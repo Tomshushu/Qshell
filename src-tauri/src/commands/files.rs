@@ -1163,7 +1163,8 @@ pub async fn files_extract_archive(app: AppHandle, server_id: Option<String>, pa
                 return Err("Archive extension does not match the actual file format".to_string());
             }
             let entries_opt = list_local_archive(kind, &path_for_task)?;
-            // 列表条目数作为真进度分母（gz/bz2/xz 无列表，total=0 表示无真进度）
+            // 列表条目数作为真进度分母（gz/bz2/xz 无列表，total=0 表示无真进度，仅 Windows 进度上报使用）
+            #[cfg(target_os = "windows")]
             let total = entries_opt
                 .as_ref()
                 .map(|entries| entries.lines().filter(|line| !line.trim().is_empty()).count())

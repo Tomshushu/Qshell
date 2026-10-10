@@ -469,7 +469,7 @@ pub async fn telnet_create_shell(
             let raw = stream.as_raw_fd();
             let sock = socket2::Socket::from_raw_fd(raw);
             let _ = sock.set_tcp_keepalive(&ka);
-            sock.into_raw_fd();
+            let _ = sock.into_raw_fd();
         }
     }
 
