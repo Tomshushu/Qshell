@@ -42,6 +42,7 @@ export function UpdateDialog() {
     checkForUpdates,
     downloadAndInstall,
     relaunchApp,
+    skipVersion,
   } = useUpdaterStore()
 
   return (
@@ -57,10 +58,10 @@ export function UpdateDialog() {
               <div className="h-9 w-9 rounded-xl bg-primary/10 border border-primary/20 text-primary flex items-center justify-center shadow-xs">
                 {isReadyToRelaunch ? (
                   <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-                ) : updateAvailable ? (
-                  <Sparkles className="h-5 w-5 text-primary" />
                 ) : errorMessage ? (
                   <AlertCircle className="h-5 w-5 text-destructive" />
+                ) : updateAvailable ? (
+                  <Sparkles className="h-5 w-5 text-primary" />
                 ) : (
                   <RotateCw className={`h-5 w-5 ${isChecking ? 'animate-spin' : ''}`} />
                 )}
@@ -69,23 +70,23 @@ export function UpdateDialog() {
                 <DialogTitle className="text-base font-bold text-foreground">
                   {isReadyToRelaunch
                     ? '更新已就绪，准备重启'
+                    : errorMessage
+                    ? (updateAvailable ? '更新下载遇到问题' : '检查更新遇到问题')
                     : updateAvailable
                     ? `发现新版本 v${updateInfo?.version}`
                     : isChecking
                     ? '正在检查新版本...'
-                    : errorMessage
-                    ? '检查更新遇到问题'
                     : '已是最新版本'}
                 </DialogTitle>
                 <DialogDescription className="text-xs text-muted-foreground">
                   {isReadyToRelaunch
                     ? '新版本安装包已验证完毕，重启即可生效'
+                    : errorMessage
+                    ? (updateAvailable ? '更新安装包下载未成功，请检查网络或系统代理后重试' : '未能成功获取更新信息')
                     : updateAvailable
                     ? '建议及时升级以获取最新功能与安全修复'
                     : isChecking
                     ? '正在连接官方更新服务器获取版本清单'
-                    : errorMessage
-                    ? '未能成功获取更新信息'
                     : '当前安装的 Qshell 运行在最新版本'}
                 </DialogDescription>
               </div>
@@ -107,7 +108,9 @@ export function UpdateDialog() {
                 <div className="flex items-start gap-2.5">
                   <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
                   <div className="space-y-1.5 text-left flex-1 min-w-0">
-                    <p className="font-semibold text-destructive">检查更新失败</p>
+                    <p className="font-semibold text-destructive">
+                      {updateAvailable ? '更新下载遇到问题' : '检查更新失败'}
+                    </p>
                     <div className="max-h-36 overflow-y-auto rounded-lg bg-background/60 p-2.5 border border-destructive/15">
                       <p className="text-muted-foreground text-[11px] leading-relaxed font-mono break-all [overflow-wrap:anywhere] whitespace-pre-wrap select-text">
                         {errorMessage}
@@ -205,36 +208,53 @@ export function UpdateDialog() {
               )}
 
               {/* 操作按钮区 */}
-              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-border/40">
+              <div className="flex items-center justify-between gap-2.5 pt-2 border-t border-border/40">
                 {!isReadyToRelaunch ? (
                   <>
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="text-xs h-9 text-muted-foreground hover:text-foreground"
+                      className="text-xs h-9 text-muted-foreground hover:text-destructive px-2 font-normal"
                       disabled={isDownloading}
-                      onClick={closeDialog}
+                      onClick={() => {
+                        if (updateInfo?.version) {
+                          skipVersion(updateInfo.version)
+                        } else {
+                          closeDialog()
+                        }
+                      }}
                     >
-                      稍后提醒
+                      跳过此版本
                     </Button>
-                    <Button
-                      size="sm"
-                      className="text-xs h-9 px-4 font-semibold gap-1.5 shadow-md bg-primary text-primary-foreground hover:bg-primary/95"
-                      disabled={isDownloading}
-                      onClick={() => void downloadAndInstall()}
-                    >
-                      {isDownloading ? (
-                        <>
-                          <RotateCw className="h-3.5 w-3.5 animate-spin" />
-                          下载中 ({downloadProgress.percentage}%)
-                        </>
-                      ) : (
-                        <>
-                          <Download className="h-3.5 w-3.5" />
-                          立即更新
-                        </>
-                      )}
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-xs h-9 text-muted-foreground hover:text-foreground"
+                        disabled={isDownloading}
+                        onClick={closeDialog}
+                      >
+                        稍后提醒
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="text-xs h-9 px-4 font-semibold gap-1.5 shadow-md bg-primary text-primary-foreground hover:bg-primary/95"
+                        disabled={isDownloading}
+                        onClick={() => void downloadAndInstall()}
+                      >
+                        {isDownloading ? (
+                          <>
+                            <RotateCw className="h-3.5 w-3.5 animate-spin" />
+                            下载中 ({downloadProgress.percentage}%)
+                          </>
+                        ) : (
+                          <>
+                            <Download className="h-3.5 w-3.5" />
+                            立即更新
+                          </>
+                        )}
+                      </Button>
+                    </div>
                   </>
                 ) : (
                   <Button

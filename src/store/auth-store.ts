@@ -256,7 +256,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
     set({ isLoading: true })
     try {
-      const redirectUrl = window.location.origin
+      const redirectUrl = isTauri ? 'http://127.0.0.1:45678/callback' : window.location.origin
 
       const { data, error } = await client.auth.signInWithOAuth({
         provider: 'github',
@@ -319,6 +319,19 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         const parsed = JSON.parse(trimmed)
         accessToken = parsed.access_token || parsed.currentSession?.access_token || ''
         refreshToken = parsed.refresh_token || parsed.currentSession?.refresh_token || ''
+        if (!accessToken && parsed.payload) {
+          const payloadStr = String(parsed.payload)
+          const hashOrQuery = payloadStr.includes('#') ? payloadStr.split('#')[1] : payloadStr.split('?')[1] || payloadStr
+          const params = new URLSearchParams(hashOrQuery)
+          accessToken = params.get('access_token') || ''
+          refreshToken = params.get('refresh_token') || ''
+        }
+      } else if (trimmed.includes('access_token=')) {
+        // 支持用户直接复制粘贴浏览器回调跳转的完整 URL (包含 hash 或 query 参数)
+        const hashOrQuery = trimmed.includes('#') ? trimmed.split('#')[1] : trimmed.split('?')[1] || trimmed
+        const params = new URLSearchParams(hashOrQuery)
+        accessToken = params.get('access_token') || ''
+        refreshToken = params.get('refresh_token') || ''
       } else {
         accessToken = trimmed
       }

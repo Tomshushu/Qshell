@@ -100,6 +100,8 @@ export function setCustomSupabaseConfig(url: string, anonKey: string): void {
   try {
     localStorage.setItem(CUSTOM_SUPABASE_URL_KEY, normalizeSupabaseUrl(url))
     localStorage.setItem(CUSTOM_SUPABASE_ANON_KEY, anonKey.trim())
+    // 切换后端实例时主动清空旧实例的 Session 缓存，避免跨后端 JWT 签名冲突
+    localStorage.removeItem('qshell_supabase_auth_token')
   } catch (err) {
     console.error('[Supabase] Failed to write custom config to localStorage:', err)
   }
@@ -114,6 +116,8 @@ export function resetCustomSupabaseConfig(): void {
   try {
     localStorage.removeItem(CUSTOM_SUPABASE_URL_KEY)
     localStorage.removeItem(CUSTOM_SUPABASE_ANON_KEY)
+    // 恢复默认配置时清空旧自定义实例的 Session 缓存
+    localStorage.removeItem('qshell_supabase_auth_token')
   } catch {
     /* ignore */
   }

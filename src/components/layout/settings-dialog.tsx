@@ -948,6 +948,8 @@ function SettingsPanel({
   const autoCheckOnStartup = useUpdaterStore((s) => s.autoCheckOnStartup);
   const setAutoCheckOnStartup = useUpdaterStore((s) => s.setAutoCheckOnStartup);
   const checkForUpdates = useUpdaterStore((s) => s.checkForUpdates);
+  const skippedVersion = useUpdaterStore((s) => s.skippedVersion);
+  const resetSkippedVersion = useUpdaterStore((s) => s.resetSkippedVersion);
   // 主题下拉:点击外部关闭 + 动态定位(通过 createPortal 渲染到 body,
   // 避免 DialogContent 的 transform/overflow-hidden 创建包含块导致 fixed 失效并被裁切)
   // 下拉为纯名称列表,鼠标 hover 项时在右侧弹出完整终端预览。
@@ -1440,6 +1442,25 @@ function SettingsPanel({
                     onCheckedChange={(enabled) => setAutoCheckOnStartup(enabled)}
                   />
                 </div>
+
+                {skippedVersion && (
+                  <div className="flex items-center justify-between pt-3 border-t text-xs">
+                    <div className="space-y-0.5">
+                      <div className="font-medium text-foreground">已跳过版本</div>
+                      <div className="text-muted-foreground text-[11px]">
+                        您此前选择了跳过 v{skippedVersion}，应用启动时将不再主动提醒
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs px-2.5 text-primary border-primary/30 hover:bg-primary/10"
+                      onClick={() => resetSkippedVersion()}
+                    >
+                      恢复提醒
+                    </Button>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </div>

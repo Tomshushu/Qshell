@@ -1,7 +1,7 @@
 {
   "name": "qshell",
   "private": true,
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Qshell - 现代化极速终端与服务器管理工作台 (Tauri + Rust)",
   "type": "module",
   "scripts": {

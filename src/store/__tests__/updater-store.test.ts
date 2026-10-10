@@ -65,4 +65,31 @@ describe('useUpdaterStore', () => {
 
     expect(useUpdaterStore.getState().errorMessage).toBe('未找到可下载的更新包信息')
   })
+
+  it('correctly compares semantic versions via isVersionNewer', async () => {
+    const { isVersionNewer } = await import('../updater-store')
+    expect(isVersionNewer('1.0.3', '1.0.2')).toBe(true)
+    expect(isVersionNewer('v1.0.3', '1.0.2')).toBe(true)
+    expect(isVersionNewer('1.1.0', '1.0.9')).toBe(true)
+    expect(isVersionNewer('2.0.0', '1.9.9')).toBe(true)
+    expect(isVersionNewer('1.0.2', '1.0.2')).toBe(false)
+    expect(isVersionNewer('1.0.1', '1.0.2')).toBe(false)
+    expect(isVersionNewer('', '1.0.2')).toBe(false)
+  })
+
+  it('updates skippedVersion and persists to localStorage on skipVersion', () => {
+    const { skipVersion, openDialog } = useUpdaterStore.getState()
+    openDialog()
+    expect(useUpdaterStore.getState().isDialogOpen).toBe(true)
+
+    skipVersion('1.0.2')
+    expect(useUpdaterStore.getState().skippedVersion).toBe('1.0.2')
+    expect(useUpdaterStore.getState().isDialogOpen).toBe(false)
+    expect(localStorage.getItem('qshell_updater_skipped_version')).toBe('1.0.2')
+
+    const { resetSkippedVersion } = useUpdaterStore.getState()
+    resetSkippedVersion()
+    expect(useUpdaterStore.getState().skippedVersion).toBeNull()
+    expect(localStorage.getItem('qshell_updater_skipped_version')).toBeNull()
+  })
 })

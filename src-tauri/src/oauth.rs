@@ -95,6 +95,58 @@ pub fn start_oauth_loopback(app_handle: AppHandle) {
                     return;
                 }
 
+                // 处理 GET /callback 或 GET / (浏览器 OAuth 回调导航)
+                if req.starts_with("GET /callback") || req.starts_with("GET / ") || req.starts_with("GET /?") {
+                    let html = r#"<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Qshell 登录成功</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #0c0a09; color: #f2f2f2; text-align: center; }
+    .card { background: #1c1917; border: 1px solid #292524; border-radius: 16px; padding: 40px 32px; max-width: 400px; box-shadow: 0 20px 40px rgba(0,0,0,0.6); }
+    .icon { font-size: 44px; margin-bottom: 12px; }
+    h2 { margin: 0 0 8px; font-size: 20px; color: #10b981; }
+    p { margin: 0; font-size: 13px; color: #a8a29e; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">🎉</div>
+    <h2>GitHub 授权成功</h2>
+    <p id="msg">正在同步登录态并返回 Qshell 客户端...</p>
+  </div>
+  <script>
+    const hash = window.location.hash || window.location.search;
+    if (hash) {
+      fetch('http://127.0.0.1:45678/auth-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: hash
+      }).then(() => {
+        document.getElementById('msg').innerText = '登录成功！您可以关闭此页面并返回 Qshell 客户端。';
+        setTimeout(() => window.close(), 1500);
+      }).catch(() => {
+        document.getElementById('msg').innerText = '凭证已就绪，请返回 Qshell 客户端。';
+      });
+    }
+  </script>
+</body>
+</html>"#;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\n\
+                        Access-Control-Allow-Origin: *\r\n\
+                        Content-Type: text/html; charset=utf-8\r\n\
+                        Content-Length: {}\r\n\
+                        \r\n\
+                        {}",
+                        html.len(),
+                        html
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    return;
+                }
+
                 let not_found = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
                 let _ = socket.write_all(not_found.as_bytes()).await;
             });

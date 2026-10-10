@@ -3,6 +3,21 @@ import { isTauri } from '@/services/api'
 import type { Update, DownloadEvent } from '@tauri-apps/plugin-updater'
 
 const AUTO_CHECK_STORAGE_KEY = 'qshell_updater_auto_check'
+const SKIPPED_VERSION_STORAGE_KEY = 'qshell_updater_skipped_version'
+
+export function isVersionNewer(newVer: string, baseVer: string): boolean {
+  if (!newVer || !baseVer) return false
+  const p1 = newVer.replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0)
+  const p2 = baseVer.replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0)
+  const maxLen = Math.max(p1.length, p2.length)
+  for (let i = 0; i < maxLen; i++) {
+    const num1 = p1[i] ?? 0
+    const num2 = p2[i] ?? 0
+    if (num1 > num2) return true
+    if (num1 < num2) return false
+  }
+  return false
+}
 
 export interface UpdateInfo {
   version: string
@@ -25,6 +40,7 @@ export interface UpdaterState {
   errorMessage: string | null
   isDialogOpen: boolean
   autoCheckOnStartup: boolean
+  skippedVersion: string | null
   lastCheckedTime: number | null
 
   // 方法
@@ -34,18 +50,22 @@ export interface UpdaterState {
   downloadAndInstall: () => Promise<void>
   relaunchApp: () => Promise<void>
   setAutoCheckOnStartup: (enabled: boolean) => void
+  skipVersion: (version: string) => void
+  resetSkippedVersion: () => void
 }
 
 let activeUpdate: Update | null = null
 
 export const useUpdaterStore = create<UpdaterState>((set, get) => {
-  // 从 localStorage 恢复是否自动检查更新配置（默认 true）
+  // 从 localStorage 恢复是否自动检查更新配置（默认 true）及已跳过版本
   let initialAutoCheck = true
+  let initialSkippedVersion: string | null = null
   try {
-    const saved = localStorage.getItem(AUTO_CHECK_STORAGE_KEY)
-    if (saved !== null) {
-      initialAutoCheck = saved === 'true'
+    const savedAutoCheck = localStorage.getItem(AUTO_CHECK_STORAGE_KEY)
+    if (savedAutoCheck !== null) {
+      initialAutoCheck = savedAutoCheck === 'true'
     }
+    initialSkippedVersion = localStorage.getItem(SKIPPED_VERSION_STORAGE_KEY)
   } catch {
     /* ignore localStorage errors */
   }
@@ -64,6 +84,7 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => {
     errorMessage: null,
     isDialogOpen: false,
     autoCheckOnStartup: initialAutoCheck,
+    skippedVersion: initialSkippedVersion,
     lastCheckedTime: null,
 
     openDialog: () => set({ isDialogOpen: true }),
@@ -76,6 +97,24 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => {
         /* ignore */
       }
       set({ autoCheckOnStartup: enabled })
+    },
+
+    skipVersion: (version: string) => {
+      try {
+        localStorage.setItem(SKIPPED_VERSION_STORAGE_KEY, version)
+      } catch {
+        /* ignore */
+      }
+      set({ skippedVersion: version, isDialogOpen: false })
+    },
+
+    resetSkippedVersion: () => {
+      try {
+        localStorage.removeItem(SKIPPED_VERSION_STORAGE_KEY)
+      } catch {
+        /* ignore */
+      }
+      set({ skippedVersion: null })
     },
 
     checkForUpdates: async (silent = false) => {
@@ -98,6 +137,17 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => {
 
         if (update) {
           activeUpdate = update
+          const currentSkipped = get().skippedVersion
+          // 判定逻辑:
+          // 1. 若当前发现的版本严格高于已跳过的版本，则说明有更新的版本发布了，自动清空旧的跳过标记并展示
+          // 2. 若当前版本 <= 已跳过版本，在后台静默检测 (silent = true) 时不弹窗；在用户主动手动点击 (silent = false) 时依然弹窗
+          const hasNewerThanSkipped = !currentSkipped || isVersionNewer(update.version, currentSkipped)
+          const shouldOpen = !silent || hasNewerThanSkipped
+
+          if (currentSkipped && hasNewerThanSkipped) {
+            get().resetSkippedVersion()
+          }
+
           set({
             isChecking: false,
             updateAvailable: true,
@@ -107,7 +157,7 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => {
               date: update.date,
               body: update.body,
             },
-            isDialogOpen: true,
+            isDialogOpen: shouldOpen,
             lastCheckedTime: Date.now(),
           })
           return true
@@ -148,6 +198,12 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => {
           rawMsg.includes('dns')
         ) {
           friendlyMsg = `无法连接到更新服务器，请检查网络连接或系统代理设置后重试。\n（详细错误：${rawMsg}）`
+        } else if (
+          rawMsg.includes('signature') ||
+          rawMsg.includes('minisign') ||
+          rawMsg.includes('verify')
+        ) {
+          friendlyMsg = '更新包数字签名校验未通过，为保障系统安全已终止更新。'
         }
 
         set({
@@ -165,6 +221,9 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => {
     downloadAndInstall: async () => {
       if (!activeUpdate) {
         set({ errorMessage: '未找到可下载的更新包信息' })
+        return
+      }
+      if (get().isDownloading) {
         return
       }
 

@@ -15,7 +15,7 @@ import { sshService } from '@/services/ssh-service'
 import { backend, isTauri } from '@/services/api'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { AlertCircle, Copy } from 'lucide-react'
+import { AlertCircle, Copy, ShieldCheck } from 'lucide-react'
 import { useEffect, useCallback, useState } from 'react'
 import { StabilityTestPanel } from '@/components/dev/stability-test-panel'
 import { CommandPalette } from '@/components/command-palette'
@@ -74,6 +74,8 @@ function AppContent() {
   // 退出应用二次确认状态
   const [showExitConfirm, setShowExitConfirm] = useState(false)
   const [isExiting, setIsExiting] = useState(false)
+  // 检测当前窗口是否为独立 OAuth 授权回调窗口 (label: 'qshell-oauth')
+  const [isOAuthPopup, setIsOAuthPopup] = useState(false)
 
   // 已取消跨重启恢复工作台；清理开发版本可能留下的旧快照与 SFTP 未完成传输残留。
   const user = useAuthStore((s) => s.user)
@@ -89,19 +91,56 @@ function AppContent() {
         try {
           const win = getCurrentWebviewWindow()
           if (win.label === 'qshell-oauth') {
-            const check = async () => {
+            setIsOAuthPopup(true)
+            const handleOAuth = async () => {
               const { getSupabaseClient } = await import('@/lib/supabase')
               const client = getSupabaseClient()
-              if (client) {
-                const { data } = await client.auth.getSession()
-                if (data.session) {
+              if (!client) return
+
+              const finishLogin = async () => {
+                try {
                   const { emit } = await import('@tauri-apps/api/event')
                   await emit('oauth-session-success')
-                  setTimeout(() => void win.close(), 300)
+                } catch {
+                  /* ignore */
+                }
+                setTimeout(() => void win.close(), 400)
+              }
+
+              // 1. 尝试直接获取 Session
+              const { data } = await client.auth.getSession()
+              if (data.session) {
+                await finishLogin()
+                return
+              }
+
+              // 2. 尝试从 URL Hash 或 Search 提取 access_token / refresh_token
+              const hashOrQuery = window.location.hash || window.location.search
+              if (hashOrQuery.includes('access_token=')) {
+                const params = new URLSearchParams(hashOrQuery.replace(/^[#?]/, ''))
+                const accessToken = params.get('access_token')
+                const refreshToken = params.get('refresh_token')
+                if (accessToken) {
+                  const { data: setRes } = await client.auth.setSession({
+                    access_token: accessToken,
+                    refresh_token: refreshToken || '',
+                  })
+                  if (setRes.session) {
+                    await finishLogin()
+                    return
+                  }
                 }
               }
+
+              // 3. 监听 onAuthStateChange 异步事件兜底
+              const { data: listener } = client.auth.onAuthStateChange(async (_event, session) => {
+                if (session) {
+                  listener.subscription.unsubscribe()
+                  await finishLogin()
+                }
+              })
             }
-            void check()
+            void handleOAuth()
           }
         } catch {
           /* ignore */
@@ -116,14 +155,20 @@ function AppContent() {
     let unlistenPayload: (() => void) | undefined
     void import('@tauri-apps/api/event').then(({ listen }) => {
       listen('oauth-session-success', () => {
-        void useAuthStore.getState().init()
+        void useAuthStore.getState().init().then(() => {
+          useAuthStore.getState().closeAuthDialog()
+          toast.success('GitHub 账号登录成功，欢迎回来')
+        })
       }).then((u) => {
         unlisten = u
       })
 
       listen<string>('oauth-session-payload', (event) => {
         if (event.payload) {
-          void useAuthStore.getState().setSessionFromToken(event.payload)
+          void useAuthStore.getState().setSessionFromToken(event.payload).then(() => {
+            useAuthStore.getState().closeAuthDialog()
+            toast.success('授权令牌导入成功，已登录')
+          })
         }
       }).then((u) => {
         unlistenPayload = u
@@ -133,7 +178,7 @@ function AppContent() {
       unlisten?.()
       unlistenPayload?.()
     }
-  }, [])
+  }, [toast])
 
   // 启动后静默检查更新（延迟 4 秒，避免和主界面初始化争抢网络资源）
   useEffect(() => {
@@ -515,6 +560,21 @@ function AppContent() {
       }
     }).catch(() => {})
   }, [isDesktop, syncConnectionState])
+
+  // 当处于客户端内部的独立 OAuth 授权窗口 (qshell-oauth) 时，渲染轻量状态页并等待关闭
+  if (isOAuthPopup) {
+    return (
+      <div className="h-screen w-screen flex flex-col items-center justify-center bg-background text-foreground space-y-4 p-6 select-none">
+        <div className="h-12 w-12 rounded-2xl bg-primary/10 border border-primary/20 text-primary flex items-center justify-center animate-pulse shadow-sm">
+          <ShieldCheck className="h-6 w-6" />
+        </div>
+        <div className="space-y-1.5 text-center">
+          <p className="text-sm font-semibold text-foreground">GitHub 授权已完成</p>
+          <p className="text-xs text-muted-foreground">正在同步安全凭证并自动关闭窗口...</p>
+        </div>
+      </div>
+    )
+  }
 
   // 当在外部浏览器中运行且已完成登录或处于 OAuth 回调时，展示专属的授权完成页，不展示桌面工作台
   if (!isDesktop && (user || window.location.hash.includes('access_token'))) {

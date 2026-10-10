@@ -1,6 +1,6 @@
 [package]
 name = "qshell"
-version = "1.0.2"
+version = "1.0.3"
 description = "Qshell - Tauri Edition"
 authors = ["Qshell Community"]
 edition = "2021"
