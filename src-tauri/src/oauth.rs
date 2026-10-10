@@ -49,6 +49,9 @@ pub fn start_oauth_loopback(app_handle: AppHandle) {
                     let body = req.split("\r\n\r\n").nth(1).unwrap_or("");
                     if !body.is_empty() {
                         let _ = app.emit("oauth-session-payload", body.trim().to_string());
+                        if let Some(oauth_win) = app.get_webview_window("qshell-oauth") {
+                            let _ = oauth_win.destroy();
+                        }
                         // 唤醒并聚焦 Qshell 桌面主窗口到最前面
                         if let Some(win) = app.get_webview_window("main") {
                             let _ = win.show();

@@ -36,6 +36,7 @@ pub mod port_forward;
 pub mod telnet;
 pub mod serial;
 pub mod tags;
+pub mod updater;
 
 // ============================================================================
 // 公共辅助类型与函数

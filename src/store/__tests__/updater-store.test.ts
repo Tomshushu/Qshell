@@ -92,4 +92,28 @@ describe('useUpdaterStore', () => {
     expect(useUpdaterStore.getState().skippedVersion).toBeNull()
     expect(localStorage.getItem('qshell_updater_skipped_version')).toBeNull()
   })
+
+  it('updates preferredMirror and persists to localStorage', () => {
+    const { setPreferredMirror } = useUpdaterStore.getState()
+    expect(useUpdaterStore.getState().preferredMirror).toBe('auto')
+
+    setPreferredMirror('gitee')
+    expect(useUpdaterStore.getState().preferredMirror).toBe('gitee')
+    expect(localStorage.getItem('qshell_updater_preferred_mirror')).toBe('gitee')
+
+    setPreferredMirror('github')
+    expect(useUpdaterStore.getState().preferredMirror).toBe('github')
+    expect(localStorage.getItem('qshell_updater_preferred_mirror')).toBe('github')
+
+    setPreferredMirror('auto')
+    expect(useUpdaterStore.getState().preferredMirror).toBe('auto')
+    expect(localStorage.getItem('qshell_updater_preferred_mirror')).toBe('auto')
+  })
+
+  it('handles probeMirrors gracefully in non-Tauri environment', async () => {
+    const { probeMirrors } = useUpdaterStore.getState()
+    const result = await probeMirrors()
+    expect(result).toBeNull()
+    expect(useUpdaterStore.getState().isProbing).toBe(false)
+  })
 })

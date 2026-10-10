@@ -13,7 +13,7 @@ async function run() {
   const supabaseUrl = (process.env.SUPABASE_URL || 'https://litlnyxkmcupbvigfrwj.supabase.co').replace(/\/+$/, '')
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
   const manifestPath = process.env.MANIFEST_PATH || 'latest.json'
-  const mirrorPrefix = process.env.CHINA_MIRROR_PREFIX || 'https://gh-proxy.com/'
+  const mirrorPrefix = process.env.CHINA_MIRROR_PREFIX || ''
 
   console.log(`[Sync] Reading release manifest from: ${manifestPath}`)
 

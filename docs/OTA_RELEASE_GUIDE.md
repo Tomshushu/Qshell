@@ -25,11 +25,11 @@
   ```
 - **私钥（Private Key）**：保存在项目根目录的 `.tauri/qshell.key` 中（已被 `.gitignore` 忽略，请妥善保管和备份）
   - 私钥保护密码：`qshell`
-- **更新清单请求端点（Endpoints - 方案 C 多镜像高可用容灾）**：
+- **更新清单请求端点（Endpoints - Gitee 国内极速优先 + GitHub 全球备用容灾）**：
   ```
-  1. https://gh-proxy.com/https://github.com/Tomshushu/Qshell/releases/latest/download/latest.json
-  2. https://ghproxy.net/https://github.com/Tomshushu/Qshell/releases/latest/download/latest.json
-  3. https://github.com/Tomshushu/Qshell/releases/latest/download/latest.json
+  1. https://gitee.com/Tom-shushu/qshell/raw/main/latest.json（第一优先：国内直连，秒速响应 0 拦截）
+  2. https://gitee.com/Tom-shushu/qshell/releases/download/latest/latest.json（第二备用：Gitee 发行版直链）
+  3. https://github.com/Tomshushu/Qshell/releases/latest/download/latest.json（第三备用：GitHub 官方原生通道）
   ```
 
 ---

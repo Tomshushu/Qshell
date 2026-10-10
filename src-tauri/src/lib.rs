@@ -465,6 +465,9 @@ pub fn run() {
             commands::serial::serial_iap_parse_firmware,
             commands::serial::serial_iap_start,
             commands::serial::serial_iap_cancel,
+            // 自动更新通道测速与优选
+            commands::updater::probe_updater_mirrors,
+            commands::updater::check_update_with_mirror,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

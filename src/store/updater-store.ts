@@ -4,6 +4,38 @@ import type { Update, DownloadEvent } from '@tauri-apps/plugin-updater'
 
 const AUTO_CHECK_STORAGE_KEY = 'qshell_updater_auto_check'
 const SKIPPED_VERSION_STORAGE_KEY = 'qshell_updater_skipped_version'
+const PREFERRED_MIRROR_STORAGE_KEY = 'qshell_updater_preferred_mirror'
+
+export interface MirrorProbeResult {
+  name: 'gitee' | 'github'
+  label: string
+  url: string
+  available: boolean
+  latencyMs: number | null
+  error?: string | null
+}
+
+export interface UpdaterMirrorsReport {
+  preferred: 'gitee' | 'github'
+  gitee: MirrorProbeResult
+  github: MirrorProbeResult
+}
+
+export type PreferredMirror = 'auto' | 'gitee' | 'github'
+
+interface RawUpdateMetadata {
+  rid: number
+  currentVersion: string
+  version: string
+  date?: string
+  body?: string
+  rawJson: Record<string, unknown>
+}
+
+interface CheckUpdateWithMirrorResponse {
+  update: RawUpdateMetadata | null
+  report: UpdaterMirrorsReport
+}
 
 export function isVersionNewer(newVer: string, baseVer: string): boolean {
   if (!newVer || !baseVer) return false
@@ -42,6 +74,9 @@ export interface UpdaterState {
   autoCheckOnStartup: boolean
   skippedVersion: string | null
   lastCheckedTime: number | null
+  preferredMirror: PreferredMirror
+  mirrorReport: UpdaterMirrorsReport | null
+  isProbing: boolean
 
   // 方法
   openDialog: () => void
@@ -52,20 +87,27 @@ export interface UpdaterState {
   setAutoCheckOnStartup: (enabled: boolean) => void
   skipVersion: (version: string) => void
   resetSkippedVersion: () => void
+  setPreferredMirror: (mirror: PreferredMirror) => void
+  probeMirrors: () => Promise<UpdaterMirrorsReport | null>
 }
 
 let activeUpdate: Update | null = null
 
 export const useUpdaterStore = create<UpdaterState>((set, get) => {
-  // 从 localStorage 恢复是否自动检查更新配置（默认 true）及已跳过版本
+  // 从 localStorage 恢复是否自动检查更新配置（默认 true）及已跳过版本、优选镜像
   let initialAutoCheck = true
   let initialSkippedVersion: string | null = null
+  let initialPreferredMirror: PreferredMirror = 'auto'
   try {
     const savedAutoCheck = localStorage.getItem(AUTO_CHECK_STORAGE_KEY)
     if (savedAutoCheck !== null) {
       initialAutoCheck = savedAutoCheck === 'true'
     }
     initialSkippedVersion = localStorage.getItem(SKIPPED_VERSION_STORAGE_KEY)
+    const savedMirror = localStorage.getItem(PREFERRED_MIRROR_STORAGE_KEY)
+    if (savedMirror === 'gitee' || savedMirror === 'github' || savedMirror === 'auto') {
+      initialPreferredMirror = savedMirror
+    }
   } catch {
     /* ignore localStorage errors */
   }
@@ -86,6 +128,9 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => {
     autoCheckOnStartup: initialAutoCheck,
     skippedVersion: initialSkippedVersion,
     lastCheckedTime: null,
+    preferredMirror: initialPreferredMirror,
+    mirrorReport: null,
+    isProbing: false,
 
     openDialog: () => set({ isDialogOpen: true }),
     closeDialog: () => set({ isDialogOpen: false }),
@@ -117,6 +162,30 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => {
       set({ skippedVersion: null })
     },
 
+    setPreferredMirror: (mirror: PreferredMirror) => {
+      try {
+        localStorage.setItem(PREFERRED_MIRROR_STORAGE_KEY, mirror)
+      } catch {
+        /* ignore */
+      }
+      set({ preferredMirror: mirror })
+    },
+
+    probeMirrors: async () => {
+      if (!isTauri) return null
+      set({ isProbing: true })
+      try {
+        const { invoke } = await import('@tauri-apps/api/core')
+        const report = await invoke<UpdaterMirrorsReport>('probe_updater_mirrors')
+        set({ mirrorReport: report, isProbing: false })
+        return report
+      } catch (e) {
+        console.warn('[Updater] Probe failed:', e)
+        set({ isProbing: false })
+        return null
+      }
+    },
+
     checkForUpdates: async (silent = false) => {
       if (!isTauri) {
         if (!silent) {
@@ -132,8 +201,29 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => {
       set({ isChecking: true, errorMessage: null, isReadyToRelaunch: false })
 
       try {
-        const { check } = await import('@tauri-apps/plugin-updater')
-        const update = await check({ timeout: 15000 })
+        let update: Update | null = null
+        let report: UpdaterMirrorsReport | null = null
+
+        // 1. 优先调用后端智能测速探测与端点重排命令 check_update_with_mirror
+        try {
+          const { invoke } = await import('@tauri-apps/api/core')
+          const { Update: TauriUpdate } = await import('@tauri-apps/plugin-updater')
+          const res = await invoke<CheckUpdateWithMirrorResponse>('check_update_with_mirror', {
+            preferredChannel: get().preferredMirror,
+          })
+          report = res.report
+          if (res.update) {
+            update = new TauriUpdate(res.update)
+          }
+        } catch (mirrorErr) {
+          console.warn('[Updater] check_update_with_mirror failed, fallback to standard check:', mirrorErr)
+          const { check } = await import('@tauri-apps/plugin-updater')
+          update = await check({ timeout: 8000 })
+        }
+
+        if (report) {
+          set({ mirrorReport: report })
+        }
 
         if (update) {
           activeUpdate = update

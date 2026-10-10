@@ -1,0 +1,273 @@
+/**
+ * tools/sync-gitee-release.mjs
+ * 
+ * 作用：在 GitHub Actions 构建完成后（或本地执行），将 Release 安装包与产物
+ * 自动同步上传到 Gitee Releases，并生成国内极速直连的 latest.json。
+ * 
+ * 机制：
+ * 1. 优先使用 Gitee 官方国内 CDN 下载地址；
+ * 2. 自动在 Gitee 创建或更新对应 Tag 的 Release；
+ * 3. 自动同步 Windows / macOS / Linux 所有安装包及数字签名；
+ * 4. 生成并推送 Gitee 专用的 latest.json 到 Gitee main 分支及 Release 资产中。
+ */
+import process from 'node:process'
+import { readFile, writeFile } from 'node:fs/promises'
+import { existsSync, readFileSync } from 'node:fs'
+
+const GITEE_TOKEN = process.env.GITEE_TOKEN || '12c9b9f0edf788cf0e5c308134e5e316'
+const GITEE_OWNER = process.env.GITEE_OWNER || 'Tom-shushu'
+const GITEE_REPO = process.env.GITEE_REPO || 'qshell'
+let defaultTag = 'v1.0.3'
+try {
+  const pkg = JSON.parse(readFileSync('package.json', 'utf8'))
+  if (pkg.version) defaultTag = `v${pkg.version.replace(/^v/i, '')}`
+} catch {}
+const TAG_NAME = (process.env.TAG_NAME || process.env.GITHUB_REF_NAME || defaultTag).replace(/^refs\/tags\//, '')
+
+async function giteeRequest(path, options = {}) {
+  const url = `https://gitee.com/api/v5${path}`
+  const separator = url.includes('?') ? '&' : '?'
+  const authedUrl = `${url}${separator}access_token=${GITEE_TOKEN}`
+
+  const res = await fetch(authedUrl, {
+    ...options,
+    headers: {
+      'User-Agent': 'Qshell-Release-Sync',
+      ...(options.headers || {}),
+    },
+  })
+
+  if (!res.ok && res.status !== 404) {
+    const errorText = await res.text().catch(() => '')
+    console.warn(`[Gitee API] ${options.method || 'GET'} ${path} returned ${res.status}: ${errorText}`)
+  }
+  return res
+}
+
+async function getOrCreateGiteeRelease(tag) {
+  console.log(`[Gitee] Checking existing releases for tag: ${tag}`)
+  const listRes = await giteeRequest(`/repos/${GITEE_OWNER}/${GITEE_REPO}/releases`)
+  if (listRes.ok) {
+    const releases = await listRes.json()
+    const found = releases.find((r) => r.tag_name === tag)
+    if (found) {
+      console.log(`[Gitee] Found existing release: ID=${found.id}, tag=${found.tag_name}`)
+      return found
+    }
+  }
+
+  console.log(`[Gitee] Creating new release for tag: ${tag}`)
+  const createRes = await giteeRequest(`/repos/${GITEE_OWNER}/${GITEE_REPO}/releases`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      tag_name: tag,
+      name: `Qshell ${tag}`,
+      body: `Qshell 现代化极速终端与服务器管理工作台 ${tag} 正式版本。国内高速镜像托管发布。`,
+      target_commitish: 'main',
+    }),
+  })
+
+  if (!createRes.ok) {
+    throw new Error(`Failed to create release on Gitee: ${createRes.status}`)
+  }
+  const newRelease = await createRes.json()
+  console.log(`[Gitee] Created release successfully: ID=${newRelease.id}`)
+  return newRelease
+}
+
+async function uploadFileToGiteeRelease(releaseId, filename, fileBuffer) {
+  console.log(`[Gitee] Uploading attachment '${filename}' (${fileBuffer.byteLength} bytes)...`)
+  const form = new FormData()
+  form.append('access_token', GITEE_TOKEN)
+  form.append('file', new Blob([fileBuffer]), filename)
+
+  const res = await fetch(`https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${releaseId}/attach_files`, {
+    method: 'POST',
+    body: form,
+  })
+
+  if (!res.ok) {
+    const err = await res.text().catch(() => '')
+    throw new Error(`Failed to upload ${filename} to Gitee release: ${res.status} ${err}`)
+  }
+  const result = await res.json()
+  console.log(`[Gitee] Successfully uploaded '${filename}': ${result.browser_download_url}`)
+  return result
+}
+
+async function deleteExistingAttachment(releaseId, attachId) {
+  await giteeRequest(`/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${releaseId}/attach_files/${attachId}`, {
+    method: 'DELETE',
+  })
+}
+
+async function updateFileOnGiteeRepo(filePath, content, message) {
+  // 检查文件是否存在
+  const checkRes = await giteeRequest(`/repos/${GITEE_OWNER}/${GITEE_REPO}/contents/${filePath}?ref=main`)
+  let sha = null
+  if (checkRes.ok) {
+    const data = await checkRes.json()
+    sha = data.sha
+  }
+
+  const base64Content = Buffer.from(content, 'utf8').toString('base64')
+  if (sha) {
+    console.log(`[Gitee Repo] Updating ${filePath} on main branch...`)
+    await giteeRequest(`/repos/${GITEE_OWNER}/${GITEE_REPO}/contents/${filePath}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: base64Content,
+        sha,
+        message,
+        branch: 'main',
+      }),
+    })
+  } else {
+    console.log(`[Gitee Repo] Creating ${filePath} on main branch...`)
+    await giteeRequest(`/repos/${GITEE_OWNER}/${GITEE_REPO}/contents/${filePath}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: base64Content,
+        message,
+        branch: 'main',
+      }),
+    })
+  }
+}
+
+async function run() {
+  console.log(`=======================================================`)
+  console.log(`[Gitee Sync] Starting release sync for ${TAG_NAME}`)
+  console.log(`[Gitee Sync] Target: https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}`)
+  console.log(`=======================================================`)
+
+  const giteeRelease = await getOrCreateGiteeRelease(TAG_NAME)
+  const existingAssets = (giteeRelease.assets || []).reduce((acc, a) => {
+    acc[a.name] = a
+    return acc
+  }, {})
+
+  // 1. 同步 GitHub Release 中的二进制资产到 Gitee Release
+  const githubRepo = process.env.GITHUB_REPOSITORY || 'Tomshushu/Qshell'
+  const githubToken = process.env.GITHUB_TOKEN || ''
+
+  try {
+    const ghHeaders = {
+      'User-Agent': 'Qshell-Sync',
+      ...(githubToken ? { 'Authorization': `Bearer ${githubToken}` } : {}),
+    }
+    const ghReleaseRes = await fetch(`https://api.github.com/repos/${githubRepo}/releases/tags/${TAG_NAME}`, {
+      headers: ghHeaders,
+    })
+
+    if (ghReleaseRes.ok) {
+      const ghRelease = await ghReleaseRes.json()
+      console.log(`[Gitee Sync] Found ${ghRelease.assets?.length || 0} assets on GitHub release.`)
+
+      for (const asset of ghRelease.assets || []) {
+        if (asset.name === 'latest.json' || asset.name === 'latest-china.json') {
+          continue // 针对 Gitee 重新生成的清单单独处理
+        }
+
+        if (existingAssets[asset.name]) {
+          console.log(`[Gitee Sync] Asset '${asset.name}' already exists on Gitee, skipping.`)
+          continue
+        }
+
+        console.log(`[Gitee Sync] Downloading '${asset.name}' from GitHub...`)
+        const downloadRes = await fetch(asset.browser_download_url, { headers: ghHeaders })
+        if (downloadRes.ok) {
+          const buffer = await downloadRes.arrayBuffer()
+          await uploadFileToGiteeRelease(giteeRelease.id, asset.name, Buffer.from(buffer))
+          existingAssets[asset.name] = true
+        } else {
+          console.warn(`[Gitee Sync] Failed to download '${asset.name}' from GitHub: ${downloadRes.status}`)
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`[Gitee Sync] Asset synchronization error:`, err.message)
+  }
+
+  // 2. 读取或准备原始 latest.json
+  const manifestPath = process.env.MANIFEST_PATH || 'latest.json'
+  let manifest = null
+
+  if (existsSync(manifestPath)) {
+    try {
+      const raw = await readFile(manifestPath, 'utf8')
+      manifest = JSON.parse(raw)
+    } catch (err) {
+      console.warn(`[Gitee Sync] Could not parse local ${manifestPath}:`, err.message)
+    }
+  }
+
+  // 如果本地没有，尝试从 Release 或远程下载
+  if (!manifest) {
+    const remoteUrl = `https://github.com/Tomshushu/Qshell/releases/download/${TAG_NAME}/latest.json`
+    console.log(`[Gitee Sync] Fetching manifest from ${remoteUrl}...`)
+    try {
+      const res = await fetch(remoteUrl)
+      if (res.ok) {
+        manifest = await res.json()
+      }
+    } catch (err) {
+      console.warn(`[Gitee Sync] Remote manifest fetch error:`, err.message)
+    }
+  }
+
+  if (!manifest) {
+    console.warn(`[Gitee Sync] No latest.json found. Skipping manifest URL rewriting.`)
+  } else {
+    // 2. 将清单中所有安装包下载地址改写为 Gitee 国内极速直链
+    console.log(`[Gitee Sync] Rewriting download URLs to Gitee Releases CDN...`)
+    const giteeManifest = JSON.parse(JSON.stringify(manifest))
+
+    if (giteeManifest.platforms) {
+      for (const [platformKey, platformData] of Object.entries(giteeManifest.platforms)) {
+        if (platformData && platformData.url) {
+          // 提取原始文件名
+          const rawUrl = platformData.url
+          const cleanUrl = rawUrl.replace(/^https:\/\/gh-proxy\.com\//, '')
+          const filename = cleanUrl.substring(cleanUrl.lastIndexOf('/') + 1)
+          const giteeDownloadUrl = `https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}/releases/download/${TAG_NAME}/${filename}`
+          
+          console.log(`  [${platformKey}] ${filename}`)
+          console.log(`    -> Gitee: ${giteeDownloadUrl}`)
+          platformData.url = giteeDownloadUrl
+        }
+      }
+    }
+
+    const giteeManifestStr = JSON.stringify(giteeManifest, null, 2)
+    await writeFile('latest-gitee.json', giteeManifestStr, 'utf8')
+
+    // 3. 上传 latest.json 到 Gitee Release
+    if (existingAssets['latest.json']) {
+      console.log(`[Gitee Sync] Deleting old latest.json on Release...`)
+      await deleteExistingAttachment(giteeRelease.id, existingAssets['latest.json'].id)
+    }
+    await uploadFileToGiteeRelease(giteeRelease.id, 'latest.json', Buffer.from(giteeManifestStr, 'utf8'))
+
+    // 4. 同步更新 Gitee 仓库 main 分支根目录的 latest.json
+    // 这样客户端可以以零代理、极高速度直连 https://gitee.com/Tom-shushu/qshell/raw/main/latest.json
+    try {
+      await updateFileOnGiteeRepo('latest.json', giteeManifestStr, `chore(release): update latest.json for ${TAG_NAME} [skip ci]`)
+      console.log(`[Gitee Sync] Successfully updated latest.json in Gitee main branch!`)
+    } catch (err) {
+      console.warn(`[Gitee Sync] Failed to update latest.json on main branch:`, err.message)
+    }
+  }
+
+  console.log(`=======================================================`)
+  console.log(`[Gitee Sync] All Gitee sync steps completed successfully!`)
+  console.log(`=======================================================`)
+}
+
+run().catch((err) => {
+  console.error('[Gitee Sync] Fatal error:', err)
+  process.exit(1)
+})

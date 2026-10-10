@@ -130,12 +130,22 @@ jobs:
           echo "Downloading manifest from $MANIFEST_URL"
           curl -sL "$MANIFEST_URL" -o latest.json || echo "{}" > latest.json
 
-      - name: Optimize manifest for fast CDN download
+      - name: Prepare clean manifest
         env:
-          CHINA_MIRROR_PREFIX: 'https://gh-proxy.com/'
           MANIFEST_PATH: 'latest.json'
         run: |
           node tools/sync-release-manifest.mjs
+
+      - name: Sync Release to Gitee Releases (国内极速镜像发布)
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN || '12c9b9f0edf788cf0e5c308134e5e316' }}
+          GITEE_OWNER: 'Tom-shushu'
+          GITEE_REPO: 'qshell'
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+          MANIFEST_PATH: 'latest.json'
+        run: |
+          node tools/sync-gitee-release.mjs
 
       - name: Overwrite latest.json on Release with accelerated URLs
         uses: actions/github-script@v7
