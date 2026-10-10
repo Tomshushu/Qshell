@@ -1,0 +1,35 @@
+{
+  "version": "1.0.3",
+  "notes": "",
+  "pub_date": "2026-10-10T13:49:27.254Z",
+  "platforms": {
+    "linux-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTWo3SmRaaTIzQmd4QlNtTDFCdjFBVG02S3pmREw3dTZ5UlRnWmhWY29MRjQrMkRzOGVGYm9RT3gyUkQ4UUxESTZlOGg5UUQzb0NxZEM2Y3NtcHdpUk1JNTB1Q3FrL0FrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNjM5NjU2CWZpbGU6UXNoZWxsXzEuMC4zX2FtZDY0LkFwcEltYWdlCjBIQ040UGQ2RXdqbzVEVExjdEx6VW42NVRlMURoVkpaMVZreDRRU0JLYmNRWWhoclJla3pPZFVXTWRDTWJXaXoyUHVBQzNXMDJVRnZFNzQ1cE11OUFnPT0K",
+      "url": "https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.3/Qshell_1.0.3_amd64.AppImage"
+    },
+    "linux-x86_64-appimage": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTWo3SmRaaTIzQmd4QlNtTDFCdjFBVG02S3pmREw3dTZ5UlRnWmhWY29MRjQrMkRzOGVGYm9RT3gyUkQ4UUxESTZlOGg5UUQzb0NxZEM2Y3NtcHdpUk1JNTB1Q3FrL0FrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNjM5NjU2CWZpbGU6UXNoZWxsXzEuMC4zX2FtZDY0LkFwcEltYWdlCjBIQ040UGQ2RXdqbzVEVExjdEx6VW42NVRlMURoVkpaMVZreDRRU0JLYmNRWWhoclJla3pPZFVXTWRDTWJXaXoyUHVBQzNXMDJVRnZFNzQ1cE11OUFnPT0K",
+      "url": "https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.3/Qshell_1.0.3_amd64.AppImage"
+    },
+    "linux-x86_64-deb": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTWo3SmRaaTIzQmhpS3ZMZWgreGtva1Blek1MYmMwMEx2cGJmc010THdKUjA4WXNhNHRPakRpODYzVkdKc2hKUld0WGxEK0xNbENwQkQzR0JaYjlUWVQwVzR2N3Q1WHd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNjM5NjU2CWZpbGU6UXNoZWxsXzEuMC4zX2FtZDY0LmRlYgpFYkwvMDgzTnZrb0MwQ0pqaHUwS1A4UDkrUkJGVi93b05FcSt5aTVBWnRNeXl4VFNFRC9GZUpXTnR1cGpSaXhGVmFDOWxuakR1b1VzSGYxU0NQU3JDZz09Cg==",
+      "url": "https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.3/Qshell_1.0.3_amd64.deb"
+    },
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTWo3SmRaaTIzQmxBWUpkZ3ZaeHNmK0ZBUDRXWFZNM3prQzZXTWJzTDFsVXpvamE0aGlJYUNaalEvS0xmdG1OZm9FbFQzcFdPLzB2U1c3YlJIU2RrQjA3b1l6NTJFWGdvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNjQwMTQyCWZpbGU6UXNoZWxsLmFwcC50YXIuZ3oKeGZITkVaK1RaZDZaT1RZWnA0VHhibkQwOUh6WllZM0ltTFZJWWRBZXlqQ1pZOTJqcVhUcnhydndHU08vY3hnTmdSTitSRHF6aGltdWRnQVRWRmY3QlE9PQo=",
+      "url": "https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.3/Qshell_aarch64.app.tar.gz"
+    },
+    "darwin-aarch64-app": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTWo3SmRaaTIzQmxBWUpkZ3ZaeHNmK0ZBUDRXWFZNM3prQzZXTWJzTDFsVXpvamE0aGlJYUNaalEvS0xmdG1OZm9FbFQzcFdPLzB2U1c3YlJIU2RrQjA3b1l6NTJFWGdvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNjQwMTQyCWZpbGU6UXNoZWxsLmFwcC50YXIuZ3oKeGZITkVaK1RaZDZaT1RZWnA0VHhibkQwOUh6WllZM0ltTFZJWWRBZXlqQ1pZOTJqcVhUcnhydndHU08vY3hnTmdSTitSRHF6aGltdWRnQVRWRmY3QlE9PQo=",
+      "url": "https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.3/Qshell_aarch64.app.tar.gz"
+    },
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTWo3SmRaaTIzQnIwNGZHbFEyVWVET1d1eDE5eUtuaXcxK3l0MUtsYU1IZjBSdllUYWxLTEduL1g2OVZOK1J2c0t3VFNiMUtlOFhUeUpPOHBoZVQ4TmIzbDF3T1NIS3dFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNjQwMTY0CWZpbGU6UXNoZWxsXzEuMC4zX3g2NC1zZXR1cC5leGUKY05CcXNaWkMvUU9tMUZvVlN4eWlFbUwzOWlJdDZhOVBqbk10Z3lyNFl0aUFMN0g1eFpiY0tMY1kvSEUyVWVmbG9rRVJ1TFlCa25SSkFtMU1zY2ljQ3c9PQo=",
+      "url": "https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.3/Qshell_1.0.3_x64-setup.exe"
+    },
+    "windows-x86_64-nsis": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTWo3SmRaaTIzQnIwNGZHbFEyVWVET1d1eDE5eUtuaXcxK3l0MUtsYU1IZjBSdllUYWxLTEduL1g2OVZOK1J2c0t3VFNiMUtlOFhUeUpPOHBoZVQ4TmIzbDF3T1NIS3dFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNjQwMTY0CWZpbGU6UXNoZWxsXzEuMC4zX3g2NC1zZXR1cC5leGUKY05CcXNaWkMvUU9tMUZvVlN4eWlFbUwzOWlJdDZhOVBqbk10Z3lyNFl0aUFMN0g1eFpiY0tMY1kvSEUyVWVmbG9rRVJ1TFlCa25SSkFtMU1zY2ljQ3c9PQo=",
+      "url": "https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.3/Qshell_1.0.3_x64-setup.exe"
+    }
+  }
+}
