@@ -25,9 +25,11 @@
   ```
 - **私钥（Private Key）**：保存在项目根目录的 `.tauri/qshell.key` 中（已被 `.gitignore` 忽略，请妥善保管和备份）
   - 私钥保护密码：`qshell`
-- **更新清单请求端点（Endpoint）**：
+- **更新清单请求端点（Endpoints - 方案 C 多镜像高可用容灾）**：
   ```
-  https://litlnyxkmcupbvigfrwj.supabase.co/storage/v1/object/public/ota-releases/latest.json
+  1. https://gh-proxy.com/https://github.com/Tomshushu/Qshell/releases/latest/download/latest.json
+  2. https://ghproxy.net/https://github.com/Tomshushu/Qshell/releases/latest/download/latest.json
+  3. https://github.com/Tomshushu/Qshell/releases/latest/download/latest.json
   ```
 
 ---
@@ -40,7 +42,7 @@
 - 本地具有 `.tauri/qshell.key` 私钥文件
 
 ### 2. 执行打包构建
-打开 PowerShell 进入 `tauri-app` 根目录：
+打开 PowerShell 进入 `Qshell` 根目录：
 
 ```powershell
 # 1. 提升版本号（例如升级到 1.0.1，请同步修改 package.json 和 src-tauri/tauri.conf.json 中的 version）
@@ -186,31 +188,50 @@ npm run build:linux
 
 ---
 
-## 七、进阶：全自动化 CI/CD 与国内加速发版方案
+## 七、进阶：全自动化 CI/CD 与国内加速发版方案（方案 C：纯 GitHub Releases + CDN 镜像加速）
 
-我们已经为您在项目中完整配置了 `.github/workflows/release.yml` 与 `tools/sync-release-manifest.mjs`：
+我们已经为您在项目中完整升级并配置了 `.github/workflows/release.yml` 与 `tools/sync-release-manifest.mjs`：
 
-### 1. 如何完美兼顾国内用户？
-国内用户下载 GitHub Releases 经常遇到被墙或速度慢的问题，自动化流采用了 **国内高速 CDN 镜像智能中转** 方案：
-- GitHub Actions 自动编译出 Win、Mac、Linux 三端安装包并附带数字签名；
-- 脚本自动将下载链接转换为国内可免翻墙直连的高速镜像源（如 `https://ghproxy.net/https://github.com/...`）；
-- 自动将优化后的 `latest.json` 实时同步推送到您的 Supabase Storage `ota-releases` 桶；
-- **效果**：国内用户点击「检查更新」时，下载速度从几十 KB 跃升至 **10~25 MB/s 满速下载**！
+### 1. 方案 C 架构说明
+彻底摆脱对第三方存储桶（如 Supabase Storage）的强依赖，安装包与 `latest.json` 清单全部由 GitHub Releases 原生托管，并引入**国内高速 CDN 镜像智能中转**方案：
+- GitHub Actions 自动编译出 Win、Mac、Linux 三端安装包并附带 Minisign (Ed25519) 数字签名；
+- 脚本自动将各平台安装包下载链接转换为国内可免翻墙直连的高速 CDN 镜像源（默认 `https://gh-proxy.com/`，备用 `https://ghproxy.net/`）；
+- 自动将加速后的 `latest.json` 覆盖更新回 GitHub Release 资产中；
+- 客户端配置多镜像高可用 endpoints：主通道走国内加速镜像，镜像抖动时自动 fallback 原生 GitHub；
+- **效果**：国内用户点击「检查更新」时，下载速度从几十 KB 跃升至 **10~25 MB/s 满速下载**，完全免费、零存储与流量上限！
 
-### 2. 仓库 Secrets 配置（仅需配置一次）
-如果您将代码推送到 GitHub，请在 GitHub 仓库的 `Settings -> Secrets and variables -> Actions` 中添加以下 3 个密钥：
+### 2. 仓库 Secrets 配置（仅需配置一次，已精简至 4 个）
+如果您将代码推送到 GitHub，请在 GitHub 仓库的 `Settings -> Secrets and variables -> Actions` 中添加以下 **4 个** 密钥（不再需要 `SUPABASE_SERVICE_ROLE_KEY`）：
 
 | Secret 键名 | 填入的值 | 说明 |
 | :--- | :--- | :--- |
 | **`TAURI_SIGNING_PRIVATE_KEY`** | 本地 `.tauri/qshell.key` 文件的全部内容 | 供云端打包时进行数字签名 |
 | **`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`** | `qshell` | 私钥保护密码 |
-| **`SUPABASE_SERVICE_ROLE_KEY`** | Supabase 项目设置中的 `service_role` 密钥 | 用于让 CI 自动将 `latest.json` 覆盖推送到存储桶 |
+| **`VITE_SUPABASE_URL`** | `https://litlnyxkmcupbvigfrwj.supabase.co` | 官方云端服务 URL（打包注入，客户端开箱即用） |
+| **`VITE_SUPABASE_ANON_KEY`** | `sb_publishable_YpBLr67_e0X5t4O9Lfcxaw_wwWZsJNG` | 官方云端公开客户端密钥（受 RLS 保护） |
 
-### 3. 一键发布操作
-配置完成后，发布新版本只需一条 Git 命令：
-```bash
-git tag v1.0.1
-git push origin v1.0.1
-```
-推送标签后，云端将并发启动 Windows、macOS、Ubuntu 三台云主机完成编译、签名、生成国内加速清单并自动同步到 Supabase，真正实现**全自动、零维护、国内极速的 OTA 在线升级**！
+### 3. 正式发版操作（标准三步走）
+配置完成后，每次发布新版本请按以下标准流程执行：
+
+1. **同步提升版本号**：
+   同时修改以下两个文件中的 `version` 字段为相同版本号（例如升级为 `1.0.2`）：
+   - `package.json`（第 4 行）
+   - `src-tauri/tauri.conf.json`（第 4 行）
+
+2. **提交并推送到代码库**：
+   ```bash
+   git add package.json src-tauri/tauri.conf.json
+   git commit -m "chore(release): v1.0.2"
+   git push origin main
+   ```
+
+3. **打 Tag 推送触发云端全自动构建**：
+   ```bash
+   git tag v1.0.2
+   git push origin v1.0.2
+   ```
+   > 💡 **国内网络提示**：如果推送 tag 时遇到 SSL/TLS 握手中断，可指定本地代理端口推送：
+   > `git -c http.proxy=http://127.0.0.1:7897 push origin v1.0.2`
+
+推送标签后，云端将并发启动 Windows、macOS、Ubuntu 三台云主机完成编译、签名、注入国内加速镜像并覆盖更新 Release 清单，真正实现**全自动、零第三方存储依赖、国内极速的 OTA 在线升级**！
 

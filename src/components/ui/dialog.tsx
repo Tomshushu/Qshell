@@ -98,7 +98,7 @@ const DialogContent = React.forwardRef<
       <DialogPrimitive.Content
         ref={ref}
         className={cn(
-          "relative grid w-[calc(100vw-2rem)] min-w-0 max-w-lg gap-4 border border-border/60 glass-strong rounded-2xl p-6 shadow-xl duration-300 [overflow-wrap:anywhere] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
+          "relative grid w-[calc(100vw-2rem)] min-w-0 max-w-lg max-h-[calc(100vh-2.5rem)] gap-4 border border-border/60 glass-strong rounded-2xl p-6 shadow-xl duration-300 [overflow-wrap:anywhere] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
           isAnime && "anime-dialog-content border-pink-300/60 dark:border-pink-500/40",
           className
         )}

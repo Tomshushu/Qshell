@@ -46,11 +46,11 @@ export function UpdateDialog() {
 
   return (
     <Dialog open={isDialogOpen} onOpenChange={(open) => !open && closeDialog()}>
-      <DialogContent className="max-w-[480px] p-0 overflow-hidden bg-card/98 backdrop-blur-2xl border border-border/70 rounded-2xl shadow-2xl">
+      <DialogContent className="max-w-[480px] max-h-[min(90vh,680px)] flex flex-col p-0 overflow-hidden bg-card/98 backdrop-blur-2xl border border-border/70 rounded-2xl shadow-2xl">
         {/* 顶部环境装饰光晕 */}
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-64 h-24 bg-primary/10 blur-3xl pointer-events-none rounded-full" />
 
-        <div className="p-6 space-y-5">
+        <div className="p-6 space-y-5 overflow-y-auto max-h-[min(90vh,680px)] [scrollbar-gutter:stable] min-w-0">
           {/* 弹窗头部 */}
           <DialogHeader className="text-left space-y-1.5">
             <div className="flex items-center gap-2.5">
@@ -103,14 +103,16 @@ export function UpdateDialog() {
           {/* 状态 2: 遇到错误 */}
           {!isChecking && errorMessage && (
             <div className="space-y-4">
-              <div className="p-3.5 rounded-xl border border-destructive/20 bg-destructive/10 text-xs space-y-1.5">
-                <div className="flex items-start gap-2">
+              <div className="p-3.5 rounded-xl border border-destructive/20 bg-destructive/10 text-xs space-y-2">
+                <div className="flex items-start gap-2.5">
                   <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
-                  <div className="space-y-1 text-left flex-1 min-w-0">
+                  <div className="space-y-1.5 text-left flex-1 min-w-0">
                     <p className="font-semibold text-destructive">检查更新失败</p>
-                    <p className="text-muted-foreground text-[11px] break-words leading-relaxed font-mono">
-                      {errorMessage}
-                    </p>
+                    <div className="max-h-36 overflow-y-auto rounded-lg bg-background/60 p-2.5 border border-destructive/15">
+                      <p className="text-muted-foreground text-[11px] leading-relaxed font-mono break-all [overflow-wrap:anywhere] whitespace-pre-wrap select-text">
+                        {errorMessage}
+                      </p>
+                    </div>
                   </div>
                 </div>
               </div>

@@ -530,12 +530,12 @@ export function AuthDialog() {
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && closeDialog()}>
-      <DialogContent className="max-w-[420px] p-0 overflow-hidden bg-card/98 backdrop-blur-2xl border border-border/70 rounded-2xl shadow-2xl">
+      <DialogContent className="max-w-[420px] max-h-[min(90vh,760px)] flex flex-col p-0 overflow-hidden bg-card/98 backdrop-blur-2xl border border-border/70 rounded-2xl shadow-2xl">
         {isAuthenticated ? (
           // ══════════════════════════════════════════════════════
           // 已登录态: 个人安全金库卡片
           // ══════════════════════════════════════════════════════
-          <div className="relative p-6 space-y-5">
+          <div className="relative p-6 space-y-5 overflow-y-auto max-h-[min(90vh,760px)] [scrollbar-gutter:stable] min-w-0">
             <div className="absolute top-0 left-1/2 -translate-x-1/2 w-48 h-20 bg-primary/10 blur-2xl pointer-events-none rounded-full" />
 
             <DialogHeader className="text-left space-y-1">
@@ -719,7 +719,7 @@ export function AuthDialog() {
           // 未登录态: 按照用户要求精准设计的现代布局
           // 上边和 GitHub 平齐 (GitHub 登录、邮箱登录)，下面是没有账号立即注册
           // ══════════════════════════════════════════════════════
-          <div className="relative p-6 space-y-4">
+          <div className="relative p-6 space-y-4 overflow-y-auto max-h-[min(90vh,760px)] [scrollbar-gutter:stable] min-w-0">
             {/* 顶部环境光晕 */}
             <div className="absolute top-0 left-1/2 -translate-x-1/2 w-56 h-20 bg-primary/10 blur-3xl pointer-events-none rounded-full" />
 
@@ -777,7 +777,7 @@ export function AuthDialog() {
               <div className="p-2.5 rounded-xl border border-destructive/40 bg-destructive/10 text-destructive text-xs flex items-center justify-between gap-2 animate-in fade-in duration-150 text-left">
                 <div className="flex items-center gap-2 min-w-0">
                   <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-                  <span className="leading-snug">{errorMessage}</span>
+                  <span className="leading-snug break-all [overflow-wrap:anywhere]">{errorMessage}</span>
                 </div>
                 {(errorMessage.includes('邮箱或密码') || errorMessage.includes('未找到') || errorMessage.includes('未注册')) && authMode === 'login' && (
                   <button

@@ -65,7 +65,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'npm'
 
       - name: Install Rust toolchain
@@ -121,7 +121,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Download generated latest.json from Release
         run: |
@@ -130,28 +130,65 @@ jobs:
           echo "Downloading manifest from $MANIFEST_URL"
           curl -sL "$MANIFEST_URL" -o latest.json || echo "{}" > latest.json
 
-      - name: Optimize for China Mainland & Sync to Supabase
+      - name: Optimize manifest for fast CDN download
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://litlnyxkmcupbvigfrwj.supabase.co' }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          CHINA_MIRROR_PREFIX: 'https://ghproxy.net/'
+          CHINA_MIRROR_PREFIX: 'https://gh-proxy.com/'
           MANIFEST_PATH: 'latest.json'
         run: |
           node tools/sync-release-manifest.mjs
 
-      - name: Upload China-accelerated manifest back to Release
+      - name: Overwrite latest.json on Release with accelerated URLs
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            if (fs.existsSync('latest-china.json')) {
-              const fileData = fs.readFileSync('latest-china.json');
+            const release_id = ${{ needs.create-release.outputs.release_id }};
+
+            const assets = await github.rest.repos.listReleaseAssets({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release_id
+            });
+
+            // 1. 删除原未经加速的 latest.json 并上传注入了国内高速 CDN 的 latest.json
+            if (fs.existsSync('latest.json')) {
+              const existingLatest = assets.data.find(a => a.name === 'latest.json');
+              if (existingLatest) {
+                await github.rest.repos.deleteReleaseAsset({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  asset_id: existingLatest.id
+                });
+                console.log('Deleted unaccelerated latest.json');
+              }
+              const fileData = fs.readFileSync('latest.json');
               await github.rest.repos.uploadReleaseAsset({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                release_id: ${{ needs.create-release.outputs.release_id }},
-                name: 'latest-china.json',
+                release_id: release_id,
+                name: 'latest.json',
                 data: fileData
               });
-              console.log('Successfully uploaded latest-china.json to GitHub Release!');
+              console.log('Uploaded accelerated latest.json successfully!');
+            }
+
+            // 2. 同时上传 latest-china.json 备用
+            if (fs.existsSync('latest-china.json')) {
+              const existingChina = assets.data.find(a => a.name === 'latest-china.json');
+              if (existingChina) {
+                await github.rest.repos.deleteReleaseAsset({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  asset_id: existingChina.id
+                });
+              }
+              const chinaData = fs.readFileSync('latest-china.json');
+              await github.rest.repos.uploadReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: release_id,
+                name: 'latest-china.json',
+                data: chinaData
+              });
+              console.log('Uploaded latest-china.json successfully!');
             }

@@ -94,7 +94,7 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => {
 
       try {
         const { check } = await import('@tauri-apps/plugin-updater')
-        const update = await check()
+        const update = await check({ timeout: 15000 })
 
         if (update) {
           activeUpdate = update
@@ -139,7 +139,15 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => {
 
         let friendlyMsg = rawMsg
         if (rawMsg.includes('None of the fallback platforms')) {
-          friendlyMsg = '更新清单中未配置当前平台 (windows-x86_64) 的安装条目，请在 latest.json 的 platforms 中添加 windows-x86_64 节点。'
+          friendlyMsg = '更新清单中未配置当前平台的安装包条目，请稍后重试。'
+        } else if (
+          rawMsg.includes('error sending request') ||
+          rawMsg.includes('connection') ||
+          rawMsg.includes('handshake') ||
+          rawMsg.includes('timed out') ||
+          rawMsg.includes('dns')
+        ) {
+          friendlyMsg = `无法连接到更新服务器，请检查网络连接或系统代理设置后重试。\n（详细错误：${rawMsg}）`
         }
 
         set({
