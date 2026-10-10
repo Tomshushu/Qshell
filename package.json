@@ -5,6 +5,7 @@
   "description": "Qshell - 现代化极速终端与服务器管理工作台 (Tauri + Rust)",
   "type": "module",
   "scripts": {
+    "tauri": "tauri",
     "dev": "vite",
     "dev:tauri": "tauri dev",
     "build": "npm run check:undefined && tsc --noEmit && vite build",
