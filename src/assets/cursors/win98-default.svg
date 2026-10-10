@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22" fill="none" shape-rendering="crispEdges">
+  <!-- Win98 Classic Arrow: Black Border -->
+  <path d="M1 1 L1 17 L5 13 L8 20 L11 18.5 L8 12 L13 12 Z" fill="#000000" stroke="#000000" stroke-width="1" stroke-linejoin="miter"/>
+  <!-- Win98 Classic White Core -->
+  <path d="M2 3 L2 14.5 L5 11.5 L7.5 17.5 L9.2 16.5 L6.8 10.8 L11 10.8 Z" fill="#FFFFFF"/>
+</svg>

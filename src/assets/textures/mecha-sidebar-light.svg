@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 1000" width="100%" height="100%">
+  <defs>
+    <linearGradient id="sidebar-mecha-light" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#E6E9ED"/>
+      <stop offset="85%" stop-color="#DEE2E8"/>
+      <stop offset="100%" stop-color="#D4D9E0"/>
+    </linearGradient>
+
+    <!-- 警戒条纹 (Sidebar) -->
+    <pattern id="hazard-side-light" width="16" height="16" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse">
+      <line x1="0" y1="0" x2="0" y2="16" stroke="#FFCC00" stroke-width="8"/>
+      <line x1="8" y1="0" x2="8" y2="16" stroke="#1A1D20" stroke-width="8"/>
+    </pattern>
+  </defs>
+
+  <!-- 钛合金面板底色 -->
+  <rect width="320" height="1000" fill="url(#sidebar-mecha-light)"/>
+
+  <!-- 垂直机械液压提升导轨 (Hydraulic Lift Rails) -->
+  <g stroke="#9AA5B2" opacity="0.35" stroke-linecap="round">
+    <line x1="16" y1="0" x2="16" y2="1000" stroke-width="2"/>
+    <line x1="22" y1="0" x2="22" y2="1000" stroke-width="1"/>
+    <!-- 导轨刻度齿 (Rack & Pinion Teeth) -->
+    <path d="M16 40 L22 40 M16 60 L22 60 M16 80 L22 80 M16 100 L22 100 M16 120 L22 120 M16 140 L22 140 M16 160 L22 160 M16 180 L22 180 M16 200 L22 200 M16 220 L22 220 M16 240 L22 240 M16 260 L22 260 M16 280 L22 280 M16 300 L22 300 M16 320 L22 320 M16 340 L22 340 M16 360 L22 360 M16 380 L22 380 M16 400 L22 400 M16 420 L22 420 M16 440 L22 440 M16 460 L22 460 M16 480 L22 480 M16 500 L22 500 M16 520 L22 520 M16 540 L22 540 M16 560 L22 560 M16 580 L22 580 M16 600 L22 600 M16 620 L22 620 M16 640 L22 640 M16 660 L22 660 M16 680 L22 680 M16 700 L22 700 M16 720 L22 720 M16 740 L22 740 M16 760 L22 760 M16 780 L22 780 M16 800 L22 800 M16 820 L22 820 M16 840 L22 840 M16 860 L22 860 M16 880 L22 880 M16 900 L22 900 M16 920 L22 920 M16 940 L22 940 M16 960 L22 960 M16 980 L22 980" stroke-width="1.2"/>
+  </g>
+
+  <!-- 垂直巨幅喷漆文字 (Watermark) -->
+  <g font-family="'Impact', 'JetBrains Mono', sans-serif" font-weight="900" font-size="52" fill="#1E2328" opacity="0.04" transform="rotate(90 160 500)">
+    <text x="-150" y="30" letter-spacing="12">MECHA-TERMINAL</text>
+  </g>
+
+  <!-- 顶部与底部黄黑警戒条纹 (Top & Bottom Hazard Stripes) -->
+  <rect x="0" y="0" width="320" height="6" fill="url(#hazard-side-light)" opacity="0.8"/>
+  <rect x="0" y="994" width="320" height="6" fill="url(#hazard-side-light)" opacity="0.8"/>
+</svg>

@@ -1,0 +1,136 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Qshell",
+  "version": "1.0.0",
+  "identifier": "com.qshell.desktop",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Qshell",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 1000,
+        "minHeight": 700,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "decorations": true,
+        "transparent": false,
+        "alwaysOnTop": false,
+        "skipTaskbar": false,
+        "dragDropEnabled": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: blob: https://tae-api-cn.mchost.guru https://*.supabase.co https://avatars.githubusercontent.com; media-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://tae-api-cn.mchost.guru https://*.supabase.co; font-src 'self' data:",
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APPDATA/backgrounds/*",
+          "$APPDATA\\backgrounds\\*",
+          "$RESOURCE/desk_bg_images/*",
+          "$RESOURCE\\desk_bg_images\\*"
+        ]
+      }
+    },
+    "withGlobalTauri": false
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "targets": ["nsis", "app", "dmg", "deb", "appimage", "rpm"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "icons/nsis-header.bmp",
+        "sidebarImage": "icons/nsis-sidebar.bmp",
+        "installMode": "both",
+        "languages": ["SimpChinese", "English"],
+        "displayLanguageSelector": false,
+        "installerHooks": "./hooks.nsh"
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "hardenedRuntime": true,
+      "dmg": {
+        "background": "icons/dmg-background.png",
+        "windowSize": {
+          "width": 660,
+          "height": 400
+        },
+        "appPosition": {
+          "x": 180,
+          "y": 180
+        },
+        "applicationFolderPosition": {
+          "x": 480,
+          "y": 180
+        }
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0 | libwebkit2gtk-4.0-37",
+          "libgtk-3-0",
+          "libayatana-appindicator3-1 | libappindicator3-1",
+          "libssl3 | libssl1.1",
+          "curl",
+          "wget"
+        ],
+        "section": "devel",
+        "priority": "optional",
+        "desktopTemplate": "desktop.template",
+        "postInstallScript": "scripts/linux/deb-postinstall.sh",
+        "postRemoveScript": "scripts/linux/deb-postremove.sh"
+      },
+      "rpm": {
+        "depends": [
+          "webkit2gtk4.1",
+          "gtk3",
+          "libappindicator-gtk3",
+          "openssl"
+        ],
+        "release": "1",
+        "epoch": 0,
+        "desktopTemplate": "desktop.template",
+        "postInstallScript": "scripts/linux/rpm-postinstall.sh",
+        "postRemoveScript": "scripts/linux/rpm-postremove.sh"
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    },
+    "resources": {
+      "resources/desk_bg_images/*": "desk_bg_images/"
+    },
+    "externalBin": [],
+    "copyright": "Qshell Community",
+    "category": "DeveloperTool",
+    "shortDescription": "Qshell - 现代化极速终端与服务器管理工作台",
+    "longDescription": "Qshell - 通过 SSH 直连远程主机，提供终端、文件、Docker、服务、进程、端口、网络诊断等一站式管理能力。"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZCNzJENjY1REIyOEYwQwpSV1FNajdKZFppMjNCdHk0aWNML1Z4TmpEMStVRWw1NWxFTCtMaUVMM0tPMGtPYXBrUkZnVVhOVwo=",
+      "endpoints": [
+        "https://litlnyxkmcupbvigfrwj.supabase.co/storage/v1/object/public/ota-releases/latest.json"
+      ]
+    }
+  }
+}

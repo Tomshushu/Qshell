@@ -1,0 +1,201 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="100%" height="100%">
+  <defs>
+    <!-- 梦幻星夜紫靛渐变 -->
+    <linearGradient id="anime-sky-dark" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#120E22"/>
+      <stop offset="50%" stop-color="#181232"/>
+      <stop offset="100%" stop-color="#241544"/>
+    </linearGradient>
+
+    <!-- 魔法阵微暗波点 -->
+    <pattern id="anime-dots-dark" width="40" height="40" patternUnits="userSpaceOnUse">
+      <circle cx="20" cy="20" r="1.5" fill="#E879F9" opacity="0.10"/>
+    </pattern>
+
+    <!-- 月光与魔星渐变 -->
+    <linearGradient id="moon-glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFF3B0"/>
+      <stop offset="100%" stop-color="#FDE047"/>
+    </linearGradient>
+    <linearGradient id="magic-cyan" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67E8F9"/>
+      <stop offset="100%" stop-color="#06B6D4"/>
+    </linearGradient>
+    <linearGradient id="magic-pink" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F472B6"/>
+      <stop offset="100%" stop-color="#DB2777"/>
+    </linearGradient>
+    <!-- 猫咪毛色渐变 -->
+    <linearGradient id="cat-fur-dark" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#F1E7FE"/>
+    </linearGradient>
+
+    <!-- 可爱猫咪肉垫爪印组件 (Kawaii Cat Paw Def) -->
+    <g id="cat-paw-dark">
+      <!-- 掌心主大肉垫 (Palm Pad) -->
+      <path d="M 0,8 C -11,8 -14,-1 -10,-7 C -6,-12 -1,-8 0,-4 C 1,-8 6,-12 10,-7 C 14,-1 11,8 0,8 Z" fill="#F472B6"/>
+      <!-- 4 颗小脚趾豆 (4 Toe Beans) -->
+      <ellipse cx="-13" cy="-14" rx="4" ry="5.5" transform="rotate(-22 -13 -14)" fill="#F472B6"/>
+      <ellipse cx="-4.5" cy="-20" rx="4.2" ry="6" transform="rotate(-6 -4.5 -20)" fill="#F472B6"/>
+      <ellipse cx="4.5" cy="-20" rx="4.2" ry="6" transform="rotate(6 4.5 -20)" fill="#F472B6"/>
+      <ellipse cx="13" cy="-14" rx="4" ry="5.5" transform="rotate(22 13 -14)" fill="#F472B6"/>
+    </g>
+  </defs>
+
+  <!-- 底板夜空 -->
+  <rect width="1600" height="900" fill="url(#anime-sky-dark)"/>
+  <rect width="1600" height="900" fill="url(#anime-dots-dark)"/>
+
+  <!-- 魔法阵星盘微痕 (Subtle Magic Circle Ring) -->
+  <g transform="translate(1320, 680)" stroke="#A855F7" fill="none" opacity="0.10">
+    <circle cx="0" cy="0" r="150" stroke-width="1.5" stroke-dasharray="6 6"/>
+    <circle cx="0" cy="0" r="110" stroke-width="1"/>
+    <polygon points="0,-110 95,55 -95,55" stroke-width="1"/>
+    <polygon points="0,110 95,-55 -95,-55" stroke-width="1"/>
+    <circle cx="0" cy="0" r="45" stroke-width="1.2" stroke-dasharray="3 3"/>
+  </g>
+
+  <!-- 底部夜雾卡通云层 (Night Mist Clouds) -->
+  <g fill="#1D153B" opacity="0.6">
+    <path d="M-50 900 L-50 820 Q 40 760, 130 810 Q 220 740, 340 790 Q 460 720, 590 780 Q 730 710, 880 770 Q 1010 700, 1170 770 Q 1300 710, 1440 770 Q 1560 720, 1700 790 L1700 900 Z"/>
+  </g>
+  <g fill="#2A1B54" opacity="0.45" stroke="#D946EF" stroke-width="0.75">
+    <path d="M-50 900 L-50 850 Q 80 800, 200 840 Q 320 780, 460 830 Q 600 760, 750 820 Q 900 760, 1050 810 Q 1200 760, 1340 810 Q 1480 760, 1620 800 Q 1660 780, 1700 820 L1700 900 Z"/>
+  </g>
+
+  <!-- 右上方可爱的发光月牙 + 趴月亮安睡小猫咪 🌙🐱 -->
+  <g transform="translate(1420, 170)">
+    <!-- 月亮 -->
+    <g transform="rotate(-15)">
+      <path d="M 0 -55 A 55 55 0 1 0 55 42 A 46 46 0 1 1 0 -55 Z" fill="url(#moon-glow)" opacity="0.75"/>
+    </g>
+    <!-- 趴在月亮凹陷弧度里熟睡的小白猫 (Sleeping Cat on Crescent Moon) -->
+    <g transform="translate(-18, -12) scale(0.9)">
+      <!-- 猫尾巴 -->
+      <path d="M -25,20 C -40,16 -46,2 -38,-6 C -32,-12 -24,-4 -28,8 Z" fill="url(#cat-fur-dark)" opacity="0.95"/>
+      <!-- 猫身躯 (蜷缩球体) -->
+      <ellipse cx="2" cy="16" rx="28" ry="19" fill="url(#cat-fur-dark)"/>
+      <!-- 后腿小肉垫爪爪 -->
+      <ellipse cx="-18" cy="24" rx="7" ry="5" fill="#F472B6" opacity="0.8"/>
+      <!-- 猫脑袋 -->
+      <circle cx="22" cy="6" r="19" fill="url(#cat-fur-dark)"/>
+      <!-- 左耳 -->
+      <path d="M 12,-6 C 9,-18 17,-26 24,-11 Z" fill="url(#cat-fur-dark)"/>
+      <path d="M 14,-7 C 12,-16 17,-21 21,-11 Z" fill="#F472B6"/>
+      <!-- 右耳 -->
+      <path d="M 27,-9 C 32,-24 42,-16 35,-4 Z" fill="url(#cat-fur-dark)"/>
+      <path d="M 29,-8 C 33,-19 39,-14 34,-5 Z" fill="#F472B6"/>
+      <!-- 熟睡闭眼 ⌒ ⌒ -->
+      <path d="M 18,7 Q 22,11 26,7" stroke="#4C1D95" stroke-width="2" stroke-linecap="round" fill="none"/>
+      <path d="M 29,6 Q 33,10 37,6" stroke="#4C1D95" stroke-width="2" stroke-linecap="round" fill="none"/>
+      <!-- 樱花小鼻嘴 :3 -->
+      <path d="M 28,11 L 26,9 C 26,8.5 30,8.5 30,9 Z" fill="#F472B6"/>
+      <path d="M 25,12 Q 27,15 28,13 Q 29,15 31,12" stroke="#6D28D9" stroke-width="1.2" stroke-linecap="round" fill="none"/>
+      <!-- 腮红 -->
+      <ellipse cx="16" cy="11" rx="4" ry="2.5" fill="#F472B6" opacity="0.6"/>
+      <ellipse cx="37" cy="10" rx="4" ry="2.5" fill="#F472B6" opacity="0.6"/>
+      <!-- 抱胸前的两只小前爪 -->
+      <ellipse cx="8" cy="24" rx="6" ry="4" fill="#FFFFFF" stroke="#E9D5FF" stroke-width="1"/>
+      <ellipse cx="17" cy="24" rx="6" ry="4" fill="#FFFFFF" stroke="#E9D5FF" stroke-width="1"/>
+      <!-- 飘浮的安睡 z Z Z -->
+      <g fill="#FDE047" opacity="0.8" font-family="'Quicksand', sans-serif" font-weight="bold">
+        <text x="36" y="-18" font-size="13">z</text>
+        <text x="45" y="-28" font-size="16">Z</text>
+      </g>
+    </g>
+    <!-- 月角陪伴小星星 -->
+    <g transform="translate(-48, 25) scale(0.65)">
+      <path d="M0 -18 Q 0 0, 18 0 Q 0 0, 0 18 Q 0 0, -18 0 Q 0 0, 0 -18 Z" fill="#FDE047" opacity="0.85"/>
+    </g>
+  </g>
+
+  <!-- 左下角云端探出头的小黑猫/小萌猫 (Peeking Cat Behind Clouds) 🐱 -->
+  <g transform="translate(180, 770) scale(0.9)">
+    <!-- 头部轮廓 -->
+    <ellipse cx="0" cy="0" rx="42" ry="34" fill="#241442" stroke="#D946EF" stroke-width="1.8"/>
+    <!-- 左耳 -->
+    <path d="M -35,-15 C -46,-45 -22,-52 -12,-28 Z" fill="#241442" stroke="#D946EF" stroke-width="1.8"/>
+    <path d="M -30,-18 C -38,-38 -22,-42 -16,-26 Z" fill="#EC4899" opacity="0.8"/>
+    <!-- 右耳 -->
+    <path d="M 35,-15 C 46,-45 22,-52 12,-28 Z" fill="#241442" stroke="#D946EF" stroke-width="1.8"/>
+    <path d="M 30,-18 C 38,-38 22,-42 16,-26 Z" fill="#EC4899" opacity="0.8"/>
+    <!-- 大眼睛 (Sparkling Anime Cat Eyes) ✧ ✧ -->
+    <ellipse cx="-18" cy="-2" rx="10" ry="13" fill="#06B6D4"/>
+    <ellipse cx="-18" cy="-2" rx="8" ry="11" fill="#0891B2"/>
+    <circle cx="-20" cy="-6" r="3.5" fill="#FFFFFF"/>
+    <circle cx="-15" cy="4" r="1.5" fill="#FFFFFF"/>
+    <ellipse cx="18" cy="-2" rx="10" ry="13" fill="#06B6D4"/>
+    <ellipse cx="18" cy="-2" rx="8" ry="11" fill="#0891B2"/>
+    <circle cx="16" cy="-6" r="3.5" fill="#FFFFFF"/>
+    <circle cx="21" cy="4" r="1.5" fill="#FFFFFF"/>
+    <!-- 樱花小鼻孔与萌嘴 -->
+    <path d="M 0,11 L -2.5,7 C -2.5,6.5 2.5,6.5 2.5,7 Z" fill="#F472B6"/>
+    <path d="M -7,12 Q -3,17 0,13 Q 3,17 7,12" stroke="#F472B6" stroke-width="2" stroke-linecap="round" fill="none"/>
+    <!-- 胡须 (Whiskers) -->
+    <path d="M -30,8 Q -50,6 -65,2" stroke="#E879F9" stroke-width="1.5" stroke-linecap="round" opacity="0.75"/>
+    <path d="M -32,14 Q -50,16 -64,18" stroke="#E879F9" stroke-width="1.5" stroke-linecap="round" opacity="0.75"/>
+    <path d="M 30,8 Q 50,6 65,2" stroke="#E879F9" stroke-width="1.5" stroke-linecap="round" opacity="0.75"/>
+    <path d="M 32,14 Q 50,16 64,18" stroke="#E879F9" stroke-width="1.5" stroke-linecap="round" opacity="0.75"/>
+    <!-- 搭在云朵上的两只萌萌小肉爪 -->
+    <g transform="translate(-26, 28)">
+      <path d="M -12,0 C -12,-10 12,-10 12,0 Z" fill="#241442" stroke="#D946EF" stroke-width="1.5"/>
+      <circle cx="-6" cy="-2" r="1.5" fill="#F472B6"/>
+      <circle cx="0" cy="-4" r="1.5" fill="#F472B6"/>
+      <circle cx="6" cy="-2" r="1.5" fill="#F472B6"/>
+    </g>
+    <g transform="translate(26, 28)">
+      <path d="M -12,0 C -12,-10 12,-10 12,0 Z" fill="#241442" stroke="#D946EF" stroke-width="1.5"/>
+      <circle cx="-6" cy="-2" r="1.5" fill="#F472B6"/>
+      <circle cx="0" cy="-4" r="1.5" fill="#F472B6"/>
+      <circle cx="6" cy="-2" r="1.5" fill="#F472B6"/>
+    </g>
+  </g>
+
+  <!-- 稀疏点缀、大小错落的夜光猫咪肉垫爪印 (Sparse Varied-Size Cat Paws) 🐾 -->
+  <g>
+    <!-- 左上方夜空：大号荧光肉垫 (Large Glowing Paw) -->
+    <use href="#cat-paw-dark" transform="translate(420, 240) rotate(-18) scale(1.1)" opacity="0.18"/>
+    <!-- 伴随的幼猫小脚印 (Tiny Baby Paw) -->
+    <use href="#cat-paw-dark" transform="translate(485, 195) rotate(8) scale(0.55)" opacity="0.22"/>
+    <!-- 中右侧星河：中号星光梅花印 (Medium Paw) -->
+    <use href="#cat-paw-dark" transform="translate(1080, 260) rotate(15) scale(0.85)" opacity="0.18"/>
+    <!-- 右上方迷你软萌爪爪 (Mini Delicate Paw) -->
+    <use href="#cat-paw-dark" transform="translate(1140, 215) rotate(32) scale(0.48)" opacity="0.20"/>
+    <!-- 云端边上的一枚轻柔爪印 (Subtle Cloud Paw) -->
+    <use href="#cat-paw-dark" transform="translate(200, 560) rotate(28) scale(0.72)" opacity="0.16"/>
+  </g>
+
+  <!-- 璀璨发光的日系四角魔法星 (Twinkling Magic Stars) -->
+  <g transform="translate(160, 130) scale(1.3)">
+    <path d="M0 -22 Q 0 0, 22 0 Q 0 0, 0 22 Q 0 0, -22 0 Q 0 0, 0 -22 Z" fill="url(#magic-pink)" opacity="0.55"/>
+    <circle cx="0" cy="0" r="3" fill="#FFFFFF"/>
+  </g>
+  <g transform="translate(480, 150) scale(0.9)">
+    <path d="M0 -18 Q 0 0, 18 0 Q 0 0, 0 18 Q 0 0, -18 0 Q 0 0, 0 -18 Z" fill="url(#magic-cyan)" opacity="0.6"/>
+  </g>
+  <g transform="translate(920, 110) scale(1.1)">
+    <path d="M0 -20 Q 0 0, 20 0 Q 0 0, 0 20 Q 0 0, -20 0 Q 0 0, 0 -20 Z" fill="url(#moon-glow)" opacity="0.5"/>
+  </g>
+
+  <!-- 流星划痕 (Shooting Star) 🌠 -->
+  <g transform="translate(680, 110) rotate(-35)" opacity="0.35">
+    <line x1="0" y1="0" x2="160" y2="0" stroke="url(#magic-cyan)" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="0" cy="0" r="4" fill="#FFFFFF"/>
+  </g>
+
+  <!-- 荧光星尘点点 -->
+  <g opacity="0.45">
+    <circle cx="280" cy="240" r="2.5" fill="#F472B6"/>
+    <circle cx="390" cy="110" r="3.5" fill="#67E8F9"/>
+    <circle cx="670" cy="210" r="3" fill="#FDE047"/>
+    <circle cx="980" cy="180" r="4" fill="#C084FC"/>
+    <circle cx="1210" cy="190" r="3" fill="#F472B6"/>
+    <circle cx="1520" cy="270" r="3.5" fill="#67E8F9"/>
+  </g>
+
+  <!-- 底部右下角萌系水印标语 -->
+  <g font-family="'Nunito', 'Quicksand', 'PingFang SC', sans-serif" font-weight="900" fill="#E879F9" opacity="0.22">
+    <text x="1530" y="865" font-size="20" letter-spacing="3" text-anchor="end">★ MAGICAL MEOW // NYA EDITION ฅ(＾・ω・＾ฅ) ★</text>
+  </g>
+</svg>

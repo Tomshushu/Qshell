@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22" fill="none">
+  <!-- Tight Press Shadow -->
+  <g transform="translate(0.5, 0.5)" opacity="0.25">
+    <ellipse cx="11.5" cy="13.5" rx="6" ry="4.5" fill="#000000"/>
+    <ellipse cx="5.5" cy="6" rx="3" ry="2.5" fill="#000000"/>
+    <ellipse cx="10.8" cy="4" rx="3" ry="2.5" fill="#000000"/>
+    <ellipse cx="15.8" cy="6" rx="3" ry="2.5" fill="#000000"/>
+    <ellipse cx="4.8" cy="10.8" rx="2.5" ry="2" fill="#000000"/>
+  </g>
+
+  <!-- Squished Paw Body (Wider, pressed down against surface) -->
+  <g stroke="#3D2033" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M5.5 10.5 C3.5 13 4.8 19 11.5 19 C18.2 19 19.5 13 17.5 10.5 C15.5 12 7.5 12 5.5 10.5 Z" fill="#FFF0F5"/>
+    <ellipse cx="5.5" cy="6" rx="3" ry="2.5" fill="#FFF0F5"/>
+    <ellipse cx="10.8" cy="4" rx="3" ry="2.5" fill="#FFF0F5"/>
+    <ellipse cx="15.8" cy="6" rx="3" ry="2.5" fill="#FFF0F5"/>
+    <ellipse cx="4.8" cy="10.8" rx="2.5" ry="2" fill="#FFF0F5"/>
+  </g>
+
+  <!-- Deep Pink Squished Paw Beans -->
+  <ellipse cx="5.5" cy="6" rx="1.8" ry="1.4" fill="#FF1493"/>
+  <ellipse cx="10.8" cy="4" rx="1.8" ry="1.4" fill="#FF1493"/>
+  <ellipse cx="15.8" cy="6" rx="1.8" ry="1.4" fill="#FF1493"/>
+  <ellipse cx="4.8" cy="10.8" rx="1.5" ry="1.2" fill="#FF1493"/>
+
+  <!-- Squished Main Meat Pad -->
+  <path d="M8 13.8 C6.8 12.2 8.6 10.5 11.5 11.5 C14.4 10.5 16.2 12.2 15 13.8 C14 16 9 16 8 13.8 Z" fill="#FF1493"/>
+
+  <!-- Cute Heart Impact Stamp at Click Point (3, 3) -->
+  <path d="M3 1.6 C2.2 0.6 1 1.2 1 2.3 C1 3.5 3 4.8 3 4.8 C3 4.8 5 3.5 5 2.3 C5 1.2 3.8 0.6 3 1.6 Z" fill="#FF007F" stroke="#FFFFFF" stroke-width="0.6"/>
+  <circle cx="2.3" cy="2" r="0.5" fill="#FFFFFF"/>
+</svg>

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22" fill="none">
+  <!-- Shadow -->
+  <circle cx="11" cy="11" r="9" stroke="#0E1012" stroke-width="2.5" fill="none" opacity="0.8"/>
+  <!-- Emergency Tactical Alert Red Outer Ring -->
+  <circle cx="11" cy="11" r="9" stroke="#FF3B30" stroke-width="1.8" fill="#FF3B30" fill-opacity="0.2"/>
+  
+  <!-- Four Clamps Clamped Inward (Clamp Lock State) -->
+  <path d="M7 9 L7 7 L9 7" stroke="#FFCC00" stroke-width="2.2" stroke-linecap="square"/>
+  <path d="M15 9 L15 7 L13 7" stroke="#FFCC00" stroke-width="2.2" stroke-linecap="square"/>
+  <path d="M7 13 L7 15 L9 15" stroke="#FFCC00" stroke-width="2.2" stroke-linecap="square"/>
+  <path d="M15 13 L15 15 L13 15" stroke="#FFCC00" stroke-width="2.2" stroke-linecap="square"/>
+
+  <!-- Hardcore Crosshair Locking Target -->
+  <line x1="6" y1="11" x2="16" y2="11" stroke="#FF3B30" stroke-width="1.8"/>
+  <line x1="11" y1="6" x2="11" y2="16" stroke="#FF3B30" stroke-width="1.8"/>
+
+  <!-- Solid Locked Core -->
+  <rect x="9.5" y="9.5" width="3" height="3" fill="#FFFFFF" stroke="#FF3B30" stroke-width="1"/>
+</svg>

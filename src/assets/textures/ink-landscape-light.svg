@@ -1,0 +1,173 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="100%" height="100%">
+  <defs>
+    <!-- 宣纸温润渐变底色 -->
+    <linearGradient id="paper-bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FAF7EE"/>
+      <stop offset="60%" stop-color="#F6F2E8"/>
+      <stop offset="100%" stop-color="#F2EDE0"/>
+    </linearGradient>
+
+    <!-- 远山云雾淡墨渐变 1 (最远层，淡若游丝) -->
+    <linearGradient id="mist-mountain-1" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1A1C20" stop-opacity="0.08"/>
+      <stop offset="70%" stop-color="#1A1C20" stop-opacity="0.03"/>
+      <stop offset="100%" stop-color="#FAF7EE" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- 远山云雾渐变 2 (第二层，清墨峦嶂) -->
+    <linearGradient id="mist-mountain-2" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#181A1D" stop-opacity="0.14"/>
+      <stop offset="65%" stop-color="#181A1D" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#FAF7EE" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- 中景山峦渐变 3 (第三层，重墨奇峰) -->
+    <linearGradient id="mist-mountain-3" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#121417" stop-opacity="0.22"/>
+      <stop offset="50%" stop-color="#15171A" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#FAF7EE" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- 江水微澜烟波渐变 -->
+    <linearGradient id="river-wash" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#181A1D" stop-opacity="0"/>
+      <stop offset="40%" stop-color="#181A1D" stop-opacity="0.04"/>
+      <stop offset="80%" stop-color="#181A1D" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#181A1D" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 1. 宣纸底色与草木微粒暗纹 -->
+  <rect width="1600" height="900" fill="url(#paper-bg)"/>
+
+  <!-- 宣纸天然长纤维微纹理（极其素雅，透明度 0.04） -->
+  <g stroke="#6B5E4F" stroke-linecap="round" fill="none" opacity="0.045">
+    <path d="M120 80 Q220 95 340 75" stroke-width="1"/>
+    <path d="M520 140 Q620 160 760 135" stroke-width="0.8"/>
+    <path d="M980 65 Q1120 90 1260 70" stroke-width="1.1"/>
+    <path d="M1380 120 Q1460 100 1540 130" stroke-width="0.9"/>
+    <path d="M80 450 Q200 480 360 440" stroke-width="0.9"/>
+    <path d="M640 520 Q780 500 920 540" stroke-width="1"/>
+    <path d="M1100 480 Q1240 510 1380 470" stroke-width="0.8"/>
+    <path d="M220 780 Q380 760 520 800" stroke-width="1.1"/>
+    <path d="M780 820 Q920 850 1060 810" stroke-width="0.9"/>
+    <path d="M1220 790 Q1380 810 1520 770" stroke-width="1"/>
+  </g>
+
+  <!-- 2. 远景层峦叠嶂（第一重山：极远黛色山峦，若隐若现） -->
+  <path d="M0 480 
+           Q 120 410, 260 430 
+           T 540 390 
+           Q 680 340, 820 380 
+           T 1120 350 
+           Q 1280 300, 1440 340 
+           T 1600 370 
+           L 1600 700 L 0 700 Z" 
+        fill="url(#mist-mountain-1)"/>
+
+  <!-- 3. 第二重山（清墨层峦：山势雄浑，云烟环绕） -->
+  <path d="M0 560 
+           Q 160 460, 320 500 
+           Q 460 420, 600 470 
+           Q 780 380, 960 450 
+           Q 1140 430, 1300 490 
+           Q 1460 440, 1600 510 
+           L 1600 850 L 0 850 Z" 
+        fill="url(#mist-mountain-2)"/>
+
+  <!-- 4. 第三重山（近景重墨奇峰，偏右下与底部布局，与上方卡片自然呼应） -->
+  <!-- 左下缓坡低峦 -->
+  <path d="M0 720 
+           Q 140 640, 280 670 
+           Q 420 620, 560 690 
+           Q 700 660, 840 760 
+           L 840 900 L 0 900 Z" 
+        fill="url(#mist-mountain-3)"/>
+
+  <!-- 右侧主峰与苍崖叠翠（山势苍劲挺拔，水墨笔触浓郁） -->
+  <path d="M880 900 
+           Q 960 740, 1080 670 
+           Q 1140 580, 1240 520 
+           Q 1300 460, 1380 500 
+           Q 1440 430, 1520 480 
+           Q 1570 440, 1600 470 
+           L 1600 900 Z" 
+        fill="url(#mist-mountain-3)"/>
+
+  <!-- 近景峰岩皴法微墨线条（雨点皴、披麻皴之墨韵骨骼） -->
+  <g stroke="#121417" stroke-linecap="round" fill="none" opacity="0.16">
+    <!-- 右主峰皴纹 -->
+    <path d="M1240 528 Q1255 580 1265 640" stroke-width="1.2"/>
+    <path d="M1250 545 Q1270 610 1285 680" stroke-width="0.9"/>
+    <path d="M1380 505 Q1400 570 1415 630" stroke-width="1.4"/>
+    <path d="M1395 530 Q1420 600 1435 670" stroke-width="1.0"/>
+    <path d="M1520 485 Q1540 550 1555 620" stroke-width="1.3"/>
+    <!-- 悬崖苍松孤影 (Cliff Bonsai Pine) -->
+    <path d="M1235 560 Q1200 550 1170 565" stroke-width="1.8"/>
+    <path d="M1170 565 Q1150 558 1130 568" stroke-width="1.4"/>
+    <!-- 松针团簇 (Pine Needles) -->
+    <ellipse cx="1135" cy="565" rx="14" ry="7" fill="#141619" opacity="0.22"/>
+    <ellipse cx="1165" cy="560" rx="18" ry="8" fill="#141619" opacity="0.20"/>
+    <ellipse cx="1195" cy="552" rx="15" ry="7" fill="#141619" opacity="0.18"/>
+  </g>
+
+  <!-- 5. 烟波水色（江面微澜与晨雾平流） -->
+  <rect x="0" y="660" width="1600" height="240" fill="url(#river-wash)"/>
+  <g stroke="#181A1D" stroke-linecap="round" fill="none" opacity="0.08">
+    <path d="M280 740 C 380 745, 480 735, 620 742" stroke-width="0.8"/>
+    <path d="M420 770 C 560 775, 700 765, 840 772" stroke-width="0.75"/>
+    <path d="M180 810 C 320 815, 460 805, 600 812" stroke-width="0.9"/>
+    <path d="M540 840 C 680 845, 820 835, 960 842" stroke-width="0.7"/>
+    <path d="M320 870 C 480 875, 640 865, 800 872" stroke-width="0.85"/>
+  </g>
+
+  <!-- 6. 江上扁舟（孤舟蓑笠翁，一叶泛清波）位于中偏左下水域留白处 -->
+  <g transform="translate(680, 785) scale(0.9)" opacity="0.45">
+    <!-- 舟身 (Boat hull) -->
+    <path d="M0 12 C 15 17, 45 17, 60 12 C 45 14, 15 14, 0 12 Z" fill="#181A1D"/>
+    <!-- 船篷与渔翁独钓 (Canopy & Fisherman silhouette) -->
+    <path d="M22 13 Q 27 6, 36 6 Q 42 6, 46 13 Z" fill="#202328"/>
+    <!-- 渔翁 (Fisherman) -->
+    <circle cx="18" cy="8" r="2.2" fill="#181A1D"/>
+    <!-- 斗笠 (Bamboo hat) -->
+    <path d="M13 8 L 23 8 L 18 5 Z" fill="#181A1D"/>
+    <!-- 钓竿 (Fishing rod) -->
+    <path d="M19 8 L 8 0" stroke="#181A1D" stroke-width="0.8" stroke-linecap="round"/>
+    <!-- 钓线 (Fishing line) -->
+    <path d="M8 0 L 8 16" stroke="#181A1D" stroke-width="0.4" stroke-opacity="0.6"/>
+    <!-- 水面倒影与微澜 (Reflection ripples) -->
+    <path d="M-5 16 Q 30 18, 65 16" stroke="#181A1D" stroke-width="0.6" stroke-opacity="0.3"/>
+  </g>
+
+  <!-- 7. 云天归雁（群峰之上一行白鹭上青天，长空灵动） -->
+  <g opacity="0.32" fill="none" stroke="#181A1D" stroke-width="1.1" stroke-linecap="round">
+    <!-- 领头雁 -->
+    <path d="M1020 220 Q 1024 214, 1028 220 Q 1032 214, 1036 220"/>
+    <!-- 伴飞 1 -->
+    <path d="M1048 232 Q 1051 227, 1055 232 Q 1059 227, 1062 232"/>
+    <!-- 伴飞 2 -->
+    <path d="M1010 238 Q 1013 233, 1017 238 Q 1021 233, 1024 238"/>
+    <!-- 远飞 3 -->
+    <path d="M1072 245 Q 1074 241, 1077 245 Q 1080 241, 1083 245"/>
+    <!-- 远飞 4 -->
+    <path d="M1038 252 Q 1040 248, 1043 252 Q 1046 248, 1049 252"/>
+  </g>
+
+  <!-- 8. 左上隅文人题款与朱砂引首章（极具文人意趣） -->
+  <g transform="translate(60, 90)" opacity="0.28">
+    <!-- 竖排题款：烟波浩渺（仿古行书骨架） -->
+    <g fill="#181A1D" font-family="'STSong', 'Songti SC', serif" font-size="13" letter-spacing="4">
+      <text x="24" y="20">烟</text>
+      <text x="24" y="42">波</text>
+      <text x="24" y="64">浩</text>
+      <text x="24" y="86">渺</text>
+      <text x="24" y="108">墨</text>
+      <text x="24" y="130">韵</text>
+      <text x="24" y="152">流</text>
+      <text x="24" y="174">芳</text>
+    </g>
+    <!-- 朱砂引首小印 (Cinnabar Seal) -->
+    <rect x="2" y="8" width="13" height="22" rx="2" fill="#C23531" opacity="0.75"/>
+    <text x="8.5" y="24" fill="#FAF7EE" font-size="8.5" font-family="'STSong', serif" text-anchor="middle" font-weight="bold">墨</text>
+  </g>
+</svg>

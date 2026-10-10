@@ -1,0 +1,45 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+release
+
+# Tauri build artifacts
+src-tauri/target
+src-tauri/target-codex-check
+src-tauri/gen/schemas
+
+# Logs
+logs
+*.log
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+
+# Task checkpoints
+.task-checkpoint*
+
+# Temporary notes
+*.txt
+_*.cjs
+!LICENSE.txt
+!NOTICE.txt
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+.tauri/
+*.key
+*.key.pub
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc

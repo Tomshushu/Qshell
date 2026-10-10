@@ -1,0 +1,16 @@
+[Desktop Entry]
+Categories={{categories}}
+Comment=现代化服务器管理工作台 (SSH, Docker, 终端, 监控, 网络诊断)
+Exec={{exec}} %U
+Icon={{icon}}
+Name={{name}}
+Terminal=false
+Type=Application
+StartupWMClass=Qshell
+MimeType=x-scheme-handler/qshell;x-scheme-handler/serverworkspace;
+Keywords=ssh;sftp;terminal;docker;server;linux;remote;management;
+Actions=NewWindow;
+
+[Desktop Action NewWindow]
+Name=新建窗口 / Open New Window
+Exec={{exec}}

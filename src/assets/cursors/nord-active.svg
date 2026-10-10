@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22" fill="none">
+  <!-- Frost Shadow -->
+  <g stroke="#2E3440" stroke-width="2" opacity="0.4" transform="translate(0.8, 0.8)">
+    <circle cx="11" cy="11" r="7.5"/>
+  </g>
+
+  <!-- Outer Ice Halo Ring -->
+  <circle cx="11" cy="11" r="7.5" stroke="#4C566A" stroke-width="1.2" stroke-dasharray="2 2"/>
+
+  <!-- 4-point Aurora Frost Crystal (Hotspot: 11, 11) -->
+  <!-- Top ray -->
+  <path d="M11 2 L12.5 9 L11 11 L9.5 9 Z" fill="#88C0D0"/>
+  <!-- Bottom ray -->
+  <path d="M11 20 L12.5 13 L11 11 L9.5 13 Z" fill="#81A1C1"/>
+  <!-- Left ray -->
+  <path d="M2 11 L9 9.5 L11 11 L9 12.5 Z" fill="#8FBCBB"/>
+  <!-- Right ray -->
+  <path d="M20 11 L13 9.5 L11 11 L13 12.5 Z" fill="#5E81AC"/>
+
+  <!-- Central Diamond Core -->
+  <polygon points="11,7.5 14.5,11 11,14.5 7.5,11" fill="#ECEFF4" stroke="#2E3440" stroke-width="0.8"/>
+  <circle cx="11" cy="11" r="1.5" fill="#88C0D0"/>
+  <circle cx="11" cy="11" r="0.6" fill="#FFFFFF"/>
+</svg>

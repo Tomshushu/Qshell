@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="100%" height="100%">
+  <defs>
+    <!-- 端砚夜色渐变底色 -->
+    <linearGradient id="night-bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#0E1013"/>
+      <stop offset="60%" stop-color="#121518"/>
+      <stop offset="100%" stop-color="#16191E"/>
+    </linearGradient>
+
+    <!-- 月夜远山渐变 1 -->
+    <linearGradient id="night-mist-1" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#889BB2" stop-opacity="0.07"/>
+      <stop offset="65%" stop-color="#889BB2" stop-opacity="0.02"/>
+      <stop offset="100%" stop-color="#0E1013" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- 月夜层峦渐变 2 -->
+    <linearGradient id="night-mist-2" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#7B90A8" stop-opacity="0.10"/>
+      <stop offset="60%" stop-color="#7B90A8" stop-opacity="0.03"/>
+      <stop offset="100%" stop-color="#0E1013" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- 月夜奇峰渐变 3 -->
+    <linearGradient id="night-mist-3" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#A5B8CC" stop-opacity="0.14"/>
+      <stop offset="50%" stop-color="#556577" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#0E1013" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- 夜江微澜渐变 -->
+    <linearGradient id="night-river-wash" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#7B90A8" stop-opacity="0"/>
+      <stop offset="40%" stop-color="#7B90A8" stop-opacity="0.03"/>
+      <stop offset="80%" stop-color="#7B90A8" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#7B90A8" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 1. 夜色端砚底板 -->
+  <rect width="1600" height="900" fill="url(#night-bg)"/>
+
+  <!-- 2. 朦胧秋月与月晕 (Moon in Cloud Mist) -->
+  <circle cx="1280" cy="180" r="70" fill="#CAD9E8" opacity="0.03"/>
+  <circle cx="1280" cy="180" r="38" fill="#E2EDF8" opacity="0.07"/>
+
+  <!-- 3. 第一重远山（青冷月光下的黛蓝远峦） -->
+  <path d="M0 480 
+           Q 120 410, 260 430 
+           T 540 390 
+           Q 680 340, 820 380 
+           T 1120 350 
+           Q 1280 300, 1440 340 
+           T 1600 370 
+           L 1600 700 L 0 700 Z" 
+        fill="url(#night-mist-1)"/>
+
+  <!-- 4. 第二重山（清冷层峦） -->
+  <path d="M0 560 
+           Q 160 460, 320 500 
+           Q 460 420, 600 470 
+           Q 780 380, 960 450 
+           Q 1140 430, 1300 490 
+           Q 1460 440, 1600 510 
+           L 1600 850 L 0 850 Z" 
+        fill="url(#night-mist-2)"/>
+
+  <!-- 5. 第三重山（近景山峦与右下峭壁苍松） -->
+  <path d="M0 720 
+           Q 140 640, 280 670 
+           Q 420 620, 560 690 
+           Q 700 660, 840 760 
+           L 840 900 L 0 900 Z" 
+        fill="url(#night-mist-3)"/>
+
+  <path d="M880 900 
+           Q 960 740, 1080 670 
+           Q 1140 580, 1240 520 
+           Q 1300 460, 1380 500 
+           Q 1440 430, 1520 480 
+           Q 1570 440, 1600 470 
+           L 1600 900 Z" 
+        fill="url(#night-mist-3)"/>
+
+  <!-- 峭壁苍松骨线 -->
+  <g stroke="#8FA3B8" stroke-linecap="round" fill="none" opacity="0.18">
+    <path d="M1235 560 Q1200 550 1170 565" stroke-width="1.8"/>
+    <path d="M1170 565 Q1150 558 1130 568" stroke-width="1.4"/>
+    <ellipse cx="1135" cy="565" rx="14" ry="7" fill="#8FA3B8" opacity="0.12"/>
+    <ellipse cx="1165" cy="560" rx="18" ry="8" fill="#8FA3B8" opacity="0.10"/>
+  </g>
+
+  <!-- 6. 夜江波光 -->
+  <rect x="0" y="660" width="1600" height="240" fill="url(#night-river-wash)"/>
+  <g stroke="#A5B8CC" stroke-linecap="round" fill="none" opacity="0.08">
+    <path d="M280 740 C 380 745, 480 735, 620 742" stroke-width="0.8"/>
+    <path d="M420 770 C 560 775, 700 765, 840 772" stroke-width="0.75"/>
+    <path d="M180 810 C 320 815, 460 805, 600 812" stroke-width="0.9"/>
+  </g>
+
+  <!-- 7. 夜泊孤舟与微茫渔火 (Night Boat with subtle warm amber lantern) -->
+  <g transform="translate(680, 785) scale(0.9)" opacity="0.55">
+    <path d="M0 12 C 15 17, 45 17, 60 12 C 45 14, 15 14, 0 12 Z" fill="#6A7D91"/>
+    <path d="M22 13 Q 27 6, 36 6 Q 42 6, 46 13 Z" fill="#526375"/>
+    <!-- 渔舟灯火 (Warm amber lantern) -->
+    <circle cx="21" cy="7" r="4" fill="#FFA500" opacity="0.25"/>
+    <circle cx="21" cy="7" r="1.5" fill="#FFD700" opacity="0.8"/>
+  </g>
+
+  <!-- 8. 夜空寒雁 -->
+  <g opacity="0.22" fill="none" stroke="#CAD7E4" stroke-width="1.1" stroke-linecap="round">
+    <path d="M1020 220 Q 1024 214, 1028 220 Q 1032 214, 1036 220"/>
+    <path d="M1048 232 Q 1051 227, 1055 232 Q 1059 227, 1062 232"/>
+    <path d="M1010 238 Q 1013 233, 1017 238 Q 1021 233, 1024 238"/>
+  </g>
+</svg>

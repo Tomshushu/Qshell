@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22" fill="none">
+  <!-- Outer Dark Armor Shadow -->
+  <path d="M1 1 L1 17 L5.5 13 L9 19.5 L12 18 L8.5 11.5 L14 11.5 Z" fill="#0E1012" stroke="#0E1012" stroke-width="1.6" stroke-linejoin="miter"/>
+  <!-- Titanium White Main Hull -->
+  <path d="M2 2 L2 15 L5.5 11.8 L8.5 17.5 L10.5 16.5 L7.5 10.8 L12.5 10.8 Z" fill="#E6E8EA"/>
+  <!-- Yellow Hazard / Flight Telemetry Wing Tip Markings -->
+  <path d="M2 6 L2 11 L5.5 11.8 Z" fill="#FFCC00"/>
+  <!-- Central Cockpit Sight Line -->
+  <line x1="2" y1="2" x2="6.5" y2="10.8" stroke="#1E2328" stroke-width="0.8"/>
+  <!-- HUD Attitude Horizon Winglet -->
+  <rect x="12" y="5" width="5" height="1.5" fill="#FFCC00" stroke="#0E1012" stroke-width="0.5"/>
+  <rect x="14" y="3" width="1.5" height="2" fill="#FF3B30"/>
+</svg>

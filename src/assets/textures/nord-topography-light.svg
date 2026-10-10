@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="100%" height="100%">
+  <defs>
+    <!-- 白桦暖雪原底色渐变 -->
+    <linearGradient id="nord-bg-light" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#F7F8F5"/>
+      <stop offset="50%" stop-color="#F2F4F0"/>
+      <stop offset="100%" stop-color="#ECF0EC"/>
+    </linearGradient>
+
+    <!-- 极地苔原微网格 -->
+    <pattern id="nord-grid-light" width="80" height="80" patternUnits="userSpaceOnUse">
+      <circle cx="40" cy="40" r="0.75" fill="#4A7C77" opacity="0.12"/>
+    </pattern>
+  </defs>
+
+  <!-- 底板 -->
+  <rect width="1600" height="900" fill="url(#nord-bg-light)"/>
+  <rect width="1600" height="900" fill="url(#nord-grid-light)"/>
+
+  <!-- 峡湾与冰川等高线 (Fjord Topographic Contours) - 平滑自然流动曲线 -->
+  <g fill="none" stroke="#3F726D" stroke-width="1.2" opacity="0.10" stroke-linecap="round">
+    <!-- 等高线层 1: 外沿冰川台地 -->
+    <path d="M-50 250 C 200 200, 450 320, 700 280 C 950 240, 1150 360, 1400 300 C 1550 260, 1650 290, 1700 310"/>
+    <!-- 等高线层 2 -->
+    <path d="M-50 350 C 250 280, 500 420, 750 370 C 1000 320, 1200 460, 1450 390 C 1580 350, 1650 380, 1700 400"/>
+    <!-- 等高线层 3 -->
+    <path d="M-50 480 C 300 400, 550 540, 820 480 C 1080 420, 1280 580, 1500 500 C 1600 460, 1660 480, 1700 510"/>
+    <!-- 等高线层 4: 峡湾深槽 -->
+    <path d="M-50 620 C 350 530, 620 680, 900 600 C 1180 520, 1350 690, 1550 620 C 1620 590, 1670 610, 1700 630"/>
+    <!-- 等高线层 5 -->
+    <path d="M-50 750 C 400 660, 700 800, 980 730 C 1250 660, 1420 810, 1620 740 C 1660 720, 1690 730, 1700 750"/>
+  </g>
+
+  <!-- 次级细等高线 (Hairline Sub-contours) -->
+  <g fill="none" stroke="#5E8C85" stroke-width="0.75" opacity="0.07" stroke-dasharray="4 6">
+    <path d="M-50 300 C 220 240, 480 370, 725 325 C 975 280, 1175 410, 1425 345 C 1565 305, 1655 335, 1700 355"/>
+    <path d="M-50 415 C 275 340, 525 480, 785 425 C 1040 370, 1240 520, 1475 445 C 1590 405, 1655 430, 1700 455"/>
+    <path d="M-50 550 C 325 465, 585 610, 860 540 C 1130 470, 1315 635, 1525 560 C 1610 525, 1665 545, 1700 570"/>
+    <path d="M-50 685 C 375 595, 660 740, 940 665 C 1215 590, 1385 750, 1585 680 C 1640 655, 1680 670, 1700 690"/>
+  </g>
+
+  <!-- 斯堪的纳维亚经纬度与地理印记 (Nordic Geographic Typography) -->
+  <g font-family="'Plus Jakarta Sans', 'Inter', -apple-system, sans-serif" fill="#3F726D" opacity="0.22">
+    <text x="70" y="80" font-size="11" font-weight="600" letter-spacing="3">64° 08' N, 21° 56' W // REYKJAVÍK BASIN</text>
+    <text x="70" y="98" font-size="9" font-weight="500" letter-spacing="1.5">ALT: 42M // ARCTIC FIORD TOPOGRAPHY</text>
+    
+    <text x="1380" y="80" font-size="11" font-weight="600" letter-spacing="3" text-anchor="end">SCANDINAVIAN MINIMAL</text>
+    <text x="1380" y="98" font-size="9" font-weight="500" letter-spacing="1.5" text-anchor="end">LAGOM &amp; HYGGE EDITION</text>
+  </g>
+
+  <!-- 右下角极地罗盘刻度极简圆环 (Minimalist Compass Ring) -->
+  <g transform="translate(1420, 720)" stroke="#3F726D" fill="none" opacity="0.12">
+    <circle cx="0" cy="0" r="90" stroke-width="1"/>
+    <circle cx="0" cy="0" r="82" stroke-width="0.5" stroke-dasharray="2 4"/>
+    <line x1="0" y1="-100" x2="0" y2="100" stroke-width="0.75"/>
+    <line x1="-100" y1="0" x2="100" y2="0" stroke-width="0.75"/>
+    <text x="0" y="-106" font-family="'Plus Jakarta Sans', sans-serif" font-size="9" font-weight="700" fill="#3F726D" text-anchor="middle" stroke="none">N</text>
+  </g>
+</svg>

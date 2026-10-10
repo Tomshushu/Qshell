@@ -1,0 +1,174 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="100%" height="100%">
+  <defs>
+    <!-- 深邃夜幕底色渐变 (严格采用 #0D0221 蓝紫倾向夜色) -->
+    <linearGradient id="nc-night-sky" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#080114"/>
+      <stop offset="45%" stop-color="#0D0221"/>
+      <stop offset="75%" stop-color="#14062E"/>
+      <stop offset="100%" stop-color="#0B021A"/>
+    </linearGradient>
+
+    <!-- 雨夜雾气与冷光漫射 -->
+    <radialGradient id="nc-cyan-mist" cx="18%" cy="55%" r="45%">
+      <stop offset="0%" stop-color="#00F0FF" stop-opacity="0.14"/>
+      <stop offset="50%" stop-color="#00F0FF" stop-opacity="0.04"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="nc-magenta-mist" cx="82%" cy="52%" r="45%">
+      <stop offset="0%" stop-color="#FF2E88" stop-opacity="0.15"/>
+      <stop offset="50%" stop-color="#7B2FF7" stop-opacity="0.05"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- 霓虹发光滤镜 (Bloom / Glow) -->
+    <filter id="neon-glow-cyan" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="8" result="blur1"/>
+      <feGaussianBlur stdDeviation="20" result="blur2"/>
+      <feMerge>
+        <feMergeNode in="blur2"/>
+        <feMergeNode in="blur1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="neon-glow-magenta" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="8" result="blur1"/>
+      <feGaussianBlur stdDeviation="22" result="blur2"/>
+      <feMerge>
+        <feMergeNode in="blur2"/>
+        <feMergeNode in="blur1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- 湿滑地面倒影模糊滤镜 -->
+    <filter id="wet-ground-reflection" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur stdDeviation="16 2"/>
+    </filter>
+
+    <!-- 赛博 HUD 透视地平网格 -->
+    <linearGradient id="grid-fade" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#7B2FF7" stop-opacity="0"/>
+      <stop offset="40%" stop-color="#00F0FF" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#FF2E88" stop-opacity="0.12"/>
+    </linearGradient>
+
+    <!-- 细密雨丝图案 -->
+    <pattern id="rain-pattern" width="80" height="80" patternTransform="rotate(18)" patternUnits="userSpaceOnUse">
+      <line x1="10" y1="5" x2="10" y2="28" stroke="#00F0FF" stroke-width="0.75" opacity="0.08"/>
+      <line x1="50" y1="35" x2="50" y2="62" stroke="#FFFFFF" stroke-width="0.6" opacity="0.06"/>
+      <line x1="30" y1="50" x2="30" y2="72" stroke="#FF2E88" stroke-width="0.75" opacity="0.07"/>
+      <line x1="70" y1="12" x2="70" y2="34" stroke="#00F0FF" stroke-width="0.5" opacity="0.05"/>
+    </pattern>
+  </defs>
+
+  <!-- 1. 背景底板 -->
+  <rect width="1600" height="900" fill="url(#nc-night-sky)"/>
+
+  <!-- 2. 两侧霓虹全息大雾晕染 -->
+  <rect width="1600" height="900" fill="url(#nc-cyan-mist)"/>
+  <rect width="1600" height="900" fill="url(#nc-magenta-mist)"/>
+
+  <!-- 3. 远景赛博摩天楼天际线剪影 -->
+  <g fill="#090117" opacity="0.85">
+    <!-- 远景高塔 1 -->
+    <rect x="260" y="180" width="70" height="720"/>
+    <polygon points="290,120 295,120 300,180 290,180" fill="#0D0221"/>
+    <circle cx="295" cy="118" r="1.5" fill="#FF2E88" opacity="0.9"/>
+    <!-- 远景主塔 -->
+    <rect x="740" y="140" width="120" height="760"/>
+    <polygon points="795,70 805,70 815,140 785,140" fill="#0D0221"/>
+    <line x1="800" y1="60" x2="800" y2="140" stroke="#00F0FF" stroke-width="1.5" opacity="0.7"/>
+    <circle cx="800" cy="58" r="2.5" fill="#00F0FF" filter="url(#neon-glow-cyan)"/>
+    <!-- 远景高塔 2 -->
+    <rect x="1220" y="160" width="90" height="740"/>
+    <polygon points="1260,90 1270,90 1280,160 1250,160" fill="#0D0221"/>
+    <circle cx="1265" cy="88" r="2" fill="#F9F871" opacity="0.9"/>
+  </g>
+
+  <!-- 4. 中景巨构与空中连廊天桥 (Skybridge) -->
+  <g fill="#100524" opacity="0.95">
+    <!-- 左侧巨构 -->
+    <path d="M60 900 L60 260 L240 260 L240 900 Z"/>
+    <!-- 右侧巨构 -->
+    <path d="M1360 900 L1360 240 L1540 240 L1540 900 Z"/>
+    <!-- 中央高架跨楼走廊天桥 -->
+    <rect x="520" y="320" width="560" height="24" rx="2" fill="#13072C" stroke="#25124A" stroke-width="1"/>
+    <!-- 穿行飞行器车流轨迹光线 -->
+    <line x1="480" y1="332" x2="620" y2="332" stroke="#00F0FF" stroke-width="2.5" opacity="0.75" filter="url(#neon-glow-cyan)"/>
+    <line x1="980" y1="332" x2="1120" y2="332" stroke="#FF2E88" stroke-width="2.5" opacity="0.75" filter="url(#neon-glow-magenta)"/>
+  </g>
+
+  <!-- 5. 巨幅全息霓虹发光看板与招牌 (两旁对峙经典构图) -->
+  <!-- 左侧：全息电光青高科技面板 (HUD Data Hologram) -->
+  <g transform="translate(100, 310)" filter="url(#neon-glow-cyan)">
+    <!-- 看板外框与发光导轨 -->
+    <rect x="0" y="0" width="130" height="190" rx="4" fill="none" stroke="#00F0FF" stroke-width="2" stroke-opacity="0.85"/>
+    <rect x="6" y="6" width="118" height="178" rx="2" fill="#00F0FF" fill-opacity="0.08"/>
+    <!-- 数据流与几何晶体图示 -->
+    <path d="M20 40 L60 40 L80 60 L110 60" fill="none" stroke="#00F0FF" stroke-width="1.5" stroke-opacity="0.9"/>
+    <rect x="20" y="80" width="70" height="10" fill="#00F0FF" fill-opacity="0.6"/>
+    <rect x="20" y="98" width="50" height="6" fill="#00F0FF" fill-opacity="0.4"/>
+    <rect x="20" y="110" width="85" height="6" fill="#00F0FF" fill-opacity="0.4"/>
+    <circle cx="95" cy="145" r="14" fill="none" stroke="#00F0FF" stroke-width="1.5" stroke-dasharray="4 2"/>
+    <line x1="20" y1="165" x2="110" y2="165" stroke="#00F0FF" stroke-width="1" stroke-opacity="0.5"/>
+  </g>
+  <!-- 左侧垂直招牌 (CYBER) -->
+  <g transform="translate(245, 360)">
+    <rect x="0" y="0" width="18" height="130" rx="3" fill="#090117" stroke="#00F0FF" stroke-width="1.5" filter="url(#neon-glow-cyan)"/>
+    <circle cx="9" cy="20" r="3" fill="#00F0FF"/>
+    <circle cx="9" cy="45" r="3" fill="#00F0FF"/>
+    <circle cx="9" cy="70" r="3" fill="#F9F871"/>
+    <circle cx="9" cy="95" r="3" fill="#00F0FF"/>
+    <circle cx="9" cy="115" r="2" fill="#00F0FF"/>
+  </g>
+
+  <!-- 右侧：全息品红看板 (Magenta Matrix Display) -->
+  <g transform="translate(1370, 290)" filter="url(#neon-glow-magenta)">
+    <!-- 矩形外轮廓 -->
+    <rect x="0" y="0" width="140" height="210" rx="4" fill="none" stroke="#FF2E88" stroke-width="2" stroke-opacity="0.85"/>
+    <rect x="6" y="6" width="128" height="198" rx="2" fill="#FF2E88" fill-opacity="0.08"/>
+    <!-- 蜂窝/切角 HUD 徽标 -->
+    <polygon points="70,35 105,55 105,95 70,115 35,95 35,55" fill="none" stroke="#FF2E88" stroke-width="1.5"/>
+    <polygon points="70,48 93,62 93,88 70,102 47,88 47,62" fill="#FF2E88" fill-opacity="0.3"/>
+    <!-- 状态进度条 -->
+    <rect x="25" y="135" width="90" height="7" rx="1" fill="#7B2FF7" fill-opacity="0.6"/>
+    <rect x="25" y="135" width="55" height="7" rx="1" fill="#FF2E88"/>
+    <line x1="25" y1="155" x2="115" y2="155" stroke="#FF2E88" stroke-width="1" stroke-dasharray="3 3"/>
+    <circle cx="35" cy="175" r="4" fill="#F9F871" opacity="0.9"/>
+    <circle cx="55" cy="175" r="4" fill="#FF2E88" opacity="0.9"/>
+    <circle cx="75" cy="175" r="4" fill="#7B2FF7" opacity="0.9"/>
+  </g>
+  <!-- 右侧垂直招牌 (NIGHT) -->
+  <g transform="translate(1335, 340)">
+    <rect x="0" y="0" width="18" height="140" rx="3" fill="#090117" stroke="#FF2E88" stroke-width="1.5" filter="url(#neon-glow-magenta)"/>
+    <circle cx="9" cy="22" r="3" fill="#FF2E88"/>
+    <circle cx="9" cy="48" r="3" fill="#FF2E88"/>
+    <circle cx="9" cy="74" r="3" fill="#7B2FF7"/>
+    <circle cx="9" cy="100" r="3" fill="#FF2E88"/>
+    <circle cx="9" cy="122" r="2" fill="#F9F871"/>
+  </g>
+
+  <!-- 6. 湿滑街道地表与全息反射倒影层 (Wet Asphalt & Neon Reflections) -->
+  <g>
+    <!-- 地平线分割暗部基底 -->
+    <path d="M0 650 L1600 650 L1600 900 L0 900 Z" fill="#0B0218"/>
+    <!-- 湿滑街道沥青反射光斑（左侧青光漫反射） -->
+    <ellipse cx="280" cy="750" rx="220" ry="40" fill="#00F0FF" opacity="0.14" filter="url(#wet-ground-reflection)"/>
+    <ellipse cx="320" cy="810" rx="160" ry="25" fill="#00F0FF" opacity="0.18" filter="url(#wet-ground-reflection)"/>
+    <!-- 湿滑街道沥青反射光斑（右侧品红漫反射） -->
+    <ellipse cx="1320" cy="740" rx="240" ry="42" fill="#FF2E88" opacity="0.15" filter="url(#wet-ground-reflection)"/>
+    <ellipse cx="1280" cy="810" rx="180" ry="28" fill="#7B2FF7" opacity="0.16" filter="url(#wet-ground-reflection)"/>
+    <!-- 中央车灯微光反射 -->
+    <ellipse cx="800" cy="720" rx="70" ry="12" fill="#F9F871" opacity="0.22" filter="url(#wet-ground-reflection)"/>
+    <!-- 地表纵深透视引导线 -->
+    <line x1="800" y1="650" x2="350" y2="900" stroke="#00F0FF" stroke-width="0.8" opacity="0.18"/>
+    <line x1="800" y1="650" x2="620" y2="900" stroke="#00F0FF" stroke-width="0.6" opacity="0.12"/>
+    <line x1="800" y1="650" x2="980" y2="900" stroke="#FF2E88" stroke-width="0.6" opacity="0.12"/>
+    <line x1="800" y1="650" x2="1250" y2="900" stroke="#FF2E88" stroke-width="0.8" opacity="0.18"/>
+  </g>
+
+  <!-- 7. 雨夜斜向雨丝覆盖层 (Raindrops) -->
+  <rect width="1600" height="900" fill="url(#rain-pattern)" pointer-events="none"/>
+</svg>

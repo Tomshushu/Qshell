@@ -1,0 +1,255 @@
+/* ==========================================================================
+   主题定制鼠标光标系统 (Theme-Specific Custom Cursors)
+   - 基于 data-custom-cursor="true" 与 data-ui-style 驱动
+   - 支持常规态与可点击悬停态（点击、长按与拖动态均保持原光标形态不变）
+   - 保护终端 (xterm)、输入框、分屏拉伸条等专业交互
+   ========================================================================== */
+
+/* ── 二次元萌系 (Anime) 专属猫爪光标 ──────────────────────────────────────── */
+
+/* 1. 常规空闲态：软萌白猫草莓肉垫爪爪 */
+[data-custom-cursor="true"][data-ui-style="anime"],
+[data-custom-cursor="true"][data-ui-style="anime"] body {
+  cursor: url('../../assets/cursors/anime-default.svg') 3 3, auto;
+}
+
+/* 2. 可点击悬停态：拍爪萌星手型 */
+[data-custom-cursor="true"][data-ui-style="anime"] a,
+[data-custom-cursor="true"][data-ui-style="anime"] a *,
+[data-custom-cursor="true"][data-ui-style="anime"] button,
+[data-custom-cursor="true"][data-ui-style="anime"] button *,
+[data-custom-cursor="true"][data-ui-style="anime"] [role="button"],
+[data-custom-cursor="true"][data-ui-style="anime"] [role="button"] *,
+[data-custom-cursor="true"][data-ui-style="anime"] [role="tab"],
+[data-custom-cursor="true"][data-ui-style="anime"] [role="tab"] *,
+[data-custom-cursor="true"][data-ui-style="anime"] [role="menuitem"],
+[data-custom-cursor="true"][data-ui-style="anime"] [role="menuitem"] *,
+[data-custom-cursor="true"][data-ui-style="anime"] .cursor-pointer,
+[data-custom-cursor="true"][data-ui-style="anime"] .cursor-pointer *,
+[data-custom-cursor="true"][data-ui-style="anime"] select,
+[data-custom-cursor="true"][data-ui-style="anime"] label,
+[data-custom-cursor="true"][data-ui-style="anime"] input[type="checkbox"],
+[data-custom-cursor="true"][data-ui-style="anime"] input[type="radio"] {
+  cursor: url('../../assets/cursors/anime-pointer.svg') 3 3, pointer;
+}
+
+
+
+/* ── 赛博朋克 (Cyberpunk) 专属未来 HUD 光标 ────────────────────────────────── */
+
+/* 1. 平时状态（空闲与悬停）：统一保持电光青未来 HUD 战术蓝色箭头 */
+[data-custom-cursor="true"][data-ui-style="cyberpunk"],
+[data-custom-cursor="true"][data-ui-style="cyberpunk"] body,
+[data-custom-cursor="true"][data-ui-style="cyberpunk"] a,
+[data-custom-cursor="true"][data-ui-style="cyberpunk"] a *,
+[data-custom-cursor="true"][data-ui-style="cyberpunk"] button,
+[data-custom-cursor="true"][data-ui-style="cyberpunk"] button *,
+[data-custom-cursor="true"][data-ui-style="cyberpunk"] [role="button"],
+[data-custom-cursor="true"][data-ui-style="cyberpunk"] [role="button"] *,
+[data-custom-cursor="true"][data-ui-style="cyberpunk"] [role="tab"],
+[data-custom-cursor="true"][data-ui-style="cyberpunk"] [role="tab"] *,
+[data-custom-cursor="true"][data-ui-style="cyberpunk"] [role="menuitem"],
+[data-custom-cursor="true"][data-ui-style="cyberpunk"] [role="menuitem"] *,
+[data-custom-cursor="true"][data-ui-style="cyberpunk"] .cursor-pointer,
+[data-custom-cursor="true"][data-ui-style="cyberpunk"] .cursor-pointer *,
+[data-custom-cursor="true"][data-ui-style="cyberpunk"] select,
+[data-custom-cursor="true"][data-ui-style="cyberpunk"] label,
+[data-custom-cursor="true"][data-ui-style="cyberpunk"] input[type="checkbox"],
+[data-custom-cursor="true"][data-ui-style="cyberpunk"] input[type="radio"] {
+  cursor: url('../../assets/cursors/cyberpunk-default.svg') 1 1, auto;
+}
+
+
+
+/* ── 北欧极简 (Nord) 专属冰晶光标 ────────────────────────────────────────── */
+
+/* 1. 常规空闲态：极简北欧冰棱几何指针 */
+[data-custom-cursor="true"][data-ui-style="nord"],
+[data-custom-cursor="true"][data-ui-style="nord"] body {
+  cursor: url('../../assets/cursors/nord-default.svg') 1 1, auto;
+}
+
+/* 2. 可点击悬停态：冰棱指针伴随极地冰晶微光 */
+[data-custom-cursor="true"][data-ui-style="nord"] a,
+[data-custom-cursor="true"][data-ui-style="nord"] a *,
+[data-custom-cursor="true"][data-ui-style="nord"] button,
+[data-custom-cursor="true"][data-ui-style="nord"] button *,
+[data-custom-cursor="true"][data-ui-style="nord"] [role="button"],
+[data-custom-cursor="true"][data-ui-style="nord"] [role="button"] *,
+[data-custom-cursor="true"][data-ui-style="nord"] [role="tab"],
+[data-custom-cursor="true"][data-ui-style="nord"] [role="tab"] *,
+[data-custom-cursor="true"][data-ui-style="nord"] [role="menuitem"],
+[data-custom-cursor="true"][data-ui-style="nord"] [role="menuitem"] *,
+[data-custom-cursor="true"][data-ui-style="nord"] .cursor-pointer,
+[data-custom-cursor="true"][data-ui-style="nord"] .cursor-pointer *,
+[data-custom-cursor="true"][data-ui-style="nord"] select,
+[data-custom-cursor="true"][data-ui-style="nord"] label,
+[data-custom-cursor="true"][data-ui-style="nord"] input[type="checkbox"],
+[data-custom-cursor="true"][data-ui-style="nord"] input[type="radio"] {
+  cursor: url('../../assets/cursors/nord-pointer.svg') 1 1, pointer;
+}
+
+
+
+/* ── CRT 复古辐射终端 (Retro CRT) 专属绿色像素光标 ──────────────────────────── */
+
+/* 1. 常规空闲态：80年代经典绿色像素箭头 */
+[data-custom-cursor="true"][data-ui-style="retro-crt"],
+[data-custom-cursor="true"][data-ui-style="retro-crt"] body {
+  cursor: url('../../assets/cursors/crt-default.svg') 1 1, auto;
+}
+
+/* 2. 可点击悬停态：绿色像素小手 */
+[data-custom-cursor="true"][data-ui-style="retro-crt"] a,
+[data-custom-cursor="true"][data-ui-style="retro-crt"] a *,
+[data-custom-cursor="true"][data-ui-style="retro-crt"] button,
+[data-custom-cursor="true"][data-ui-style="retro-crt"] button *,
+[data-custom-cursor="true"][data-ui-style="retro-crt"] [role="button"],
+[data-custom-cursor="true"][data-ui-style="retro-crt"] [role="button"] *,
+[data-custom-cursor="true"][data-ui-style="retro-crt"] [role="tab"],
+[data-custom-cursor="true"][data-ui-style="retro-crt"] [role="tab"] *,
+[data-custom-cursor="true"][data-ui-style="retro-crt"] [role="menuitem"],
+[data-custom-cursor="true"][data-ui-style="retro-crt"] [role="menuitem"] *,
+[data-custom-cursor="true"][data-ui-style="retro-crt"] .cursor-pointer,
+[data-custom-cursor="true"][data-ui-style="retro-crt"] .cursor-pointer *,
+[data-custom-cursor="true"][data-ui-style="retro-crt"] select,
+[data-custom-cursor="true"][data-ui-style="retro-crt"] label,
+[data-custom-cursor="true"][data-ui-style="retro-crt"] input[type="checkbox"],
+[data-custom-cursor="true"][data-ui-style="retro-crt"] input[type="radio"] {
+  cursor: url('../../assets/cursors/crt-pointer.svg') 4 1, pointer;
+}
+
+
+
+/* ── Windows 98 怀旧经典 (Win98) 专属千禧像素与小沙漏光标 ────────────────────── */
+
+/* 1. 常规空闲态：纯正 Win98 像素箭头 (白芯黑边) */
+[data-custom-cursor="true"][data-ui-style="win98"],
+[data-custom-cursor="true"][data-ui-style="win98"] body {
+  cursor: url('../../assets/cursors/win98-default.svg') 1 1, auto;
+}
+
+/* 2. 可点击悬停态：经典 IE/Win98 像素小手 */
+[data-custom-cursor="true"][data-ui-style="win98"] a,
+[data-custom-cursor="true"][data-ui-style="win98"] a *,
+[data-custom-cursor="true"][data-ui-style="win98"] button,
+[data-custom-cursor="true"][data-ui-style="win98"] button *,
+[data-custom-cursor="true"][data-ui-style="win98"] [role="button"],
+[data-custom-cursor="true"][data-ui-style="win98"] [role="button"] *,
+[data-custom-cursor="true"][data-ui-style="win98"] [role="tab"],
+[data-custom-cursor="true"][data-ui-style="win98"] [role="tab"] *,
+[data-custom-cursor="true"][data-ui-style="win98"] [role="menuitem"],
+[data-custom-cursor="true"][data-ui-style="win98"] [role="menuitem"] *,
+[data-custom-cursor="true"][data-ui-style="win98"] .cursor-pointer,
+[data-custom-cursor="true"][data-ui-style="win98"] .cursor-pointer *,
+[data-custom-cursor="true"][data-ui-style="win98"] select,
+[data-custom-cursor="true"][data-ui-style="win98"] label,
+[data-custom-cursor="true"][data-ui-style="win98"] input[type="checkbox"],
+[data-custom-cursor="true"][data-ui-style="win98"] input[type="radio"] {
+  cursor: url('../../assets/cursors/win98-pointer.svg') 4 1, pointer;
+}
+
+/* ── 重装机甲战备 (Mecha Tactical) 专属战机 HUD 飞行指示与瞄准锁标 ───────────── */
+
+/* 1. 常规空闲态：战机驾驶舱 HUD 飞行姿态指示箭头 */
+[data-custom-cursor="true"][data-ui-style="mecha"],
+[data-custom-cursor="true"][data-ui-style="mecha"] body {
+  cursor: url('../../assets/cursors/mecha-default.svg') 1 1, auto;
+}
+
+/* 2. 可点击悬停态：驾驶舱飞行追踪锁具准星 (Target Reticle) */
+[data-custom-cursor="true"][data-ui-style="mecha"] a,
+[data-custom-cursor="true"][data-ui-style="mecha"] a *,
+[data-custom-cursor="true"][data-ui-style="mecha"] button,
+[data-custom-cursor="true"][data-ui-style="mecha"] button *,
+[data-custom-cursor="true"][data-ui-style="mecha"] [role="button"],
+[data-custom-cursor="true"][data-ui-style="mecha"] [role="button"] *,
+[data-custom-cursor="true"][data-ui-style="mecha"] [role="tab"],
+[data-custom-cursor="true"][data-ui-style="mecha"] [role="tab"] *,
+[data-custom-cursor="true"][data-ui-style="mecha"] [role="menuitem"],
+[data-custom-cursor="true"][data-ui-style="mecha"] [role="menuitem"] *,
+[data-custom-cursor="true"][data-ui-style="mecha"] .cursor-pointer,
+[data-custom-cursor="true"][data-ui-style="mecha"] .cursor-pointer *,
+[data-custom-cursor="true"][data-ui-style="mecha"] select,
+[data-custom-cursor="true"][data-ui-style="mecha"] label,
+[data-custom-cursor="true"][data-ui-style="mecha"] input[type="checkbox"],
+[data-custom-cursor="true"][data-ui-style="mecha"] input[type="radio"] {
+  cursor: url('../../assets/cursors/mecha-pointer.svg') 11 11, crosshair;
+}
+
+
+
+/* ── 现代水墨 (Modern Ink Wash) 专属文房行书毛笔与朱砂落款方印 ───────────── */
+
+/* 1. 常规空闲态：文房行书毛笔尖端指针 */
+[data-custom-cursor="true"][data-ui-style="ink"],
+[data-custom-cursor="true"][data-ui-style="ink"] body {
+  cursor: url('../../assets/cursors/ink-default.svg') 1 1, auto;
+}
+
+/* 2. 可点击悬停态：毛笔饱蘸朱砂红墨笔尖 */
+[data-custom-cursor="true"][data-ui-style="ink"] a,
+[data-custom-cursor="true"][data-ui-style="ink"] a *,
+[data-custom-cursor="true"][data-ui-style="ink"] button,
+[data-custom-cursor="true"][data-ui-style="ink"] button *,
+[data-custom-cursor="true"][data-ui-style="ink"] [role="button"],
+[data-custom-cursor="true"][data-ui-style="ink"] [role="button"] *,
+[data-custom-cursor="true"][data-ui-style="ink"] [role="tab"],
+[data-custom-cursor="true"][data-ui-style="ink"] [role="tab"] *,
+[data-custom-cursor="true"][data-ui-style="ink"] [role="menuitem"],
+[data-custom-cursor="true"][data-ui-style="ink"] [role="menuitem"] *,
+[data-custom-cursor="true"][data-ui-style="ink"] .cursor-pointer,
+[data-custom-cursor="true"][data-ui-style="ink"] .cursor-pointer *,
+[data-custom-cursor="true"][data-ui-style="ink"] select,
+[data-custom-cursor="true"][data-ui-style="ink"] label,
+[data-custom-cursor="true"][data-ui-style="ink"] input[type="checkbox"],
+[data-custom-cursor="true"][data-ui-style="ink"] input[type="radio"] {
+  cursor: url('../../assets/cursors/ink-pointer.svg') 1 1, pointer;
+}
+
+
+
+/* ── 专业交互保护：终端、文本输入、分屏拉伸条绝不受光标覆盖 ──────────────── */
+[data-custom-cursor="true"] input:not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="submit"]):not([type="reset"]),
+[data-custom-cursor="true"] textarea,
+[data-custom-cursor="true"] [contenteditable="true"],
+[data-custom-cursor="true"] .xterm,
+[data-custom-cursor="true"] .xterm *:not(.xterm-scrollable-element):not(.scrollbar):not(.slider) {
+  cursor: text !important;
+}
+
+/* 终端滚动条与滑块交互手势光标保护 */
+[data-custom-cursor="true"] .xterm .xterm-scrollable-element > .scrollbar {
+  cursor: pointer !important;
+}
+
+[data-custom-cursor="true"] .xterm .xterm-scrollable-element > .scrollbar > .slider {
+  cursor: grab !important;
+}
+
+[data-custom-cursor="true"] .xterm .xterm-scrollable-element > .scrollbar > .slider:active {
+  cursor: grabbing !important;
+}
+
+[data-custom-cursor="true"] .cursor-col-resize,
+[data-custom-cursor="true"] .cursor-col-resize *,
+[data-custom-cursor="true"] [data-resize-handle][data-direction="horizontal"],
+[data-custom-cursor="true"] [data-resize-handle][data-direction="horizontal"] * {
+  cursor: col-resize !important;
+}
+
+[data-custom-cursor="true"] .cursor-row-resize,
+[data-custom-cursor="true"] .cursor-row-resize *,
+[data-custom-cursor="true"] [data-resize-handle][data-direction="vertical"],
+[data-custom-cursor="true"] [data-resize-handle][data-direction="vertical"] * {
+  cursor: row-resize !important;
+}
+
+[data-custom-cursor="true"] :disabled,
+[data-custom-cursor="true"] :disabled *,
+[data-custom-cursor="true"] .cursor-not-allowed,
+[data-custom-cursor="true"] .cursor-not-allowed *,
+[data-custom-cursor="true"] [disabled],
+[data-custom-cursor="true"] [disabled] * {
+  cursor: not-allowed !important;
+}

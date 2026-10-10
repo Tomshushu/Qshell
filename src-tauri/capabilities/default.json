@@ -1,0 +1,79 @@
+{
+  "$schema": "https://schema.tauri.app/acl/2",
+  "identifier": "default",
+  "description": "Default permission set for Qshell",
+  "windows": ["main", "*"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:event:allow-listen",
+    "core:event:allow-emit",
+    "core:window:default",
+    "core:window:allow-close",
+    "core:window:allow-minimize",
+    "core:window:allow-maximize",
+    "core:window:allow-unmaximize",
+    "core:window:allow-set-title",
+    "core:window:allow-set-theme",
+    "core:window:allow-show",
+    "core:window:allow-create",
+    "core:window:allow-destroy",
+    "core:window:allow-set-position",
+    "core:window:allow-start-dragging",
+    "core:window:allow-is-focused",
+    "core:webview:default",
+    "core:webview:allow-create-webview",
+    "core:app:default",
+    "core:path:default",
+    "shell:allow-open",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    {
+      "identifier": "fs:default",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-read",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-write-file",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-open",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-write-text-file",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-read-text-file",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-remove",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-rename",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-mkdir",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-exists",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-read-dir",
+      "allow": [{ "path": "**" }]
+    },
+    "os:default",
+    "process:default",
+    "updater:default"
+  ]
+}

@@ -1,0 +1,161 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 1000" width="100%" height="100%">
+  <defs>
+    <!-- 素宣竖幅渐变底色 -->
+    <linearGradient id="sidebar-paper-light" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#F3F0E6"/>
+      <stop offset="50%" stop-color="#EFECE0"/>
+      <stop offset="100%" stop-color="#EAE5D7"/>
+    </linearGradient>
+
+    <!-- 淡墨竹身渐变 -->
+    <linearGradient id="bamboo-stem-light" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#181A1D" stop-opacity="0.14"/>
+      <stop offset="50%" stop-color="#181A1D" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#181A1D" stop-opacity="0.12"/>
+    </linearGradient>
+
+    <linearGradient id="bamboo-stem-distant" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#181A1D" stop-opacity="0.05"/>
+      <stop offset="50%" stop-color="#181A1D" stop-opacity="0.09"/>
+      <stop offset="100%" stop-color="#181A1D" stop-opacity="0.04"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 1. 宣纸底色板 -->
+  <rect width="320" height="1000" fill="url(#sidebar-paper-light)"/>
+
+  <!-- 2. 宣纸草木微丝纤维（极轻柔底纹，透明度 0.04） -->
+  <g stroke="#6A5D4D" stroke-linecap="round" fill="none" opacity="0.04">
+    <path d="M30 50 Q70 65 120 45" stroke-width="0.8"/>
+    <path d="M180 120 Q230 140 280 115" stroke-width="0.7"/>
+    <path d="M50 280 Q100 295 150 270" stroke-width="0.8"/>
+    <path d="M170 450 Q220 470 270 440" stroke-width="0.7"/>
+    <path d="M40 680 Q90 700 140 670" stroke-width="0.8"/>
+    <path d="M160 880 Q210 900 260 870" stroke-width="0.7"/>
+  </g>
+
+  <!-- 3. 底部山石小景（破墨写意石景，烘托竹根） -->
+  <path d="M0 960 
+           Q 40 920, 90 935 
+           Q 140 890, 200 930 
+           Q 260 910, 320 950 
+           L 320 1000 L 0 1000 Z" 
+        fill="#181A1D" opacity="0.08"/>
+  <path d="M0 975 
+           Q 60 950, 130 965 
+           Q 190 940, 260 970 
+           L 320 985 L 320 1000 L 0 1000 Z" 
+        fill="#181A1D" opacity="0.12"/>
+
+  <!-- 4. 远景淡竹（后景若隐若现的远竹，墨韵深邃） -->
+  <g opacity="0.7">
+    <!-- 远竹竿（细挺，偏右侧） -->
+    <path d="M220 950 L218 800 M217 792 L215 650 M214 642 L212 500 M211 492 L209 350 M208 342 L206 200" 
+          stroke="url(#bamboo-stem-distant)" stroke-width="3.5" stroke-linecap="round"/>
+    <!-- 远竹节横断骨线 -->
+    <circle cx="218" cy="796" r="2.5" fill="#181A1D" opacity="0.08"/>
+    <circle cx="215" cy="646" r="2.5" fill="#181A1D" opacity="0.08"/>
+    <circle cx="212" cy="496" r="2.5" fill="#181A1D" opacity="0.08"/>
+    <circle cx="209" cy="346" r="2.5" fill="#181A1D" opacity="0.08"/>
+    
+    <!-- 远竹枝叶（极淡墨撇叶） -->
+    <g fill="#181A1D" opacity="0.07">
+      <!-- 组 1 -->
+      <path d="M215 646 Q235 620 265 625 Q245 635 215 646 Z"/>
+      <path d="M215 646 Q245 640 275 655 Q245 655 215 646 Z"/>
+      <!-- 组 2 -->
+      <path d="M212 496 Q240 475 270 480 Q245 490 212 496 Z"/>
+      <path d="M212 496 Q185 480 160 485 Q185 495 212 496 Z"/>
+      <path d="M212 496 Q235 510 260 525 Q235 520 212 496 Z"/>
+      <!-- 组 3 -->
+      <path d="M209 346 Q235 320 265 328 Q240 338 209 346 Z"/>
+      <path d="M209 346 Q240 355 270 370 Q240 365 209 346 Z"/>
+    </g>
+  </g>
+
+  <!-- 5. 近景主干秀竹（节节拔高，苍劲挺拔，布局在左侧与下半区） -->
+  <!-- 主竹竿 1（左侧，稳固刚劲） -->
+  <g>
+    <!-- 竹竿分段（传统画竹法：节长递增，竿留白节） -->
+    <path d="M72 980 L70 850" stroke="url(#bamboo-stem-light)" stroke-width="6" stroke-linecap="round"/>
+    <path d="M70 842 L68 700" stroke="url(#bamboo-stem-light)" stroke-width="5.5" stroke-linecap="round"/>
+    <path d="M68 692 L66 540" stroke="url(#bamboo-stem-light)" stroke-width="5" stroke-linecap="round"/>
+    <path d="M66 532 L64 380" stroke="url(#bamboo-stem-light)" stroke-width="4.5" stroke-linecap="round"/>
+    <path d="M64 372 L62 210" stroke="url(#bamboo-stem-light)" stroke-width="4" stroke-linecap="round"/>
+    <path d="M62 202 L60 50"  stroke="url(#bamboo-stem-light)" stroke-width="3" stroke-linecap="round"/>
+
+    <!-- 竹节骨环（写意乙字点/月牙节） -->
+    <g stroke="#181A1D" stroke-width="1.8" stroke-linecap="round" fill="none" opacity="0.32">
+      <path d="M66 846 Q70 844 74 846"/>
+      <path d="M64 696 Q68 694 72 696"/>
+      <path d="M62 536 Q66 534 70 536"/>
+      <path d="M60 376 Q64 374 68 376"/>
+      <path d="M58 206 Q62 204 66 206"/>
+    </g>
+
+    <!-- 副竹竿 2（细竹伴生，更显生机） -->
+    <path d="M108 970 L110 860" stroke="url(#bamboo-stem-light)" stroke-width="4.2" stroke-linecap="round" opacity="0.8"/>
+    <path d="M110 852 L112 730" stroke="url(#bamboo-stem-light)" stroke-width="3.8" stroke-linecap="round" opacity="0.8"/>
+    <path d="M112 722 L114 600" stroke="url(#bamboo-stem-light)" stroke-width="3.2" stroke-linecap="round" opacity="0.8"/>
+    <path d="M114 592 L116 460" stroke="url(#bamboo-stem-light)" stroke-width="2.8" stroke-linecap="round" opacity="0.8"/>
+    <path d="M116 452 L118 310" stroke="url(#bamboo-stem-light)" stroke-width="2.2" stroke-linecap="round" opacity="0.8"/>
+
+    <!-- 副竹竹节 -->
+    <g stroke="#181A1D" stroke-width="1.4" stroke-linecap="round" fill="none" opacity="0.25">
+      <path d="M106 856 Q110 854 114 856"/>
+      <path d="M108 726 Q112 724 116 726"/>
+      <path d="M110 596 Q114 594 118 596"/>
+      <path d="M112 456 Q116 454 120 456"/>
+    </g>
+  </g>
+
+  <!-- 6. 写意墨竹叶片（个字点、介字点、重叠交错之经典笔法） -->
+  <g fill="#181A1D">
+    <!-- 下部竹叶簇（浓墨近景） -->
+    <g opacity="0.25">
+      <!-- 700 节位分支 -->
+      <path d="M68 692 Q95 675 130 682 Q100 690 68 692 Z"/>
+      <path d="M130 682 Q165 670 195 680 Q160 690 130 682 Z"/>
+      <path d="M130 682 Q155 695 185 715 Q150 705 130 682 Z"/>
+      <path d="M130 682 Q145 715 160 745 Q135 725 130 682 Z"/>
+      <!-- 左向回抱叶 -->
+      <path d="M68 692 Q45 680 15 685 Q40 695 68 692 Z"/>
+      <path d="M68 692 Q40 705 18 725 Q45 715 68 692 Z"/>
+    </g>
+
+    <!-- 中部竹叶簇（530 节位，“介”字式飞叶） -->
+    <g opacity="0.22">
+      <!-- 右展枝 -->
+      <path d="M66 532 Q100 515 140 520 Q105 530 66 532 Z"/>
+      <path d="M140 520 Q180 505 215 515 Q175 525 140 520 Z"/>
+      <path d="M140 520 Q175 530 205 550 Q170 545 140 520 Z"/>
+      <path d="M140 520 Q160 545 180 575 Q155 555 140 520 Z"/>
+      <path d="M140 520 Q135 550 145 585 Q130 560 140 520 Z"/>
+    </g>
+
+    <!-- 上中部竹叶簇（370 节位，“分”字式下垂拂风叶） -->
+    <g opacity="0.18">
+      <path d="M64 372 Q95 350 135 355 Q100 365 64 372 Z"/>
+      <path d="M135 355 Q170 340 205 348 Q165 360 135 355 Z"/>
+      <path d="M135 355 Q165 370 195 390 Q160 385 135 355 Z"/>
+      <path d="M64 372 Q40 355 12 360 Q38 372 64 372 Z"/>
+    </g>
+
+    <!-- 梢头嫩叶与梢尖（高处梢枝，临风摇曳，虚实相生） -->
+    <g opacity="0.15">
+      <path d="M62 202 Q90 185 125 190 Q95 200 62 202 Z"/>
+      <path d="M125 190 Q155 175 185 182 Q150 195 125 190 Z"/>
+      <path d="M125 190 Q150 205 175 225 Q145 220 125 190 Z"/>
+      <path d="M60 50 Q85 30 115 35 Q88 48 60 50 Z"/>
+      <path d="M60 50 Q75 15 95 0 Q78 25 60 50 Z"/>
+    </g>
+  </g>
+
+  <!-- 7. 右下角清幽朱砂闲章（古印：幽篁） -->
+  <g transform="translate(268, 930)" opacity="0.45">
+    <rect width="18" height="32" rx="2" fill="#C23531"/>
+    <rect x="2" y="2" width="14" height="28" rx="1" fill="none" stroke="#F6F2E8" stroke-width="0.8"/>
+    <text x="9" y="14" fill="#FAF7EE" font-size="8" font-family="'STSong', serif" text-anchor="middle" font-weight="bold">幽</text>
+    <text x="9" y="25" fill="#FAF7EE" font-size="8" font-family="'STSong', serif" text-anchor="middle" font-weight="bold">篁</text>
+  </g>
+</svg>

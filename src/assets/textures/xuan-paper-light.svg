@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160">
+  <!-- 温润生宣纯正纸浆底色 -->
+  <rect width="160" height="160" fill="#F7F4EB"/>
+
+  <!-- 宣纸均匀磨砂微粒（纯矢量点阵，极轻微半透明，赋予真实纸张的磨砂触感） -->
+  <g fill="#7A6E5D" opacity="0.05">
+    <!-- 行 1 -->
+    <circle cx="8" cy="14" r="0.8"/>
+    <circle cx="28" cy="6" r="0.6"/>
+    <circle cx="52" cy="18" r="0.7"/>
+    <circle cx="76" cy="8" r="0.9"/>
+    <circle cx="98" cy="22" r="0.6"/>
+    <circle cx="124" cy="12" r="0.8"/>
+    <circle cx="148" cy="24" r="0.7"/>
+    <!-- 行 2 -->
+    <circle cx="18" cy="38" r="0.7"/>
+    <circle cx="42" cy="48" r="0.9"/>
+    <circle cx="68" cy="34" r="0.6"/>
+    <circle cx="88" cy="44" r="0.8"/>
+    <circle cx="114" cy="36" r="0.7"/>
+    <circle cx="136" cy="50" r="0.9"/>
+    <circle cx="156" cy="38" r="0.6"/>
+    <!-- 行 3 -->
+    <circle cx="6" cy="70" r="0.8"/>
+    <circle cx="32" cy="62" r="0.6"/>
+    <circle cx="58" cy="76" r="0.9"/>
+    <circle cx="82" cy="66" r="0.7"/>
+    <circle cx="106" cy="80" r="0.8"/>
+    <circle cx="130" cy="68" r="0.6"/>
+    <circle cx="150" cy="74" r="0.9"/>
+    <!-- 行 4 -->
+    <circle cx="22" cy="98" r="0.7"/>
+    <circle cx="46" cy="108" r="0.8"/>
+    <circle cx="70" cy="94" r="0.6"/>
+    <circle cx="94" cy="106" r="0.9"/>
+    <circle cx="118" cy="96" r="0.7"/>
+    <circle cx="142" cy="112" r="0.8"/>
+    <!-- 行 5 -->
+    <circle cx="12" cy="130" r="0.9"/>
+    <circle cx="36" cy="122" r="0.6"/>
+    <circle cx="62" cy="136" r="0.8"/>
+    <circle cx="84" cy="126" r="0.7"/>
+    <circle cx="108" cy="140" r="0.9"/>
+    <circle cx="132" cy="128" r="0.6"/>
+    <circle cx="154" cy="138" r="0.8"/>
+    <!-- 行 6 -->
+    <circle cx="26" cy="154" r="0.7"/>
+    <circle cx="50" cy="148" r="0.8"/>
+    <circle cx="74" cy="156" r="0.6"/>
+    <circle cx="98" cy="150" r="0.9"/>
+    <circle cx="122" cy="154" r="0.7"/>
+    <circle cx="144" cy="148" r="0.6"/>
+  </g>
+
+  <!-- 天然宣纸草木细屑与纸浆云斑（Pulp Flecks） -->
+  <g fill="#5C5042" opacity="0.06">
+    <ellipse cx="45" cy="28" rx="1.4" ry="0.8" transform="rotate(25 45 28)"/>
+    <ellipse cx="112" cy="55" rx="1.2" ry="0.7" transform="rotate(-35 112 55)"/>
+    <ellipse cx="25" cy="115" rx="1.5" ry="0.9" transform="rotate(40 25 115)"/>
+    <ellipse cx="138" cy="102" rx="1.3" ry="0.7" transform="rotate(-20 138 102)"/>
+    <ellipse cx="85" cy="142" rx="1.6" ry="0.8" transform="rotate(15 85 142)"/>
+    <circle cx="72" cy="88" r="1.0"/>
+  </g>
+
+  <!-- 宣纸传统手工抄造草木长纤维丝缕（Organic Plant Fibers） -->
+  <g stroke="#6E604F" stroke-linecap="round" fill="none" opacity="0.065">
+    <path d="M10 22 C 22 28, 30 18, 42 24" stroke-width="0.8"/>
+    <path d="M75 14 C 85 24, 95 18, 105 28" stroke-width="0.7"/>
+    <path d="M128 32 C 138 24, 146 34, 154 42" stroke-width="0.75"/>
+    <path d="M20 74 C 32 82, 38 70, 52 78" stroke-width="0.85"/>
+    <path d="M68 60 C 78 52, 90 64, 98 72" stroke-width="0.7"/>
+    <path d="M115 85 C 128 92, 134 80, 148 88" stroke-width="0.8"/>
+    <path d="M15 125 C 28 135, 36 122, 48 130" stroke-width="0.75"/>
+    <path d="M80 115 C 92 124, 100 110, 112 120" stroke-width="0.8"/>
+    <path d="M55 145 C 68 152, 75 140, 88 148" stroke-width="0.7"/>
+    <path d="M125 142 C 135 150, 145 138, 155 146" stroke-width="0.75"/>
+  </g>
+</svg>

@@ -1,0 +1,142 @@
+name: 'Release Qshell (全平台自动化打包与 OTA 发布)'
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  create-release:
+    permissions:
+      contents: write
+    runs-on: ubuntu-22.04
+    outputs:
+      release_id: ${{ steps.create-release.outputs.result }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create draft release
+        id: create-release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: context.ref.replace("refs/tags/", ""),
+              name: `Qshell ${context.ref.replace("refs/tags/", "")}`,
+              body: 'Qshell 现代化极速终端与服务器管理工作台正式版本。详细更新内容请参阅版本提交日志。',
+              draft: true,
+              prerelease: false
+            });
+            return data.id;
+
+  build-tauri:
+    needs: create-release
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'windows-latest'
+            args: '--bundles nsis'
+          - platform: 'macos-latest'
+            args: '--bundles app,dmg'
+          - platform: 'ubuntu-22.04'
+            args: '--bundles appimage,deb'
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux dependencies (Ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install frontend dependencies
+        run: npm ci || npm install
+
+      - name: Build Tauri App & Sign with Minisign
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          args: ${{ matrix.args }}
+
+  publish-and-sync:
+    needs: [create-release, build-tauri]
+    permissions:
+      contents: write
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Publish draft release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: ${{ needs.create-release.outputs.release_id }},
+              draft: false
+            });
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Download generated latest.json from Release
+        run: |
+          TAG_NAME="${{ github.ref_name }}"
+          MANIFEST_URL="https://github.com/${{ github.repository }}/releases/download/${TAG_NAME}/latest.json"
+          echo "Downloading manifest from $MANIFEST_URL"
+          curl -sL "$MANIFEST_URL" -o latest.json || echo "{}" > latest.json
+
+      - name: Optimize for China Mainland & Sync to Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://litlnyxkmcupbvigfrwj.supabase.co' }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          CHINA_MIRROR_PREFIX: 'https://ghproxy.net/'
+          MANIFEST_PATH: 'latest.json'
+        run: |
+          node tools/sync-release-manifest.mjs
+
+      - name: Upload China-accelerated manifest back to Release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            if (fs.existsSync('latest-china.json')) {
+              const fileData = fs.readFileSync('latest-china.json');
+              await github.rest.repos.uploadReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: ${{ needs.create-release.outputs.release_id }},
+                name: 'latest-china.json',
+                data: fileData
+              });
+              console.log('Successfully uploaded latest-china.json to GitHub Release!');
+            }

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 1000" width="100%" height="100%">
+  <defs>
+    <linearGradient id="sidebar-mecha-dark" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#16191D"/>
+      <stop offset="85%" stop-color="#131619"/>
+      <stop offset="100%" stop-color="#0E1012"/>
+    </linearGradient>
+
+    <pattern id="hazard-side-dark" width="16" height="16" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse">
+      <line x1="0" y1="0" x2="0" y2="16" stroke="#FFCC00" stroke-width="8"/>
+      <line x1="8" y1="0" x2="8" y2="16" stroke="#121518" stroke-width="8"/>
+    </pattern>
+  </defs>
+
+  <rect width="320" height="1000" fill="url(#sidebar-mecha-dark)"/>
+
+  <!-- 机械导轨 -->
+  <g stroke="#323C4A" opacity="0.4" stroke-linecap="round">
+    <line x1="16" y1="0" x2="16" y2="1000" stroke-width="2"/>
+    <line x1="22" y1="0" x2="22" y2="1000" stroke-width="1"/>
+    <path d="M16 40 L22 40 M16 80 L22 80 M16 120 L22 120 M16 160 L22 160 M16 200 L22 200 M16 240 L22 240 M16 280 L22 280 M16 320 L22 320 M16 360 L22 360 M16 400 L22 400 M16 440 L22 440 M16 480 L22 480 M16 520 L22 520 M16 560 L22 560 M16 600 L22 600 M16 640 L22 640 M16 680 L22 680 M16 720 L22 720 M16 760 L22 760 M16 800 L22 800 M16 840 L22 840 M16 880 L22 880 M16 920 L22 920 M16 960 L22 960" stroke-width="1.2"/>
+  </g>
+
+  <!-- 垂直大字喷漆 -->
+  <g font-family="'Impact', 'JetBrains Mono', sans-serif" font-weight="900" font-size="52" fill="#FFFFFF" opacity="0.03" transform="rotate(90 160 500)">
+    <text x="-150" y="30" letter-spacing="12">MECHA-TERMINAL</text>
+  </g>
+
+  <!-- 警戒条纹 -->
+  <rect x="0" y="0" width="320" height="6" fill="url(#hazard-side-dark)" opacity="0.8"/>
+  <rect x="0" y="994" width="320" height="6" fill="url(#hazard-side-dark)" opacity="0.8"/>
+</svg>

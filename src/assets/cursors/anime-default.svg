@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22" fill="none">
+  <!-- Contrast Drop Shadow -->
+  <g transform="translate(0.8, 1)" opacity="0.25">
+    <ellipse cx="11" cy="12.5" rx="5.5" ry="4.8" fill="#000000"/>
+    <circle cx="5" cy="5" r="2.8" fill="#000000"/>
+    <circle cx="9.8" cy="3" r="2.8" fill="#000000"/>
+    <circle cx="14.5" cy="5" r="2.8" fill="#000000"/>
+    <circle cx="4.2" cy="9.8" r="2.4" fill="#000000"/>
+  </g>
+
+  <!-- Paw Body (Clean crisp contour & white fill) -->
+  <g>
+    <path d="M6 9.8 C4 12.5 5.5 18 11 18 C16.5 18 18 12.5 16 9.8 C14 11 8.5 11 6 9.8 Z" fill="#FFFFFF"/>
+    <!-- Top-Left toe (Click hotspot near (3, 3)) -->
+    <circle cx="5" cy="5" r="2.8" fill="#FFFFFF"/>
+    <circle cx="9.8" cy="3" r="2.8" fill="#FFFFFF"/>
+    <circle cx="14.5" cy="5" r="2.8" fill="#FFFFFF"/>
+    <circle cx="4.2" cy="9.8" r="2.4" fill="#FFFFFF"/>
+  </g>
+
+  <!-- Sweet Strawberry Pink Paw Beans -->
+  <circle cx="5" cy="5" r="1.6" fill="#FF7BA9"/>
+  <circle cx="9.8" cy="3" r="1.6" fill="#FF7BA9"/>
+  <circle cx="14.5" cy="5" r="1.6" fill="#FF7BA9"/>
+  <circle cx="4.2" cy="9.8" r="1.4" fill="#FF7BA9"/>
+
+  <!-- Main Palm Meat Pad -->
+  <path d="M8.2 13 C7.2 11.6 8.8 10.2 11 11 C13.2 10.2 14.8 11.6 13.8 13 C13 15 9 15 8.2 13 Z" fill="#FF7BA9"/>
+</svg>

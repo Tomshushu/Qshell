@@ -350,6 +350,15 @@ Telnet 支持交互式 Shell、终端尺寸、输出历史和终端编码转换�
 - **编辑框建议来源**：服务器编辑框的标签建议为「标签目录 ∪ 服务器已有标签」，因此新建的空标签可直接在编辑服务器时选用。
 - **健壮性**：旧数据 / 导入数据 `tags` 为 `undefined` 时不会让首页崩溃，而是简单地不参与匹配（与设备类型过滤的天然安全性一致）。
 
+### 19. 账号认证与云端同步（Supabase / 自建实例）
+
+- **多种认证方式**：支持邮箱 + 密码（应用内登录与注册）、邮箱验证码免密登录（Magic Link OTP）以及 GitHub OAuth 一键授权登录。
+- **纯开源离线模式**：默认无需依赖任何云端，未配置时完全离线本地运行；所有本地核心功能与数据管理完全不受影响。
+- **自建与第三方兼容服务（Bring-Your-Own-Backend）**：用户或企业团队可在「设置 -> 账号」或登录弹窗中直接填入自建 Supabase 实例或国内兼容服务（如 MemFire Cloud）的 URL 与 Anon Key，支持实时连接探测诊断与一键重置为默认。
+- **URL 智能容错**：自动识别并剥离粘贴中附带的 `/rest/v1`、`/auth/v1` 或末尾斜杠，无需手动清洗格式。
+- **零知识端到端加密（Zero-Knowledge E2EE）**：敏感服务器密码、SSH 私钥等凭证在同步前均在客户端本地基于主密钥加密，云端仅作为加密密文的备份与多端同步通道，保障核心资产绝不外泄。
+- **开源安全合规**：代码仓库绝不硬编码任何私密密钥；严格区分客户端公开匿名密钥（Anon Key）与管理密钥（Service Role Key，绝不引入前端与客户端）。
+
 ## 技术栈
 
 ### 前端
@@ -368,6 +377,7 @@ Telnet 支持交互式 Shell、终端尺寸、输出历史和终端编码转换�
 | TanStack React Virtual | 大列表虚拟化 |
 | PrismJS + react-simple-code-editor | 文件与 Compose 编辑器 |
 | zmodem.js | 浏览器侧 ZMODEM 协议处理 |
+| @supabase/supabase-js | 用户身份认证、Session 管理与云端同步通道 |
 | Vitest + ESLint | 测试与代码检查 |
 
 ### 桌面端与 Rust 后端
@@ -468,6 +478,24 @@ Tauri 插件包括 Shell、Dialog、FS 和 OS。Release 构建启用 LTO、符�
 npm install
 ```
 
+### 环境变量配置（可选）
+
+项目支持通过 `.env` 预设默认的 Supabase 账号与云服务配置。仓库内置了合规的安全示例模板 `.env.example`：
+
+```bash
+# 复制环境变量模板
+cp .env.example .env
+```
+
+并在 `.env` 中按需填写实例信息：
+
+```env
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-public-key
+```
+
+> **安全说明**：`.env` 已严格加入 `.gitignore`，绝不会提交到公共仓库。若不配置环境变量，应用默认以**纯离线开源模式**运行，用户也可以直接在软件内「设置 -> 账号」或登录弹窗中动态配置自己的专属云服务或私有化实例。
+
 ### 启动前端开发服务器
 
 ```bash
@@ -510,6 +538,8 @@ npm run test:native
 - 导出文件使用用户密码通过 Argon2id 派生独立密钥，再以 AES-256-GCM 加密。
 - 导入时先验证格式、版本和密文，再使用本地主密钥重新加密入库。
 - 密码、Passphrase、私钥正文和证书正文不写入 localStorage。
+- 云端同步采用零知识架构（Zero-Knowledge Architecture）：敏感资产在上传至 Supabase 前均在客户端本地基于主密钥加密，云端仅存储密文，云服务商与数据库管理员均无法解密。
+- 开源安全合规：代码与客户端中严格只使用受 RLS（行级安全）限制的 Anon Public Key，绝不引入 Service Role Key，杜绝密钥泄露隐患。
 - SSH 主机密钥校验用于识别主机身份变化。
 - 远端命令参数和文件路径经过转义与输入校验，危险路径和高风险命令另行拦截。
 - Tauri CSP 限制脚本、网络、媒体、字体和本地资源的加载范围。

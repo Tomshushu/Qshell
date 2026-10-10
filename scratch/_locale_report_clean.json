@@ -1,0 +1,137 @@
+{
+  "ar.ts": {
+    "total": 1793,
+    "missingCount": 0,
+    "missing": []
+  },
+  "da.ts": {
+    "total": 1807,
+    "missingCount": 0,
+    "missing": []
+  },
+  "de.ts": {
+    "total": 1809,
+    "missingCount": 0,
+    "missing": []
+  },
+  "en.ts": {
+    "total": 1807,
+    "missingCount": 0,
+    "missing": []
+  },
+  "es-MX.ts": {
+    "total": 1812,
+    "missingCount": 0,
+    "missing": []
+  },
+  "es.ts": {
+    "total": 1812,
+    "missingCount": 0,
+    "missing": []
+  },
+  "fi.ts": {
+    "total": 1812,
+    "missingCount": 0,
+    "missing": []
+  },
+  "fr.ts": {
+    "total": 1810,
+    "missingCount": 0,
+    "missing": []
+  },
+  "hi.ts": {
+    "total": 1807,
+    "missingCount": 0,
+    "missing": []
+  },
+  "id.ts": {
+    "total": 1812,
+    "missingCount": 0,
+    "missing": []
+  },
+  "it.ts": {
+    "total": 1810,
+    "missingCount": 0,
+    "missing": []
+  },
+  "ja.ts": {
+    "total": 1802,
+    "missingCount": 0,
+    "missing": []
+  },
+  "ko.ts": {
+    "total": 1793,
+    "missingCount": 0,
+    "missing": []
+  },
+  "ms.ts": {
+    "total": 1810,
+    "missingCount": 0,
+    "missing": []
+  },
+  "nl.ts": {
+    "total": 1809,
+    "missingCount": 0,
+    "missing": []
+  },
+  "no.ts": {
+    "total": 1809,
+    "missingCount": 0,
+    "missing": []
+  },
+  "pl.ts": {
+    "total": 1812,
+    "missingCount": 0,
+    "missing": []
+  },
+  "pt-BR.ts": {
+    "total": 1810,
+    "missingCount": 0,
+    "missing": []
+  },
+  "pt-PT.ts": {
+    "total": 1812,
+    "missingCount": 0,
+    "missing": []
+  },
+  "ru.ts": {
+    "total": 1792,
+    "missingCount": 0,
+    "missing": []
+  },
+  "sv.ts": {
+    "total": 1809,
+    "missingCount": 0,
+    "missing": []
+  },
+  "th.ts": {
+    "total": 1793,
+    "missingCount": 0,
+    "missing": []
+  },
+  "tr.ts": {
+    "total": 1808,
+    "missingCount": 0,
+    "missing": []
+  },
+  "uk.ts": {
+    "total": 1793,
+    "missingCount": 0,
+    "missing": []
+  },
+  "vi.ts": {
+    "total": 1800,
+    "missingCount": 0,
+    "missing": []
+  },
+  "zh-CN.ts": {
+    "total": 1774,
+    "missingCount": 0,
+    "missing": []
+  },
+  "zh-TW.ts": {
+    "total": 1788,
+    "missingCount": 0,
+    "missing": []
+  }
+}

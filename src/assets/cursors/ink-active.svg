@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
+  <!-- 印泥微润投影 -->
+  <rect x="4.5" y="4.5" width="17" height="17" rx="3" fill="#000000" opacity="0.32"/>
+  <!-- 宣纸白玉高反差外缘 -->
+  <rect x="2.5" y="2.5" width="19" height="19" rx="3.5" fill="#FAF8F2" opacity="0.95"/>
+  <!-- 典雅朱砂金石印面 (Cinnabar Seal Body) -->
+  <rect x="3.5" y="3.5" width="17" height="17" rx="2.5" fill="#C23531" stroke="#7A1D1A" stroke-width="1.2"/>
+  <!-- 双线内边框 (Double Inset Border) -->
+  <rect x="5.5" y="5.5" width="13" height="13" rx="1.5" fill="none" stroke="#FEE4E2" stroke-width="0.9" opacity="0.9"/>
+  <!-- 汉印古篆 '印' 字 (Classic Archaic Seal Script) -->
+  <path d="M8 7.8 L11 7.8 L11 16.2 L8 16.2" stroke="#FAF8F2" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M11 11.5 L16 11.5 L16 16.2 L13 16.2" stroke="#FAF8F2" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M13.5 7.8 L16 7.8 L16 10" stroke="#FAF8F2" stroke-width="1.2" stroke-linecap="round"/>
+  <!-- 中心定位金石点 -->
+  <circle cx="12" cy="12" r="1.1" fill="#FAF8F2"/>
+</svg>

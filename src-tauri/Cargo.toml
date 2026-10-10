@@ -1,0 +1,74 @@
+[package]
+name = "qshell"
+version = "1.0.0"
+description = "Qshell - Tauri Edition"
+authors = ["Qshell Community"]
+edition = "2021"
+rust-version = "1.80"
+
+[lib]
+name = "qshell_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-os = "2"
+tauri-plugin-process = "2"
+tauri-plugin-updater = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+# socket2: Telnet TCP keepalive 探测配置（tokio 自带的 set_keepalive 只能开启
+# SO_KEEPALIVE，Windows 默认 2 小时才开始探测，无法及时发现 NAT 静默丢弃的死连接）
+socket2 = "0.6"
+russh = "0.45"
+russh-keys = "0.45"
+russh-sftp = "2.1"
+# ssh-key 用于 PPK (PuTTY) 格式私钥解析、证书加载、密钥生成，russh-keys 0.45 未开启 ppk feature
+# 注: ssh-key 0.6 不含 ppk feature，需要 0.7+（当前为 RC）。
+#     russh-keys 0.45 依赖 ssh-key 0.6，Cargo 会同时拉取 0.6 (transitive) 与 0.7 (direct)。
+#     - getrandom: 提供 SysRng，用于 PrivateKey::random / encrypt
+#     - p256/p384: ECDSA 曲线支持
+ssh-key = { version = "0.7.0-rc.11", features = ["ed25519", "rsa", "encryption", "ppk", "ecdsa", "p256", "p384", "getrandom", "rand_core"] }
+# sha2 用于计算 SSH 公钥的 SHA256 指纹（agent identity 展示）
+sha2 = "0.10"
+async-trait = "0.1"
+base64 = "0.22"
+rusqlite = { version = "0.32", features = ["bundled"] }
+aes-gcm = "0.10"
+zeroize = { version = "1", features = ["derive"] }
+keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service"] }
+argon2 = "0.5"
+rand = "0.8"
+regex = "1"
+encoding_rs = "0.8"
+codepage-strings = "1.0"
+# Redfish API 客户端（BMC 带外管理）：rustls-tls 避免 OpenSSL 依赖；BMC 普遍使用自签名证书，
+# 运行时通过 danger_accept_invalid_certs 兼容
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "gzip"] }
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+hex = "0.4"
+dirs = "6"
+lazy_static = "1"
+serialport = "4.6"
+
+# Windows API（用于获取全局鼠标位置和按键状态，支持跨窗口拖拽合并；磁盘空间查询）
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_Storage_FileSystem"] }
+
+[profile.release]
+lto = true
+strip = true
+opt-level = 3
+codegen-units = 1
+panic = "abort"

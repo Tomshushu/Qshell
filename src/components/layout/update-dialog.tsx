@@ -1,0 +1,254 @@
+import React from 'react'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
+import { Progress } from '@/components/ui/progress'
+import { useUpdaterStore } from '@/store/updater-store'
+import {
+  Sparkles,
+  Download,
+  RotateCw,
+  CheckCircle2,
+  AlertCircle,
+  ShieldCheck,
+  ArrowRight,
+  ExternalLink,
+} from 'lucide-react'
+
+function formatBytes(bytes: number): string {
+  if (!bytes || bytes <= 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`
+}
+
+export function UpdateDialog() {
+  const {
+    isDialogOpen,
+    closeDialog,
+    isChecking,
+    updateAvailable,
+    updateInfo,
+    isDownloading,
+    downloadProgress,
+    isReadyToRelaunch,
+    errorMessage,
+    checkForUpdates,
+    downloadAndInstall,
+    relaunchApp,
+  } = useUpdaterStore()
+
+  return (
+    <Dialog open={isDialogOpen} onOpenChange={(open) => !open && closeDialog()}>
+      <DialogContent className="max-w-[480px] p-0 overflow-hidden bg-card/98 backdrop-blur-2xl border border-border/70 rounded-2xl shadow-2xl">
+        {/* 顶部环境装饰光晕 */}
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-64 h-24 bg-primary/10 blur-3xl pointer-events-none rounded-full" />
+
+        <div className="p-6 space-y-5">
+          {/* 弹窗头部 */}
+          <DialogHeader className="text-left space-y-1.5">
+            <div className="flex items-center gap-2.5">
+              <div className="h-9 w-9 rounded-xl bg-primary/10 border border-primary/20 text-primary flex items-center justify-center shadow-xs">
+                {isReadyToRelaunch ? (
+                  <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                ) : updateAvailable ? (
+                  <Sparkles className="h-5 w-5 text-primary" />
+                ) : errorMessage ? (
+                  <AlertCircle className="h-5 w-5 text-destructive" />
+                ) : (
+                  <RotateCw className={`h-5 w-5 ${isChecking ? 'animate-spin' : ''}`} />
+                )}
+              </div>
+              <div>
+                <DialogTitle className="text-base font-bold text-foreground">
+                  {isReadyToRelaunch
+                    ? '更新已就绪，准备重启'
+                    : updateAvailable
+                    ? `发现新版本 v${updateInfo?.version}`
+                    : isChecking
+                    ? '正在检查新版本...'
+                    : errorMessage
+                    ? '检查更新遇到问题'
+                    : '已是最新版本'}
+                </DialogTitle>
+                <DialogDescription className="text-xs text-muted-foreground">
+                  {isReadyToRelaunch
+                    ? '新版本安装包已验证完毕，重启即可生效'
+                    : updateAvailable
+                    ? '建议及时升级以获取最新功能与安全修复'
+                    : isChecking
+                    ? '正在连接官方更新服务器获取版本清单'
+                    : errorMessage
+                    ? '未能成功获取更新信息'
+                    : '当前安装的 Qshell 运行在最新版本'}
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+
+          {/* 状态 1: 正在检查 */}
+          {isChecking && (
+            <div className="py-8 text-center space-y-3">
+              <RotateCw className="h-8 w-8 text-primary animate-spin mx-auto" />
+              <p className="text-xs text-muted-foreground">正在核对版本清单与数字签名...</p>
+            </div>
+          )}
+
+          {/* 状态 2: 遇到错误 */}
+          {!isChecking && errorMessage && (
+            <div className="space-y-4">
+              <div className="p-3.5 rounded-xl border border-destructive/20 bg-destructive/10 text-xs space-y-1.5">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+                  <div className="space-y-1 text-left flex-1 min-w-0">
+                    <p className="font-semibold text-destructive">检查更新失败</p>
+                    <p className="text-muted-foreground text-[11px] break-words leading-relaxed font-mono">
+                      {errorMessage}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <Button variant="outline" size="sm" className="text-xs h-8.5" onClick={closeDialog}>
+                  关闭
+                </Button>
+                <Button
+                  size="sm"
+                  className="text-xs h-8.5 gap-1.5"
+                  onClick={() => void checkForUpdates(false)}
+                >
+                  <RotateCw className="h-3.5 w-3.5" />
+                  重试
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* 状态 3: 已是最新版本 */}
+          {!isChecking && !errorMessage && !updateAvailable && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-center space-y-2">
+                <CheckCircle2 className="h-8 w-8 text-emerald-500 mx-auto" />
+                <div className="space-y-0.5">
+                  <p className="text-sm font-semibold text-foreground">您的软件处于最新状态</p>
+                  <p className="text-xs text-muted-foreground">无需任何操作，畅享极速体验。</p>
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-1">
+                <Button size="sm" className="text-xs h-8.5 px-5" onClick={closeDialog}>
+                  好，知道了
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* 状态 4: 发现新版本 */}
+          {!isChecking && !errorMessage && updateAvailable && updateInfo && (
+            <div className="space-y-4">
+              {/* 版本跨度与安全认证条 */}
+              <div className="p-3 rounded-xl border border-border/70 bg-muted/30 flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-muted-foreground">v{updateInfo.currentVersion}</span>
+                  <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span className="font-mono font-bold text-primary">v{updateInfo.version}</span>
+                </div>
+                <div className="flex items-center gap-1 text-[11px] text-emerald-500 font-medium">
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  <span>官方签名认证</span>
+                </div>
+              </div>
+
+              {/* 更新日志详情 */}
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-semibold text-muted-foreground">更新日志</label>
+                <div className="max-h-48 overflow-y-auto p-3 rounded-xl border border-border/60 bg-muted/20 text-xs text-foreground/90 whitespace-pre-wrap leading-relaxed font-sans select-text">
+                  {updateInfo.body?.trim() || '日常问题修复与性能优化。'}
+                </div>
+              </div>
+
+              {/* 下载中进度 */}
+              {isDownloading && (
+                <div className="space-y-2 pt-1">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground font-medium flex items-center gap-1.5">
+                      <Download className="h-3.5 w-3.5 text-primary animate-bounce" />
+                      正在下载更新包...
+                    </span>
+                    <span className="font-mono font-semibold text-foreground">
+                      {downloadProgress.percentage}%
+                    </span>
+                  </div>
+                  <Progress value={downloadProgress.percentage} className="h-2 rounded-full" />
+                  <div className="flex justify-between text-[11px] text-muted-foreground font-mono">
+                    <span>{formatBytes(downloadProgress.downloaded)}</span>
+                    <span>{formatBytes(downloadProgress.total)}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* 更新已就绪提示 */}
+              {isReadyToRelaunch && (
+                <div className="p-3 rounded-xl border border-emerald-500/25 bg-emerald-500/10 text-xs text-emerald-500 flex items-center gap-2 font-medium">
+                  <CheckCircle2 className="h-4 w-4 shrink-0" />
+                  <span>更新包已准备就绪，点击下方按钮立即重启生效。</span>
+                </div>
+              )}
+
+              {/* 操作按钮区 */}
+              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-border/40">
+                {!isReadyToRelaunch ? (
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-xs h-9 text-muted-foreground hover:text-foreground"
+                      disabled={isDownloading}
+                      onClick={closeDialog}
+                    >
+                      稍后提醒
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="text-xs h-9 px-4 font-semibold gap-1.5 shadow-md bg-primary text-primary-foreground hover:bg-primary/95"
+                      disabled={isDownloading}
+                      onClick={() => void downloadAndInstall()}
+                    >
+                      {isDownloading ? (
+                        <>
+                          <RotateCw className="h-3.5 w-3.5 animate-spin" />
+                          下载中 ({downloadProgress.percentage}%)
+                        </>
+                      ) : (
+                        <>
+                          <Download className="h-3.5 w-3.5" />
+                          立即更新
+                        </>
+                      )}
+                    </Button>
+                  </>
+                ) : (
+                  <Button
+                    size="sm"
+                    className="w-full text-xs h-9.5 font-semibold gap-1.5 shadow-md bg-emerald-500 hover:bg-emerald-600 text-white"
+                    onClick={() => void relaunchApp()}
+                  >
+                    <RotateCw className="h-3.5 w-3.5" />
+                    立即重启并完成升级
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}

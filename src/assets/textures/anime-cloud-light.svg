@@ -1,0 +1,168 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="100%" height="100%">
+  <defs>
+    <!-- 梦幻樱花蜜桃天空渐变 -->
+    <linearGradient id="anime-sky-light" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFF6F9"/>
+      <stop offset="50%" stop-color="#FFF0F5"/>
+      <stop offset="100%" stop-color="#FCE4EC"/>
+    </linearGradient>
+
+    <!-- 漫画萌系波点底纹 (Manga Polka Dots) -->
+    <pattern id="anime-dots-light" width="36" height="36" patternUnits="userSpaceOnUse">
+      <circle cx="18" cy="18" r="1.5" fill="#FF85B3" opacity="0.10"/>
+    </pattern>
+
+    <!-- 星芒渐变 -->
+    <linearGradient id="star-grad-gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFE680"/>
+      <stop offset="100%" stop-color="#FFA834"/>
+    </linearGradient>
+    <linearGradient id="star-grad-pink" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFB3D9"/>
+      <stop offset="100%" stop-color="#FF5499"/>
+    </linearGradient>
+    <linearGradient id="star-grad-cyan" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#C2F5E9"/>
+      <stop offset="100%" stop-color="#5EEAD4"/>
+    </linearGradient>
+
+    <!-- 可爱猫咪粉嫩肉垫爪印组件 (Kawaii Cat Paw Light Def) -->
+    <g id="cat-paw-light">
+      <path d="M 0,8 C -11,8 -14,-1 -10,-7 C -6,-12 -1,-8 0,-4 C 1,-8 6,-12 10,-7 C 14,-1 11,8 0,8 Z" fill="#FF7BA9"/>
+      <ellipse cx="-13" cy="-14" rx="4" ry="5.5" transform="rotate(-22 -13 -14)" fill="#FF7BA9"/>
+      <ellipse cx="-4.5" cy="-20" rx="4.2" ry="6" transform="rotate(-6 -4.5 -20)" fill="#FF7BA9"/>
+      <ellipse cx="4.5" cy="-20" rx="4.2" ry="6" transform="rotate(6 4.5 -20)" fill="#FF7BA9"/>
+      <ellipse cx="13" cy="-14" rx="4" ry="5.5" transform="rotate(22 13 -14)" fill="#FF7BA9"/>
+    </g>
+  </defs>
+
+  <!-- 底板天空与波点 -->
+  <rect width="1600" height="900" fill="url(#anime-sky-light)"/>
+  <rect width="1600" height="900" fill="url(#anime-dots-light)"/>
+
+  <!-- 底部连绵圆滚滚卡通棉花云 (Puffy Cartoon Cumulus Clouds) -->
+  <g fill="#FADCE6" opacity="0.5">
+    <path d="M-50 900 L-50 810 Q 30 760, 110 810 Q 180 730, 290 770 Q 390 700, 520 760 Q 640 680, 780 740 Q 900 660, 1050 730 Q 1180 670, 1310 740 Q 1440 690, 1560 760 Q 1630 720, 1700 770 L1700 900 Z"/>
+  </g>
+  <g fill="#FFF2F7" opacity="0.8">
+    <path d="M-50 900 L-50 830 Q 50 780, 160 820 Q 250 760, 380 800 Q 480 740, 620 790 Q 750 720, 900 780 Q 1020 730, 1160 780 Q 1280 710, 1420 770 Q 1540 730, 1700 800 L1700 900 Z"/>
+  </g>
+  <g fill="#FFFFFF" opacity="0.9">
+    <path d="M-50 900 L-50 860 Q 70 810, 190 840 Q 300 790, 430 830 Q 540 770, 680 820 Q 820 760, 970 810 Q 1100 760, 1240 810 Q 1380 750, 1520 800 Q 1620 770, 1700 820 L1700 900 Z"/>
+  </g>
+
+  <!-- 左下侧：趴在蓬蓬云朵上安睡的小猫咪 (Sleeping Cat on Fluffy Cloud) 🐱☁️ -->
+  <g transform="translate(320, 765) scale(0.95)">
+    <!-- 小猫阴影垫底 -->
+    <ellipse cx="4" cy="24" rx="36" ry="8" fill="#F472B6" opacity="0.15"/>
+    <!-- 猫尾巴微卷 -->
+    <path d="M -30,16 C -48,12 -54,-2 -46,-12 C -40,-18 -32,-10 -36,2 Z" fill="#FFFFFF" stroke="#FBCFE8" stroke-width="2"/>
+    <!-- 猫身躯 (白色圆滚滚球体) -->
+    <ellipse cx="2" cy="12" rx="34" ry="24" fill="#FFFFFF" stroke="#FBCFE8" stroke-width="2"/>
+    <!-- 后小爪肉垫 -->
+    <ellipse cx="-20" cy="22" rx="8" ry="6" fill="#FF85B3" opacity="0.9"/>
+    <!-- 猫脑袋 -->
+    <circle cx="28" cy="0" r="23" fill="#FFFFFF" stroke="#FBCFE8" stroke-width="2"/>
+    <!-- 左耳 -->
+    <path d="M 15,-14 C 11,-29 21,-38 29,-20 Z" fill="#FFFFFF" stroke="#FBCFE8" stroke-width="2"/>
+    <path d="M 17,-15 C 14,-26 21,-32 26,-19 Z" fill="#FF85B3"/>
+    <!-- 右耳 -->
+    <path d="M 33,-18 C 39,-35 51,-26 43,-11 Z" fill="#FFFFFF" stroke="#FBCFE8" stroke-width="2"/>
+    <path d="M 35,-17 C 40,-29 48,-23 42,-12 Z" fill="#FF85B3"/>
+    <!-- 甜甜闭眼 ⌒ ⌒ -->
+    <path d="M 23,2 Q 28,7 33,2" stroke="#DB2777" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+    <path d="M 37,1 Q 42,6 47,1" stroke="#DB2777" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+    <!-- 小三角樱花鼻尖与 :3 娇俏嘴巴 -->
+    <path d="M 35,6 L 33,3.5 C 33,3 37,3 37,3.5 Z" fill="#FF6097"/>
+    <path d="M 31,7 Q 34,11 35,8.5 Q 36,11 39,7" stroke="#DB2777" stroke-width="1.6" stroke-linecap="round" fill="none"/>
+    <!-- 粉嘟嘟小腮红 -->
+    <ellipse cx="20" cy="6" rx="5" ry="3" fill="#FF4D8D" opacity="0.6"/>
+    <ellipse cx="46" cy="5" rx="5" ry="3" fill="#FF4D8D" opacity="0.6"/>
+    <!-- 胡须 (Whiskers) -->
+    <path d="M 14,4 Q 0,2 -10,-2" stroke="#F472B6" stroke-width="1.4" stroke-linecap="round" opacity="0.75"/>
+    <path d="M 14,9 Q 0,11 -10,12" stroke="#F472B6" stroke-width="1.4" stroke-linecap="round" opacity="0.75"/>
+    <path d="M 48,3 Q 62,1 72,-3" stroke="#F472B6" stroke-width="1.4" stroke-linecap="round" opacity="0.75"/>
+    <path d="M 48,8 Q 62,10 72,11" stroke="#F472B6" stroke-width="1.4" stroke-linecap="round" opacity="0.75"/>
+    <!-- 前爪搭在身前 -->
+    <ellipse cx="10" cy="22" rx="7" ry="5" fill="#FFFFFF" stroke="#FBCFE8" stroke-width="1.5"/>
+    <ellipse cx="21" cy="22" rx="7" ry="5" fill="#FFFFFF" stroke="#FBCFE8" stroke-width="1.5"/>
+    <!-- 飘起的安睡小气泡与小爱心 -->
+    <g fill="#FF6599" opacity="0.7" font-family="'Quicksand', sans-serif" font-weight="bold">
+      <text x="46" y="-30" font-size="14">z</text>
+      <text x="56" y="-42" font-size="18">Z</text>
+    </g>
+  </g>
+
+  <!-- 右下侧：从云朵后探头好奇眨眼的小猫咪 (Curious Peeking Cat) 🐱 -->
+  <g transform="translate(1420, 750) scale(0.85)">
+    <!-- 头型 -->
+    <circle cx="0" cy="0" r="38" fill="#FFF0F5" stroke="#FFB6C1" stroke-width="2"/>
+    <!-- 耳朵 -->
+    <path d="M -32,-16 C -40,-44 -18,-48 -10,-28 Z" fill="#FFF0F5" stroke="#FFB6C1" stroke-width="2"/>
+    <path d="M -28,-18 C -35,-38 -18,-41 -13,-26 Z" fill="#FF85B3"/>
+    <path d="M 32,-16 C 40,-44 18,-48 10,-28 Z" fill="#FFF0F5" stroke="#FFB6C1" stroke-width="2"/>
+    <path d="M 28,-18 C 35,-38 18,-41 13,-26 Z" fill="#FF85B3"/>
+    <!-- 眼睛：左眼圆亮睁开、右眼调皮眨眼 ^ < -->
+    <ellipse cx="-16" cy="-2" rx="9" ry="11" fill="#FF4D8D"/>
+    <circle cx="-18" cy="-5" r="3.5" fill="#FFFFFF"/>
+    <circle cx="-13" cy="3" r="1.5" fill="#FFFFFF"/>
+    <!-- 眨眼弧线 -->
+    <path d="M 9,-2 Q 18,-8 27,-2" stroke="#DB2777" stroke-width="3" stroke-linecap="round" fill="none"/>
+    <!-- 鼻嘴 -->
+    <path d="M 0,9 L -2.5,5.5 C -2.5,5 2.5,5 2.5,5.5 Z" fill="#FF4D8D"/>
+    <path d="M -6,11 Q -3,15 0,11.5 Q 3,15 6,11" stroke="#DB2777" stroke-width="1.8" stroke-linecap="round" fill="none"/>
+    <!-- 腮红 -->
+    <ellipse cx="-20" cy="8" rx="6" ry="3.5" fill="#FF4D8D" opacity="0.55"/>
+    <ellipse cx="20" cy="8" rx="6" ry="3.5" fill="#FF4D8D" opacity="0.55"/>
+    <!-- 云端搭爪爪 -->
+    <g transform="translate(-24, 28)">
+      <path d="M -11,0 C -11,-9 11,-9 11,0 Z" fill="#FFFFFF" stroke="#FFB6C1" stroke-width="1.5"/>
+      <circle cx="-5" cy="-2" r="1.8" fill="#FF85B3"/>
+      <circle cx="0" cy="-4" r="1.8" fill="#FF85B3"/>
+      <circle cx="5" cy="-2" r="1.8" fill="#FF85B3"/>
+    </g>
+    <g transform="translate(24, 28)">
+      <path d="M -11,0 C -11,-9 11,-9 11,0 Z" fill="#FFFFFF" stroke="#FFB6C1" stroke-width="1.5"/>
+      <circle cx="-5" cy="-2" r="1.8" fill="#FF85B3"/>
+      <circle cx="0" cy="-4" r="1.8" fill="#FF85B3"/>
+      <circle cx="5" cy="-2" r="1.8" fill="#FF85B3"/>
+    </g>
+  </g>
+
+  <!-- 稀疏点缀、大小错落的灵动粉色肉垫爪印 (Sparse Varied-Size Cat Paws) 🐾 -->
+  <g>
+    <!-- 左上空旷处：一只俏皮大肉垫 (Large Playful Paw) -->
+    <use href="#cat-paw-light" transform="translate(420, 240) rotate(-18) scale(1.1)" opacity="0.18"/>
+    <!-- 伴随的一只小幼猫脚印 (Tiny Baby Paw) -->
+    <use href="#cat-paw-light" transform="translate(485, 195) rotate(8) scale(0.55)" opacity="0.22"/>
+    <!-- 中右侧高处：一只中等大小的梅花印 (Medium Paw) -->
+    <use href="#cat-paw-light" transform="translate(1080, 260) rotate(15) scale(0.85)" opacity="0.18"/>
+    <!-- 右上方飘过的一枚迷你小软垫 (Mini Delicate Paw) -->
+    <use href="#cat-paw-light" transform="translate(1140, 215) rotate(32) scale(0.48)" opacity="0.20"/>
+    <!-- 左侧云端边缘一颗柔和爪爪痕迹 -->
+    <use href="#cat-paw-light" transform="translate(200, 560) rotate(28) scale(0.72)" opacity="0.16"/>
+  </g>
+
+  <!-- 漂浮在空中的魔法四角星芒 ✨ -->
+  <g transform="translate(1440, 120) scale(1.3)">
+    <path d="M0 -24 Q 0 0, 24 0 Q 0 0, 0 24 Q 0 0, -24 0 Q 0 0, 0 -24 Z" fill="url(#star-grad-gold)" opacity="0.5"/>
+    <circle cx="0" cy="0" r="3" fill="#FFFBEB"/>
+  </g>
+  <g transform="translate(160, 120) scale(1.1)">
+    <path d="M0 -20 Q 0 0, 20 0 Q 0 0, 0 20 Q 0 0, -20 0 Q 0 0, 0 -20 Z" fill="url(#star-grad-pink)" opacity="0.45"/>
+  </g>
+  <g transform="translate(560, 90) scale(0.9)">
+    <path d="M0 -18 Q 0 0, 18 0 Q 0 0, 0 18 Q 0 0, -18 0 Q 0 0, 0 -18 Z" fill="url(#star-grad-cyan)" opacity="0.5"/>
+  </g>
+
+  <!-- 浮空可爱小爱心与气泡 -->
+  <g fill="#FF6599" opacity="0.3">
+    <path d="M 640,180 A 5,5 0 0,0 630,180 A 5,5 0 0,0 620,180 Q 620,192 630,200 Q 640,192 640,180 Z" transform="rotate(-15 630 190) scale(1.3)"/>
+    <path d="M 980,130 A 5,5 0 0,0 970,130 A 5,5 0 0,0 960,130 Q 960,142 970,150 Q 980,142 980,130 Z" transform="rotate(12 970 140) scale(1.2)"/>
+  </g>
+
+  <!-- 底部右下角萌系水印标语 -->
+  <g font-family="'Nunito', 'Quicksand', 'PingFang SC', sans-serif" font-weight="900" fill="#FF6599" opacity="0.22">
+    <text x="1530" y="865" font-size="20" letter-spacing="3" text-anchor="end">✨ KAWAII MEOW // NYA EDITION ฅ(＾・ω・＾ฅ) ✨</text>
+  </g>
+</svg>

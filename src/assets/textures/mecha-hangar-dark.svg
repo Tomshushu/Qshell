@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="100%" height="100%">
+  <defs>
+    <!-- 暗夜钛金装甲底色渐变 -->
+    <linearGradient id="mecha-bg-dark" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#121518"/>
+      <stop offset="50%" stop-color="#0E1012"/>
+      <stop offset="100%" stop-color="#090B0D"/>
+    </linearGradient>
+
+    <!-- 暗夜蜂窝装甲网格 -->
+    <pattern id="hex-armor-dark" width="48" height="83.14" patternUnits="userSpaceOnUse">
+      <path d="M48 0 L24 13.86 L0 0 L0 27.71 L24 41.57 L48 27.71 Z M0 41.57 L24 55.43 L48 41.57 L48 69.28 L24 83.14 L0 69.28 Z" 
+            fill="none" stroke="#252C36" stroke-width="0.8" opacity="0.45"/>
+    </pattern>
+
+    <!-- 警戒斑马纹 (Dark Mode) -->
+    <pattern id="hazard-pattern-dark" width="20" height="20" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse">
+      <line x1="0" y1="0" x2="0" y2="20" stroke="#FFCC00" stroke-width="10"/>
+      <line x1="10" y1="0" x2="10" y2="20" stroke="#121518" stroke-width="10"/>
+    </pattern>
+  </defs>
+
+  <!-- 底板 -->
+  <rect width="1600" height="900" fill="url(#mecha-bg-dark)"/>
+
+  <!-- 蜂窝装甲层 -->
+  <rect width="1600" height="900" fill="url(#hex-armor-dark)"/>
+
+  <!-- 战术十字准星阵列 (柔和暗色，避免点状杂乱) -->
+  <g stroke="#262F3B" stroke-width="1" opacity="0.4">
+    <path d="M190 140 L210 140 M200 130 L200 150"/>
+    <path d="M590 140 L610 140 M600 130 L600 150"/>
+    <path d="M990 140 L1010 140 M1000 130 L1000 150"/>
+    <path d="M1390 140 L1410 140 M1400 130 L1400 150"/>
+    <path d="M190 440 L210 440 M200 430 L200 450"/>
+    <path d="M590 440 L610 440 M600 430 L600 450"/>
+    <path d="M990 440 L1010 440 M1000 430 L1000 450"/>
+    <path d="M1390 440 L1410 440 M1400 430 L1400 450"/>
+    <path d="M190 740 L210 740 M200 730 L200 750"/>
+    <path d="M590 740 L610 740 M600 730 L600 750"/>
+    <path d="M990 740 L1010 740 M1000 730 L1000 750"/>
+    <path d="M1390 740 L1410 740 M1400 730 L1400 750"/>
+  </g>
+
+  <!-- 战术雷达准星 (整体融入暗夜背景，去除刺眼高对比度红黄高光点) -->
+  <g transform="translate(1320, 680)" opacity="0.25">
+    <circle cx="0" cy="0" r="140" fill="none" stroke="#2D3847" stroke-width="1.2" stroke-dasharray="8 6"/>
+    <circle cx="0" cy="0" r="100" fill="none" stroke="#2D3847" stroke-width="1"/>
+    <circle cx="0" cy="0" r="40" fill="none" stroke="#2D3847" stroke-width="1.2"/>
+    <line x1="-160" y1="0" x2="160" y2="0" stroke="#2D3847" stroke-width="0.8"/>
+    <line x1="0" y1="-160" x2="0" y2="160" stroke="#2D3847" stroke-width="0.8"/>
+    <rect x="-6" y="-6" width="12" height="12" fill="none" stroke="#2D3847" stroke-width="1.2"/>
+    <text x="50" y="-110" fill="#4E5D6F" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="bold">HUD // TACTICAL RADAR</text>
+  </g>
+
+  <!-- 暗夜格纳库大字喷漆 -->
+  <g font-family="'JetBrains Mono', 'Impact', sans-serif" font-weight="900" opacity="0.12" fill="#FFFFFF">
+    <text x="60" y="830" font-size="64" letter-spacing="6">BAY-07 // COMBAT READY</text>
+    <text x="60" y="860" font-size="16" letter-spacing="4" font-family="'JetBrains Mono', monospace">TACTICAL UNIT-01 // LAUNCH CATAPULT STANDBY</text>
+  </g>
+
+  <!-- 边角卡扣 -->
+  <g stroke="#374352" stroke-width="2.5" fill="none" opacity="0.5">
+    <path d="M20 50 L20 20 L50 20"/>
+    <path d="M1580 50 L1580 20 L1550 20"/>
+    <path d="M20 850 L20 880 L50 880"/>
+    <path d="M1580 850 L1580 880 L1550 880"/>
+  </g>
+
+  <!-- 警戒条纹带 -->
+  <rect x="0" y="888" width="1600" height="12" fill="url(#hazard-pattern-dark)" opacity="0.8"/>
+  <rect x="0" y="0" width="1600" height="5" fill="url(#hazard-pattern-dark)" opacity="0.6"/>
+</svg>

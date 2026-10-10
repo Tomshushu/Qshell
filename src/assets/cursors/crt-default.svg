@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22" fill="none" shape-rendering="crispEdges">
+  <!-- Phosphor Shadow -->
+  <path d="M2 2 L2 17 L6 13 L9 20 L12 18.5 L9 12 L14 12 Z" fill="#051205" opacity="0.8"/>
+  <!-- Dark Green Edge -->
+  <path d="M1 1 L1 16 L5 12 L8 19 L11 17.5 L8 11 L13 11 Z" fill="#0D260D" stroke="#0D260D" stroke-width="1.5" stroke-linejoin="miter"/>
+  <!-- P31 Phosphor Green Core -->
+  <path d="M2 3 L2 13.5 L5 10.5 L7.5 16.5 L9.5 15.5 L7 10 L11 10 Z" fill="#33FF33"/>
+  <!-- Terminal Glow Dot at Tip -->
+  <rect x="1" y="1" width="2" height="2" fill="#88FF88"/>
+</svg>

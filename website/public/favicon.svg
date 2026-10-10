@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <!-- 深空深蓝黑底座渐变 -->
+    <linearGradient id="qshell_bg" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#081524"/>
+      <stop offset="60%" stop-color="#050B14"/>
+      <stop offset="100%" stop-color="#02060C"/>
+    </linearGradient>
+    
+    <!-- 电光青蓝极速流光渐变 -->
+    <linearGradient id="qshell_cyan" x1="8" y1="8" x2="58" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#38BDF8"/>   <!-- 极光高亮青 -->
+      <stop offset="45%" stop-color="#0EA5E9"/>  <!-- 极客天空蓝 -->
+      <stop offset="100%" stop-color="#0284C7"/> <!-- 蔚蓝科技蓝 -->
+    </linearGradient>
+
+    <!-- 终端命令行提示符高亮白金 -->
+    <linearGradient id="qshell_prompt" x1="15" y1="15" x2="35" y2="35" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#E0F2FE"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 圆角矩形底座，带青色微光描边 -->
+  <rect width="64" height="64" rx="14" fill="url(#qshell_bg)"/>
+  <rect x="0.5" y="0.5" width="63" height="63" rx="13.5" stroke="#38BDF8" stroke-opacity="0.32"/>
+
+  <!-- 居中饱满的 Q 主体正圆 (cx=30, cy=29.5, r=16.5) -->
+  <circle cx="30" cy="29.5" r="16.5" stroke="url(#qshell_cyan)" stroke-width="5.5" stroke-linecap="round"/>
+
+  <!-- 垂直居中的终端命令行提示符 > -->
+  <path d="M 22.5 22.5 L 29.5 29.5 L 22.5 36.5" stroke="url(#qshell_prompt)" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- 终端光标块 ▋ -->
+  <rect x="34" y="26.5" width="5.5" height="6" rx="1.5" fill="#38BDF8"/>
+
+  <!-- 经典优雅向右舒展起翘的 Q 尾巴 -->
+  <path d="M 36 41.5 C 40 47, 43.5 52.5, 52.5 51" stroke="url(#qshell_cyan)" stroke-width="5.8" stroke-linecap="round"/>
+</svg>

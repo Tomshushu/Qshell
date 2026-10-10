@@ -1,0 +1,297 @@
+[
+  {
+    "id": "mock-ubuntu-01",
+    "name": "🌟 生产 Linux (Ubuntu 22.04 LTS) - 密码认证",
+    "host": "127.0.0.1",
+    "port": 2222,
+    "username": "root",
+    "authType": "password",
+    "password": "123456",
+    "targetType": "linux",
+    "protocol": "ssh",
+    "protocols": [
+      "ssh"
+    ],
+    "tags": [
+      "模拟环境",
+      "Linux",
+      "Ubuntu",
+      "密码认证"
+    ],
+    "notes": "全功�?Linux 模拟机：支持 /proc/stat, /proc/meminfo, df, ps, systemctl, ss, SFTP 虚拟文件系统",
+    "favorite": true,
+    "createdAt": 1787413612378,
+    "updatedAt": 1787413612378
+  },
+  {
+    "id": "mock-ubuntu-rsa-key",
+    "name": "🔑 生产 Linux (Ubuntu 22.04) - RSA 私钥免密登录",
+    "host": "127.0.0.1",
+    "port": 2222,
+    "username": "root",
+    "authType": "privateKey",
+    "privateKeyPath": "./tools/mock-servers/certs/id_rsa_test",
+    "privateKeyContent": "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAr/t0knA+HL6mnZE8hLzQgMSf9aVKhNLRVwbGE14HPVRC/qkg\nKVd930vH6I6W1JDAxhNFKXiQkW3c0OfJGc62OQjb+HyELyOXJOBGr7LEPB0BfjM/\nd1g0lJY58ApZaE/uwQ7sPoLd79LleWI3QkfS6+2ikUlAPYcNGjT3wLN4msFEfZR6\n3k1+M/9IzxpUlVHkyMXGnnY8/TYTvo5DwsQcM76Txftvi4nxLgv1YuKGiomdZI2A\noF90pZ5YpYQsImM09OitJUyex5dxNctwinB+5BL8rdM5cu5D7fP3d43Rcu7w2EYE\ntC/CsyQY5JqzuVVR1i6GoeRqpeNEyXe5ZCx6VwIDAQABAoIBABpTd6DggaozKyGv\nNGp3BIn+4B8TVw5/qyllrgP/sP2PuWX3TwRgPkhFQeacThwGe5AmGdaWXqoi0UG/\nKupdbg0iMiX+Gpgirt2pX2mxSIHlpO+IIxpra5I+1vP92Fouev0OinDfiuvxlLqP\n4sxbikYZCpTJbH7H0UH2YonFT2l2+DZhaLEj5NO2E6vT0arkYkhx3XAQtH/naJgN\nb0dNIiugVDo+Rme+dMRQ2gAAZ7CwekcoK1EfubHKLwgSXev2Dpj7Ziw27DlCCBDk\nzvvU0FesfsDV+HFloLz6X91KqkYsLeNaMIo0lRMYlEFPTXsDiyOKv3ITKsxL4Hqr\nMRk1BQECgYEA7B1cb49OQwlndd/irBAlXpJparM7dVxKunXk5CgdFiBRgTEJe1OH\nAuVzzMGE7OIOZUr7xxcKo1YpmKM1afrhk9vROXkDjDnh9XsPjq4UsO6CkcJfJmZ9\n0WUcbR0ZpAxDEMSyxE5IAT35upEQSMc1DXvdmvrIjLCEaRG+q2t4S/cCgYEAvs2j\nIHHd9y58eZUXw0rWvhHnpHWQ7xf90qpfBkhWWiLRqLWtGzq0X4lPMbHo8NfKoD5F\nTyzrq5C9HEgKthUFD7uPK51SJd8eawvDF6JlTf+sc1hfdwVjIHm4ZKgYsWaAvK5d\nJpbcmUEA0MBIIBnkx8Vt+7dVmn/m7sPY6sMr7KECgYAeMsslwZBi5osC+nWFSDNf\nWx58dRv/sKQmIPn7bF37/HowKdNqoI4+ApbC82VK3sa0kdiN6BaGOXjsesNUILBF\nNvIVhbK8dpK90NV2jDE9R+QPPGrrAGTLKUFvey9SWfch5+ZtUQ3IiuKrx+3rQP86\nEEORlM2doN3uikR2rDIglQKBgQCwdXnCDczcR0+zGeHKKTKEwgZbIKeTl7qU1B/h\nrZC+96iywKKBpj8eg9yL9x+ZbdjlbfGnkcG6/7cFqtLNJo9xx2JXUb2hbMGy+kPJ\nXdUW17fjTP2tE3xjkm6oGJYNquCwnwljIO6PhYB9jvalSY09/CcFPr6ajmNCujmo\nlCvRQQKBgDyKm1UwAzmNZu3Jbm5lFX/Iy8ywbP8da8WH/H88w50Hs1JGQk9zfFy+\nwuQMY7nOAdx8NqYxnuojLGqBxFFc3FEK1mohAKHERv2HTVCAd1HE1zsYQIkx5Hm2\n2rBO2nXZ+VgaUixxnNAY4vSbVLfEwX7cC80dQCOTotbUN3t0nBVR\n-----END RSA PRIVATE KEY-----\n",
+    "targetType": "linux",
+    "protocol": "ssh",
+    "protocols": [
+      "ssh"
+    ],
+    "tags": [
+      "模拟环境",
+      "Linux",
+      "RSA密钥",
+      "免密认证"
+    ],
+    "notes": "RSA 2048 密钥认证，私钥文�? ./tools/mock-servers/certs/id_rsa_test",
+    "favorite": true,
+    "createdAt": 1787413612378,
+    "updatedAt": 1787413612378
+  },
+  {
+    "id": "mock-ubuntu-passphrase-key",
+    "name": "🔐 生产 Linux (Ubuntu 22.04) - 加密私钥 (Passphrase: Secret@123)",
+    "host": "127.0.0.1",
+    "port": 2222,
+    "username": "root",
+    "authType": "privateKey",
+    "privateKeyPath": "./tools/mock-servers/certs/id_rsa_passphrase",
+    "privateKeyPassphrase": "Secret@123",
+    "privateKeyContent": "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-256-CBC,6CF7EC07477D285F895E9DD377CB54F9\n\nZGOVeCRJjArBO+ZCaZItMXiPseBMnhZSn8UNIXZpUTB3gsKWGzzSRaDtxL4KdVm8\neJSahjV56aB+kcXb/IlDd4ACEERNttTLIUqz/8SUIu0FWltML8P8q/B/NVPpw6H8\ngktPGalg1pDWX3ZP35enVwh2kvZ69nKe2GTbPM16vT1DxnyO9/+1sYldSaHzzEpt\nwUOdA6/VSGDtjEWPLh2IbPhFW9Q+f46nLybJ5o1WiqT6t9dIBb5/87iPLLbOUH2R\njqvY/Uaf/yVufJBzCpiPfQEp0eKSPzjO1w9D9bCULsy+VEL6ko8E01SgV+GHz4ic\nW8j0PF8WcDlp6g3esyca15M2HPFYhy1mDezrR5XcVe9qTxBH/w4yEiwGYj9dcMiT\n4H09TxOsVP6Krw0iC/skLr6HBSeI7XE0Ejs1Vvq89ZFTcv8UpQLd9iqNLtgppxc0\njFT/nCAupiEl38Gec44gU3zdluzNsQPDwy5DxXDObm+Wiz4sb6W7hBdCDUVn8Ad5\nA67lF4dK2DgX6IDqYeJka5PzUZtS78JsR+Mycr8qcJXuJ+icnPAFNxTgiLQGLOUF\nXi/rfpxJBFzgZDkFX5LGMaFsjYpbEedJu+z4VHDCz15/8fT7bWV7T4XPPDjaca9H\ngLn/xaUIFYFh+cUw67d9LGOez+rinOdaveM2oXGDcFITD2UZW2f61Agvg3KV7hWT\nuo2Za7hfsEF9DsXwgv/jn58VZnVMs34wi7qrK8stg3eV8zIJQ5/rUjIkNqXWTfH/\ndNB/5EWVWXwirg2gPNZyj2XmluiR02Lq+rEimr/GpxFnOHpM/Ct/DNEh7PV5fKs8\nRUxU6pF+HtodeKrYPMSwS5yshHYbJT2FXRexDgdsraAFpIvsRIgjr7unXmg0p3KP\nDnRDAiujTAbRNMH4JndQNFXamUlak8tsxbqnhohTaKLDAm2cG2MNnFMoIlqrpHC0\nQjQzY3o8oySNlEnDywawuqwg3QQil4k8o0V2ANvJIJ9q7snnfGo2h8rrF9cRJgAH\nQryM7sKzTVUf92IjSZ4kfR+Sebz7esUR3h5m9YaiGCeCgpCZOSJGCNUgkkuyv0Rm\nZ/IpEqoT1ldHqHK3b35nqp9hFkSsNt4rQC1LXevg1y9Bq4ZYYyfHzbDnYDmCmOxx\n2TV62o42UICYuPQC34EzJtPrs8Vc+/m/TNCWyeDaoqxDbpI1d8UWPjKeHfvt83Ge\nVA7F7sYQ0fmyLHjttFWW6BAgJlekxENQv/niwaewdoZUYd2GqdBjoQv+P8K7XKkC\nRbkQTH92+UBnbhHf8mDhxSldZwjRXuzsSxhYrQ3slgNr3j36l6sVamdfgGdv5Uax\nGwsrPJqaaS4vfaJq4eFJoi+NBDkF7/W0O79rH7gdaAlZCroFncT7EFt0L1u6BrKz\npMPrqC+Mwi4osdfNoOef54VJbYRhQteRbxzZwUciJGbxMzJ6segPe6a4mJBrhNCF\nXv7jL/MrDi0Nrc2vfaJhJcpLdIa7hjfylgZvPw3h1Nw0d3SU6MGjNv9oeUC5XKwT\nFTLHHyq63VfZ+bgevuf1X74eAyeVYeOgBwRfg2K2siG2QR/pdOLXYpOV9VNPd1LP\n-----END RSA PRIVATE KEY-----\n",
+    "targetType": "linux",
+    "protocol": "ssh",
+    "protocols": [
+      "ssh"
+    ],
+    "tags": [
+      "模拟环境",
+      "Linux",
+      "加密密钥",
+      "Passphrase"
+    ],
+    "notes": "AES 加密私钥认证，口�? Secret@123，私钥路�? ./tools/mock-servers/certs/id_rsa_passphrase",
+    "favorite": true,
+    "createdAt": 1787413612378,
+    "updatedAt": 1787413612378
+  },
+  {
+    "id": "mock-ubuntu-ed25519-key",
+    "name": "�?生产 Linux (Ubuntu 22.04) - Ed25519 椭圆曲线密钥",
+    "host": "127.0.0.1",
+    "port": 2222,
+    "username": "ubuntu",
+    "authType": "privateKey",
+    "privateKeyPath": "./tools/mock-servers/certs/id_ed25519_test",
+    "privateKeyContent": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\nQyNTUxOQAAACAKZqPA4Ig++Dr3Fb30q74bjrz+rsEq97+FfPQAvv95hAAAAJAENHgZBDR4\nGQAAAAtzc2gtZWQyNTUxOQAAACAKZqPA4Ig++Dr3Fb30q74bjrz+rsEq97+FfPQAvv95hA\nAAAECyFPyjeCmo0nJaeXIPWNeR2ZtczVB34sxwGCePnvhzDApmo8DgiD74OvcVvfSrvhuO\nvP6uwSr3v4V89AC+/3mEAAAACTE1MjQ5QHRvbQECAwQ=\n-----END OPENSSH PRIVATE KEY-----\n",
+    "targetType": "linux",
+    "protocol": "ssh",
+    "protocols": [
+      "ssh"
+    ],
+    "tags": [
+      "模拟环境",
+      "Linux",
+      "Ed25519",
+      "椭圆曲线"
+    ],
+    "notes": "Ed25519 现代高性能签名密钥，私钥路�? ./tools/mock-servers/certs/id_ed25519_test",
+    "favorite": true,
+    "createdAt": 1787413612378,
+    "updatedAt": 1787413612378
+  },
+  {
+    "id": "mock-ubuntu-cert",
+    "name": "📜 生产 Linux (Ubuntu 22.04) - OpenSSH 用户证书认证",
+    "host": "127.0.0.1",
+    "port": 2222,
+    "username": "ubuntu",
+    "authType": "certificate",
+    "privateKeyPath": "./tools/mock-servers/certs/id_ed25519_test",
+    "certificatePath": "./tools/mock-servers/certs/id_ed25519_test-cert.pub",
+    "privateKeyContent": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\nQyNTUxOQAAACAKZqPA4Ig++Dr3Fb30q74bjrz+rsEq97+FfPQAvv95hAAAAJAENHgZBDR4\nGQAAAAtzc2gtZWQyNTUxOQAAACAKZqPA4Ig++Dr3Fb30q74bjrz+rsEq97+FfPQAvv95hA\nAAAECyFPyjeCmo0nJaeXIPWNeR2ZtczVB34sxwGCePnvhzDApmo8DgiD74OvcVvfSrvhuO\nvP6uwSr3v4V89AC+/3mEAAAACTE1MjQ5QHRvbQECAwQ=\n-----END OPENSSH PRIVATE KEY-----\n",
+    "certificateContent": "ssh-ed25519-cert-v01@openssh.com AAAAIHNzaC1lZDI1NTE5LWNlcnQtdjAxQG9wZW5zc2guY29tAAAAIBhPZY5HMuUSjTH7WfXUcy2Ed+sk5bpn4bAXmR5n+BGhAAAAIApmo8DgiD74OvcVvfSrvhuOvP6uwSr3v4V89AC+/3mEAAAAAAAAAAAAAAABAAAADm1vY2tfdXNlcl9jZXJ0AAAAGwAAAARyb290AAAABnVidW50dQAAAAVreWxpbgAAAABqibx8AAAAAH1IkNgAAAAAAAAAggAAABVwZXJtaXQtWDExLWZvcndhcmRpbmcAAAAAAAAAF3Blcm1pdC1hZ2VudC1mb3J3YXJkaW5nAAAAAAAAABZwZXJtaXQtcG9ydC1mb3J3YXJkaW5nAAAAAAAAAApwZXJtaXQtcHR5AAAAAAAAAA5wZXJtaXQtdXNlci1yYwAAAAAAAAAAAAAAMwAAAAtzc2gtZWQyNTUxOQAAACCUSK7R5Pcf36m8L1PXhB+GyeKsXPjVeGPiX6LK/h18IAAAAFMAAAALc3NoLWVkMjU1MTkAAABA4BQ12119IoAEfFWCzCLdxePhZrGENBBRNA+cRvEe276O1yKTP75Lnvb8MxOGZ+fBX04FpstXjT2qoucV8K0MDw== 15249@tom\n",
+    "targetType": "linux",
+    "protocol": "ssh",
+    "protocols": [
+      "ssh"
+    ],
+    "tags": [
+      "模拟环境",
+      "Linux",
+      "OpenSSH证书",
+      "CA认证"
+    ],
+    "notes": "�?CA 签发�?OpenSSH 用户证书，证书路�? ./tools/mock-servers/certs/id_ed25519_test-cert.pub",
+    "favorite": true,
+    "createdAt": 1787413612378,
+    "updatedAt": 1787413612378
+  },
+  {
+    "id": "mock-kylin-01",
+    "name": "🇨🇳 信创服务�?(银河麒麟 Kylin V10)",
+    "host": "127.0.0.1",
+    "port": 2222,
+    "username": "kylin",
+    "authType": "password",
+    "password": "123456",
+    "targetType": "xinchuang",
+    "protocol": "ssh",
+    "protocols": [
+      "ssh"
+    ],
+    "tags": [
+      "信创",
+      "银河麒麟",
+      "Linux"
+    ],
+    "notes": "信创操作系统模拟�?,
+    "favorite": true,
+    "createdAt": 1787413612378,
+    "updatedAt": 1787413612378
+  },
+  {
+    "id": "mock-win-01",
+    "name": "🪟 Windows Server 2022 Datacenter",
+    "host": "127.0.0.1",
+    "port": 2223,
+    "username": "Administrator",
+    "authType": "password",
+    "password": "Admin@123",
+    "targetType": "windows",
+    "protocol": "ssh",
+    "protocols": [
+      "ssh",
+      "rdp"
+    ],
+    "rdpPort": 3389,
+    "tags": [
+      "模拟环境",
+      "Windows",
+      "PowerShell"
+    ],
+    "notes": "Windows OpenSSH 模拟机：支持 PowerShell Get-Process, Get-Service, Get-Volume, C:/ 盘符 SFTP",
+    "favorite": true,
+    "createdAt": 1787413612378,
+    "updatedAt": 1787413612378
+  },
+  {
+    "id": "mock-switch-huawei",
+    "name": "🌐 华为核心交换�?(Huawei CloudEngine)",
+    "host": "127.0.0.1",
+    "port": 2323,
+    "username": "admin",
+    "authType": "password",
+    "password": "admin@123",
+    "targetType": "network",
+    "protocol": "telnet",
+    "protocols": [
+      "telnet",
+      "ssh"
+    ],
+    "tags": [
+      "网络设备",
+      "华为",
+      "Telnet"
+    ],
+    "notes": "华为 VRP 交换机：支持 <Huawei> 提示�? display version/interface, Telnet IAC 协商",
+    "favorite": false,
+    "createdAt": 1787413612378,
+    "updatedAt": 1787413612378
+  },
+  {
+    "id": "mock-switch-cisco",
+    "name": "🌐 思科核心路由�?(Cisco Catalyst)",
+    "host": "127.0.0.1",
+    "port": 2224,
+    "username": "admin",
+    "authType": "password",
+    "password": "admin@123",
+    "targetType": "network",
+    "protocol": "ssh",
+    "protocols": [
+      "ssh",
+      "telnet"
+    ],
+    "tags": [
+      "网络设备",
+      "思科",
+      "SSH"
+    ],
+    "notes": "思科 IOS 路由器：支持 Router# 提示�? show version, show ip int brief",
+    "favorite": false,
+    "createdAt": 1787413612378,
+    "updatedAt": 1787413612378
+  },
+  {
+    "id": "mock-bmc-dell",
+    "name": "🌟 Dell PowerEdge R750 (iDRAC9 带外)",
+    "host": "127.0.0.1",
+    "port": 2222,
+    "bmcPort": 8443,
+    "username": "root",
+    "authType": "password",
+    "password": "calvin",
+    "targetType": "bmc",
+    "protocol": "ssh",
+    "protocols": [
+      "ssh"
+    ],
+    "tags": [
+      "带外管理",
+      "BMC",
+      "Dell",
+      "iDRAC"
+    ],
+    "notes": "Dell iDRAC9 Redfish 带外管理：支持开机引导项设定 (Boot Override)、动态温�?风扇/功耗、SEL 日志",
+    "favorite": true,
+    "createdAt": 1787413612378,
+    "updatedAt": 1787413612378
+  },
+  {
+    "id": "mock-bmc-hpe",
+    "name": "🌟 HPE ProLiant DL380 Gen10 (iLO5 带外)",
+    "host": "127.0.0.1",
+    "port": 2222,
+    "bmcPort": 8444,
+    "username": "Administrator",
+    "authType": "password",
+    "password": "Admin@123",
+    "targetType": "bmc",
+    "protocol": "ssh",
+    "protocols": [
+      "ssh"
+    ],
+    "tags": [
+      "带外管理",
+      "BMC",
+      "HPE",
+      "iLO"
+    ],
+    "notes": "HPE iLO5 Redfish 带外管理",
+    "favorite": false,
+    "createdAt": 1787413612378,
+    "updatedAt": 1787413612378
+  },
+  {
+    "id": "mock-bastion-jump",
+    "name": "🛡�?运维跳板�?(Bastion Jump Proxy)",
+    "host": "127.0.0.1",
+    "port": 2225,
+    "username": "jumpuser",
+    "authType": "password",
+    "password": "jump123",
+    "targetType": "linux",
+    "protocol": "ssh",
+    "protocols": [
+      "ssh"
+    ],
+    "tags": [
+      "跳板�?,
+      "代理网关"
+    ],
+    "notes": "SSH 跳板机：支持端口转发与代理穿�?,
+    "favorite": false,
+    "createdAt": 1787413612378,
+    "updatedAt": 1787413612378
+  }
+]

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22" fill="none">
+  <!-- Subtle Frost Shadow -->
+  <path d="M2 1 L14 9.5 L8.5 10.5 L12 17 L8.8 18.5 L5.5 12 L2 15 Z" fill="#242933" opacity="0.4" transform="translate(0.8, 0.8)"/>
+  <!-- Dark Polar Night Boundary -->
+  <path d="M1 1 L14 9.5 L8.5 10.5 L12 17 L8.8 18.5 L5.5 12 L1 15 Z" fill="#2E3440" stroke="#434C5E" stroke-width="1.2" stroke-linejoin="round"/>
+  <!-- Left Ice Facet (Frost Cyan #88C0D0) -->
+  <path d="M2 2 L7.5 10.5 L5.5 11.5 L2 13.5 Z" fill="#88C0D0"/>
+  <!-- Right Ice Facet (Glacier Teal #8FBCBB) -->
+  <path d="M2 2 L12.5 9 L8 9.8 L7.5 10.5 Z" fill="#8FBCBB"/>
+  <!-- Stem Accent (Deep Arctic Blue #5E81AC) -->
+  <path d="M7 11 L10.8 16.8 L9 17.5 L5.8 12.2 Z" fill="#5E81AC"/>
+  <!-- Pure Snow White Precision Tip -->
+  <circle cx="1.2" cy="1.2" r="1.1" fill="#ECEFF4"/>
+</svg>

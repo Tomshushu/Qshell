@@ -1,0 +1,5 @@
+# The Tauri command surface and SSH/SFTP transport constructors are intentionally
+# parameter-rich: their arguments map directly to IPC payloads and protocol
+# settings. Keep Clippy strict for correctness while allowing these stable APIs.
+too-many-arguments-threshold = 15
+type-complexity-threshold = 1000
