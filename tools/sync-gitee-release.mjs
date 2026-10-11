@@ -251,7 +251,22 @@ async function run() {
   const manifestPath = process.env.MANIFEST_PATH || 'latest.json'
   let manifest = null
 
-  if (existsSync(manifestPath)) {
+  // 优先从当前 Release 的 GitHub 产物中获取官方生成的 latest.json（确保版本号与签名 100% 对应）
+  const ghManifestAsset = (ghRelease.assets || []).find((a) => a.name === 'latest.json')
+  if (ghManifestAsset) {
+    console.log(`[Gitee Sync] Fetching official manifest from GitHub Release asset: ${ghManifestAsset.browser_download_url}`)
+    try {
+      const res = await fetch(ghManifestAsset.browser_download_url, { headers: { 'User-Agent': 'Qshell-Sync' } })
+      if (res.ok) {
+        manifest = await res.json()
+      }
+    } catch (err) {
+      console.warn(`[Gitee Sync] Failed to download manifest from release asset:`, err.message)
+    }
+  }
+
+  // 兜底：若资产中未找到，尝试读取本地或 tag 路径
+  if (!manifest && existsSync(manifestPath)) {
     try {
       const raw = await readFile(manifestPath, 'utf8')
       manifest = JSON.parse(raw)
@@ -260,12 +275,11 @@ async function run() {
     }
   }
 
-  // 如果本地没有，尝试从 Release 或远程下载
   if (!manifest) {
     const remoteUrl = `https://github.com/Tomshushu/Qshell/releases/download/${TAG_NAME}/latest.json`
     console.log(`[Gitee Sync] Fetching manifest from ${remoteUrl}...`)
     try {
-      const res = await fetch(remoteUrl)
+      const res = await fetch(remoteUrl, { headers: { 'User-Agent': 'Qshell-Sync' } })
       if (res.ok) {
         manifest = await res.json()
       }
