@@ -8,6 +8,8 @@
  * 4. 异步无阻塞发送（fire-and-forget），离线或网络故障时静默忽略，绝不干扰应用启动。
  */
 
+import { APP_VERSION } from '@/utils/version'
+
 export const TELEMETRY_DEVICE_ID_KEY = 'qshell_telemetry_device_id'
 export const TELEMETRY_ENABLED_KEY = 'qshell_telemetry_enabled'
 
@@ -73,7 +75,7 @@ export function detectPlatform(): 'windows' | 'macos' | 'linux' | 'web' {
 /**
  * 组装匿名心跳数据包
  */
-export function buildTelemetryPayload(version = '1.0.7'): TelemetryPayload {
+export function buildTelemetryPayload(version = APP_VERSION): TelemetryPayload {
   return {
     anonymousId: getOrCreateAnonymousId(),
     version,
