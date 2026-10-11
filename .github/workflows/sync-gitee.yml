@@ -1,0 +1,32 @@
+name: 'Sync Release Assets to Gitee (国内镜像一键同步)'
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release Tag (例如 v1.0.5)'
+        required: true
+        default: 'v1.0.5'
+
+jobs:
+  sync-gitee:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Sync to Gitee Releases
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN || '12c9b9f0edf788cf0e5c308134e5e316' }}
+          GITEE_OWNER: 'Tom-shushu'
+          GITEE_REPO: 'qshell'
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.event.inputs.tag_name }}
+          MANIFEST_PATH: 'latest.json'
+        run: |
+          node tools/sync-gitee-release.mjs

@@ -153,43 +153,98 @@ async function run() {
   // 1. 同步 GitHub Release 中的二进制资产到 Gitee Release
   const githubRepo = process.env.GITHUB_REPOSITORY || 'Tomshushu/Qshell'
   const githubToken = process.env.GITHUB_TOKEN || ''
+  const githubReleaseId = process.env.GITHUB_RELEASE_ID || ''
 
-  try {
-    const ghHeaders = {
-      'User-Agent': 'Qshell-Sync',
-      ...(githubToken ? { 'Authorization': `Bearer ${githubToken}` } : {}),
+  const ghHeaders = {
+    'User-Agent': 'Qshell-Sync',
+    ...(githubToken ? { 'Authorization': `Bearer ${githubToken}` } : {}),
+  }
+
+  let ghRelease = null
+  if (githubReleaseId) {
+    console.log(`[Gitee Sync] Fetching GitHub release by ID: ${githubReleaseId}`)
+    try {
+      const res = await fetch(`https://api.github.com/repos/${githubRepo}/releases/${githubReleaseId}`, { headers: ghHeaders })
+      if (res.ok) ghRelease = await res.json()
+    } catch (err) {
+      console.warn(`[Gitee Sync] Failed to fetch release by ID:`, err.message)
     }
-    const ghReleaseRes = await fetch(`https://api.github.com/repos/${githubRepo}/releases/tags/${TAG_NAME}`, {
-      headers: ghHeaders,
-    })
+  }
 
-    if (ghReleaseRes.ok) {
-      const ghRelease = await ghReleaseRes.json()
-      console.log(`[Gitee Sync] Found ${ghRelease.assets?.length || 0} assets on GitHub release.`)
+  if (!ghRelease) {
+    console.log(`[Gitee Sync] Fetching GitHub release by tag: ${TAG_NAME}`)
+    try {
+      const res = await fetch(`https://api.github.com/repos/${githubRepo}/releases/tags/${TAG_NAME}`, { headers: ghHeaders })
+      if (res.ok) ghRelease = await res.json()
+    } catch (err) {
+      console.warn(`[Gitee Sync] Failed to fetch release by tag:`, err.message)
+    }
+  }
 
-      for (const asset of ghRelease.assets || []) {
-        if (asset.name === 'latest.json' || asset.name === 'latest-china.json') {
-          continue // 针对 Gitee 重新生成的清单单独处理
+  if (!ghRelease) {
+    throw new Error(`[Gitee Sync] Could not fetch GitHub release for tag '${TAG_NAME}' or ID '${githubReleaseId}'`)
+  }
+
+  console.log(`[Gitee Sync] Found ${ghRelease.assets?.length || 0} assets on GitHub release.`)
+
+  const syncErrors = []
+  for (const asset of ghRelease.assets || []) {
+    if (asset.name === 'latest.json' || asset.name === 'latest-china.json') {
+      continue // 针对 Gitee 重新生成的清单单独处理
+    }
+
+    if (existingAssets[asset.name]) {
+      console.log(`[Gitee Sync] Asset '${asset.name}' already exists on Gitee, skipping.`)
+      continue
+    }
+
+    let downloadedBuffer = null
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        console.log(`[Gitee Sync] Downloading '${asset.name}' (${(asset.size / 1024 / 1024).toFixed(2)} MB, attempt ${attempt}/3)...`)
+        // 注意：下载 browser_download_url 时严禁携带 Authorization 请求头！
+        // GitHub 下载地址会 302 重定向到 AWS S3 预签名 URL。
+        // AWS S3 若同时收到 URL 预签名参数与 Authorization 请求头，将直接返回 400 Bad Request。
+        const downloadRes = await fetch(asset.browser_download_url, {
+          headers: { 'User-Agent': 'Qshell-Sync' },
+        })
+        if (!downloadRes.ok) {
+          throw new Error(`Download failed: HTTP ${downloadRes.status} ${downloadRes.statusText}`)
         }
-
-        if (existingAssets[asset.name]) {
-          console.log(`[Gitee Sync] Asset '${asset.name}' already exists on Gitee, skipping.`)
-          continue
-        }
-
-        console.log(`[Gitee Sync] Downloading '${asset.name}' from GitHub...`)
-        const downloadRes = await fetch(asset.browser_download_url, { headers: ghHeaders })
-        if (downloadRes.ok) {
-          const buffer = await downloadRes.arrayBuffer()
-          await uploadFileToGiteeRelease(giteeRelease.id, asset.name, Buffer.from(buffer))
-          existingAssets[asset.name] = true
-        } else {
-          console.warn(`[Gitee Sync] Failed to download '${asset.name}' from GitHub: ${downloadRes.status}`)
-        }
+        const ab = await downloadRes.arrayBuffer()
+        downloadedBuffer = Buffer.from(ab)
+        break
+      } catch (err) {
+        console.warn(`[Gitee Sync] Attempt ${attempt} failed to download '${asset.name}':`, err.message)
+        if (attempt < 3) await new Promise((r) => setTimeout(r, 2000 * attempt))
       }
     }
-  } catch (err) {
-    console.warn(`[Gitee Sync] Asset synchronization error:`, err.message)
+
+    if (!downloadedBuffer) {
+      syncErrors.push(`Failed to download ${asset.name} from GitHub`)
+      continue
+    }
+
+    let uploadOk = false
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await uploadFileToGiteeRelease(giteeRelease.id, asset.name, downloadedBuffer)
+        existingAssets[asset.name] = true
+        uploadOk = true
+        break
+      } catch (err) {
+        console.warn(`[Gitee Sync] Attempt ${attempt} failed to upload '${asset.name}' to Gitee:`, err.message)
+        if (attempt < 3) await new Promise((r) => setTimeout(r, 2000 * attempt))
+      }
+    }
+
+    if (!uploadOk) {
+      syncErrors.push(`Failed to upload ${asset.name} to Gitee`)
+    }
+  }
+
+  if (syncErrors.length > 0) {
+    throw new Error(`[Gitee Sync] Critical asset synchronization failed for:\n  ${syncErrors.join('\n  ')}`)
   }
 
   // 2. 读取或准备原始 latest.json

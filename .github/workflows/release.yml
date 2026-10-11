@@ -143,6 +143,7 @@ jobs:
           GITEE_REPO: 'qshell'
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ github.ref_name }}
+          GITHUB_RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
           MANIFEST_PATH: 'latest.json'
         run: |
           node tools/sync-gitee-release.mjs
