@@ -560,9 +560,10 @@ npm run test:native
 - **WinRM 与 VNC**：类型定义中存在协议预留，但当前没有完整 WinRM 管理模块或通用 VNC 客户端，不应视为已支持功能。
 - **终端图片协议**：当前未声明完整支持 Kitty / iTerm2 图片协议。
 
-## 版本
+## 版本与发布规范
 
-当前应用版本：`1.0.0`。
+- **当前应用版本**：`1.0.6`
+- **发版标准作业程序 (SOP)**：协同开发与版本发布请严格参阅 [Qshell 官方发版指南 (RELEASE_GUIDE.md)](./RELEASE_GUIDE.md)，包含语义化版本控制、4 处版本清单同步、发版前强制质检验收门禁、Conventional Commits 提交规范以及 GitHub Actions 全平台多架构自动化 CI/CD 构建流程。
 
 ## License
 
