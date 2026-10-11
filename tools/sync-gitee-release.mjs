@@ -190,12 +190,39 @@ async function run() {
   }
 
   if (!ghRelease) {
-    console.log(`[Gitee Sync] Fetching GitHub release by tag: ${TAG_NAME}`)
-    try {
-      const res = await fetch(`https://api.github.com/repos/${githubRepo}/releases/tags/${TAG_NAME}`, { headers: ghHeaders })
-      if (res.ok) ghRelease = await res.json()
-    } catch (err) {
-      console.warn(`[Gitee Sync] Failed to fetch release by tag:`, err.message)
+    console.log(`[Gitee Sync] GitHub API rate limited or unreachable. Attempting fallback via release manifest...`)
+    const manifestUrls = [
+      `https://gh-proxy.com/https://github.com/${githubRepo}/releases/download/${TAG_NAME}/latest.json`,
+      `https://github.com/${githubRepo}/releases/download/${TAG_NAME}/latest.json`,
+    ]
+    for (const mUrl of manifestUrls) {
+      try {
+        const mRes = await fetch(mUrl, { headers: { 'User-Agent': 'Qshell-Sync' } })
+        if (mRes.ok) {
+          const mJson = await mRes.json()
+          const assetNames = new Set()
+          for (const p of Object.values(mJson.platforms || {})) {
+            if (p.url) {
+              const fname = p.url.substring(p.url.lastIndexOf('/') + 1)
+              assetNames.add(fname)
+              assetNames.add(`${fname}.sig`)
+            }
+          }
+          const cleanVer = TAG_NAME.replace(/^v/, '')
+          assetNames.add(`Qshell_${cleanVer}_aarch64.dmg`)
+          
+          const fallbackAssets = Array.from(assetNames).map(name => ({
+            name,
+            browser_download_url: `https://github.com/${githubRepo}/releases/download/${TAG_NAME}/${name}`,
+            size: 0,
+          }))
+          ghRelease = { assets: fallbackAssets }
+          console.log(`[Gitee Sync] Successfully reconstructed ${fallbackAssets.length} assets from release manifest.`)
+          break
+        }
+      } catch (err) {
+        // try next
+      }
     }
   }
 
@@ -238,13 +265,26 @@ async function run() {
     let downloadedBuffer = null
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        console.log(`[Gitee Sync] Downloading '${asset.name}' (${(asset.size / 1024 / 1024).toFixed(2)} MB, attempt ${attempt}/3)...`)
-        const downloadRes = await fetch(asset.browser_download_url, {
-          headers: { 'User-Agent': 'Qshell-Sync' },
-          signal: AbortSignal.timeout(120_000),
-        })
-        if (!downloadRes.ok) {
-          throw new Error(`Download failed: HTTP ${downloadRes.status} ${downloadRes.statusText}`)
+        console.log(`[Gitee Sync] Downloading '${asset.name}' (${asset.size ? (asset.size / 1024 / 1024).toFixed(2) : '??'} MB, attempt ${attempt}/3)...`)
+        const downloadCandidates = [
+          asset.browser_download_url,
+          `https://gh-proxy.com/${asset.browser_download_url}`,
+        ]
+        let downloadRes = null
+        for (const dlUrl of downloadCandidates) {
+          try {
+            const res = await fetch(dlUrl, {
+              headers: { 'User-Agent': 'Qshell-Sync' },
+              signal: AbortSignal.timeout(60_000),
+            })
+            if (res.ok) {
+              downloadRes = res
+              break
+            }
+          } catch {}
+        }
+        if (!downloadRes) {
+          throw new Error(`Download failed for '${asset.name}' from all candidate sources`)
         }
         const ab = await downloadRes.arrayBuffer()
         downloadedBuffer = Buffer.from(ab)
