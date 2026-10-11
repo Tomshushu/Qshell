@@ -4,7 +4,7 @@
 
 ### 🚀 现代化极速桌面终端与多协议服务器管理工作台
 
-[![Release](https://img.shields.io/badge/Release-v1.0.6-blue.svg?style=flat-square)](https://github.com/Tomshushu/Qshell/releases)
+[![Release](https://img.shields.io/badge/Release-v1.0.7-blue.svg?style=flat-square)](https://github.com/Tomshushu/Qshell/releases)
 [![Tauri](https://img.shields.io/badge/Tauri-v2.0-24C8D8.svg?style=flat-square&logo=tauri)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-19.0-61DAFB.svg?style=flat-square&logo=react)](https://react.dev/)
 [![Rust](https://img.shields.io/badge/Rust-1.80+-DEA584.svg?style=flat-square&logo=rust)](https://www.rust-lang.org/)

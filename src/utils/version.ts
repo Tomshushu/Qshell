@@ -4,7 +4,7 @@ import { isTauri } from '@/services/api'
 declare const __APP_VERSION__: string | undefined
 
 // 编译期版本号（由 vite 注入 package.json 版本，或回退至常量）
-export const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.0.6'
+export const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.0.7'
 
 /**
  * 动态获取当前客户端运行时的真实版本号

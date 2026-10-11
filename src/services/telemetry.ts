@@ -73,7 +73,7 @@ export function detectPlatform(): 'windows' | 'macos' | 'linux' | 'web' {
 /**
  * 组装匿名心跳数据包
  */
-export function buildTelemetryPayload(version = '1.0.6'): TelemetryPayload {
+export function buildTelemetryPayload(version = '1.0.7'): TelemetryPayload {
   return {
     anonymousId: getOrCreateAnonymousId(),
     version,

@@ -77,7 +77,7 @@ async function deriveKey(password: string, salt: Uint8Array, iterations = 100000
 export async function encryptData(
   plaintext: string,
   masterPassword: string,
-  appVersion = '1.0.6',
+  appVersion = '1.0.7',
 ): Promise<string> {
   if (!masterPassword || masterPassword.trim().length === 0) {
     throw new Error('同步主密码不能为空')
