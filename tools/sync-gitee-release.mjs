@@ -57,13 +57,30 @@ async function getOrCreateGiteeRelease(tag) {
   }
 
   console.log(`[Gitee] Creating new release for tag: ${tag}`)
+  const releaseBody = `## 🚀 Qshell ${tag} 正式版本发布
+
+> 现代化极速终端与多协议服务器管理工作台。国内高速镜像托管发布。
+
+### 📦 国内免翻墙极速下载通道 (推荐)
+
+| 操作系统与架构 | 安装包类型 | 国内极速直链 (10~25MB/s) |
+| :--- | :--- | :--- |
+| **Windows 64位** | 安装包 (.exe) | [⚡ 点击极速下载](https://gh-proxy.com/https://github.com/Tomshushu/Qshell/releases/download/${tag}/Qshell_${tag.replace(/^v/, '')}_x64-setup.exe) |
+| **macOS Apple Silicon** | 镜像包 (.dmg) | [⚡ 点击极速下载](https://gh-proxy.com/https://github.com/Tomshushu/Qshell/releases/download/${tag}/Qshell_${tag.replace(/^v/, '')}_aarch64.dmg) |
+| **macOS 压缩包** | 应用包 (.app.tar.gz) | [⚡ 点击极速下载](https://gh-proxy.com/https://github.com/Tomshushu/Qshell/releases/download/${tag}/Qshell_aarch64.app.tar.gz) |
+| **Linux (全平台通用)** | 便携版 (.AppImage) | [⚡ 点击极速下载](https://gh-proxy.com/https://github.com/Tomshushu/Qshell/releases/download/${tag}/Qshell_${tag.replace(/^v/, '')}_amd64.AppImage) |
+| **Linux (Debian/Ubuntu)** | 安装包 (.deb) | [⚡ 点击极速下载](https://gh-proxy.com/https://github.com/Tomshushu/Qshell/releases/download/${tag}/Qshell_${tag.replace(/^v/, '')}_amd64.deb) |
+
+---
+*注：Qshell 客户端内置智能动态双通道测速，更新时将自动优选国内最畅通的直连节点。*`
+
   const createRes = await giteeRequest(`/repos/${GITEE_OWNER}/${GITEE_REPO}/releases`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       tag_name: tag,
       name: `Qshell ${tag}`,
-      body: `Qshell 现代化极速终端与服务器管理工作台 ${tag} 正式版本。国内高速镜像托管发布。`,
+      body: releaseBody,
       target_commitish: 'main',
     }),
   })
@@ -85,7 +102,7 @@ async function uploadFileToGiteeRelease(releaseId, filename, fileBuffer) {
   const res = await fetch(`https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${releaseId}/attach_files`, {
     method: 'POST',
     body: form,
-    signal: AbortSignal.timeout(180_000),
+    signal: AbortSignal.timeout(60_000),
   })
 
   if (!res.ok) {
@@ -245,7 +262,8 @@ async function run() {
     }
 
     let uploadOk = false
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    const maxAttempts = (asset.size && asset.size > 10 * 1024 * 1024) ? 2 : 3
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         await uploadFileToGiteeRelease(giteeRelease.id, asset.name, downloadedBuffer)
         existingAssets[asset.name] = true
@@ -253,7 +271,7 @@ async function run() {
         break
       } catch (err) {
         console.warn(`[Gitee Sync] Attempt ${attempt} failed to upload '${asset.name}' to Gitee:`, err.message)
-        if (attempt < 3) await new Promise((r) => setTimeout(r, 2000 * attempt))
+        if (attempt < maxAttempts) await new Promise((r) => setTimeout(r, 2000 * attempt))
       }
     }
 
@@ -322,11 +340,19 @@ async function run() {
           const rawUrl = platformData.url
           const cleanUrl = rawUrl.replace(/^https:\/\/gh-proxy\.com\//, '')
           const filename = cleanUrl.substring(cleanUrl.lastIndexOf('/') + 1)
-          const giteeDownloadUrl = `https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}/releases/download/${TAG_NAME}/${filename}`
           
-          console.log(`  [${platformKey}] ${filename}`)
-          console.log(`    -> Gitee: ${giteeDownloadUrl}`)
-          platformData.url = giteeDownloadUrl
+          if (existingAssets[filename]) {
+            const giteeDownloadUrl = `https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}/releases/download/${TAG_NAME}/${filename}`
+            console.log(`  [${platformKey}] ${filename}`)
+            console.log(`    -> Gitee Attachment: ${giteeDownloadUrl}`)
+            platformData.url = giteeDownloadUrl
+          } else {
+            // 若 Gitee 附件因跨国网络超时跳过，自动优雅回退为国内 CDN 高速镜像，彻底避免客户端 404
+            const fallbackUrl = `https://gh-proxy.com/https://github.com/${githubRepo}/releases/download/${TAG_NAME}/${filename}`
+            console.log(`  [${platformKey}] ${filename}`)
+            console.log(`    -> CDN Mirror Fallback: ${fallbackUrl}`)
+            platformData.url = fallbackUrl
+          }
         }
       }
     }
