@@ -77,6 +77,7 @@ import {
   RotateCw,
 } from "lucide-react";
 import { useUpdaterStore } from "@/store/updater-store";
+import { useAppVersion } from "@/utils/version";
 import { getAllFileIconThemes } from "@/components/file-icons";
 import { KnownHostsPanel } from "./known-hosts-panel";
 import { AccountSettingsPanel } from "./account-settings-panel";
@@ -950,6 +951,7 @@ function SettingsPanel({
   const checkForUpdates = useUpdaterStore((s) => s.checkForUpdates);
   const skippedVersion = useUpdaterStore((s) => s.skippedVersion);
   const resetSkippedVersion = useUpdaterStore((s) => s.resetSkippedVersion);
+  const appVersion = useAppVersion();
   // 主题下拉:点击外部关闭 + 动态定位(通过 createPortal 渲染到 body,
   // 避免 DialogContent 的 transform/overflow-hidden 创建包含块导致 fixed 失效并被裁切)
   // 下拉为纯名称列表,鼠标 hover 项时在右侧弹出完整终端预览。
@@ -1349,7 +1351,7 @@ function SettingsPanel({
 
           <div className="flex items-center gap-2.5 px-3 py-2 text-[10px] text-muted-foreground/60 border-t mt-1">
             <span className="flex-1">{t("sidebar_version")}</span>
-            <span>v1.0.0</span>
+            <span>v{appVersion}</span>
           </div>
         </div>
       </div>
@@ -1411,7 +1413,7 @@ function SettingsPanel({
                     <span className="text-sm font-bold text-foreground flex items-center gap-2">
                       软件在线更新 (OTA)
                       <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
-                        v1.0.0
+                        v{appVersion}
                       </span>
                     </span>
                     <p className="text-muted-foreground text-[11px]">

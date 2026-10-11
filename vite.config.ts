@@ -2,11 +2,15 @@ import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
+import pkg from './package.json' with { type: 'json' }
 
 // Tauri 版本配置：
 // - dev server 端口 1420（Tauri 官方推荐标准端口，与 tauri.conf.json 中 devUrl 一致，彻底避开 517x 冲突）
 // - 通过 Tauri 的 IPC 通道与 Rust 后端通信，不再依赖 Node.js 原生模块
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   base: './',
   plugins: [react(), tailwindcss()],
   resolve: {
