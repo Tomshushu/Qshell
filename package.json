@@ -24,8 +24,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:native": "cd src-tauri && cargo test",
-    "test:stress:ssh-log": "node tools/stress/ssh-log-stress.mjs",
-    "sync:gitee": "node tools/sync-gitee-release.mjs"
+    "sync:gitee": "node tools/sync-gitee-release.mjs",
+    "version:sync": "node tools/bump-version.mjs",
+    "bump": "node tools/bump-version.mjs"
   },
   "dependencies": {
     "@open-file-viewer/core": "^0.1.48",

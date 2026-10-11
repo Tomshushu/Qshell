@@ -54,25 +54,44 @@ flowchart TD
 
 ---
 
-## 二、 步骤一：版本号规约与文件同步清单
+## 二、 步骤一：版本号规约与一键自动化同步
 
 Qshell 严格遵循 [语义化版本规范 (Semantic Versioning 2.0.0)](https://semver.org/lang/zh-CN/)：
 - **主版本号 (Major)**：架构级不兼容变动（如协议升级、重大底层重构）；
 - **次版本号 (Minor)**：向后兼容的功能性重大新增（如新增云漫游模块、新增图表工具）；
 - **修订版本号 (Patch)**：向后兼容的缺陷修复与细节体验优化。
 
-### ⚠️ 必须同步修改的 4 处版本清单（缺一不可）
+### 🚀 全局单一版本源（SSOT）一键同步机制
 
-在发起发版提交前，必须确保以下文件中的版本号**完全一致**：
+Qshell 已经实现了**全工程单一事实来源 (Single Source of Truth)**，前端代码已全量动态注入，源码中无需任何硬编码修改。发版时只需通过以下任一方式**改动一个地方**即可：
 
-| 序号 | 目标文件路径 | 对应字段 / 行 | 说明 |
-| :---: | :--- | :--- | :--- |
-| **1** | [`package.json`](file:///d:/SSHTOOL/Qshell/package.json) | `"version": "x.y.z"` | 前端基础包版本 |
-| **2** | [`src-tauri/Cargo.toml`](file:///d:/SSHTOOL/Qshell/src-tauri/Cargo.toml) | `[package] version = "x.y.z"` | Rust 核心包版本（影响安装包元数据） |
-| **3** | [`src-tauri/tauri.conf.json`](file:///d:/SSHTOOL/Qshell/src-tauri/tauri.conf.json) | `"version": "x.y.z"` | Tauri 桌面宿主版本（影响 OTA 比较逻辑） |
-| **4** | [`src/utils/version.ts`](file:///d:/SSHTOOL/Qshell/src/utils/version.ts) | `APP_VERSION = ... : 'x.y.z'` | 前端运行时回退版本常量 |
+#### 方式 A：命令行一键自动递增（最推荐，零手动改文件）
 
-> **提示**：更新完后，可以在终端执行一次 `cargo check`，以自动更新 [`src-tauri/Cargo.lock`](file:///d:/SSHTOOL/Qshell/src-tauri/Cargo.lock) 中的版本元数据。
+```bash
+# 自动递增补丁号 (Patch): 1.0.7 -> 1.0.8
+npm run bump patch
+
+# 自动递增次版本号 (Minor): 1.0.7 -> 1.1.0
+npm run bump minor
+
+# 或者直接指定版本号:
+npm run bump 1.0.8
+```
+
+#### 方式 B：仅在 `package.json` 修改一个数字
+
+若习惯直接改文件，您只需要打开根目录的 [`package.json`](file:///d:/SSHTOOL/Qshell/package.json)，将 `"version"` 修改为新版本号（如 `"1.0.8"`），然后在终端运行：
+
+```bash
+npm run version:sync
+```
+
+脚本将自动级联同步以下全部文件，并自动刷新 `Cargo.lock`：
+- `package.json`
+- `src-tauri/tauri.conf.json`
+- `src-tauri/Cargo.toml`
+- `README.md`（Release 徽标）
+- `src-tauri/Cargo.lock` (自动通过 `cargo check` 刷新)
 
 ---
 

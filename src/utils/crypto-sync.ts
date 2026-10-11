@@ -7,6 +7,8 @@
  * 云端（如 Gitee 私有仓库）仅存储密文，第三方平台哪怕被脱库也无法解密任何明文。
  */
 
+import { APP_VERSION } from './version'
+
 export interface EncryptedPackage {
   format: 'qshell-e2ee-v1'
   algorithm: 'AES-256-GCM'
@@ -77,7 +79,7 @@ async function deriveKey(password: string, salt: Uint8Array, iterations = 100000
 export async function encryptData(
   plaintext: string,
   masterPassword: string,
-  appVersion = '1.0.7',
+  appVersion = APP_VERSION,
 ): Promise<string> {
   if (!masterPassword || masterPassword.trim().length === 0) {
     throw new Error('同步主密码不能为空')
