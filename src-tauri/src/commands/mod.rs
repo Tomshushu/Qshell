@@ -37,6 +37,7 @@ pub mod telnet;
 pub mod serial;
 pub mod tags;
 pub mod updater;
+pub mod backgrounds;
 
 // ============================================================================
 // 公共辅助类型与函数

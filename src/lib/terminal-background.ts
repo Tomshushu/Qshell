@@ -41,6 +41,8 @@ export interface UserBackground {
   path: string
   /** 可直接用于 <img src>/CSS background-image 的 asset:// URL */
   url: string
+  /** 媒体类型：图片或视频 */
+  type: 'image' | 'video'
 }
 
 /** 最大上传图片大小 5MB */
@@ -218,13 +220,16 @@ export async function listUserBackgrounds(): Promise<UserBackground[]> {
     if (entry.isDirectory) continue
     const name = entry.name
     const lower = name.toLowerCase()
-    if (!IMAGE_EXTENSIONS.some((ext) => lower.endsWith(ext))) continue
+    const isImg = IMAGE_EXTENSIONS.some((ext) => lower.endsWith(ext))
+    const isVid = VIDEO_EXTENSIONS.some((ext) => lower.endsWith(ext))
+    if (!isImg && !isVid) continue
     const path = await join(bgDir, name)
     list.push({
       id: name,
       name,
       path,
       url: convertFileSrc(path),
+      type: isVid ? 'video' : 'image',
     })
   }
   list.sort((a, b) => a.name.localeCompare(b.name))

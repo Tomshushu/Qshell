@@ -2,17 +2,49 @@ import { useState, useRef, useEffect, useMemo } from 'react'
 import { useAppStore } from '@/store'
 import { Button } from '@/components/ui/button'
 import {
-  Home, Settings, ArrowLeftRight, Lock, User as UserIcon,
+  Home,
+  Settings,
+  ArrowLeftRight,
+  Lock,
+  Cloud,
+  Loader2,
+  ChevronDown,
+  CloudUpload,
 } from 'lucide-react'
 import type { WorkspaceTab } from '@/types'
 import { useTranslation } from '@/i18n'
-import { useAuthStore } from '@/store/auth-store'
+import { useSyncStore } from '@/store/sync-store'
+import { useToast } from '@/components/ui/toast'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuGroup,
+} from '@/components/ui/dropdown-menu'
 import { SettingsDialog } from '@/components/layout/settings-dialog'
 import { TabStrip } from '@/components/layout/tab-strip'
 import { cn } from '@/lib/utils'
 import { isTauri } from '@/services/api'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+
+function formatRelativeTime(isoStr: string | null): string {
+  if (!isoStr) return ''
+  try {
+    const diffMs = Date.now() - new Date(isoStr).getTime()
+    const diffSec = Math.floor(diffMs / 1000)
+    if (diffSec < 60) return '刚刚'
+    const diffMin = Math.floor(diffSec / 60)
+    if (diffMin < 60) return `${diffMin}分钟前`
+    const diffHour = Math.floor(diffMin / 60)
+    if (diffHour < 24) return `${diffHour}小时前`
+    return new Date(isoStr).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
+  } catch {
+    return ''
+  }
+}
 
 /**
  * 顶层标签栏外壳：承载全局工具按钮（首页/SFTP/设置）。
@@ -21,6 +53,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
  */
 export function TabBar() {
   const { t } = useTranslation()
+  const { toast } = useToast()
   const tabs = useAppStore((s) => s.tabs)
   const isHomeActive = useAppStore((s) => !s.activeTabId)
   const isSftpActive = useAppStore((s) =>
@@ -32,10 +65,34 @@ export function TabBar() {
   const appLockEnabled = useAppStore((s) => s.appLockEnabled)
   const appLockPasswordHash = useAppStore((s) => s.appLockPasswordHash)
   const lockApp = useAppStore((s) => s.lockApp)
-  const user = useAuthStore((s) => s.user)
-  const openAuthDialog = useAuthStore((s) => s.openAuthDialog)
+
+  const provider = useSyncStore((s) => s.provider)
+  const isConfigured = useSyncStore((s) => s.isConfigured)
+  const isSyncing = useSyncStore((s) => s.isSyncing)
+  const currentUser = useSyncStore((s) => s.currentUser)
+  const masterPassword = useSyncStore((s) => s.masterPassword)
+  const lastSyncTime = useSyncStore((s) => s.lastSyncTime)
+  const backup = useSyncStore((s) => s.backup)
 
   const [showSettings, setShowSettings] = useState(false)
+  const [settingsTab, setSettingsTab] = useState<
+    "general" | "security" | "account" | "terminal" | "sftp" | "logs" | "shortcuts" | "known_hosts"
+  >("general")
+
+  const handleQuickBackup = async () => {
+    if (!masterPassword) {
+      setSettingsTab('account')
+      setShowSettings(true)
+      toast.warning('请先设置同步主密码以保护您的配置')
+      return
+    }
+    const res = await backup()
+    if (res.success) {
+      toast.success('配置已成功加密同步至云端私有仓库！')
+    } else {
+      toast.error(`同步失败: ${res.error}`)
+    }
+  }
 
   // 当前窗口 label（合并功能使用）
   const currentWindowLabel = useRef<string>('main')
@@ -122,42 +179,184 @@ export function TabBar() {
         <Lock className="h-3 w-3" />
       </Button>
 
-      {/* 右侧：全局设置 */}
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-full px-2 rounded-none border-l border-border/40 text-[11px] flex-shrink-0"
-        onClick={() => setShowSettings(true)}
-        title={t('nav_settings')}
-      >
-        <Settings className="h-3 w-3" />
-      </Button>
+      {/* 右侧：用户与全局设置下拉菜单 (统一收纳云同步、快捷备份、设置等) */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            className="group h-full px-2.5 flex items-center gap-1.5 border-l border-border/40 text-[11px] text-foreground hover:bg-muted/40 transition-colors focus:outline-none data-[state=open]:bg-muted/60 select-none cursor-pointer"
+            title={
+              isConfigured && currentUser
+                ? `${currentUser.name || currentUser.login} (@${currentUser.login}) - 点击展开控制菜单`
+                : '账户与设置 - 点击展开控制菜单'
+            }
+          >
+            {isSyncing ? (
+              <div className="flex items-center gap-1.5 text-primary">
+                <Loader2
+                  className={cn(
+                    'h-3.5 w-3.5 animate-spin',
+                    provider === 'gitee' ? 'text-red-500' : 'text-primary',
+                  )}
+                />
+                <span className="text-[10px] hidden sm:inline font-medium">同步中</span>
+              </div>
+            ) : isConfigured && currentUser ? (
+              <div className="flex items-center gap-1.5">
+                {currentUser.avatar_url ? (
+                  <img
+                    src={currentUser.avatar_url}
+                    alt="Avatar"
+                    className={cn(
+                      'h-4 w-4 rounded-full ring-1 shrink-0',
+                      provider === 'gitee' ? 'ring-red-500/50' : 'ring-primary/50',
+                    )}
+                  />
+                ) : (
+                  <div
+                    className={cn(
+                      'h-4 w-4 rounded-full font-bold text-[9px] flex items-center justify-center shrink-0',
+                      provider === 'gitee' ? 'bg-red-500/20 text-red-500' : 'bg-primary/20 text-primary',
+                    )}
+                  >
+                    {currentUser.name?.[0] || currentUser.login[0] || 'U'}
+                  </div>
+                )}
+                <span className="hidden xl:inline max-w-[84px] truncate text-[11px] font-medium text-foreground">
+                  {currentUser.name || currentUser.login}
+                </span>
+                <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0 opacity-60 transition-transform duration-200 group-data-[state=open]:rotate-180" />
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground">
+                <Settings className="h-3.5 w-3.5 shrink-0" />
+                <span className="text-[11px] hidden sm:inline font-medium">设置</span>
+                <ChevronDown className="h-3 w-3 opacity-60 shrink-0 transition-transform duration-200 group-data-[state=open]:rotate-180" />
+              </div>
+            )}
+          </button>
+        </DropdownMenuTrigger>
 
-      {/* 右侧：用户账号与云端同步 */}
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-full px-2 rounded-none border-l border-border/40 text-[11px] flex-shrink-0 gap-1.5 hover:text-primary"
-        onClick={openAuthDialog}
-        title={user ? `${user.email || '已连接云端'} (点击查看账号)` : `${t('sidebar_account') || '账号'} (登录/注册)`}
-      >
-        {user ? (
-          <div className="flex items-center gap-1.5">
-            <div className="h-4 w-4 rounded-full bg-primary/20 text-primary font-bold text-[9px] flex items-center justify-center">
-              {user.email?.slice(0, 1).toUpperCase() || 'U'}
-            </div>
-            <span className="hidden xl:inline max-w-[80px] truncate text-[10px]">
-              {user.email?.split('@')[0]}
-            </span>
+        <DropdownMenuContent align="end" sideOffset={6} className="w-64 p-2 glass-strong border border-border/60 rounded-xl shadow-xl space-y-1">
+          {/* 1. 用户信息卡片（可点击直达云同步设置） */}
+          <div
+            onClick={() => {
+              setSettingsTab('account')
+              setShowSettings(true)
+            }}
+            className="p-2.5 rounded-lg bg-muted/40 hover:bg-muted/70 transition-colors border border-border/50 cursor-pointer group select-none"
+            title="点击前往云同步管理"
+          >
+            {isConfigured && currentUser ? (
+              <div className="flex items-center gap-2.5">
+                {currentUser.avatar_url ? (
+                  <img
+                    src={currentUser.avatar_url}
+                    alt={currentUser.name}
+                    className={cn(
+                      'h-8 w-8 rounded-full ring-2 shrink-0',
+                      provider === 'gitee' ? 'ring-red-500/40' : 'ring-primary/40',
+                    )}
+                  />
+                ) : (
+                  <div className="h-8 w-8 rounded-full bg-primary/20 text-primary flex items-center justify-center font-bold text-xs shrink-0">
+                    {currentUser.name?.[0] || currentUser.login[0] || 'U'}
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-1">
+                    <div className="font-semibold text-xs text-foreground truncate">
+                      {currentUser.name || currentUser.login}
+                    </div>
+                    <span
+                      className={cn(
+                        'text-[10px] px-1.5 py-0.2 rounded-md font-medium shrink-0',
+                        provider === 'gitee'
+                          ? 'bg-red-500/10 text-red-500 border border-red-500/20'
+                          : 'bg-primary/10 text-primary border border-primary/20',
+                      )}
+                    >
+                      {provider === 'gitee' ? '🇨🇳 Gitee' : '🌐 GitHub'}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-muted-foreground truncate">
+                    @{currentUser.login}
+                  </div>
+                  <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-emerald-500">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <span>云同步就绪</span>
+                    {lastSyncTime && (
+                      <span className="text-muted-foreground ml-auto">
+                        {formatRelativeTime(lastSyncTime)}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2.5">
+                <div className="h-8 w-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                  <Cloud className="h-4 w-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-semibold text-foreground">
+                    多端云同步 (未配置)
+                  </div>
+                  <p className="text-[10px] text-muted-foreground mt-0.5 leading-tight">
+                    点击前往绑定私有仓库
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
-        ) : (
-          <UserIcon className="h-3 w-3" />
-        )}
-      </Button>
+
+          <DropdownMenuSeparator className="my-1" />
+
+          {/* 2. 核心可用操作 */}
+          <DropdownMenuGroup>
+            {isConfigured && (
+              <DropdownMenuItem
+                onClick={handleQuickBackup}
+                disabled={isSyncing}
+                className="text-xs gap-2 py-2 cursor-pointer"
+              >
+                <CloudUpload className="h-3.5 w-3.5 text-primary shrink-0" />
+                <div className="flex-1 flex items-center justify-between">
+                  <span>立即同步备份</span>
+                  {isSyncing && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
+                </div>
+              </DropdownMenuItem>
+            )}
+
+            <DropdownMenuItem
+              onClick={() => {
+                setSettingsTab('account')
+                setShowSettings(true)
+              }}
+              className="text-xs gap-2 py-2 cursor-pointer"
+            >
+              <Cloud className="h-3.5 w-3.5 text-primary shrink-0" />
+              <span>云同步管理...</span>
+            </DropdownMenuItem>
+
+            <DropdownMenuItem
+              onClick={() => {
+                setSettingsTab('general')
+                setShowSettings(true)
+              }}
+              className="text-xs gap-2 py-2 cursor-pointer"
+            >
+              <Settings className="h-3.5 w-3.5 text-foreground/80 shrink-0" />
+              <span>系统偏好设置...</span>
+            </DropdownMenuItem>
+          </DropdownMenuGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
 
       {/* 全局设置弹窗 */}
       <SettingsDialog
         open={showSettings}
+        defaultTab={settingsTab}
         onOpenChange={(open) => {
           setShowSettings(open);
           if (!open) {

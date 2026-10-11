@@ -27,6 +27,14 @@ pub async fn ssh_keys_list() -> Result<String, String> {
         .map_err(|e| format!("Task join error: {}", e))?
 }
 
+/// 列出所有 SSH 密钥（用于端到端零知识云同步，包含解密后的 content 与 passphrase）
+#[tauri::command]
+pub async fn ssh_keys_list_for_sync() -> Result<String, String> {
+    tokio::task::spawn_blocking(db::ssh_keys_list_for_sync)
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
+}
+
 /// 新增 SSH 密钥
 /// key 参数为前端传来的 JSON 字符串（SshKeyInput）
 /// 返回 { success: true, id }

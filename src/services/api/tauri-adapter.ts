@@ -61,6 +61,9 @@ import type {
   BatchExecuteProgress,
   ForwardSpec,
   ForwardInfo,
+  TagRow,
+  SyncBackgroundItem,
+  LogBookmark,
 } from "./types";
 import { ConnectionState } from "@/services/ssh-connection-state";
 import type {
@@ -541,6 +544,12 @@ export const tauriAdapter: BackendAdapter = {
       );
       return (rawList || []).map(normalizeServer);
     },
+    async listForSync(): Promise<Server[]> {
+      const rawList = await invokeJson<Array<Record<string, unknown> | null>>(
+        "servers_list_for_sync",
+      );
+      return (rawList || []).map(normalizeServer);
+    },
     async add(server): Promise<OperationResult> {
       return safeInvoke<OperationResult>("servers_add", {
         server: JSON.stringify(server),
@@ -620,6 +629,7 @@ export const tauriAdapter: BackendAdapter = {
     async add(group): Promise<OperationResult> {
       return safeInvoke<OperationResult>("server_groups_add", {
         group: JSON.stringify({
+          ...(group.id ? { id: group.id } : {}),
           name: group.name,
           parentId: group.parentId ?? null,
         }),
@@ -707,6 +717,9 @@ export const tauriAdapter: BackendAdapter = {
     },
     async clearAllKnownHosts(): Promise<OperationResult> {
       return safeInvoke<OperationResult>("ssh_clear_all_known_hosts");
+    },
+    async restoreKnownHosts(records: KnownHostRecord[]): Promise<number> {
+      return safeInvoke<number>("ssh_restore_known_hosts", { records });
     },
     async checkAllServers(): Promise<Record<string, boolean>> {
       return safeInvoke<Record<string, boolean>>("ssh_check_all_servers");
@@ -1040,6 +1053,9 @@ export const tauriAdapter: BackendAdapter = {
     async list(): Promise<SshKey[]> {
       return invokeJson<SshKey[]>("ssh_keys_list");
     },
+    async listForSync(): Promise<SshKey[]> {
+      return invokeJson<SshKey[]>("ssh_keys_list_for_sync");
+    },
     async add(input: SshKeyInput): Promise<OperationResult> {
       return safeInvoke<OperationResult>("ssh_keys_add", {
         key: JSON.stringify(input),
@@ -1074,6 +1090,12 @@ export const tauriAdapter: BackendAdapter = {
     },
     async delete(name: string): Promise<void> {
       await safeInvoke("tags_delete", { name });
+    },
+    async listAll(): Promise<TagRow[]> {
+      return safeInvoke<TagRow[]>("tags_list");
+    },
+    async restore(tags: TagRow[]): Promise<number> {
+      return safeInvoke<number>("tags_restore", { tags });
     },
   },
 
@@ -2052,6 +2074,29 @@ export const tauriAdapter: BackendAdapter = {
     },
     async delete(id): Promise<OperationResult> {
       return safeInvoke<OperationResult>("fav_cmds_delete", { id });
+    },
+    async restore(cmds: FavoriteCommand[]): Promise<OperationResult> {
+      return safeInvoke<OperationResult>("fav_cmds_restore", { cmds });
+    },
+  },
+
+  // ==================== 书签 ====================
+  bookmarks: {
+    async listAll(): Promise<LogBookmark[]> {
+      return invokeJson<LogBookmark[]>("bookmarks_list_all");
+    },
+    async restore(items: LogBookmark[]): Promise<OperationResult> {
+      return safeInvoke<OperationResult>("bookmarks_restore", { items });
+    },
+  },
+
+  // ==================== 终端自定义背景图片/视频 ====================
+  backgrounds: {
+    async listForSync(): Promise<SyncBackgroundItem[]> {
+      return safeInvoke<SyncBackgroundItem[]>("backgrounds_list_for_sync");
+    },
+    async restore(items: SyncBackgroundItem[]): Promise<number> {
+      return safeInvoke<number>("backgrounds_restore", { items });
     },
   },
 

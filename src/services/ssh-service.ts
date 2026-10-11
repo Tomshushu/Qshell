@@ -79,6 +79,9 @@ import type {
   GenerateKeyResult,
   SshAgentIdentity,
   SshAgentStatus,
+  SshKey,
+  SshKeyInput,
+  SshKeyUpdate,
 } from "@/services/api";
 import {
   ConnectionState,
@@ -195,6 +198,14 @@ export const sshService = {
   // ==================== 服务器管理 ====================
   async listServers(): Promise<Server[]> {
     if (!backend) return [];
+    return backend.servers.list();
+  },
+
+  async listServersForSync(): Promise<Server[]> {
+    if (!backend) return [];
+    if (backend.servers.listForSync) {
+      return backend.servers.listForSync();
+    }
     return backend.servers.list();
   },
 
@@ -316,9 +327,10 @@ export const sshService = {
   async addGroup(
     name: string,
     parentId?: string | null,
+    id?: string,
   ): Promise<OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.serverGroups.add({ name, parentId: parentId ?? null });
+    return backend.serverGroups.add({ id, name, parentId: parentId ?? null });
   },
 
   async updateGroup(
@@ -332,6 +344,30 @@ export const sshService = {
   async deleteGroup(id: string): Promise<OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
     return backend.serverGroups.delete(id);
+  },
+
+  // ==================== SSH 密钥库 ====================
+  async listKeys(): Promise<SshKey[]> {
+    if (!backend) return [];
+    return backend.sshKeys.list();
+  },
+
+  async listKeysForSync(): Promise<SshKey[]> {
+    if (!backend) return [];
+    if (backend.sshKeys.listForSync) {
+      return backend.sshKeys.listForSync();
+    }
+    return backend.sshKeys.list();
+  },
+
+  async addKey(input: SshKeyInput): Promise<OperationResult> {
+    if (!backend) throw new Error(NOT_AVAILABLE);
+    return backend.sshKeys.add(input);
+  },
+
+  async updateKey(id: string, updates: SshKeyUpdate): Promise<OperationResult> {
+    if (!backend) throw new Error(NOT_AVAILABLE);
+    return backend.sshKeys.update(id, updates);
   },
 
   // ==================== 标签目录（独立存储） ====================
@@ -353,6 +389,16 @@ export const sshService = {
   async deleteTag(name: string): Promise<void> {
     if (!backend) throw new Error(NOT_AVAILABLE);
     return backend.tags.delete(name);
+  },
+
+  async listTagsAll(): Promise<import("./api/types").TagRow[]> {
+    if (!backend?.tags.listAll) return [];
+    return backend.tags.listAll();
+  },
+
+  async restoreTags(tags: import("./api/types").TagRow[]): Promise<number> {
+    if (!backend?.tags.restore) return 0;
+    return backend.tags.restore(tags);
   },
 
   /** 移动服务器（批量）到指定分组。groupId 为 null 表示移出到根目录 */
@@ -512,6 +558,12 @@ export const sshService = {
   async clearAllKnownHosts(): Promise<import("./api/types").OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
     return backend.ssh.clearAllKnownHosts();
+  },
+
+  /** 批量恢复已知主机公钥指纹记录 */
+  async restoreKnownHosts(records: import("./api/types").KnownHostRecord[]): Promise<number> {
+    if (!backend?.ssh.restoreKnownHosts) return 0;
+    return backend.ssh.restoreKnownHosts(records);
   },
 
   async checkAllServers(): Promise<Record<string, boolean>> {
@@ -1897,6 +1949,31 @@ export const sshService = {
   async deleteFavCmd(id: string): Promise<OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
     return backend.favCmds.delete(id);
+  },
+
+  async restoreFavCmds(cmds: import("./api/types").FavoriteCommand[]): Promise<OperationResult> {
+    if (!backend?.favCmds.restore) return { success: false, error: NOT_AVAILABLE };
+    return backend.favCmds.restore(cmds);
+  },
+
+  async listBookmarksAll(): Promise<import("@/types").LogBookmark[]> {
+    if (!backend?.bookmarks?.listAll) return [];
+    return backend.bookmarks.listAll();
+  },
+
+  async restoreBookmarks(items: import("@/types").LogBookmark[]): Promise<OperationResult> {
+    if (!backend?.bookmarks?.restore) return { success: false, error: NOT_AVAILABLE };
+    return backend.bookmarks.restore(items);
+  },
+
+  async listBackgroundsForSync(): Promise<import("./api/types").SyncBackgroundItem[]> {
+    if (!backend?.backgrounds?.listForSync) return [];
+    return backend.backgrounds.listForSync();
+  },
+
+  async restoreBackgrounds(items: import("./api/types").SyncBackgroundItem[]): Promise<number> {
+    if (!backend?.backgrounds?.restore) return 0;
+    return backend.backgrounds.restore(items);
   },
 
   // ==================== SSH 密钥管理（对齐 Termius/MobaXterm/SecureCRT） ====================

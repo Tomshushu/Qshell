@@ -5,11 +5,11 @@
 // 重命名 / 删除会级联到 servers.tags，保证筛选与显示一致。
 
 use rusqlite::params;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// 标签目录行
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TagRow {
     pub id: String,
@@ -208,4 +208,47 @@ fn cascade_delete_tag(conn: &rusqlite::Connection, tag: &str) -> Result<(), Stri
         .map_err(|e| format!("Failed to update server tags: {}", e))?;
     }
     Ok(())
+}
+
+/// 批量恢复标签目录（用于云端同步恢复）
+#[tauri::command]
+pub async fn tags_restore(tags: Vec<TagRow>) -> Result<usize, String> {
+    tokio::task::spawn_blocking(move || {
+        let conn = crate::db::get_conn()?;
+        let mut count = 0;
+        for tag in tags {
+            let trimmed = tag.name.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let exists: bool = conn
+                .query_row(
+                    "SELECT 1 FROM tags WHERE lower(name) = lower(?1) OR id = ?2 LIMIT 1",
+                    params![trimmed, tag.id],
+                    |_| Ok(true),
+                )
+                .unwrap_or(false);
+            if !exists {
+                let id = if tag.id.trim().is_empty() {
+                    Uuid::new_v4().to_string()
+                } else {
+                    tag.id
+                };
+                let now = if tag.created_at > 0 {
+                    tag.created_at
+                } else {
+                    chrono::Utc::now().timestamp_millis()
+                };
+                conn.execute(
+                    "INSERT INTO tags (id, name, created_at) VALUES (?1, ?2, ?3)",
+                    params![id, trimmed, now],
+                )
+                .map_err(|e| format!("Failed to insert tag {}: {}", trimmed, e))?;
+                count += 1;
+            }
+        }
+        Ok(count)
+    })
+    .await
+    .map_err(|e| format!("Task failed: {}", e))?
 }

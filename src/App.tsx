@@ -23,6 +23,8 @@ import { useAppIdleLock } from '@/hooks/use-app-idle-lock'
 import { AppLockOverlay } from '@/components/layout/app-lock-overlay'
 import { AppLockSetupDialog } from '@/components/layout/app-lock-setup-dialog'
 import { useAuthStore } from '@/store/auth-store'
+import { useSyncStore } from '@/store/sync-store'
+import { sendStartupPulse } from '@/services/telemetry'
 import { AuthDialog } from '@/components/auth/auth-dialog'
 import { OAuthCallbackLanding } from '@/components/auth/oauth-callback-landing'
 import { useUpdaterStore } from '@/store/updater-store'
@@ -85,6 +87,8 @@ function AppContent() {
     localStorage.removeItem('qshell-workspace-session-v1')
     localStorage.removeItem('sftp_pending_transfers')
     void useAuthStore.getState().init()
+    void useSyncStore.getState().init()
+    void sendStartupPulse()
 
     if (isTauri) {
       void import('@tauri-apps/api/webviewWindow').then(({ getCurrentWebviewWindow }) => {

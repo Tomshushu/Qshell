@@ -111,3 +111,22 @@ pub async fn fav_cmds_delete(app: AppHandle, id: String) -> Result<OperationResu
     write_fav_cmds(&app, &cmds)?;
     Ok(OperationResult::ok())
 }
+
+/// 批量恢复收藏指令（用于云端同步恢复）
+#[tauri::command]
+pub async fn fav_cmds_restore(
+    app: AppHandle,
+    cmds: Vec<FavoriteCommand>,
+) -> Result<OperationResult, String> {
+    let mut current = read_fav_cmds(&app);
+    let mut current_ids: std::collections::HashSet<String> =
+        current.iter().map(|c| c.id.clone()).collect();
+    for cmd in cmds {
+        if !current_ids.contains(&cmd.id) {
+            current_ids.insert(cmd.id.clone());
+            current.push(cmd);
+        }
+    }
+    write_fav_cmds(&app, &current)?;
+    Ok(OperationResult::ok())
+}

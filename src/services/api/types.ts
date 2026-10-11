@@ -39,8 +39,21 @@ import type {
   CaptureReq,
   CaptureResult,
   ExportResult,
+  LogBookmark,
 } from "@/types";
-export type { FileEntry, ServiceResourceRawMap };
+export type { FileEntry, ServiceResourceRawMap, LogBookmark };
+
+export interface TagRow {
+  id: string;
+  name: string;
+  createdAt: number;
+}
+
+export interface SyncBackgroundItem {
+  name: string;
+  mediaType: "image" | "video";
+  dataBase64: string;
+}
 import type {
   ConnectionState,
   SshErrorKind,
@@ -768,6 +781,7 @@ export interface BackendAdapter {
   // ==================== 服务器管理 ====================
   servers: {
     list: () => Promise<Server[]>;
+    listForSync?: () => Promise<Server[]>;
     add: (
       server: Omit<Server, "createdAt" | "updatedAt">,
     ) => Promise<OperationResult>;
@@ -814,6 +828,7 @@ export interface BackendAdapter {
     list: () => Promise<ServerGroup[]>;
     /** 新建分组（parentId 为 null 表示根目录），返回新分组 ID */
     add: (group: {
+      id?: string;
       name: string;
       parentId?: string | null;
     }) => Promise<OperationResult>;
@@ -856,6 +871,8 @@ export interface BackendAdapter {
     ) => Promise<OperationResult>;
     /** 清空全部已知主机公钥记录 */
     clearAllKnownHosts: () => Promise<OperationResult>;
+    /** 批量恢复已知主机公钥记录（用于云同步恢复） */
+    restoreKnownHosts?: (records: KnownHostRecord[]) => Promise<number>;
     checkAllServers: () => Promise<Record<string, boolean>>;
     detectOsInfo: (serverId: string) => Promise<DetectOsResult>;
     getHomeDirectory: (serverId: string) => Promise<string>;
@@ -957,6 +974,8 @@ export interface BackendAdapter {
   sshKeys: {
     /** 列出所有 SSH 密钥（passphrase 返回占位符，content 不返回） */
     list: () => Promise<SshKey[]>;
+    /** 列出 SSH 密钥（用于端到端零知识云同步，含解密 content 与 passphrase） */
+    listForSync?: () => Promise<SshKey[]>;
     /** 新增 SSH 密钥（content / passphrase 加密入库） */
     add: (input: SshKeyInput) => Promise<OperationResult>;
     /** 更新 SSH 密钥（敏感字段为占位符时跳过更新） */
@@ -981,6 +1000,10 @@ export interface BackendAdapter {
     rename: (oldName: string, newName: string) => Promise<void>;
     /** 删除标签（级联更新服务器） */
     delete: (name: string) => Promise<void>;
+    /** 列出完整标签记录（含 id 与创建时间，用于云同步） */
+    listAll?: () => Promise<TagRow[]>;
+    /** 批量恢复标签目录（用于云同步恢复） */
+    restore?: (tags: TagRow[]) => Promise<number>;
   };
 
   // ==================== 系统指标 ====================
@@ -1479,6 +1502,19 @@ export interface BackendAdapter {
     add: (cmd: string, desc: string) => Promise<OperationResult>;
     update: (id: string, cmd: string, desc: string) => Promise<OperationResult>;
     delete: (id: string) => Promise<OperationResult>;
+    restore?: (cmds: FavoriteCommand[]) => Promise<OperationResult>;
+  };
+
+  // ==================== 书签 ====================
+  bookmarks?: {
+    listAll: () => Promise<LogBookmark[]>;
+    restore: (items: LogBookmark[]) => Promise<OperationResult>;
+  };
+
+  // ==================== 终端自定义背景图片/视频 ====================
+  backgrounds?: {
+    listForSync: () => Promise<SyncBackgroundItem[]>;
+    restore: (items: SyncBackgroundItem[]) => Promise<number>;
   };
 
   // ==================== 窗口管理（仅 Tauri） ====================

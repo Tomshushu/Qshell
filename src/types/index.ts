@@ -577,6 +577,7 @@ export interface LogBookmark {
   serverId: string
   path: string
   alias: string
+  createdAt?: number
 }
 
 export interface FileEntry {

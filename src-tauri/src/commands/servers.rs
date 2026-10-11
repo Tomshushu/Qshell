@@ -49,6 +49,14 @@ pub async fn servers_list() -> Result<String, String> {
         .map_err(|e| format!("Task join error: {}", e))?
 }
 
+/// 列出所有服务器（用于端到端零知识云同步，包含解密后的密码与 passphrase）
+#[tauri::command]
+pub async fn servers_list_for_sync() -> Result<String, String> {
+    tokio::task::spawn_blocking(db::servers_list_for_sync)
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
+}
+
 /// 新增服务器
 /// server 参数为前端传来的 JSON 字符串（ServerInput）
 /// 返回 { success: true, id }

@@ -1465,6 +1465,14 @@ pub async fn ssh_clear_all_known_hosts() -> Result<OperationResult, String> {
     )))
 }
 
+/// 批量恢复已知主机记录（用于云同步恢复）
+#[tauri::command]
+pub async fn ssh_restore_known_hosts(records: Vec<db::KnownHostRecord>) -> Result<usize, String> {
+    tokio::task::spawn_blocking(move || db::restore_known_hosts(records))
+        .await
+        .map_err(|e| format!("Task spawn failed: {}", e))?
+}
+
 
 /// 测试连接配置（不保存到数据库）
 /// 用于"新建服务器"对话框的连接测试

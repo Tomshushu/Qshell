@@ -38,6 +38,7 @@ import {
   deleteVideoBackground,
   animatedImageToDataUrl,
   getVideoSrc,
+  getUserImageSrc,
   saveImageBackground,
   listUserBackgrounds,
   deleteUserBackground,
@@ -198,8 +199,6 @@ export function TerminalThemeDialog({ open, onOpenChange }: TerminalThemeDialogP
   const [editBgOpacity, setEditBgOpacity] = useState<number>(1)
   const [editBgBlur, setEditBgBlur] = useState<number>(0)
   const [editBgSize, setEditBgSize] = useState<'cover' | 'contain' | 'center'>('cover')
-  // 背景文件输入 ref（支持图片和视频）
-  const bgImageInputRef = useRef<HTMLInputElement>(null)
   // 是否有任意背景媒体（图片 base64 或视频路径）
   const hasBgMedia = !!(editBgImage || editBgVideoPath)
   // 预置背景缩略图 URL 列表（对话框打开时加载，避免重复调用 resourceDir）
@@ -471,75 +470,6 @@ export function TerminalThemeDialog({ open, onOpenChange }: TerminalThemeDialogP
     }
   }
 
-  // 上传背景媒体：图片走 base64 压缩，视频保存到 appDataDir/backgrounds/。
-  // - 静态图片：canvas 压缩到 <500KB，base64 内联存储（主题可移植）
-  // - 动态图片（GIF/WebP）：不压缩转 base64（保留动画帧）
-  // - 视频：保存到 Tauri appDataDir，主题中存文件路径（不读入内存，asset 协议加载）
-  // 首次上传时把 opacity 从默认 1（看不到）重置为 0.7，让用户能立即看到效果。
-  const handleBgMediaUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    try {
-      // 按类型分别检查大小：图片 5MB、视频 10MB
-      const isVideo = isVideoFile(file.name)
-      const limit = isVideo ? MAX_VIDEO_UPLOAD_SIZE : MAX_IMAGE_UPLOAD_SIZE
-      if (file.size > limit) {
-        toast.error(t(isVideo ? 'thm_bg_video_too_large' : 'thm_bg_image_too_large'))
-        return
-      }
-      const isFirstUpload = !hasBgMedia
-      const newOpacity = isFirstUpload ? 0.7 : editBgOpacity
-
-      if (isVideoFile(file.name)) {
-        // 视频文件：保存到 appDataDir，删除旧视频文件（若存在）
-        if (editBgVideoPath) {
-          await deleteVideoBackground(editBgVideoPath).catch(() => {})
-        }
-        const videoPath = await saveVideoBackground(file)
-        setEditBgVideoPath(videoPath)
-        setEditBgImage(undefined)
-        setEditBgType('video')
-        if (isFirstUpload) setEditBgOpacity(newOpacity)
-        updateBgConfig({
-          type: 'video',
-          videoPath,
-          image: undefined,
-          ...(isFirstUpload ? { opacity: newOpacity } : {}),
-        })
-        toast.success(t('thm_bg_upload_success'))
-      } else if (isImageFile(file.name)) {
-        // 图片文件：动态图（GIF/WebP）不压缩，静态图走 canvas 压缩
-        const isAnimated = file.type === 'image/gif' || file.type === 'image/webp'
-        const dataUrl = isAnimated
-          ? await animatedImageToDataUrl(file)
-          : await compressImage(file, 1920, 0.8, 500 * 1024)
-        // 切换到图片模式时清除旧视频文件
-        if (editBgVideoPath) {
-          await deleteVideoBackground(editBgVideoPath).catch(() => {})
-        }
-        setEditBgImage(dataUrl)
-        setEditBgVideoPath(undefined)
-        setEditBgType('image')
-        if (isFirstUpload) setEditBgOpacity(newOpacity)
-        updateBgConfig({
-          type: 'image',
-          image: dataUrl,
-          videoPath: undefined,
-          ...(isFirstUpload ? { opacity: newOpacity } : {}),
-        })
-        toast.success(t('thm_bg_upload_success'))
-      } else {
-        toast.error(t('thm_bg_unsupported_format'))
-      }
-    } catch (err) {
-      console.error('[terminal-bg] 上传背景失败:', err)
-      const detail = err instanceof Error ? err.message : String(err)
-      toast.error(`${t('thm_bg_upload_failed')}：${detail}`)
-    } finally {
-      if (bgImageInputRef.current) bgImageInputRef.current.value = ''
-    }
-  }
-
   // 清除背景：自定义主题删除 theme.background；系统预设主题清除整个覆盖层（恢复默认）。
   // 若是视频背景，同时删除磁盘上的视频文件避免残留。
   const handleClearBgImage = async () => {
@@ -621,24 +551,38 @@ export function TerminalThemeDialog({ open, onOpenChange }: TerminalThemeDialogP
     }
   }, [t])
 
-  // 选择图片库中的某张图片作为当前背景（与预置图片一致：image 字段存 asset:// URL）
+  // 选择媒体库中的某张图片或视频作为当前背景
   const handleSelectUserBg = async (bg: UserBackground) => {
     try {
-      if (editBgVideoPath) {
-        await deleteVideoBackground(editBgVideoPath).catch(() => {})
+      if (editBgVideoPath && bg.path !== editBgVideoPath) {
+        // 切走时不删除库中的视频文件
       }
       const isFirstUpload = !hasBgMedia
       const newOpacity = isFirstUpload ? 0.7 : editBgOpacity
-      setEditBgImage(bg.url)
-      setEditBgVideoPath(undefined)
-      setEditBgType('image')
-      if (isFirstUpload) setEditBgOpacity(newOpacity)
-      updateBgConfig({
-        type: 'image',
-        image: bg.url,
-        videoPath: undefined,
-        ...(isFirstUpload ? { opacity: newOpacity } : {}),
-      })
+
+      if (bg.type === 'video') {
+        setEditBgVideoPath(bg.path)
+        setEditBgImage(undefined)
+        setEditBgType('video')
+        if (isFirstUpload) setEditBgOpacity(newOpacity)
+        updateBgConfig({
+          type: 'video',
+          videoPath: bg.path,
+          image: undefined,
+          ...(isFirstUpload ? { opacity: newOpacity } : {}),
+        })
+      } else {
+        setEditBgImage(bg.url)
+        setEditBgVideoPath(undefined)
+        setEditBgType('image')
+        if (isFirstUpload) setEditBgOpacity(newOpacity)
+        updateBgConfig({
+          type: 'image',
+          image: bg.url,
+          videoPath: undefined,
+          ...(isFirstUpload ? { opacity: newOpacity } : {}),
+        })
+      }
       toast.success(t('thm_bg_upload_success'))
     } catch (err) {
       console.error('[terminal-bg] 选择图片库背景失败:', err)
@@ -646,31 +590,75 @@ export function TerminalThemeDialog({ open, onOpenChange }: TerminalThemeDialogP
     }
   }
 
-  // 上传图片到图片库（可多选，不立即应用，仅入库供后续复用）
+  // 上传图片或视频到媒体库（保存后入库，并自动应用为当前终端背景）
   const handleAddToLibrary = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? [])
     if (files.length === 0) return
     let added = 0
     let failed = 0
+    let lastSavedPath = ''
+    let lastSavedIsVideo = false
+
     for (const file of files) {
       try {
-        await saveImageBackground(file)
-        added += 1
+        const isVideo = isVideoFile(file.name)
+        let savedPath = ''
+        if (isVideo) {
+          savedPath = await saveVideoBackground(file)
+        } else {
+          savedPath = await saveImageBackground(file)
+        }
+        if (savedPath) {
+          added += 1
+          lastSavedPath = savedPath
+          lastSavedIsVideo = isVideo
+        }
       } catch (err) {
         failed += 1
         console.error('[terminal-bg] 加入图片库失败:', err)
       }
     }
     await refreshUserBgs()
-    if (added > 0) toast.success(t('thm_bg_library_added').replace('{n}', String(added)))
+    if (added > 0) {
+      toast.success(t('thm_bg_library_added').replace('{n}', String(added)))
+      // 自动选中使用最新上传的媒体
+      if (lastSavedPath) {
+        const isFirstUpload = !hasBgMedia
+        const newOpacity = isFirstUpload ? 0.7 : editBgOpacity
+        if (lastSavedIsVideo) {
+          setEditBgVideoPath(lastSavedPath)
+          setEditBgImage(undefined)
+          setEditBgType('video')
+          if (isFirstUpload) setEditBgOpacity(newOpacity)
+          updateBgConfig({
+            type: 'video',
+            videoPath: lastSavedPath,
+            image: undefined,
+            ...(isFirstUpload ? { opacity: newOpacity } : {}),
+          })
+        } else {
+          const url = getUserImageSrc(lastSavedPath)
+          setEditBgImage(url)
+          setEditBgVideoPath(undefined)
+          setEditBgType('image')
+          if (isFirstUpload) setEditBgOpacity(newOpacity)
+          updateBgConfig({
+            type: 'image',
+            image: url,
+            videoPath: undefined,
+            ...(isFirstUpload ? { opacity: newOpacity } : {}),
+          })
+        }
+      }
+    }
     if (failed > 0) toast.error(t('thm_bg_library_add_failed').replace('{n}', String(failed)))
     if (libImageInputRef.current) libImageInputRef.current.value = ''
   }
 
-  // 从图片库删除某张图片（若当前正应用该图，则一并清除背景避免裂图）
+  // 从图片库删除某张图片（若当前正应用该项，则一并清除背景避免裂图）
   const handleDeleteUserBg = async (bg: UserBackground) => {
     await deleteUserBackground(bg.path).catch(() => {})
-    if (editBgImage === bg.url) {
+    if (editBgImage === bg.url || editBgVideoPath === bg.path) {
       await handleClearBgImage()
     }
     await refreshUserBgs()
@@ -1323,10 +1311,10 @@ export function TerminalThemeDialog({ open, onOpenChange }: TerminalThemeDialogP
                         )}
                       </div>
                       <div className="flex flex-col gap-3 p-3 bg-muted/10 rounded-lg border border-border/50">
-                        {/* 背景预览 + 上传/清除按钮（系统主题和自定义主题均可上传图片或视频） */}
-                        <div className="flex items-center gap-3">
+                        {/* 当前背景预览与清除状态区 */}
+                        <div className="flex items-center gap-3 p-2 bg-muted/20 rounded-md border border-border/40">
                           <div
-                            className="w-20 h-12 rounded border border-border/50 overflow-hidden flex-shrink-0 flex items-center justify-center bg-black/20 relative"
+                            className="w-20 h-12 rounded border border-border/50 overflow-hidden flex-shrink-0 flex items-center justify-center bg-black/20 relative shadow-xs"
                             style={editBgImage ? {
                               backgroundImage: `url(${editBgImage})`,
                               backgroundSize: 'cover',
@@ -1345,39 +1333,33 @@ export function TerminalThemeDialog({ open, onOpenChange }: TerminalThemeDialogP
                             )}
                             {!hasBgMedia && <Monitor className="h-4 w-4 text-muted-foreground/50" />}
                           </div>
-                          <div className="flex flex-col gap-1.5 flex-1">
-                            <div className="flex gap-1.5">
+                          <div className="flex items-center justify-between flex-1 gap-2 min-w-0">
+                            <div className="flex flex-col gap-0.5 min-w-0">
+                              <span className="text-xs font-medium text-foreground truncate">
+                                {hasBgMedia
+                                  ? (editBgType === 'video' ? '当前已应用动态视频背景' : '当前已应用图片背景')
+                                  : '纯色终端背景'}
+                              </span>
+                              <span className="text-[10px] text-muted-foreground leading-tight">
+                                {hasBgMedia
+                                  ? '从下方点选其他背景即可快速切换，或点击清除恢复纯色'
+                                  : '未设置背景，可从下方点选预置背景或在图片库中上传'}
+                              </span>
+                            </div>
+
+                            {hasBgMedia && (
                               <Button
                                 variant="outline"
                                 size="sm"
-                                className="h-7 gap-1 text-[11px] flex-1"
-                                onClick={() => bgImageInputRef.current?.click()}
+                                className="h-7 px-2.5 gap-1 text-[11px] text-rose-500 hover:text-rose-600 hover:bg-rose-500/10 border-rose-500/30 shrink-0 cursor-pointer"
+                                onClick={handleClearBgImage}
+                                title="清除当前背景，恢复纯色终端"
                               >
-                                <Upload className="h-3 w-3" />
-                                {hasBgMedia ? t('thm_bg_change') : t('thm_bg_upload')}
+                                <Trash2 className="h-3 w-3" />
+                                <span>清除背景</span>
                               </Button>
-                              {hasBgMedia && (
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  className="h-7 gap-1 text-[11px] text-rose-500 hover:text-rose-600 hover:bg-rose-500/10 border-rose-500/20"
-                                  onClick={handleClearBgImage}
-                                >
-                                  <Trash2 className="h-3 w-3" />
-                                </Button>
-                              )}
-                            </div>
-                            <span className="text-[10px] text-muted-foreground">
-                              {hasBgMedia ? t('thm_bg_uploaded_hint') : t('thm_bg_empty_hint')}
-                            </span>
+                            )}
                           </div>
-                          <input
-                            ref={bgImageInputRef}
-                            type="file"
-                            accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm,video/ogg,video/quicktime"
-                            onChange={handleBgMediaUpload}
-                            className="hidden"
-                          />
                         </div>
 
                         {/* 预置背景选择区：打包在应用内的图片/视频，用户可快速点选。
@@ -1466,57 +1448,76 @@ export function TerminalThemeDialog({ open, onOpenChange }: TerminalThemeDialogP
                             <span className="text-[10px] text-muted-foreground">{t('thm_bg_library_empty')}</span>
                           ) : (
                             <div className="grid grid-cols-5 gap-1.5">
-                              {userBgList.map((bg) => (
-                                <button
-                                  key={bg.id}
-                                  type="button"
-                                  title={bg.name}
-                                  onClick={() => handleSelectUserBg(bg)}
-                                  className={cn(
-                                    'relative aspect-video rounded border overflow-hidden flex items-center justify-center bg-black/20 transition-all group',
-                                    editBgImage === bg.url
-                                      ? 'border-primary ring-2 ring-primary'
-                                      : 'border-border/50 hover:border-primary hover:ring-1 hover:ring-primary',
-                                  )}
-                                >
-                                  <div
-                                    className="w-full h-full bg-cover bg-center"
-                                    style={{ backgroundImage: `url(${bg.url})` }}
-                                  />
-                                  <span
-                                    role="button"
-                                    tabIndex={0}
-                                    title={t('thm_bg_library_delete')}
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      handleDeleteUserBg(bg)
-                                    }}
-                                    onKeyDown={(e) => {
-                                      if (e.key === 'Enter' || e.key === ' ') {
+                              {userBgList.map((bg) => {
+                                const isSelected = editBgImage === bg.url || editBgVideoPath === bg.path
+                                return (
+                                  <button
+                                    key={bg.id}
+                                    type="button"
+                                    title={bg.name}
+                                    onClick={() => handleSelectUserBg(bg)}
+                                    className={cn(
+                                      'relative aspect-video rounded border overflow-hidden flex items-center justify-center bg-black/20 transition-all group',
+                                      isSelected
+                                        ? 'border-primary ring-2 ring-primary'
+                                        : 'border-border/50 hover:border-primary hover:ring-1 hover:ring-primary',
+                                    )}
+                                  >
+                                    {bg.type === 'video' ? (
+                                      <video
+                                        src={bg.url}
+                                        className="w-full h-full object-cover"
+                                        muted
+                                        loop
+                                        playsInline
+                                        onMouseEnter={(e) => { (e.target as HTMLVideoElement).play().catch(() => {}) }}
+                                        onMouseLeave={(e) => { (e.target as HTMLVideoElement).pause() }}
+                                      />
+                                    ) : (
+                                      <div
+                                        className="w-full h-full bg-cover bg-center"
+                                        style={{ backgroundImage: `url(${bg.url})` }}
+                                      />
+                                    )}
+                                    {/* 类型角标 */}
+                                    <span className="absolute top-0.5 right-0.5 px-1 rounded-sm bg-black/60 text-white text-[8px] leading-tight group-hover:opacity-0 transition-opacity">
+                                      {bg.type === 'video' ? 'V' : 'I'}
+                                    </span>
+                                    <span
+                                      role="button"
+                                      tabIndex={0}
+                                      title={t('thm_bg_library_delete')}
+                                      onClick={(e) => {
                                         e.stopPropagation()
                                         handleDeleteUserBg(bg)
-                                      }
-                                    }}
-                                    className="absolute top-0.5 right-0.5 p-0.5 rounded-sm bg-black/60 text-white text-[9px] leading-none opacity-0 group-hover:opacity-100 hover:text-rose-400 cursor-pointer"
-                                  >
-                                    <Trash2 className="h-3 w-3" />
-                                  </span>
-                                  {editBgImage === bg.url && (
-                                    <span
-                                      title={t('thm_bg_selected')}
-                                      className="absolute top-0.5 left-0.5 p-0.5 rounded-sm bg-primary text-primary-foreground"
+                                      }}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter' || e.key === ' ') {
+                                          e.stopPropagation()
+                                          handleDeleteUserBg(bg)
+                                        }
+                                      }}
+                                      className="absolute top-0.5 right-0.5 p-0.5 rounded-sm bg-black/60 text-white text-[9px] leading-none opacity-0 group-hover:opacity-100 hover:text-rose-400 cursor-pointer"
                                     >
-                                      <Check className="h-3 w-3" />
+                                      <Trash2 className="h-3 w-3" />
                                     </span>
-                                  )}
-                                </button>
-                              ))}
+                                    {isSelected && (
+                                      <span
+                                        title={t('thm_bg_selected')}
+                                        className="absolute top-0.5 left-0.5 p-0.5 rounded-sm bg-primary text-primary-foreground"
+                                      >
+                                        <Check className="h-3 w-3" />
+                                      </span>
+                                    )}
+                                  </button>
+                                )
+                              })}
                             </div>
                           )}
                           <input
                             ref={libImageInputRef}
                             type="file"
-                            accept="image/*"
+                            accept="image/*,video/mp4,video/webm,video/ogg,video/quicktime"
                             multiple
                             onChange={handleAddToLibrary}
                             className="hidden"

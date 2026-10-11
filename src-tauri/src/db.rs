@@ -172,6 +172,8 @@ pub struct Server {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerInput {
+    #[serde(default)]
+    pub id: Option<String>,
     pub name: String,
     pub host: String,
     pub port: Option<i32>,
@@ -984,6 +986,39 @@ pub fn servers_list_raw() -> Result<String, String> {
         .map_err(|e| format!("Serialization failed: {}", e))
 }
 
+/// List all active servers with decrypted passwords for zero-knowledge cloud sync.
+/// Called exclusively during E2EE packaging where data is immediately encrypted with user's sync master password.
+pub fn servers_list_for_sync() -> Result<String, String> {
+    let conn = get_conn()?;
+
+    let mut stmt = conn
+        .prepare("SELECT * FROM servers WHERE deleted_at IS NULL ORDER BY favorite DESC, name ASC")
+        .map_err(|e| format!("Failed to prepare query: {}", e))?;
+
+    let mk = master_key();
+    let servers: Vec<Server> = stmt
+        .query_map([], row_to_server)
+        .map_err(|e| format!("Query failed: {}", e))?
+        .filter_map(|r| r.ok())
+        .map(|mut s| {
+            if let Some(ref enc) = s.password {
+                if !enc.is_empty() && enc != PASSWORD_PLACEHOLDER {
+                    s.password = crypto::decrypt_password(enc, mk).ok();
+                }
+            }
+            if let Some(ref enc) = s.private_key_passphrase {
+                if !enc.is_empty() && enc != PASSWORD_PLACEHOLDER {
+                    s.private_key_passphrase = crypto::decrypt_password(enc, mk).ok();
+                }
+            }
+            s
+        })
+        .collect();
+
+    serde_json::to_string(&servers)
+        .map_err(|e| format!("Serialization failed: {}", e))
+}
+
 /// Add a new server with encrypted password
 pub fn servers_add(server: String) -> Result<String, String> {
     let input: ServerInput = serde_json::from_str(&server)
@@ -1006,21 +1041,24 @@ pub fn servers_add(server: String) -> Result<String, String> {
 
     let conn = get_conn()?;
 
-    let id = Uuid::new_v4().to_string();
+    let id = input
+        .id
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
     let now = Utc::now().timestamp_millis();
 
-    // Encrypt password if provided
+    // Encrypt password if provided (skip placeholder)
     let encrypted_password = match &input.password {
-        Some(p) if !p.is_empty() => Some(
+        Some(p) if !p.is_empty() && p != PASSWORD_PLACEHOLDER => Some(
             crypto::encrypt_password(p, master_key())
                 .map_err(|e| format!("Password encryption failed: {}", e))?
         ),
         _ => None,
     };
 
-    // Encrypt private_key_passphrase if provided
+    // Encrypt private_key_passphrase if provided (skip placeholder)
     let encrypted_passphrase = match &input.private_key_passphrase {
-        Some(p) if !p.is_empty() => Some(
+        Some(p) if !p.is_empty() && p != PASSWORD_PLACEHOLDER => Some(
             crypto::encrypt_password(p, master_key())
                 .map_err(|e| format!("Passphrase encryption failed: {}", e))?
         ),
@@ -1641,6 +1679,8 @@ pub struct ServerGroup {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerGroupInput {
+    #[serde(default)]
+    pub id: Option<String>,
     pub name: String,
     #[serde(default)]
     pub parent_id: Option<String>,
@@ -1708,23 +1748,55 @@ pub fn server_groups_add(group: String) -> Result<String, String> {
     }
 
     let conn = get_conn()?;
-    // 未指定父分组时默认挂到「主机」下，保证整棵树只有一个根
-    let parent_id = input
-        .parent_id
+    let id = input
+        .id
         .as_deref()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
-        .unwrap_or_else(|| HOST_GROUP_ID.to_string());
-    validate_group_parent(&conn, Some(&parent_id))?;
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
 
-    let id = Uuid::new_v4().to_string();
+    let parent_id = if id == HOST_GROUP_ID {
+        None
+    } else {
+        Some(
+            input
+                .parent_id
+                .as_deref()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| HOST_GROUP_ID.to_string()),
+        )
+    };
+
+    if let Some(ref pid) = parent_id {
+        validate_group_parent(&conn, Some(pid))?;
+    }
+
     let now = Utc::now().timestamp_millis();
-    conn.execute(
-        "INSERT INTO server_groups (id, name, parent_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![id, name, parent_id, now, now],
-    )
-    .map_err(|e| format!("Failed to insert group: {}", e))?;
+    let exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM server_groups WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|c| c > 0)
+        .unwrap_or(false);
+
+    if exists {
+        conn.execute(
+            "UPDATE server_groups SET name = ?1, parent_id = ?2, updated_at = ?3 WHERE id = ?4",
+            params![name, parent_id, now, id],
+        )
+        .map_err(|e| format!("Failed to update group: {}", e))?;
+    } else {
+        conn.execute(
+            "INSERT INTO server_groups (id, name, parent_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, name, parent_id, now, now],
+        )
+        .map_err(|e| format!("Failed to insert group: {}", e))?;
+    }
     Ok(id)
 }
 
@@ -1966,6 +2038,48 @@ pub fn bookmarks_delete(id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// 列出全部书签（用于云端同步备份）
+pub fn bookmarks_list_all() -> Result<String, String> {
+    let conn = get_conn()?;
+    let mut stmt = conn
+        .prepare("SELECT * FROM log_bookmarks ORDER BY created_at DESC")
+        .map_err(|e| format!("Failed to prepare query: {}", e))?;
+
+    let bookmarks: Vec<LogBookmark> = stmt
+        .query_map([], |row| {
+            Ok(LogBookmark {
+                id: row.get("id")?,
+                server_id: row.get("server_id")?,
+                path: row.get("path")?,
+                alias: row.get("alias")?,
+                created_at: row.get("created_at")?,
+            })
+        })
+        .map_err(|e| format!("Query failed: {}", e))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    serde_json::to_string(&bookmarks)
+        .map_err(|e| format!("Serialization failed: {}", e))
+}
+
+/// 批量还原书签
+pub fn bookmarks_restore(items: Vec<LogBookmark>) -> Result<usize, String> {
+    let conn = get_conn()?;
+    let mut count = 0;
+    for b in items {
+        if b.id.trim().is_empty() || b.server_id.trim().is_empty() {
+            continue;
+        }
+        conn.execute(
+            "INSERT OR REPLACE INTO log_bookmarks (id, server_id, path, alias, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![b.id, b.server_id, b.path, b.alias, b.created_at],
+        ).map_err(|e| format!("Failed to restore bookmark: {}", e))?;
+        count += 1;
+    }
+    Ok(count)
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum KnownHostVerifyResult {
     Match,
@@ -2139,6 +2253,21 @@ pub fn clear_all_known_hosts() -> Result<usize, String> {
         .execute("DELETE FROM known_hosts", [])
         .map_err(|e| format!("Failed to clear known hosts: {}", e))?;
     Ok(affected)
+}
+
+/// 批量导入/恢复已知主机指纹（用于云同步恢复）
+pub fn restore_known_hosts(records: Vec<KnownHostRecord>) -> Result<usize, String> {
+    let conn = get_conn()?;
+    let mut count = 0;
+    for rec in records {
+        conn.execute(
+            "INSERT OR REPLACE INTO known_hosts (host, port, key_type, key_value, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![rec.host, rec.port, rec.key_type, rec.key_value, rec.created_at],
+        )
+        .map_err(|e| format!("Failed to restore known host: {}", e))?;
+        count += 1;
+    }
+    Ok(count)
 }
 
 
@@ -2589,6 +2718,47 @@ pub fn ssh_keys_list() -> Result<String, String> {
         .map_err(|e| format!("Query failed: {}", e))?
         .filter_map(|r| r.ok())
         .map(mask_ssh_key_secrets)
+        .collect();
+
+    serde_json::to_string(&keys)
+        .map_err(|e| format!("Serialization failed: {}", e))
+}
+
+/// List all SSH keys with decrypted content and passphrase for zero-knowledge cloud sync.
+pub fn ssh_keys_list_for_sync() -> Result<String, String> {
+    let conn = get_conn()?;
+
+    let mut stmt = conn
+        .prepare("SELECT * FROM ssh_keys ORDER BY name ASC")
+        .map_err(|e| format!("Failed to prepare query: {}", e))?;
+
+    let mk = master_key();
+    let keys: Vec<SshKeyInput> = stmt
+        .query_map([], row_to_ssh_key)
+        .map_err(|e| format!("Query failed: {}", e))?
+        .filter_map(|r| r.ok())
+        .map(|k| {
+            let decrypt = |field: &Option<String>| -> Option<String> {
+                match field {
+                    Some(s) if !s.is_empty() && s != PASSWORD_PLACEHOLDER => {
+                        crypto::decrypt_password(s, mk).ok()
+                    }
+                    _ => None,
+                }
+            };
+            SshKeyInput {
+                id: k.id,
+                name: k.name,
+                key_type: k.key_type,
+                private_key_path: k.private_key_path,
+                private_key_content: decrypt(&k.private_key_content),
+                private_key_passphrase: decrypt(&k.private_key_passphrase),
+                public_key: k.public_key,
+                certificate_path: k.certificate_path,
+                certificate_content: decrypt(&k.certificate_content),
+                notes: k.notes,
+            }
+        })
         .collect();
 
     serde_json::to_string(&keys)

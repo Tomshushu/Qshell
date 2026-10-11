@@ -75,12 +75,13 @@ import {
   Lock,
   KeyRound,
   RotateCw,
+  Cloud,
 } from "lucide-react";
 import { useUpdaterStore } from "@/store/updater-store";
 import { useAppVersion } from "@/utils/version";
 import { getAllFileIconThemes } from "@/components/file-icons";
 import { KnownHostsPanel } from "./known-hosts-panel";
-import { AccountSettingsPanel } from "./account-settings-panel";
+import { SyncSettingsPanel } from "./sync-settings-panel";
 
 // ── 快捷键管理数据（集中维护，便于后续扩展自定义功能） ──────────────────────────
 // 按键组合以数组形式表示，每个元素为一个按键单元（如 ['CTRL', 'SHIFT', 'H']）
@@ -554,9 +555,18 @@ const SCOPE_LABEL: Record<ShortcutItem["scope"], string> = {
 interface SettingsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  defaultTab?:
+    | "general"
+    | "security"
+    | "account"
+    | "terminal"
+    | "sftp"
+    | "logs"
+    | "shortcuts"
+    | "known_hosts";
 }
 
-export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
+export function SettingsDialog({ open, onOpenChange, defaultTab }: SettingsDialogProps) {
   const [showThemeDialog, setShowThemeDialog] = useState(false);
   // 跳过首次挂载：避免初始 open=false 时误播 Close 音
   const mountedRef = useRef(false);
@@ -579,7 +589,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     <TooltipProvider delayDuration={200}>
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="max-w-5xl h-[min(620px,calc(100vh-2rem))] flex flex-col p-0 overflow-hidden bg-background border rounded-xl gap-0">
-          <SettingsPanel onOpenThemeDialog={() => setShowThemeDialog(true)} />
+          <SettingsPanel defaultTab={defaultTab} onOpenThemeDialog={() => setShowThemeDialog(true)} />
         </DialogContent>
       {/* 主题弹框嵌套进设置 Dialog 内（而非兄弟节点），共享 DismissableLayer 作用域，
           关闭主题弹框时不会误关设置弹框（修复「关一个全关」问题）。 */}
@@ -936,13 +946,29 @@ function SmoothConcurrencySlider({
 }
 
 function SettingsPanel({
+  defaultTab = "general",
   onOpenThemeDialog,
 }: {
+  defaultTab?:
+    | "general"
+    | "security"
+    | "account"
+    | "terminal"
+    | "sftp"
+    | "logs"
+    | "shortcuts"
+    | "known_hosts";
   onOpenThemeDialog: () => void;
 }) {
   const [subTab, setSubTab] = useState<
     "general" | "security" | "account" | "terminal" | "sftp" | "logs" | "shortcuts" | "known_hosts"
-  >("general");
+  >(defaultTab);
+
+  useEffect(() => {
+    if (defaultTab) {
+      setSubTab(defaultTab);
+    }
+  }, [defaultTab]);
 
   // 软件更新管理
   const isCheckingUpdate = useUpdaterStore((s) => s.isChecking);
@@ -1213,8 +1239,8 @@ function SettingsPanel({
                 : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
             }`}
           >
-            <User className="h-3.5 w-3.5 flex-shrink-0" />
-            <span className="flex-1 truncate">{t("sidebar_account")}</span>
+            <Cloud className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
+            <span className="flex-1 truncate">云端同步 (Gitee / GitHub)</span>
           </button>
           <button
             onClick={() => setSubTab("terminal")}
@@ -2790,7 +2816,7 @@ function SettingsPanel({
             </Card>
           </div>
         ) : subTab === "account" ? (
-          <AccountSettingsPanel />
+          <SyncSettingsPanel />
         ) : (
           <div className="w-full max-w-4xl mx-auto space-y-6">
             {/* 其它分类占位符 */}

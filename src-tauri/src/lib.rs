@@ -191,6 +191,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // 服务器管理
             commands::servers::servers_list,
+            commands::servers::servers_list_for_sync,
             commands::servers::servers_add,
             commands::servers::servers_update,
             commands::servers::servers_delete,
@@ -225,6 +226,7 @@ pub fn run() {
             commands::ssh::ssh_list_known_hosts,
             commands::ssh::ssh_delete_known_host,
             commands::ssh::ssh_clear_all_known_hosts,
+            commands::ssh::ssh_restore_known_hosts,
             commands::ssh::ssh_check_all_servers,
             commands::ssh::ssh_detect_os_info,
             commands::ssh::ssh_get_home_directory,
@@ -250,6 +252,7 @@ pub fn run() {
 
             // SSH 密钥管理（密钥库：加密存储私钥/证书内容）
             commands::ssh_keys::ssh_keys_list,
+            commands::ssh_keys::ssh_keys_list_for_sync,
             commands::ssh_keys::ssh_keys_add,
             commands::ssh_keys::ssh_keys_update,
             commands::ssh_keys::ssh_keys_delete,
@@ -259,6 +262,7 @@ pub fn run() {
             commands::tags::tags_create,
             commands::tags::tags_rename,
             commands::tags::tags_delete,
+            commands::tags::tags_restore,
             // 系统指标
             commands::metrics::metrics_collect,
             commands::metrics::metrics_refresh_cache,
@@ -420,10 +424,16 @@ pub fn run() {
             commands::fav_cmds::fav_cmds_add,
             commands::fav_cmds::fav_cmds_update,
             commands::fav_cmds::fav_cmds_delete,
+            commands::fav_cmds::fav_cmds_restore,
             // 书签
             commands::bookmarks::bookmarks_list,
+            commands::bookmarks::bookmarks_list_all,
             commands::bookmarks::bookmarks_add,
             commands::bookmarks::bookmarks_delete,
+            commands::bookmarks::bookmarks_restore,
+            // 终端自定义背景
+            commands::backgrounds::backgrounds_list_for_sync,
+            commands::backgrounds::backgrounds_restore,
             // 窗口管理
             commands::window::window_create,
             commands::window::window_list_all,
