@@ -99,10 +99,13 @@ async function uploadFileToGiteeRelease(releaseId, filename, fileBuffer) {
   form.append('access_token', GITEE_TOKEN)
   form.append('file', new Blob([fileBuffer]), filename)
 
+  // 针对大文件（如 90MB AppImage 或 16MB 安装包）动态设置充足的跨国传输超时（最少 120 秒，最大 360 秒）
+  const timeoutMs = Math.min(360_000, Math.max(120_000, Math.ceil(fileBuffer.byteLength / 1024 / 40) * 1000))
+
   const res = await fetch(`https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${releaseId}/attach_files`, {
     method: 'POST',
     body: form,
-    signal: AbortSignal.timeout(60_000),
+    signal: AbortSignal.timeout(timeoutMs),
   })
 
   if (!res.ok) {
@@ -401,11 +404,30 @@ async function run() {
     await writeFile('latest-gitee.json', giteeManifestStr, 'utf8')
 
     // 3. 上传 latest.json 到 Gitee Release
-    if (existingAssets['latest.json']) {
-      console.log(`[Gitee Sync] Deleting old latest.json on Release...`)
-      await deleteExistingAttachment(giteeRelease.id, existingAssets['latest.json'].id)
+    try {
+      if (existingAssets['latest.json']) {
+        console.log(`[Gitee Sync] Deleting old latest.json on Release...`)
+        await deleteExistingAttachment(giteeRelease.id, existingAssets['latest.json'].id)
+      }
+      await uploadFileToGiteeRelease(giteeRelease.id, 'latest.json', Buffer.from(giteeManifestStr, 'utf8'))
+    } catch (err) {
+      console.warn(`[Gitee Sync] Warning: failed to upload latest.json attachment to Gitee release:`, err.message)
     }
-    await uploadFileToGiteeRelease(giteeRelease.id, 'latest.json', Buffer.from(giteeManifestStr, 'utf8'))
+
+    // 3.1 若存在 latest-china.json，也同步上传到 Gitee Release 备用
+    try {
+      if (existsSync('latest-china.json')) {
+        const chinaRaw = readFileSync('latest-china.json')
+        if (existingAssets['latest-china.json']) {
+          console.log(`[Gitee Sync] Deleting old latest-china.json on Release...`)
+          await deleteExistingAttachment(giteeRelease.id, existingAssets['latest-china.json'].id)
+        }
+        await uploadFileToGiteeRelease(giteeRelease.id, 'latest-china.json', chinaRaw)
+        console.log(`[Gitee Sync] Uploaded latest-china.json to Gitee release successfully!`)
+      }
+    } catch (err) {
+      console.warn(`[Gitee Sync] Optional latest-china.json upload failed, continuing:`, err.message)
+    }
 
     // 4. 同步更新 Gitee 仓库 main 分支根目录的 latest.json
     // 这样客户端可以以零代理、极高速度直连 https://gitee.com/Tom-shushu/qshell/raw/main/latest.json
