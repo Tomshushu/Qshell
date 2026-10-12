@@ -115,6 +115,13 @@ export function WorkspacePage({
     },
     [],
   );
+  const terminalGetCwdRef = useRef<(() => string | undefined) | null>(null);
+  const registerTerminalGetCwd = useCallback((fn: (() => string | undefined) | null) => {
+    terminalGetCwdRef.current = fn;
+  }, []);
+  const resolveTerminalCwd = useCallback(async (): Promise<string | null> => {
+    return terminalGetCwdRef.current?.() ?? null;
+  }, []);
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [credentialPromptOpen, setCredentialPromptOpen] = useState(false);
@@ -976,6 +983,7 @@ export function WorkspacePage({
             registerSearchTrigger={registerTerminalSearchTrigger}
             registerOutputActions={registerTerminalOutputActions}
             registerSerialToolbar={setSerialToolbar}
+            registerGetCwd={registerTerminalGetCwd}
             onReconnect={handleConnect}
           />
         </div>
@@ -1011,6 +1019,7 @@ export function WorkspacePage({
                     serverId={connId}
                     isConnected={isConnected}
                     isActive={isActive && currentTab.module === "files"}
+                    getTerminalCwd={resolveTerminalCwd}
                   />
                 </div>
               )}

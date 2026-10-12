@@ -6,6 +6,8 @@ export interface FilesModuleProps {
   isConnected?: boolean
   /** 模块当前是否可见；原生拖放是 WebView 全局事件，只允许可见模块处理 */
   isActive?: boolean
+  /** 异步获取终端最新工作目录的回调（用于主动探测或刷新） */
+  getTerminalCwd?: () => Promise<string | null> | string | null | undefined
 }
 
 export interface TreeNode {

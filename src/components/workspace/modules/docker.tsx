@@ -2314,21 +2314,24 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
   }, [])
 
   // 关闭菜单
+  // 注意（与 files 模块同款修复）：Docker 模块同样渲染在 WorkspaceModuleModal 内，
+  // 弹窗主体对 click 做了 stopPropagation，挂 window 冒泡阶段的 click 监听永远收不到
+  // 事件，必须用 document 捕获阶段的 pointerdown；同时点击菜单内部
+  // （根节点带 data-ctx-menu 标记）时不关闭，否则菜单项会先被关掉导致点击失效。
   useEffect(() => {
     if (!ctxMenu && !dropdownId && !composeMenu) return
-    const close = () => {
+    const close = (e: Event) => {
+      const target = e.target as HTMLElement | null
+      if (target?.closest('[data-ctx-menu]')) return
       setCtxMenu(null)
       setDropdownId(null)
       setComposeMenu(null)
     }
-    const timer = setTimeout(() => {
-      window.addEventListener('click', close)
-      window.addEventListener('contextmenu', close)
-    }, 0)
+    document.addEventListener('pointerdown', close, true)
+    document.addEventListener('contextmenu', close, true)
     return () => {
-      clearTimeout(timer)
-      window.removeEventListener('click', close)
-      window.removeEventListener('contextmenu', close)
+      document.removeEventListener('pointerdown', close, true)
+      document.removeEventListener('contextmenu', close, true)
     }
   }, [ctxMenu, dropdownId, composeMenu])
 

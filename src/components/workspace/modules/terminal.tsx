@@ -178,6 +178,10 @@ import {
   TerminalHintPanel,
   SerialQuickSendEditor,
 } from "@/components/terminal";
+import {
+  extractPathFromShellTitle,
+  resolveRelativePath,
+} from "@/utils/terminal-path-utils";
 
 export {
   FONT_PRESETS,
@@ -230,6 +234,7 @@ export function TerminalModule({
   registerSearchTrigger,
   registerOutputActions,
   registerSerialToolbar,
+  registerGetCwd,
   onReconnect,
 }: TerminalModuleProps) {
   const { t } = useTranslation();
@@ -545,6 +550,7 @@ export function TerminalModule({
   // 停止录制后仍保留最近一次日志路径，便于"打开日志文件"在停止后可用
   const recordingLastPathRef = useRef<Map<string, string>>(new Map());
   const terminalCwdRef = useRef<Map<string, string>>(new Map());
+  const homeDirRef = useRef<string>("");
   const shellIntegrationRef = useRef<
     Map<
       string,
@@ -2490,6 +2496,33 @@ export function TerminalModule({
       const clean = command.trim();
       if (!clean) return;
       pendingCommandRef.current.set(termId, clean);
+
+      // cd 指令智能追踪：当用户键入 cd /path 等命令时，及时推导并更新终端工作目录。
+      // 仅对「纯路径」形式的 cd 做乐观推导：含变量($)、命令连接(&&/;)、管道(|)、
+      // 重定向(>)、通配(*?)、反引号、多参数(空格)或 `cd -` 时跳过，避免记录错误
+      // cwd（这类情况交给后续 Shell 标题更新纠正，最终以 statInfo 校验兜底）。
+      if (/^cd(\s+|$)/i.test(clean)) {
+        const target = clean.replace(/^cd\s*/i, "").trim().replace(/^['"]|['"]$/g, "");
+        const isSimplePath = !!target && !/[\s$&|;<>*?`]/.test(target) && !target.startsWith("-");
+        if (!target || target === "~") {
+          if (homeDirRef.current) {
+            terminalCwdRef.current.set(termId, homeDirRef.current);
+          }
+        } else if (isSimplePath && target.startsWith("/")) {
+          terminalCwdRef.current.set(termId, target);
+        } else if (isSimplePath && target.startsWith("~/") && homeDirRef.current) {
+          const resolved = target.replace(/^~/, homeDirRef.current.replace(/\/+$/, ""));
+          terminalCwdRef.current.set(termId, resolved);
+        } else if (isSimplePath) {
+          // 相对路径（含 ./ ../ ..）
+          const current = terminalCwdRef.current.get(termId) || homeDirRef.current || "/";
+          const resolved = resolveRelativePath(current, target);
+          if (resolved) {
+            terminalCwdRef.current.set(termId, resolved);
+          }
+        }
+      }
+
       queueSessionEvent(termId, "command", {
         command: redactCommandForSession(clean),
         cwd: terminalCwdRef.current.get(termId),
@@ -3952,6 +3985,11 @@ export function TerminalModule({
       const updateShellTitle = (value: string) => {
         const title = value.trim();
         if (!title) return false;
+        // 尝试从 shellTitle 中自动提取当前工作目录（兼容常见 Linux/Unix 发行版默认 PS1 标题）
+        const extracted = extractPathFromShellTitle(title, homeDirRef.current);
+        if (extracted) {
+          terminalCwdRef.current.set(termId, extracted);
+        }
         queueSessionEvent(termId, "title", { title });
         setTerminals((prev) => {
           const current = prev.get(termId);
@@ -5775,6 +5813,42 @@ export function TerminalModule({
     recordingTermIds,
     toggleRecording,
   ]);
+
+  // 异步拉取并缓存远程用户的 home 目录路径，供路径解析时替换 ~ 使用
+  useEffect(() => {
+    if (!isConnected || !serverId) return;
+    sshService
+      .getHomeDirectory(serverId)
+      .then((h) => {
+        if (h && h !== "/") {
+          homeDirRef.current = h;
+        }
+      })
+      .catch(() => {});
+  }, [isConnected, serverId]);
+
+  // 向外层工作台注册获取当前终端 CWD 的回调
+  useEffect(() => {
+    if (!registerGetCwd) return;
+    const getCwd = () => {
+      if (!activeTermId) return undefined;
+      let cwd = terminalCwdRef.current.get(activeTermId);
+      if (cwd && (cwd.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(cwd))) {
+        return cwd;
+      }
+      const term = terminals.get(activeTermId);
+      if (term?.shellTitle) {
+        const extracted = extractPathFromShellTitle(term.shellTitle, homeDirRef.current);
+        if (extracted) {
+          terminalCwdRef.current.set(activeTermId, extracted);
+          return extracted;
+        }
+      }
+      return homeDirRef.current || undefined;
+    };
+    registerGetCwd(getCwd);
+    return () => registerGetCwd(null);
+  }, [registerGetCwd, activeTermId, terminals]);
 
   const jumpToLatestOutput = useCallback(() => {
     if (!activeTermId) return;

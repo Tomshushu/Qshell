@@ -49,6 +49,7 @@ import { useToast } from '@/components/ui/toast'
 import { useAppStore } from '@/store'
 import { extractBaseServerId } from '@/services/ssh-connection-state'
 import type { FilesModuleProps, TreeNode, SortField, SortDirection } from './files/types'
+import { isAbsolutePath, resolveRelativePath } from '@/utils/terminal-path-utils'
 import { PermissionBadge } from './files/permission-badge'
 import { FilePropertiesDialog } from './files/file-properties-dialog'
 import { FileEditorView } from './files/file-editor-view'
@@ -168,7 +169,12 @@ function getFileKind(name: string):
 
 
 
-export function FilesModule({ serverId, isConnected = true, isActive = true }: FilesModuleProps) {
+export function FilesModule({
+  serverId,
+  isConnected = true,
+  isActive = true,
+  getTerminalCwd,
+}: FilesModuleProps) {
   const { t } = useTranslation()
   const { toast } = useToast()
   // ToastProvider 在消息列表变化时会重建 toast 对象。异步文件操作统一通过 ref
@@ -219,6 +225,21 @@ export function FilesModule({ serverId, isConnected = true, isActive = true }: F
   // 保活初始化标记：确保根目录加载只在首次连接建立时执行一次，
   // 避免保活模式下切换模块回归时重复发起 SFTP 请求
   const filesInitializedRef = useRef(false)
+  // 终端目录直达：每次打开（激活）文件模块时，定位到终端当前工作目录。
+  // - lastAppliedTerminalDirRef：上次已直达的终端目录。仅在终端目录发生变化时
+  //   才重新直达：终端没动时保留用户在文件模块内的手动导航，不被拽回；
+  //   终端 cd 到新目录后再次打开文件模块，则跟随过去
+  // - filesInitDone：init 异步流程（根目录树 + home 解析）完成标记，
+  //   激活直达需等 init 完成后再导航，否则会被 init 的 setCurrentPath(home) 覆盖
+  const lastAppliedTerminalDirRef = useRef<string | null>(null)
+  const [filesInitDone, setFilesInitDone] = useState(false)
+  // 同步 currentPath 最新值，供异步直达逻辑读取，避免闭包过期
+  const currentPathRef = useRef(currentPath)
+  useEffect(() => { currentPathRef.current = currentPath }, [currentPath])
+  // 终端 cwd 回调经 ref 读取：init/激活 effect 不因 prop 变化重跑，
+  // 同时保证回调内总能拿到最新值
+  const getTerminalCwdPropRef = useRef(getTerminalCwd)
+  useEffect(() => { getTerminalCwdPropRef.current = getTerminalCwd }, [getTerminalCwd])
   // E4: 标记重命名是否已通过 Enter 提交,避免卸载 input 触发 onBlur 重复提交/取消
   const renameCommittedRef = useRef(false)
   // 同步追踪 treeRoot 最新值,供 loadNodeChildren 在 async 上下文中读取,
@@ -281,23 +302,33 @@ export function FilesModule({ serverId, isConnected = true, isActive = true }: F
   }, [bookmarks, baseServerId])
 
   // 点击其他地方关闭右键菜单
+  // 注意两个坑（本项目其他浮层已踩过）：
+  // 1. 文件模块渲染在 WorkspaceModuleModal 内，弹窗主体对 click 做了
+  //    stopPropagation，挂 window/document 冒泡阶段的 click 监听永远收不到事件，
+  //    必须用 document 捕获阶段；
+  // 2. 部分 Radix 下拉 trigger 会在 pointerdown 上 preventDefault，导致后续
+  //    click 不派发，因此用 pointerdown 而非 click/mousedown。
   useEffect(() => {
     if (!ctxMenu) return
-    const close = (e: MouseEvent) => {
-      if (ctxMenuRef.current && !ctxMenuRef.current.contains(e.target as Node)) {
+    const close = (e: Event) => {
+      const target = e.target as Node | null
+      if (ctxMenuRef.current && target && !ctxMenuRef.current.contains(target)) {
         setCtxMenu(null)
       }
     }
-    const timer = setTimeout(() => {
-      window.addEventListener('click', close)
-      window.addEventListener('contextmenu', close)
-    }, 0)
+    document.addEventListener('pointerdown', close, true)
+    document.addEventListener('contextmenu', close, true)
     return () => {
-      clearTimeout(timer)
-      window.removeEventListener('click', close)
-      window.removeEventListener('contextmenu', close)
+      document.removeEventListener('pointerdown', close, true)
+      document.removeEventListener('contextmenu', close, true)
     }
   }, [ctxMenu])
+
+  // 模块被隐藏（弹窗关闭/切换到其他模块）时收起右键菜单：
+  // 菜单经 Portal 挂到 body，不会随模块隐藏而消失，需显式清理
+  useEffect(() => {
+    if (!isActive) setCtxMenu(null)
+  }, [isActive])
 
   const fetchFiles = useCallback(async (path: string) => {
     // C2.1 修复：请求序号机制，快速切目录时丢弃过期响应，
@@ -354,14 +385,88 @@ export function FilesModule({ serverId, isConnected = true, isActive = true }: F
     }
   }, [serverId, t])
 
+  // 文件列表滚动容器（虚拟滚动 + 框选共用）
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+
+  // 重置文件列表滚动位置（虚拟滚动必须显式重置，对齐 sftp-panel 的做法）。
+  // 根因：模块弹窗隐藏时外层容器被加上 display:none，浏览器会把滚动容器的
+  // scrollTop 静默归零且不派发 scroll 事件，而 virtualizer 内部的 scrollOffset
+  // 仍是旧值；恢复显示后 virtualizer 按旧 offset 计算可见范围，会把第一个
+  // 可见项的 start 渲染成顶部 spacer，导致首行上方出现大片空白、整体行被推下去，
+  // 且因没有 scroll 事件产生，该错位不会自愈。
+  // 恢复显示时上一份内容仍在 DOM 中（保活渲染），容器可滚动，此时先挪开 1px
+  // 再于下一帧归零，强制产生真实的 scroll 事件，把内部 offset 同步回 0。
+  // 注意：必须声明在 navigateTo 之前——navigateTo 的依赖数组在渲染时同步求值，
+  // 后置声明会触发 TDZ（Cannot access before initialization）。
+  const resetListScroll = useCallback((forceSync = false) => {
+    const el = scrollContainerRef.current
+    if (!el) return
+    if (el.scrollTop !== 0) {
+      el.scrollTo({ top: 0 })
+      return
+    }
+    if (forceSync && el.scrollHeight > el.clientHeight + 1) {
+      el.scrollTo({ top: 1 })
+      requestAnimationFrame(() => {
+        scrollContainerRef.current?.scrollTo({ top: 0 })
+      })
+    }
+  }, [])
+
   // 乐观导航：0ms 立即更新目标路径并开始拉取，消除 React 生命周期等待与感官延迟
   const navigateTo = useCallback((targetPath: string) => {
     if (!targetPath) return
     setOpeningPath(targetPath)
     lastFetchedPathRef.current = targetPath
     setCurrentPath(targetPath)
+    // 切换目录后回到顶部：否则新目录会保留上一目录的滚动偏移
+    // （旧内容此刻仍在 DOM 中，scrollTo 能产生 scroll 事件同步 virtualizer 内部状态）
+    resetListScroll()
     void fetchFiles(targetPath)
-  }, [fetchFiles])
+  }, [fetchFiles, resetListScroll])
+
+  // 解析终端当前工作目录，校验通过后返回可导航的绝对路径；失败返回 null（回退 home）。
+  // 解析链路（terminal.tsx 侧）：OSC 7 > Shell 标题(OSC 0/2)路径提取 > cd 命令推导 > home。
+  const resolveTerminalDir = useCallback(async (): Promise<string | null> => {
+    let candidate: string | null = null
+    try {
+      const asyncCwd = await getTerminalCwdPropRef.current?.()
+      if (typeof asyncCwd === 'string' && asyncCwd.trim()) candidate = asyncCwd.trim()
+    } catch {
+      // 探测异常静默回退 home
+    }
+    if (!candidate || !isAbsolutePath(candidate)) return null
+
+    // Windows 目标：终端上报原生盘符路径（C:\Users\foo），文件模块使用
+    // POSIX 风格（/C:/Users/foo，后端会再转回 Windows 路径），需对齐
+    if (isWindows && /^[a-zA-Z]:[\\/]/.test(candidate)) {
+      candidate = `/${candidate.replace(/\\/g, '/')}`
+    }
+    // 去掉末尾斜杠（根目录除外），与目录树/列表路径表示保持一致
+    if (candidate.length > 1 && candidate.endsWith('/')) {
+      candidate = candidate.replace(/\/+$/, '')
+    }
+
+    // 校验目录真实存在且为目录，避免把终端标题解析误差导航过去；
+    // 符号链接目录解析为绝对目标后再用（cd 进入软链目录的常见场景）
+    try {
+      const info = await sshService.statInfo(serverId, candidate)
+      if (info?.type === 'directory') return candidate
+      if (info?.type === 'symbolic link' && info.symlinkTarget) {
+        const target = info.symlinkTarget.trim()
+        if (!target) return null
+        const parent = candidate.slice(0, candidate.lastIndexOf('/')) || '/'
+        const resolved = isAbsolutePath(target)
+          ? target
+          : resolveRelativePath(parent, target)
+        const verify = await sshService.statInfo(serverId, resolved).catch(() => null)
+        if (verify?.type === 'directory') return resolved
+      }
+    } catch {
+      // stat 失败（路径不存在/无权限）静默回退 home
+    }
+    return null
+  }, [serverId, isWindows])
 
   const loadNodeChildren = useCallback(async (nodePath: string, force = false) => {
     if (treeLoadingRef.current.has(nodePath) && !force) return
@@ -433,6 +538,9 @@ export function FilesModule({ serverId, isConnected = true, isActive = true }: F
     if (!isConnected || isTelnet || isNetwork) return
     if (filesInitializedRef.current) return
     filesInitializedRef.current = true
+    // 新会话重置终端目录直达标记：重连后允许重新直达新 shell 的目录
+    lastAppliedTerminalDirRef.current = null
+    setFilesInitDone(false)
     let cancelled = false
     // 重置状态
     setExpandedPaths(new Set(['/']))
@@ -510,6 +618,10 @@ export function FilesModule({ serverId, isConnected = true, isActive = true }: F
           await loadNodeChildren(ancestorPath)
         }
       }
+
+      // init 完成：通知"激活直达"逻辑可以安全导航。
+      // 早于此的导航会被上面的 setCurrentPath(home) 覆盖，必须等这一步
+      if (!cancelled) setFilesInitDone(true)
     }
     init()
     return () => {
@@ -521,6 +633,32 @@ export function FilesModule({ serverId, isConnected = true, isActive = true }: F
       filesInitializedRef.current = false
     }
   }, [isConnected, serverId, loadNodeChildren, isTelnet, isNetwork, t])
+
+  // 打开文件模块时直达终端当前工作目录（每次激活都求值，跟随终端目录变化）：
+  // 1. 触发时机为"模块被激活"（用户点击文件 tab/弹窗打开），而非连接建立时——
+  //    此刻终端已运行良久，OSC 7/标题追踪的 cwd 一定就绪；连接时立即解析大概率
+  //    只能拿到 home 兜底值；
+  // 2. filesInitDone 守卫：init 未完成时导航会被 init 的 setCurrentPath(home) 覆盖，
+  //    等 init 置位后本 effect 会因依赖变化自动重跑，补上直达；
+  // 3. lastAppliedTerminalDirRef 守卫：终端目录没变时保留用户的手动导航，
+  //    cd 到新目录后再打开文件模块则跟随过去；重连时 init 重置该标记。
+  useEffect(() => {
+    if (!isActive || !isConnected || isTelnet || isNetwork) return
+    if (!filesInitDone) return
+    let cancelled = false
+    void (async () => {
+      const dir = await resolveTerminalDir()
+      if (cancelled) return
+      // 终端目录未变化：保留用户在文件模块内的手动导航，不重复直达
+      if (!dir || dir === lastAppliedTerminalDirRef.current) return
+      lastAppliedTerminalDirRef.current = dir
+      // 校验失败（null）时保持 init 设置的 home，属于预期的静默回退
+      if (dir !== currentPathRef.current) {
+        navigateTo(dir)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [isActive, isConnected, isTelnet, isNetwork, filesInitDone, resolveTerminalDir, navigateTo])
 
   // 当 currentPath 变化时加载文件列表（跳过已由 navigateTo 同步发起的请求）
   useEffect(() => {
@@ -708,8 +846,6 @@ export function FilesModule({ serverId, isConnected = true, isActive = true }: F
     }
   }
 
-  const scrollContainerRef = useRef<HTMLDivElement>(null)
-
   const rowVirtualizer = useVirtualizer({
     count: sortedFiles.length,
     getScrollElement: () => scrollContainerRef.current,
@@ -729,6 +865,13 @@ export function FilesModule({ serverId, isConnected = true, isActive = true }: F
     setSelection: (ids) => setSelectedFiles(Array.from(ids)),
     containerRef: scrollContainerRef,
   })
+
+  // 模块重新显示（从终端切回文件/再次打开弹窗）时同步虚拟滚动内部偏移，
+  // 避免顶部出现空白 spacer、首行被推下去
+  useEffect(() => {
+    if (!isActive) return
+    resetListScroll(true)
+  }, [isActive, resetListScroll])
 
 
   // === 目录树宽度调整 ===

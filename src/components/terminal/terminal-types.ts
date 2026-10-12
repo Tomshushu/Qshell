@@ -62,6 +62,8 @@ export interface TerminalModuleProps {
   registerSerialToolbar?: (
     toolbar: import("@/components/workspace/module-tabs").SerialToolbarState | null,
   ) => void;
+  /** 注册终端工作目录获取函数：供外层工作台在切换到文件模块等场景时获取当前终端所在目录 */
+  registerGetCwd?: (fn: (() => string | undefined) | null) => void;
   /** 用户在终端内触发手动重连（如断开状态下按回车）时的回调，用于唤醒工作台顶层连接流程与认证提示 */
   onReconnect?: () => void;
 }
