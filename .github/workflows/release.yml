@@ -249,7 +249,7 @@ jobs:
         continue-on-error: true
         run: |
           echo "Triggering China Serverless Sync for tag: ${{ github.ref_name }}..."
-          curl -f --max-time 300 -X POST "https://qshell-tee-sync-anullfwzbd.cn-shanghai.fcapp.run" \
+          curl -N -f --max-time 600 -X POST "https://qshell-tee-sync-anullfwzbd.cn-shanghai.fcapp.run" \
             -H "Content-Type: application/json" \
             -d '{"tag": "${{ github.ref_name }}", "secret": "Qshell_Release_Sync_2026"}'
 
