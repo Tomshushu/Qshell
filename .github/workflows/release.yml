@@ -123,6 +123,56 @@ jobs:
         with:
           node-version: 22
 
+      - name: Standardize Release Assets Naming (统一产物规范命名与补齐版本号)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = context.ref.replace("refs/tags/", "");
+            const cleanVer = tag.replace(/^v/, '');
+            const release_id = ${{ needs.create-release.outputs.release_id }};
+
+            const assets = await github.rest.repos.listReleaseAssets({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release_id
+            });
+
+            // 1. 将 macOS 缺失版本号的 OTA 更新包重命名为标准格式
+            const macTarGz = assets.data.find(a => a.name === 'Qshell_aarch64.app.tar.gz');
+            if (macTarGz) {
+              const newName = `Qshell_${cleanVer}_aarch64.app.tar.gz`;
+              await github.rest.repos.updateReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                asset_id: macTarGz.id,
+                name: newName
+              });
+              console.log(`Renamed asset ${macTarGz.name} -> ${newName}`);
+            }
+
+            const macTarGzSig = assets.data.find(a => a.name === 'Qshell_aarch64.app.tar.gz.sig');
+            if (macTarGzSig) {
+              const newSigName = `Qshell_${cleanVer}_aarch64.app.tar.gz.sig`;
+              await github.rest.repos.updateReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                asset_id: macTarGzSig.id,
+                name: newSigName
+              });
+              console.log(`Renamed asset ${macTarGzSig.name} -> ${newSigName}`);
+            }
+
+            // 2. 清理多余冗余资产（保持两端资产数完全一致）
+            const redundantChina = assets.data.find(a => a.name === 'latest-china.json');
+            if (redundantChina) {
+              await github.rest.repos.deleteReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                asset_id: redundantChina.id
+              });
+              console.log('Removed redundant latest-china.json');
+            }
+
       - name: Download generated latest.json from Release
         run: |
           TAG_NAME="${{ github.ref_name }}"
@@ -133,10 +183,11 @@ jobs:
       - name: Prepare clean manifest
         env:
           MANIFEST_PATH: 'latest.json'
+          TAG_NAME: ${{ github.ref_name }}
         run: |
           node tools/sync-release-manifest.mjs
 
-      - name: Overwrite latest.json and upload latest-china.json on Release
+      - name: Overwrite latest.json on Release
         uses: actions/github-script@v7
         with:
           script: |
@@ -149,7 +200,7 @@ jobs:
               release_id: release_id
             });
 
-            // 1. 删除原未经加速的 latest.json 并上传最新 latest.json
+            // 删除原未经加速与规范化的 latest.json 并上传最新 latest.json
             if (fs.existsSync('latest.json')) {
               const existingLatest = assets.data.find(a => a.name === 'latest.json');
               if (existingLatest) {
@@ -168,39 +219,14 @@ jobs:
                 name: 'latest.json',
                 data: fileData
               });
-              console.log('Uploaded clean latest.json successfully!');
+              console.log('Uploaded standardized latest.json successfully!');
             }
 
-            // 2. 同时上传 latest-china.json 备用
-            if (fs.existsSync('latest-china.json')) {
-              const existingChina = assets.data.find(a => a.name === 'latest-china.json');
-              if (existingChina) {
-                await github.rest.repos.deleteReleaseAsset({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  asset_id: existingChina.id
-                });
-              }
-              const chinaData = fs.readFileSync('latest-china.json');
-              await github.rest.repos.uploadReleaseAsset({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                release_id: release_id,
-                name: 'latest-china.json',
-                data: chinaData
-              });
-              console.log('Uploaded latest-china.json successfully!');
-            }
-
-      - name: Sync Release to Gitee Releases (国内极速镜像发布)
+      - name: Sync Release to Gitee via China Serverless Webhook (国内云函数全自动极速同步)
         continue-on-error: true
-        env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN || '12c9b9f0edf788cf0e5c308134e5e316' }}
-          GITEE_OWNER: 'Tom-shushu'
-          GITEE_REPO: 'qshell'
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: ${{ github.ref_name }}
-          GITHUB_RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
-          MANIFEST_PATH: 'latest.json'
         run: |
-          node tools/sync-gitee-release.mjs
+          echo "Triggering China Serverless Sync for tag: ${{ github.ref_name }}..."
+          curl -s -X POST "https://qshell-tee-sync-anullfwzbd.cn-shanghai.fcapp.run" \
+            -H "Content-Type: application/json" \
+            -d '{"tag": "${{ github.ref_name }}", "secret": "Qshell_Release_Sync_2026"}' || true
+

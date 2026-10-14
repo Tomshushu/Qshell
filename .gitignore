@@ -39,6 +39,8 @@ _*.cjs
 # OS files
 .DS_Store
 Thumbs.db
+.tmp_sync_*
+
 
 # Python
 __pycache__/

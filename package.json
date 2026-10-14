@@ -1,7 +1,7 @@
 {
   "name": "qshell",
   "private": true,
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Qshell - 现代化极速终端与服务器管理工作台 (Tauri + Rust)",
   "type": "module",
   "scripts": {
@@ -17,6 +17,7 @@
     "build:all": "tauri build",
     "lint": "eslint .",
     "check:undefined": "node tools/check-undefined.mjs",
+    "release:gitee": "node tools/sync-gitee-local.mjs",
     "preview": "vite preview",
     "site:dev": "vite website --port 5180",
     "site:build": "vite build website",

@@ -35,7 +35,18 @@ async function run() {
 
   console.log(`[Sync] Manifest version: ${manifest.version || 'unknown'}`)
 
-  // 1. 为安装包链接注入高速 CDN 镜像加速前缀（国内免翻墙高速直连 10~25 MB/s）
+  const version = manifest.version || (process.env.TAG_NAME || '').replace(/^v/, '')
+
+  // 1. 规范化平台包文件名：将未携带版本号的 macOS 产物命名统一包含版本号
+  if (manifest.platforms && version) {
+    for (const [platformKey, platformData] of Object.entries(manifest.platforms)) {
+      if (platformData && platformData.url) {
+        platformData.url = platformData.url.replace(/Qshell_aarch64\.app\.tar\.gz$/, `Qshell_${version}_aarch64.app.tar.gz`)
+      }
+    }
+  }
+
+  // 2. 为安装包链接注入高速 CDN 镜像加速前缀（若有配置）
   if (manifest.platforms && mirrorPrefix) {
     for (const [platformKey, platformData] of Object.entries(manifest.platforms)) {
       if (platformData && platformData.url && platformData.url.startsWith('https://github.com/')) {
@@ -50,10 +61,9 @@ async function run() {
 
   const updatedJson = JSON.stringify(manifest, null, 2)
 
-  // 覆盖原 latest.json（供 GitHub Release 重新上传覆盖）并写入 latest-china.json
+  // 覆盖原 latest.json（标准唯一清单）
   await writeFile(manifestPath, updatedJson, 'utf8')
-  await writeFile('latest-china.json', updatedJson, 'utf8')
-  console.log(`[Sync] Successfully updated ${manifestPath} and latest-china.json`)
+  console.log(`[Sync] Successfully updated ${manifestPath}`)
 
   // 2. 可选：若配置了 Supabase Service Key，同步推送到 Supabase Storage 作为备用
   if (serviceKey) {
