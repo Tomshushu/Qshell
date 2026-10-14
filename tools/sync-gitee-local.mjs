@@ -27,8 +27,8 @@ const GITHUB_REPO = process.env.GITHUB_REPOSITORY || 'Tomshushu/Qshell'
 
 // 国内多路加速镜像源
 const CDN_PROXIES = [
-  'https://gh-proxy.com/',
   'https://ghproxy.net/',
+  'https://gh-proxy.com/',
 ]
 
 const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'

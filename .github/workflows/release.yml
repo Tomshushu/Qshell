@@ -111,11 +111,31 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            const tag = context.ref.replace("refs/tags/", "");
+            const cleanVer = tag.replace(/^v/, '');
+            const body = `## 🚀 Qshell ${tag} 正式版本发布
+
+> 现代化极速终端与多协议服务器管理工作台。国内高速镜像托管发布。
+
+### 📦 国内免翻墙极速下载通道 (推荐)
+
+| 操作系统与架构 | 安装包类型 | 国内极速直链 (10~25MB/s) |
+| :--- | :--- | :--- |
+| **Windows 64位** | 安装包 (.exe) | [⚡ 点击极速下载](https://ghproxy.net/https://github.com/${context.repo.owner}/${context.repo.repo}/releases/download/${tag}/Qshell_${cleanVer}_x64-setup.exe) |
+| **macOS Apple Silicon** | 镜像包 (.dmg) | [⚡ 点击极速下载](https://ghproxy.net/https://github.com/${context.repo.owner}/${context.repo.repo}/releases/download/${tag}/Qshell_${cleanVer}_aarch64.dmg) |
+| **macOS 压缩包** | 应用包 (.app.tar.gz) | [⚡ 点击极速下载](https://ghproxy.net/https://github.com/${context.repo.owner}/${context.repo.repo}/releases/download/${tag}/Qshell_${cleanVer}_aarch64.app.tar.gz) |
+| **Linux (全平台通用)** | 便携版 (.AppImage) | [⚡ 点击极速下载](https://ghproxy.net/https://github.com/${context.repo.owner}/${context.repo.repo}/releases/download/${tag}/Qshell_${cleanVer}_amd64.AppImage) |
+| **Linux (Debian/Ubuntu)** | 安装包 (.deb) | [⚡ 点击极速下载](https://ghproxy.net/https://github.com/${context.repo.owner}/${context.repo.repo}/releases/download/${tag}/Qshell_${cleanVer}_amd64.deb) |
+
+---
+*注：Qshell 客户端内置智能动态双通道测速，更新时将自动优选国内最畅通的直连节点。*`;
+
             await github.rest.repos.updateRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
               release_id: ${{ needs.create-release.outputs.release_id }},
-              draft: false
+              draft: false,
+              body: body
             });
 
       - name: Setup Node.js
@@ -226,7 +246,7 @@ jobs:
         continue-on-error: true
         run: |
           echo "Triggering China Serverless Sync for tag: ${{ github.ref_name }}..."
-          curl -s -X POST "https://qshell-tee-sync-anullfwzbd.cn-shanghai.fcapp.run" \
+          curl -f --max-time 300 -X POST "https://qshell-tee-sync-anullfwzbd.cn-shanghai.fcapp.run" \
             -H "Content-Type: application/json" \
-            -d '{"tag": "${{ github.ref_name }}", "secret": "Qshell_Release_Sync_2026"}' || true
+            -d '{"tag": "${{ github.ref_name }}", "secret": "Qshell_Release_Sync_2026"}'
 
