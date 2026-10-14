@@ -113,10 +113,10 @@ export function OverviewTab({
             <div className="space-y-0.5 min-w-0 flex-1 pr-2">
               <div className="text-xs text-muted-foreground font-medium">{t('net_ov_default_route')}</div>
               <div className="text-sm font-semibold font-mono truncate text-foreground">
-                {overview?.default_gateway || 'None'}
+                {overview?.defaultGateway || 'None'}
               </div>
               <div className="text-[10px] text-muted-foreground truncate">
-                dev {overview?.default_iface || 'N/A'}
+                dev {overview?.defaultIface || 'N/A'}
               </div>
             </div>
             <Globe className="h-7 w-7 text-primary/30 shrink-0" />
@@ -128,7 +128,7 @@ export function OverviewTab({
             <div className="space-y-0.5">
               <div className="text-xs text-muted-foreground font-medium">{t('net_ov_listening_ports')}</div>
               <div className="text-xl font-bold font-mono text-foreground">
-                {overview?.listening_ports_count ?? 0}
+                {overview?.listeningPortsCount ?? 0}
               </div>
               <div className="text-[10px] text-muted-foreground font-medium">
                 TCP / UDP Ports
@@ -143,7 +143,7 @@ export function OverviewTab({
             <div className="space-y-0.5">
               <div className="text-xs text-muted-foreground font-medium">{t('net_ov_active_conns')}</div>
               <div className="text-xl font-bold font-mono text-foreground">
-                {overview?.established_conn_count ?? 0}
+                {overview?.establishedConnCount ?? 0}
               </div>
               <div className="text-[10px] text-muted-foreground font-medium">
                 ESTABLISHED
@@ -247,8 +247,8 @@ export function OverviewTab({
               </Button>
             </CardHeader>
             <CardContent className="p-3 pt-0 space-y-1.5">
-              {overview?.dns_servers && overview.dns_servers.length > 0 ? (
-                overview.dns_servers.map((dns, i) => (
+              {overview?.dnsServers && overview.dnsServers.length > 0 ? (
+                overview.dnsServers.map((dns: string, i: number) => (
                   <div key={i} className="flex items-center justify-between p-1.5 rounded bg-muted/30 text-xs font-mono">
                     <span>{dns}</span>
                     <Badge variant="outline" className="text-[9px] px-1 py-0">DNS #{i + 1}</Badge>
@@ -272,20 +272,20 @@ export function OverviewTab({
             </CardHeader>
             <CardContent className="p-3 pt-0">
               <div className="flex flex-wrap gap-1.5">
-                <CapBadge label="iproute2" available={overview?.capabilities.has_iproute2} />
-                <CapBadge label="ss" available={overview?.capabilities.has_ss} />
-                <CapBadge label="tcpdump" available={overview?.capabilities.has_tcpdump} />
-                <CapBadge label="mtr" available={overview?.capabilities.has_mtr} />
-                <CapBadge label="traceroute" available={overview?.capabilities.has_traceroute} />
-                <CapBadge label="ethtool" available={overview?.capabilities.has_ethtool} />
-                <CapBadge label="curl" available={overview?.capabilities.has_curl} />
-                <CapBadge label="ICMP" available={overview?.capabilities.can_icmp} />
+                <CapBadge label="iproute2" available={overview?.capabilities.hasIproute2} />
+                <CapBadge label="ss" available={overview?.capabilities.hasSs} />
+                <CapBadge label="tcpdump" available={overview?.capabilities.hasTcpdump} />
+                <CapBadge label="mtr" available={overview?.capabilities.hasMtr} />
+                <CapBadge label="traceroute" available={overview?.capabilities.hasTraceroute} />
+                <CapBadge label="ethtool" available={overview?.capabilities.hasEthtool} />
+                <CapBadge label="curl" available={overview?.capabilities.hasCurl} />
+                <CapBadge label="ICMP" available={overview?.capabilities.canIcmp} />
               </div>
             </CardContent>
           </Card>
 
           {/* Recent Runs */}
-          {overview?.recent_runs && overview.recent_runs.length > 0 && (
+          {overview?.recentRuns && overview.recentRuns.length > 0 && (
             <Card className="border shadow-none">
               <CardHeader className="p-3 pb-2 flex flex-row items-center justify-between">
                 <CardTitle className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
@@ -302,7 +302,7 @@ export function OverviewTab({
                 </Button>
               </CardHeader>
               <CardContent className="p-3 pt-0 space-y-1.5">
-                {overview.recent_runs.slice(0, 3).map((r) => (
+                {overview.recentRuns.slice(0, 3).map((r) => (
                   <div
                     key={r.id}
                     onClick={() => onNavigateTab('history')}

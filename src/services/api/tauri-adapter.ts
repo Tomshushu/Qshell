@@ -530,7 +530,8 @@ function normalizeServer(raw: Record<string, unknown> | null): Server {
     lastError: raw.last_error || raw.lastError,
     createdAt: raw.created_at || raw.createdAt,
     updatedAt: raw.updated_at || raw.updatedAt,
-  } as Server;
+    // raw 为 snake_case/camelCase 双兼容的运行时数据，需经 unknown 断言为 Server
+  } as unknown as Server;
 }
 
 export const tauriAdapter: BackendAdapter = {
@@ -801,6 +802,9 @@ export const tauriAdapter: BackendAdapter = {
     },
     resizeShell(sessionId, cols, rows): void {
       void safeInvoke<void>("ssh_resize_shell", { sessionId, cols, rows });
+    },
+    async setShellEncoding(sessionId, encoding): Promise<void> {
+      await safeInvoke<void>("ssh_set_shell_encoding", { sessionId, encoding });
     },
     pauseShell(sessionId): void {
       void safeInvoke<void>("ssh_pause_shell", { sessionId });
@@ -1539,9 +1543,6 @@ export const tauriAdapter: BackendAdapter = {
         localPaths,
         targetFileName: targetFileName ?? null,
       });
-    },
-    async setShellEncoding(sessionId, encoding): Promise<void> {
-      await safeInvoke<void>("ssh_set_shell_encoding", { sessionId, encoding });
     },
     async getLocalUploadStats(paths): Promise<LocalUploadStats> {
       return safeInvoke<LocalUploadStats>("files_get_local_upload_stats", {

@@ -240,8 +240,8 @@ function InlineHopForm({
                 options={[
                   { value: '', label: '-- 使用 Agent 默认第一个身份 --' },
                   ...agentIdentities.map((id) => ({
-                    value: id.publicKey,
-                    label: `${id.comment || id.keyType} (${id.publicKey.slice(0, 24)}...)`,
+                    value: id.publicKeyBase64,
+                    label: `${id.algorithm} (${id.publicKeyBase64.slice(0, 24)}...)`,
                   })),
                 ]}
                 className="h-8 flex-1"

@@ -235,6 +235,7 @@ export function TerminalModule({
   registerOutputActions,
   registerSerialToolbar,
   registerGetCwd,
+  onCwdChange,
   onReconnect,
 }: TerminalModuleProps) {
   const { t } = useTranslation();
@@ -551,6 +552,19 @@ export function TerminalModule({
   const recordingLastPathRef = useRef<Map<string, string>>(new Map());
   const terminalCwdRef = useRef<Map<string, string>>(new Map());
   const homeDirRef = useRef<string>("");
+  // 终端 cwd 变化推送：文件面板据此即时跟随（避免轮询延迟）
+  const onCwdChangeRef = useRef(onCwdChange);
+  useEffect(() => {
+    onCwdChangeRef.current = onCwdChange;
+  }, [onCwdChange]);
+  // 记录终端 cwd 并对外推送变化事件；仅当是活跃终端时推送（文件面板跟随活跃终端）
+  const recordTerminalCwd = useCallback((termId: string, cwd: string) => {
+    if (!cwd) return;
+    terminalCwdRef.current.set(termId, cwd);
+    if (termId === activeTermIdRef.current) {
+      onCwdChangeRef.current?.(cwd);
+    }
+  }, []);
   const shellIntegrationRef = useRef<
     Map<
       string,
@@ -760,7 +774,7 @@ export function TerminalModule({
         }
 
         // 用户正在向上翻看历史日志时跳过，避免注入控制字符破坏当前浏览或引发假新输出
-        if (userScrolledUpRef.current.get(inst.termId) === true) {
+        if (userScrolledUpRef.current.get(inst.id) === true) {
           continue;
         }
 
@@ -821,7 +835,10 @@ export function TerminalModule({
     const enabled = terminalBellSound ?? false;
     xtermInstances.current.forEach(({ term }) => {
       // 关闭铃声时改为 visual：静默 + 视觉闪烁（xterm.css 已引入），与设置项描述一致
-      term.options.bellStyle = enabled ? "sound" : "visual";
+      // xterm 6 的 ITerminalOptions 类型已移除 bellStyle（运行时仍支持），经 unknown 写入
+      (term.options as unknown as { bellStyle?: string }).bellStyle = enabled
+        ? "sound"
+        : "visual";
     });
   }, [terminalBellSound]);
 
@@ -2506,19 +2523,19 @@ export function TerminalModule({
         const isSimplePath = !!target && !/[\s$&|;<>*?`]/.test(target) && !target.startsWith("-");
         if (!target || target === "~") {
           if (homeDirRef.current) {
-            terminalCwdRef.current.set(termId, homeDirRef.current);
+            recordTerminalCwd(termId, homeDirRef.current);
           }
         } else if (isSimplePath && target.startsWith("/")) {
-          terminalCwdRef.current.set(termId, target);
+          recordTerminalCwd(termId, target);
         } else if (isSimplePath && target.startsWith("~/") && homeDirRef.current) {
           const resolved = target.replace(/^~/, homeDirRef.current.replace(/\/+$/, ""));
-          terminalCwdRef.current.set(termId, resolved);
+          recordTerminalCwd(termId, resolved);
         } else if (isSimplePath) {
           // 相对路径（含 ./ ../ ..）
           const current = terminalCwdRef.current.get(termId) || homeDirRef.current || "/";
           const resolved = resolveRelativePath(current, target);
           if (resolved) {
-            terminalCwdRef.current.set(termId, resolved);
+            recordTerminalCwd(termId, resolved);
           }
         }
       }
@@ -3131,7 +3148,7 @@ export function TerminalModule({
           : isTelnet
           ? await sshService.createTelnetShell(
               serverId,
-              host,
+              host ?? "",
               port,
               cols,
               rows,
@@ -3836,7 +3853,7 @@ export function TerminalModule({
         lastPrintedAttempt = -1;
         // 如果服务器连接重新 Ready 且终端尚未恢复 Session，自动重连 Shell
         const serverState = useAppStore.getState().serverStates[serverId];
-        if (serverState === ConnectionState.Ready) {
+        if (serverState?.state === ConnectionState.Ready) {
           terminalsRef.current.forEach((inst, tId) => {
             if (!inst.sessionId && inst.status !== "connected") {
               reconnectTerminal(tId, true);
@@ -3942,10 +3959,10 @@ export function TerminalModule({
         allowProposedApi: true,
         scrollback: terminalScrollbackLinesRef.current,
         rightClickSelectsWord: true,
-        fastScrollModifier: "shift",
+        // xterm 6 类型已移除 fastScrollModifier / bellStyle（运行时仍支持），经展开绕过多余属性检查
+        ...(({ fastScrollModifier: "shift", bellStyle: (terminalBellSound ?? false) ? "sound" : "visual" }) as object),
         fastScrollSensitivity: 5,
         scrollSensitivity: 1,
-        bellStyle: (terminalBellSound ?? false) ? "sound" : "visual",
         drawBoldTextInBrightColors: terminalDrawBoldInBrightColors ?? true,
         // minimumContrastRatio 设为 1（关闭逐字符相对亮度反色循环，日志高频倾泻时大幅减少 CPU 开销）
         minimumContrastRatio: 1,
@@ -3975,7 +3992,7 @@ export function TerminalModule({
             : value;
           const uri = new URL(raw);
           const cwd = decodeURIComponent(uri.pathname || "/");
-          terminalCwdRef.current.set(termId, cwd);
+          recordTerminalCwd(termId, cwd);
           queueSessionEvent(termId, "cwd", { cwd });
         } catch {
           // 非标准 OSC 7 内容忽略，不影响终端输出
@@ -3988,7 +4005,7 @@ export function TerminalModule({
         // 尝试从 shellTitle 中自动提取当前工作目录（兼容常见 Linux/Unix 发行版默认 PS1 标题）
         const extracted = extractPathFromShellTitle(title, homeDirRef.current);
         if (extracted) {
-          terminalCwdRef.current.set(termId, extracted);
+          recordTerminalCwd(termId, extracted);
         }
         queueSessionEvent(termId, "title", { title });
         setTerminals((prev) => {
@@ -4673,7 +4690,9 @@ export function TerminalModule({
 
       // 等待一帧并等待字体加载完成，以防 Xterm 字符尺寸测量偏差导致汉字挤压
       console.log(`[Terminal Init] ${sId} 等待 rAF + 字体加载`);
-      await new Promise<void>((resolve) => requestAnimationFrame(resolve));
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
       try {
         if (document.fonts && typeof document.fonts.load === "function") {
           console.log(`[Terminal Init] ${sId} document.fonts.load 开始`);
@@ -4916,7 +4935,7 @@ export function TerminalModule({
           );
           const result = await sshService.createTelnetShell(
             sId,
-            host,
+            host ?? "",
             port,
             cols,
             rows,
@@ -6808,7 +6827,7 @@ export function TerminalModule({
           const bytes = Uint8Array.from(atob(initialData), (ch) =>
             ch.charCodeAt(0),
           );
-          sentry.consume(Array.from(bytes));
+          sentry.consume?.(bytes);
         }
       },
     );
@@ -6816,7 +6835,7 @@ export function TerminalModule({
       const sentry = zmodemSentriesRef.current.get(sessionId);
       if (!sentry) return;
       const bytes = Uint8Array.from(atob(data), (ch) => ch.charCodeAt(0));
-      sentry.consume(Array.from(bytes));
+      sentry.consume?.(bytes);
     });
     const ended = sshService.onShellZmodemEnd(({ sessionId }) => {
       zmodemSentriesRef.current.delete(sessionId);

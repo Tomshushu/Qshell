@@ -1787,7 +1787,7 @@ export function getTerminalTheme(
     const background = raw.background || '#181824'
     const foreground = raw.foreground || '#b2b2b2'
     result = {
-      id: raw.id,
+      id: raw.id || 'legacy-theme',
       name: raw.name || 'Legacy Theme',
       type: raw.isDark === false ? 'light' : 'dark',
       ui: {
@@ -2066,9 +2066,7 @@ export function watchSystemColorScheme(
     mql.addEventListener('change', handler)
     return () => mql.removeEventListener('change', handler)
   } else {
-    // @ts-expect-error legacy API
     mql.addListener(handler)
-    // @ts-expect-error legacy API
     return () => mql.removeListener(handler)
   }
 }

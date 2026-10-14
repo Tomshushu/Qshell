@@ -24,6 +24,7 @@ import type {
   NeighborInfo,
   NetworkRunSummary,
 } from '@/types/network'
+import type { NavigationContext, WorkspaceModule } from '@/types'
 import { OverviewTab } from './tabs/overview-tab'
 import { InterfacesTab } from './tabs/interfaces-tab'
 import { ConnectionsTab } from './tabs/connections-tab'
@@ -43,7 +44,7 @@ export type NetworkTabId =
 
 export interface NetworkModuleProps {
   serverId: string
-  onNavigate?: (module: string, context?: { searchQuery?: string; view?: string }) => void
+  onNavigate?: (module: WorkspaceModule, context?: NavigationContext) => void
 }
 
 export function NetworkModule({ serverId, onNavigate }: NetworkModuleProps) {
@@ -184,33 +185,32 @@ export function NetworkModule({ serverId, onNavigate }: NetworkModuleProps) {
 
       {/* 右侧内容区 */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* 上下文信息条（服务器 / 网络概要指标 / 全局刷新） */}
-        <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border/60 flex-wrap shrink-0 bg-card/30">
+        {/* 上下文信息条（网关指标 / 全局刷新，样式与 Docker 模块统一） */}
+        <div className="flex items-center justify-between gap-2.5 px-4 h-11 border-b border-border/50 bg-muted/20 shrink-0 flex-wrap">
           <div className="flex items-center gap-2 min-w-0 flex-wrap">
-            <span className="text-sm font-medium text-foreground truncate max-w-[180px]">
-              {serverName}
-            </span>
-            {overview?.defaultGateway && (
-              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-primary/20 bg-primary/10 text-primary text-[11px] font-medium whitespace-nowrap">
+            {overview?.defaultGateway ? (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border border-primary/25 bg-primary/10 text-primary text-[11px] font-medium whitespace-nowrap">
                 <Route className="w-3 h-3 shrink-0" />
                 <span>网关: {overview.defaultGateway}</span>
+                {overview.defaultIface && (
+                  <span className="text-[10px] opacity-70 font-mono">({overview.defaultIface})</span>
+                )}
               </span>
-            )}
-            {overview?.publicIp && (
-              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 text-emerald-500 dark:text-emerald-400 text-[11px] font-medium whitespace-nowrap">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-                <span>公网: {overview.publicIp}</span>
+            ) : (
+              <span className="text-xs text-muted-foreground flex items-center gap-1.5">
+                <Radio className="h-3.5 w-3.5 text-muted-foreground/60" />
+                <span>{t('module_network')}</span>
               </span>
             )}
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
             <Button
-              variant="outline"
+              variant="ghost"
               size="sm"
               onClick={fetchAllData}
               disabled={loading}
-              className="h-7 px-2.5 text-xs gap-1.5"
+              className="h-7 gap-1 text-xs"
             >
               <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
               <span>{t('net_refresh')}</span>

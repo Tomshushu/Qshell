@@ -54,7 +54,7 @@ vi.mock('@/services/ssh-service', () => ({
   },
 }))
 
-vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}) }), { virtual: true })
+vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}) }))
 vi.mock('@/i18n', () => ({ useTranslation: () => ({ t: (k: string) => k }) }))
 vi.mock('@/components/ui/toast', () => ({ useToast: () => ({ toast: { success: vi.fn(), error: vi.fn() } }) }))
 

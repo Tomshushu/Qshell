@@ -19,10 +19,11 @@ const mockProc = (pid: number, name: string): ProcessInfo => ({
   memory: 1.2,
   vsz: 1024,
   rss: 512,
-  tty: '?',
   stat: 'S',
+  nice: 0,
   start: '00:00',
-  time: '0:01',
+  startTimeTicks: 0,
+  cgroup: '',
   command: name,
 })
 

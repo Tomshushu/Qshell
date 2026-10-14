@@ -103,7 +103,7 @@ export function SnapshotModal({ open, onClose, serverName, serverId }: SnapshotM
       setCollectLabel(t('snap_collecting_done'))
 
       if (result) {
-        setSnapshot(result as SnapshotRawData)
+        setSnapshot(result as unknown as SnapshotRawData)
         setStep('done')
       } else {
         setErrorMessage(t('snap_err_no_data'))

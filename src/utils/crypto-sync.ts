@@ -31,8 +31,8 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
   return btoa(chunks.join(''))
 }
 
-// 辅助工具：Base64 转 Uint8Array
-function base64ToUint8Array(base64: string): Uint8Array {
+// 辅助工具：Base64 转 Uint8Array（始终以 ArrayBuffer 为 backing store，可直接用作 BufferSource）
+function base64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(base64)
   const len = binary.length
   const bytes = new Uint8Array(len)
@@ -45,7 +45,7 @@ function base64ToUint8Array(base64: string): Uint8Array {
 /**
  * 使用 PBKDF2 从主密码衍生出 AES-256 密钥
  */
-async function deriveKey(password: string, salt: Uint8Array, iterations = 100000): Promise<CryptoKey> {
+async function deriveKey(password: string, salt: Uint8Array<ArrayBuffer>, iterations = 100000): Promise<CryptoKey> {
   const encoder = new TextEncoder()
   const passwordKey = await crypto.subtle.importKey(
     'raw',

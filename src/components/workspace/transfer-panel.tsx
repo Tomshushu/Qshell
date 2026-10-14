@@ -107,9 +107,10 @@ export function TransferPanel() {
       const isFailSignal = done === false
       const effectiveTotal = (isDoneSignal || isFailSignal) ? undefined : total
       const effectiveCurrent = (isDoneSignal || isFailSignal) ? undefined : current
-      // 优先使用后端提供的 totalType，回退到启发式判断
-      const effectiveTotalType: 'bytes' | 'count' = totalType
-        ?? (total > 0 && total < 50000 ? 'count' : 'bytes')
+      // 优先使用后端提供的 totalType，回退到启发式判断（manifest 阶段按字节数展示）
+      const effectiveTotalType: 'bytes' | 'count' = totalType === 'manifest'
+        ? 'bytes'
+        : (totalType ?? (total > 0 && total < 50000 ? 'count' : 'bytes'))
       const percent = effectiveTotal && effectiveTotal > 0
         ? Math.round((effectiveCurrent! / effectiveTotal) * 100)
         : isFailSignal ? 0 : done ? 100 : 0

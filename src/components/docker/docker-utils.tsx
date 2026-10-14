@@ -476,15 +476,31 @@ export function OverviewCard({
   return (
     <button
       onClick={onClick}
-      className="rounded-xl border border-border/60 bg-card/50 p-3.5 text-left hover:border-primary/40 hover:bg-accent/30 transition-colors"
+      className="group relative flex flex-col justify-between rounded-xl border border-border/70 bg-card/60 p-3.5 text-left transition-all duration-200 hover:border-primary/50 hover:bg-card/90 hover:shadow-xs cursor-pointer"
     >
-      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground mb-1">
-        {icon}
-        {label}
+      <div>
+        <div className="flex items-center justify-between gap-1.5 mb-2">
+          <span className="text-[12px] font-medium text-muted-foreground group-hover:text-foreground transition-colors">
+            {label}
+          </span>
+          <div className="p-1.5 rounded-md bg-muted/60 text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary transition-colors">
+            {icon}
+          </div>
+        </div>
+        <div className="text-2xl font-bold text-foreground tabular-nums tracking-tight">
+          {value}
+        </div>
       </div>
-      <div className="text-3xl font-semibold text-foreground tabular-nums leading-tight">{value}</div>
-      {footer}
-      {sub && <div className="text-[11px] text-muted-foreground mt-1 truncate">{sub}</div>}
+      {(footer || sub) ? (
+        <div className="mt-2 pt-1 border-t border-border/30">
+          {footer}
+          {sub && (
+            <div className="text-[11px] text-muted-foreground mt-1 truncate">
+              {sub}
+            </div>
+          )}
+        </div>
+      ) : null}
     </button>
   );
 }

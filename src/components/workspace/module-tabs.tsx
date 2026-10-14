@@ -120,6 +120,8 @@ interface ModuleTabsProps {
   toolbarPosition?: "top" | "left" | "bottom" | "right";
   /** 串口专属工具条状态与操作（直接内嵌在顶栏） */
   serialToolbar?: SerialToolbarState | null;
+  /** 文件面板（终端下方）是否展开：用于高亮文件按钮、展示传输进度 */
+  filesPanelOpen?: boolean;
 }
 
 export function ModuleTabs({
@@ -139,6 +141,7 @@ export function ModuleTabs({
   onShowDiagnostics,
   toolbarPosition = "top",
   serialToolbar,
+  filesPanelOpen,
 }: ModuleTabsProps) {
   const { t } = useTranslation();
   const [showThemeDialog, setShowThemeDialog] = useState(false);
@@ -219,7 +222,8 @@ export function ModuleTabs({
               vertical
                 ? "w-full justify-start px-3.5 py-2 is-vertical"
                 : "mx-0.5 my-0.5 px-2.5 py-1 is-horizontal",
-              activeModule === key && "is-active",
+              (activeModule === key || (key === "files" && filesPanelOpen)) &&
+                "is-active",
             )}
             onClick={() => onModuleChange(key)}
           >
@@ -463,7 +467,7 @@ export function ModuleTabs({
             <Palette className="h-3 w-3" />
           </Button>
         )}
-        {activeModule === "files" && <TransferPanel />}
+        {filesPanelOpen && <TransferPanel />}
         {activeModule === "terminal" && (
           <Button
             variant="ghost"

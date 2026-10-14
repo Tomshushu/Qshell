@@ -42,6 +42,7 @@ import type {
   LogBookmark,
 } from "@/types";
 export type { FileEntry, ServiceResourceRawMap, LogBookmark };
+export type { SshKey, SshKeyInput, SshKeyUpdate };
 
 export interface TagRow {
   id: string;
@@ -614,6 +615,12 @@ export interface LocalFileEntry {
   isDirectory: boolean;
   size: number;
   modified: string;
+  /** 属主（部分平台/场景提供，用于排序展示） */
+  owner?: string;
+  /** 属组 */
+  group?: string;
+  uid?: number;
+  gid?: number;
 }
 
 /** 本地目录列表结果 */
@@ -794,6 +801,12 @@ export interface BackendAdapter {
     restore: (id: string) => Promise<OperationResult>;
     /** 回收站：永久删除（物理清除）指定服务器 */
     purge: (id: string) => Promise<OperationResult>;
+    /** 回收站：批量恢复指定服务器 */
+    restoreBatch: (ids: string[]) => Promise<OperationResult>;
+    /** 回收站：批量永久删除（物理清除）指定服务器 */
+    purgeBatch: (ids: string[]) => Promise<OperationResult>;
+    /** 回收站：批量移入回收站 */
+    deleteBatch: (ids: string[]) => Promise<OperationResult>;
     /** 回收站：清理超过 retentionDays 天的待删除项，返回清理条数 */
     cleanupTrash: (retentionDays: number) => Promise<number>;
     /**
@@ -895,6 +908,8 @@ export interface BackendAdapter {
       serverId: string,
       cols: number,
       rows: number,
+      /** shell 编码，缺省 utf-8（部分网络设备需 GBK 等） */
+      encoding?: string,
     ) => Promise<CreateShellResult>;
     writeToShell: (sessionId: string, data: string) => Promise<void>;
     interruptShell: (sessionId: string) => Promise<number>;
@@ -1146,6 +1161,8 @@ export interface BackendAdapter {
   files: {
     list: (serverId: string, path: string) => Promise<FileEntry[]>;
     read: (serverId: string, path: string) => Promise<CommandResult>;
+    /** 读取文件原始字节，返回 base64（不带 ::base64:: 前缀），用于二进制预览/编码兜底重读 */
+    readBinary: (serverId: string, path: string) => Promise<string>;
     write: (
       serverId: string,
       path: string,
@@ -1328,6 +1345,8 @@ export interface BackendAdapter {
     stats: (serverId: string, containerId: string) => Promise<CommandResult>;
     inspect: (serverId: string, containerId: string) => Promise<CommandResult>;
     composePs: (serverId: string) => Promise<CommandResult>;
+    /** 列出服务器上全部 compose 项目（`docker compose ls`），返回原始文本 */
+    composeList: (serverId: string) => Promise<string>;
     rmi: (serverId: string, imageId: string) => Promise<CommandResult>;
     imagePrune: (serverId: string) => Promise<CommandResult>;
     rm: (

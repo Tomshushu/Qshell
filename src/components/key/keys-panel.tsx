@@ -509,7 +509,7 @@ export function KeysPanel() {
         confirmText="确定删除"
         cancelText="取消"
         onConfirm={handleDeleteConfirm}
-        onClose={() => setDeleteTarget(null)}
+        onCancel={() => setDeleteTarget(null)}
       />
     </div>
   )

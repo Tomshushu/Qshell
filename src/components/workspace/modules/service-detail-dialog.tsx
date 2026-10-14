@@ -86,6 +86,8 @@ export function ServiceDetailDialog({
 }: ServiceDetailDialogProps) {
   const { toast } = useToast()
   const { t } = useTranslation()
+  // 服务名（多处 JSX/导出文件名使用）；遮蔽 DOM 全局 name，避免解析到 void 类型
+  const name = service?.name || 'unknown'
   const [tab, setTab] = useState<DetailTab>('overview')
 
   // 日志
@@ -591,7 +593,7 @@ export function ServiceDetailDialog({
                         <option key={r.value} value={r.value}>{t(r.labelKey)}</option>
                       ))}
                     </select>
-                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={loadLogs} disabled={loadingLogs}>
+                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => void loadLogs()} disabled={loadingLogs}>
                       <RefreshCw className={`h-3 w-3 mr-1 ${loadingLogs ? 'animate-spin' : ''}`} />
                       {t('svc_log_refresh')}
                     </Button>
@@ -695,7 +697,7 @@ export function ServiceDetailDialog({
                       ['before', t('svc_dep_before')],
                       ['requiredBy', t('svc_dep_requiredBy')],
                       ['wantedBy', t('svc_dep_wantedBy')],
-                    ] as [keyof ServiceDependencies, string][]
+                    ] as [Exclude<keyof ServiceDependencies, 'states'>, string][]
                   ).map(([key, label]) => {
                     const items = deps[key] || []
                     if (items.length === 0) return null

@@ -37,7 +37,7 @@ export function SftpExtractConflictDialog({
             {pendingExtractConflict?.destination}
           </p>
         </div>
-        <div className="px-6 pb-5 flex justify-end gap-2">
+        <div className="px-6 pb-5 flex flex-wrap justify-end gap-2">
           <Button
             variant="ghost"
             size="sm"

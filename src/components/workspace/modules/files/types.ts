@@ -8,6 +8,8 @@ export interface FilesModuleProps {
   isActive?: boolean
   /** 异步获取终端最新工作目录的回调（用于主动探测或刷新） */
   getTerminalCwd?: () => Promise<string | null> | string | null | undefined
+  /** 订阅终端 cwd 变化推送：变化时触发一次跟随，返回取消订阅函数 */
+  subscribeTerminalCwd?: (listener: () => void) => () => void
 }
 
 export interface TreeNode {

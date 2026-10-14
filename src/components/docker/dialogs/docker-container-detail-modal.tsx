@@ -36,6 +36,7 @@ import {
 import { useTranslation } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { DockerContainer as DockerContainerType } from "@/types";
+import type { DockerFileEntry } from "@/services/api";
 import type { StatsData } from "../docker-types";
 import { renderAnsiLine, stripAnsi, StructuredInspect, formatSize } from "../docker-utils";
 
@@ -62,7 +63,7 @@ export interface DockerContainerDetailModalProps {
   logLines: string[];
   logVirtualizer: {
     getTotalSize: () => number;
-    getVirtualItems: () => Array<{ key: string | number; index: number; start: number; size: number }>;
+    getVirtualItems: () => Array<{ key: React.Key; index: number; start: number; size: number }>;
   };
   logsScrollRef: React.RefObject<HTMLDivElement | null>;
   logsStickBottomRef: React.MutableRefObject<boolean>;
@@ -90,14 +91,14 @@ export interface DockerContainerDetailModalProps {
   filesPath: string;
   filesLoading: boolean;
   filesError: string | null;
-  filesList: Array<{ name: string; isDir: boolean; size: number; modified: string }>;
+  filesList: DockerFileEntry[];
   actionLoading: string | null;
   onNavigateFiles: (path: string) => void;
   onRefreshFiles: () => void;
   onFileUpload: () => void;
   onOpenHostPicker: () => void;
-  onFileDownload: (file: { name: string; isDir: boolean; size: number; modified: string }) => void;
-  onPromptFileDelete: (file: { name: string; isDir: boolean; size: number; modified: string }) => void;
+  onFileDownload: (file: DockerFileEntry) => void;
+  onPromptFileDelete: (file: DockerFileEntry) => void;
 }
 
 export function DockerContainerDetailModal({

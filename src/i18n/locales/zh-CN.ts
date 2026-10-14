@@ -649,6 +649,7 @@ export default {
   cd_default_title: "确认操作",
   cd_default_confirm: "确认",
   cd_default_cancel: "取消",
+  cd_dont_ask_again: "不再提醒，后续直接执行",
   ed_default_title: "操作失败",
   ed_ok: "我知道了",
   tag_default_placeholder: "输入标签后回车添加...",
@@ -1296,6 +1297,7 @@ export default {
   net_copy_success: "已复制到剪贴板",
 
   // ========== Overview 模块 ==========
+  ov_refresh: "刷新",
   ov_connecting: "正在连接服务器获取数据...",
   ov_health_healthy: "健康",
   ov_health_warning: "警告",
@@ -2880,6 +2882,7 @@ export default {
   quick_access_home: "主目录",
 
   // ========== 通用提示（Toast） ==========
+  common_action: "操作",
   common_op_failed: "操作失败",
   common_op_success: "操作成功",
   common_delete_failed: "删除失败",

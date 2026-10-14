@@ -118,35 +118,33 @@ export function PortForwardModule({ serverId, hideToolbarHeader }: PortForwardMo
 
   return (
     <div className="flex flex-col h-full bg-transparent">
-      {/* Toolbar */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-border/60 bg-card">
-        {!hideToolbarHeader && (
-          <>
-            <ArrowLeftRight className="h-4 w-4 text-primary" />
-            <span className="text-sm font-medium">{t('pf_title')}</span>
-            {server && (
-              <span className="text-xs text-muted-foreground">
-                {server.name} ({server.host})
-              </span>
-            )}
-          </>
-        )}
-        <div className="flex-1" />
-        <Button onClick={fetchForwards} disabled={loading} size="sm" variant="outline" className="gap-1 h-7 text-xs">
-          <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin')} />
-          {t('pf_refresh')}
-        </Button>
-        <Button
-          onClick={handleStopAll}
-          disabled={stoppingAll || forwards.length === 0}
-          size="sm"
-          variant="outline"
-          className="gap-1 h-7 text-xs text-destructive hover:text-destructive"
-        >
-          {stoppingAll ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-          {t('pf_stop_all')}
-        </Button>
-      </div>
+      {/* 独立模式下的 Toolbar */}
+      {!hideToolbarHeader && (
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-border/60 bg-card">
+          <ArrowLeftRight className="h-4 w-4 text-primary" />
+          <span className="text-sm font-medium">{t('pf_title')}</span>
+          {server && (
+            <span className="text-xs text-muted-foreground">
+              {server.name} ({server.host})
+            </span>
+          )}
+          <div className="flex-1" />
+          <Button onClick={fetchForwards} disabled={loading} size="sm" variant="outline" className="gap-1 h-7 text-xs">
+            <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin')} />
+            {t('pf_refresh')}
+          </Button>
+          <Button
+            onClick={handleStopAll}
+            disabled={stoppingAll || forwards.length === 0}
+            size="sm"
+            variant="outline"
+            className="gap-1 h-7 text-xs text-destructive hover:text-destructive"
+          >
+            {stoppingAll ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+            {t('pf_stop_all')}
+          </Button>
+        </div>
+      )}
 
       <div className="flex-1 overflow-auto p-3 space-y-3">
         {/* 面板定位说明 */}
@@ -165,8 +163,30 @@ export function PortForwardModule({ serverId, hideToolbarHeader }: PortForwardMo
         {/* 转发列表 */}
         <div className="rounded-md border border-border/60 bg-card overflow-hidden">
           <div className="px-3 py-2 border-b border-border/60 bg-muted/30 flex items-center justify-between">
-            <span className="text-xs font-medium">{t('pf_list_title')}</span>
-            <span className="text-xs text-muted-foreground tabular-nums">{forwards.length}</span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium">{t('pf_list_title')}</span>
+              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-primary/10 text-primary font-semibold tabular-nums">
+                {forwards.length}
+              </span>
+            </div>
+            {hideToolbarHeader && (
+              <div className="flex items-center gap-1.5">
+                <Button onClick={fetchForwards} disabled={loading} size="sm" variant="ghost" className="gap-1 h-6 px-2 text-xs">
+                  <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin')} />
+                  {t('pf_refresh')}
+                </Button>
+                <Button
+                  onClick={handleStopAll}
+                  disabled={stoppingAll || forwards.length === 0}
+                  size="sm"
+                  variant="ghost"
+                  className="gap-1 h-6 px-2 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
+                >
+                  {stoppingAll ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                  {t('pf_stop_all')}
+                </Button>
+              </div>
+            )}
           </div>
           {forwards.length === 0 ? (
             <div className="px-3 py-8 text-center text-xs text-muted-foreground">

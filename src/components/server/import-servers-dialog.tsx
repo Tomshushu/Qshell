@@ -54,61 +54,9 @@ export function ImportServersDialog({ open, onClose }: ImportServersDialogProps)
   const refreshServers = async () => {
     try {
       const dbServers = await sshService.listServers()
-      // SQLite 行使用 snake_case 列名，与前端 Server 模型的 camelCase 不同，
-      // 这里按「两种命名都读」的白名单重建对象。
-      interface DbServerRow {
-        id: string
-        name: string
-        host: string
-        port: number
-        username: string
-        password?: string
-        favorite?: boolean
-        status?: string
-        protocol?: string
-        notes?: string
-        tags?: unknown
-        protocols?: unknown
-        auth_type?: string
-        authType?: string
-        private_key_path?: string
-        privateKeyPath?: string
-        connection_timeout?: number
-        connectionTimeout?: number
-        os_type?: string
-        osType?: string
-        os_info?: string
-        osInfo?: string
-        target_type?: string
-        targetType?: string
-        rdp_port?: number
-        rdpPort?: number
-        bmc_port?: number
-        bmcPort?: number
-        last_accessed_at?: number
-        lastAccessedAt?: number
-        created_at?: number
-        createdAt?: number
-        updated_at?: number
-        updatedAt?: number
-        group_id?: string | null
-        groupId?: string | null
-      }
-      const rows = dbServers as unknown as DbServerRow[]
-      setServers(rows.map((s: DbServerRow) => ({
-        id: s.id, name: s.name, host: s.host, port: s.port, username: s.username,
-        authType: s.auth_type || s.authType || 'password', password: s.password,
-        privateKeyPath: s.private_key_path || s.privateKeyPath || '',
-        tags: Array.isArray(s.tags) ? s.tags : typeof s.tags === 'string' && s.tags ? JSON.parse(s.tags) : [],
-        notes: s.notes || '', connectionTimeout: s.connection_timeout || s.connectionTimeout || 30,
-        favorite: !!s.favorite, status: s.status || 'unknown', osType: s.os_type || s.osType || '', osInfo: s.os_info || s.osInfo || '',
-        targetType: s.target_type || s.targetType || 'linux', protocol: s.protocol || 'ssh',
-        protocols: Array.isArray(s.protocols) ? s.protocols : typeof s.protocols === 'string' && s.protocols ? JSON.parse(s.protocols) : ['ssh'],
-        rdpPort: s.rdp_port || s.rdpPort || 3389, bmcPort: s.bmc_port || s.bmcPort || 443,
-        lastAccessedAt: s.last_accessed_at || s.lastAccessedAt, createdAt: s.created_at || s.createdAt, updatedAt: s.updated_at || s.updatedAt,
-        // 所属分组 ID：同样是逐字段重建的白名单，漏掉会让导入产生的分组归属在界面上丢失
-        groupId: s.group_id || s.groupId || null,
-      })))
+      // sshService.listServers 已由适配层完成 snake_case→camelCase 归一化与 tags/protocols 解析，
+      // 此处直接使用，避免白名单重建丢字段
+      setServers(dbServers)
     } catch (e) { console.error('Failed to refresh servers:', e) }
     try { if (backend?.sshKeys) setKeys(await backend.sshKeys.list()) } catch (e) { console.error('Failed to refresh keys:', e) }
   }

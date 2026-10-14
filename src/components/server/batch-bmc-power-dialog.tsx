@@ -177,7 +177,7 @@ export function BatchBmcPowerDialog({ open, servers, onClose }: BatchBmcPowerDia
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 pt-1">
+            <div className="flex flex-wrap justify-end gap-2 pt-1">
               <Button variant="outline" size="sm" disabled={executing} onClick={handleClose}>
                 {t('cd_default_cancel')}
               </Button>

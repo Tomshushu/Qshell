@@ -414,28 +414,31 @@ export function ProcessesModule({ serverId, onNavigate }: ProcessesModuleProps) 
 
   return (
     <div className="flex flex-col h-full bg-transparent">
-      {/* Toolbar */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-border/60 bg-card flex-wrap">
+      {/* 统一规范工具栏 */}
+      <div className="flex items-center gap-2.5 px-4 h-11 border-b border-border/50 bg-muted/20 shrink-0 flex-wrap">
         <Button
+          variant="ghost"
           onClick={() => refreshProcessSnapshot(serverId)}
           disabled={loading}
           size="sm"
           className="gap-1 h-7 text-xs"
         >
-          <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
           {t('proc_refresh')}
         </Button>
 
-        <label className="flex items-center gap-1.5 text-xs text-muted-foreground ml-1">
+        <div className="h-3.5 w-[1px] bg-border/60" />
+
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <Switch checked={autoRefresh} onCheckedChange={setAutoRefresh} />
-          {t('proc_auto_refresh')}
+          <span className="text-[11px]">{t('proc_auto_refresh')}</span>
         </label>
 
         <select
           value={intervalMs}
           disabled={!autoRefresh}
           onChange={(e) => setIntervalMs(Number(e.target.value))}
-          className="h-7 rounded-md border border-border/60 bg-card text-xs px-1 disabled:opacity-50"
+          className="h-7 rounded-md border border-border/60 bg-background/80 text-[11px] px-1.5 disabled:opacity-50"
           title={t('proc_refresh_interval')}
         >
           {INTERVAL_OPTIONS.map((ms) => (
@@ -445,10 +448,10 @@ export function ProcessesModule({ serverId, onNavigate }: ProcessesModuleProps) 
           ))}
         </select>
 
-        <div className="flex items-center rounded-md border border-border/60 overflow-hidden">
+        <div className="flex items-center rounded-lg border border-border/50 bg-muted/40 p-0.5 text-xs">
           <button
-            className={`flex items-center gap-1 px-2 h-7 text-xs ${
-              viewMode === 'list' ? 'bg-accent text-foreground' : 'text-muted-foreground'
+            className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium transition-all ${
+              viewMode === 'list' ? 'bg-background text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground'
             }`}
             onClick={() => setViewMode('list')}
           >
@@ -456,8 +459,8 @@ export function ProcessesModule({ serverId, onNavigate }: ProcessesModuleProps) 
             {t('proc_view_list')}
           </button>
           <button
-            className={`flex items-center gap-1 px-2 h-7 text-xs border-l border-border/60 ${
-              viewMode === 'tree' ? 'bg-accent text-foreground' : 'text-muted-foreground'
+            className={`flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium transition-all ${
+              viewMode === 'tree' ? 'bg-background text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground'
             }`}
             onClick={() => setViewMode('tree')}
           >
@@ -468,30 +471,30 @@ export function ProcessesModule({ serverId, onNavigate }: ProcessesModuleProps) 
 
         <div className="flex-1" />
 
-        <div className="relative w-56">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
+        <div className="relative w-52">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
             placeholder={t('proc_search_placeholder')}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="h-7 pl-7 text-xs"
+            className="h-7 pl-8 text-xs bg-background/80"
           />
         </div>
       </div>
 
-      {/* Summary */}
-      <div className="flex items-center gap-4 px-3 py-1.5 border-b bg-muted/30 text-xs text-muted-foreground">
+      {/* Summary 统计栏 */}
+      <div className="flex items-center gap-4 px-4 py-1.5 border-b border-border/40 bg-muted/15 text-[11px] text-muted-foreground">
         <span>
-          {t('proc_summary_total')}: <b className="text-foreground">{summary.total}</b>
+          {t('proc_summary_total')}: <b className="text-foreground font-mono">{summary.total}</b>
         </span>
-        <span className="text-green-500">
-          {t('proc_summary_running')}: <b>{summary.running}</b>
+        <span className="text-emerald-500">
+          {t('proc_summary_running')}: <b className="font-mono">{summary.running}</b>
         </span>
         <span>
-          {t('proc_summary_sleeping')}: <b className="text-foreground">{summary.sleeping}</b>
+          {t('proc_summary_sleeping')}: <b className="text-foreground font-mono">{summary.sleeping}</b>
         </span>
-        <span className="text-red-500">
-          {t('proc_summary_zombie')}: <b>{summary.zombie}</b>
+        <span className={summary.zombie > 0 ? "text-rose-500 font-semibold" : "text-muted-foreground"}>
+          {t('proc_summary_zombie')}: <b className="font-mono">{summary.zombie}</b>
         </span>
       </div>
 
@@ -518,8 +521,9 @@ export function ProcessesModule({ serverId, onNavigate }: ProcessesModuleProps) 
             <p className="text-sm">{t('proc_empty')}</p>
           </div>
         ) : (
-          <div className="m-2 rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden">
-            <table className="w-full text-xs">
+          <div className="p-3">
+            <div className="rounded-xl border border-border/70 bg-card shadow-xs overflow-hidden">
+              <table className="w-full text-xs">
               <thead className="workspace-table-head">
                 <tr className="text-left text-muted-foreground">
                   <th className="px-3 py-2 font-medium cursor-pointer" onClick={() => toggleSort('pid')}>
@@ -560,6 +564,7 @@ export function ProcessesModule({ serverId, onNavigate }: ProcessesModuleProps) 
               </tbody>
             </table>
           </div>
+        </div>
         )}
       </div>
 

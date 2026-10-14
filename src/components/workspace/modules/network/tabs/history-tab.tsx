@@ -128,16 +128,6 @@ export function HistoryTab({
               {t('net_hist_compare_btn')}
             </Button>
           )}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onRefresh}
-            disabled={loading}
-            className="h-7 text-xs gap-1"
-          >
-            <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
-            {t('net_refresh')}
-          </Button>
         </div>
       </div>
 

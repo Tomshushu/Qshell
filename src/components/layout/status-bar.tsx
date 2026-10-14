@@ -88,12 +88,13 @@ export function StatusBar() {
         const stats = await sshService.getSerialStats(sessionId)
         if (disposed) return
         const now = Date.now()
-        const sameSession = previous?.sessionId === sessionId
-        const seconds = sameSession ? Math.max((now - previous.at) / 1000, 0.001) : 1
+        const prev = previous
+        const sameSession = prev !== null && prev.sessionId === sessionId
+        const seconds = sameSession ? Math.max((now - prev.at) / 1000, 0.001) : 1
         setSerialStats({
           ...stats,
-          rxRate: sameSession ? Math.max(0, (stats.rxBytes - previous.rxBytes) / seconds) : 0,
-          txRate: sameSession ? Math.max(0, (stats.txBytes - previous.txBytes) / seconds) : 0,
+          rxRate: sameSession ? Math.max(0, (stats.rxBytes - prev.rxBytes) / seconds) : 0,
+          txRate: sameSession ? Math.max(0, (stats.txBytes - prev.txBytes) / seconds) : 0,
         })
         previous = { sessionId, ...stats, at: now }
       } catch {

@@ -1,9 +1,10 @@
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import type { ConflictAction, PendingConflict } from "./sftp-types";
+import type { ConflictAction } from "./sftp-types";
 
 export interface SftpConflictDialogProps {
-  pendingConflict: PendingConflict | null;
+  /** 仅需 name/location 用于展示；解析动作由 onResolve 回调负责 */
+  pendingConflict: { name: string; location: string } | null;
   conflictApplyToAll: boolean;
   onApplyToAllChange: (apply: boolean) => void;
   onResolve: (action: ConflictAction) => void;

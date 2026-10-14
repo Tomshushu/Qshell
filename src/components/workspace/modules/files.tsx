@@ -11,6 +11,9 @@ import {
   RefreshCw,
   Search,
   Eye,
+  Pencil,
+  Save,
+  Shield,
   ArrowUp,
   ArrowDown,
   ArrowUpDown,
@@ -35,6 +38,7 @@ import {
 } from './local-file-picker-utils'
 import { UniversalFileViewer } from '@/components/ui/universal-file-viewer'
 import { ResizablePreviewDialog } from '@/components/ui/resizable-preview-dialog'
+import { CodeEditor } from '@/components/ui/code-editor'
 import { ArchiveFileIcon } from '@/components/ui/file-icons'
 import { sshService } from '@/services/ssh-service'
 import { FilePermissionsModal } from './file-permissions-modal'
@@ -50,9 +54,19 @@ import { useAppStore } from '@/store'
 import { extractBaseServerId } from '@/services/ssh-connection-state'
 import type { FilesModuleProps, TreeNode, SortField, SortDirection } from './files/types'
 import { isAbsolutePath, resolveRelativePath } from '@/utils/terminal-path-utils'
+import {
+  decodeTextFile,
+  decodeTextWithEncoding,
+  encodeTextFile,
+  normalizeEol,
+  bytesToBase64,
+  base64ToBytes,
+  SUPPORTED_ENCODINGS,
+  eolLabel,
+  type TextEol,
+} from '@/utils/text-file-codec'
 import { PermissionBadge } from './files/permission-badge'
 import { FilePropertiesDialog } from './files/file-properties-dialog'
-import { FileEditorView } from './files/file-editor-view'
 import { FileContextMenu } from './files/file-context-menu'
 import { FileDirectoryTree } from './files/file-directory-tree'
 import { FileToolbar } from './files/file-toolbar'
@@ -174,6 +188,7 @@ export function FilesModule({
   isConnected = true,
   isActive = true,
   getTerminalCwd,
+  subscribeTerminalCwd,
 }: FilesModuleProps) {
   const { t } = useTranslation()
   const { toast } = useToast()
@@ -192,9 +207,24 @@ export function FilesModule({
   const [searchQuery, setSearchQuery] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [editingFile, setEditingFile] = useState<string | null>(null)
   const [editContent, setEditContent] = useState('')
   const [editLoading, setEditLoading] = useState(false)
+  // 预览对话框的查看模式：编辑在预览弹框内进行（与 SFTP 面板一致），不再有独立编辑器视图
+  const [viewerMode, setViewerMode] = useState<'preview' | 'edit'>('preview')
+  // 当前预览文件是否可编辑（文本类且不超大小上限；实际为二进制内容时自动降级为不可编辑）
+  const [viewerEditable, setViewerEditable] = useState(false)
+  // 打开文件的原始编码/换行符/BOM：保存时按原样回写（参照 Notepad++）
+  // state 供编辑器工具栏展示，refs 供异步保存逻辑读取最新值
+  const [editFileEncoding, setEditFileEncoding] = useState('utf-8')
+  const [editFileEol, setEditFileEol] = useState<TextEol>(null)
+  const [editFileHasBom, setEditFileHasBom] = useState(false)
+  const editFileEncodingRef = useRef('utf-8')
+  const editFileEolRef = useRef<TextEol>(null)
+  const editFileHasBomRef = useRef(false)
+  // 编辑器内容是否被用户修改过：切换编码重读磁盘前据此提示，避免未保存内容静默丢失
+  const editDirtyRef = useRef(false)
+  // 待确认的编码切换（dirty 时先弹确认框）
+  const [pendingEncodingChange, setPendingEncodingChange] = useState<string | null>(null)
   const [newItemName, setNewItemName] = useState('')
   const [showNewItem, setShowNewItem] = useState(false)
   const [newItemType, setNewItemType] = useState<'file' | 'dir'>('file')
@@ -225,12 +255,14 @@ export function FilesModule({
   // 保活初始化标记：确保根目录加载只在首次连接建立时执行一次，
   // 避免保活模式下切换模块回归时重复发起 SFTP 请求
   const filesInitializedRef = useRef(false)
-  // 终端目录直达：每次打开（激活）文件模块时，定位到终端当前工作目录。
-  // - lastAppliedTerminalDirRef：上次已直达的终端目录。仅在终端目录发生变化时
-  //   才重新直达：终端没动时保留用户在文件模块内的手动导航，不被拽回；
-  //   终端 cd 到新目录后再次打开文件模块，则跟随过去
+  // 终端目录跟随：面板激活期间实时探测终端 cwd，变化即跟随。
+  // - lastRawTerminalCwdRef：上次探测到的原始 cwd（规范化后）。用于快速通道——
+  //   原始值未变则跳过 statInfo 校验，避免轮询每轮都打后端
+  // - lastAppliedTerminalDirRef：上次已直达的（经校验/符号链接解析后的）目录。
+  //   终端目录没变时保留用户在文件模块内的手动导航，不被轮询拽回
   // - filesInitDone：init 异步流程（根目录树 + home 解析）完成标记，
-  //   激活直达需等 init 完成后再导航，否则会被 init 的 setCurrentPath(home) 覆盖
+  //   直达需等 init 完成后再导航，否则会被 init 的 setCurrentPath(home) 覆盖
+  const lastRawTerminalCwdRef = useRef<string | null>(null)
   const lastAppliedTerminalDirRef = useRef<string | null>(null)
   const [filesInitDone, setFilesInitDone] = useState(false)
   // 同步 currentPath 最新值，供异步直达逻辑读取，避免闭包过期
@@ -240,8 +272,14 @@ export function FilesModule({
   // 同时保证回调内总能拿到最新值
   const getTerminalCwdPropRef = useRef(getTerminalCwd)
   useEffect(() => { getTerminalCwdPropRef.current = getTerminalCwd }, [getTerminalCwd])
+  const subscribeTerminalCwdRef = useRef(subscribeTerminalCwd)
+  useEffect(() => { subscribeTerminalCwdRef.current = subscribeTerminalCwd }, [subscribeTerminalCwd])
   // E4: 标记重命名是否已通过 Enter 提交,避免卸载 input 触发 onBlur 重复提交/取消
   const renameCommittedRef = useRef(false)
+  // 「再次点击重命名」：点击前已选中该文件时，标记待重命名，onClick 延时触发
+  const pendingRenameRef = useRef<string | null>(null)
+  // 双击标志：用于消歧「再次点击重命名」与「双击进入目录/打开文件」
+  const rowDblClickedRef = useRef(false)
   // 同步追踪 treeRoot 最新值,供 loadNodeChildren 在 async 上下文中读取,
   // 避免 React 18 并发模式下 setState updater 非同步执行导致的 canLoad 误判。
   const treeRootRef = useRef(treeRoot)
@@ -266,12 +304,11 @@ export function FilesModule({
   const [propertiesFile, setPropertiesFile] = useState<FileEntry | null>(null)
   const [statInfo, setStatInfo] = useState<FileStatInfo | null>(null)
   const [statLoading, setStatLoading] = useState(false)
-  // 文件预览（图片/PDF/视频/音频/DOCX/表格/压缩包）
+  // 文件预览（文本编辑 / 图片/PDF/视频/音频/DOCX/表格/压缩包，编辑在弹框内进行）
   const [previewFile, setPreviewFile] = useState<FileEntry | null>(null)
   const [previewRawBytes, setPreviewRawBytes] = useState<Uint8Array | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
-  const [editMode, setEditMode] = useState<'edit' | 'preview'>('preview')
   // 目录树宽度（可调整）
   const [treeWidth, setTreeWidth] = useState(240)
   const resizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
@@ -425,15 +462,17 @@ export function FilesModule({
     void fetchFiles(targetPath)
   }, [fetchFiles, resetListScroll])
 
-  // 解析终端当前工作目录，校验通过后返回可导航的绝对路径；失败返回 null（回退 home）。
+  // 读取终端上报的当前工作目录并做路径规范化（不含存在性校验）。
   // 解析链路（terminal.tsx 侧）：OSC 7 > Shell 标题(OSC 0/2)路径提取 > cd 命令推导 > home。
-  const resolveTerminalDir = useCallback(async (): Promise<string | null> => {
+  // 与 resolveTerminalDir 拆分：本函数开销小，供实时跟随轮询做「目录是否变化」快速判断，
+  // 避免每次轮询都发起 statInfo。
+  const getTerminalCwdCandidate = useCallback(async (): Promise<string | null> => {
     let candidate: string | null = null
     try {
       const asyncCwd = await getTerminalCwdPropRef.current?.()
       if (typeof asyncCwd === 'string' && asyncCwd.trim()) candidate = asyncCwd.trim()
     } catch {
-      // 探测异常静默回退 home
+      // 探测异常静默回退
     }
     if (!candidate || !isAbsolutePath(candidate)) return null
 
@@ -446,6 +485,13 @@ export function FilesModule({
     if (candidate.length > 1 && candidate.endsWith('/')) {
       candidate = candidate.replace(/\/+$/, '')
     }
+    return candidate
+  }, [isWindows])
+
+  // 完整解析终端目录：候选路径经 statInfo 校验（含符号链接解析），失败返回 null（回退 home）。
+  const resolveTerminalDir = useCallback(async (): Promise<string | null> => {
+    const candidate = await getTerminalCwdCandidate()
+    if (!candidate) return null
 
     // 校验目录真实存在且为目录，避免把终端标题解析误差导航过去；
     // 符号链接目录解析为绝对目标后再用（cd 进入软链目录的常见场景）
@@ -466,7 +512,7 @@ export function FilesModule({
       // stat 失败（路径不存在/无权限）静默回退 home
     }
     return null
-  }, [serverId, isWindows])
+  }, [serverId, getTerminalCwdCandidate])
 
   const loadNodeChildren = useCallback(async (nodePath: string, force = false) => {
     if (treeLoadingRef.current.has(nodePath) && !force) return
@@ -538,7 +584,8 @@ export function FilesModule({
     if (!isConnected || isTelnet || isNetwork) return
     if (filesInitializedRef.current) return
     filesInitializedRef.current = true
-    // 新会话重置终端目录直达标记：重连后允许重新直达新 shell 的目录
+    // 新会话重置终端目录跟随标记：重连后允许重新跟随新 shell 的目录
+    lastRawTerminalCwdRef.current = null
     lastAppliedTerminalDirRef.current = null
     setFilesInitDone(false)
     let cancelled = false
@@ -634,31 +681,61 @@ export function FilesModule({
     }
   }, [isConnected, serverId, loadNodeChildren, isTelnet, isNetwork, t])
 
-  // 打开文件模块时直达终端当前工作目录（每次激活都求值，跟随终端目录变化）：
-  // 1. 触发时机为"模块被激活"（用户点击文件 tab/弹窗打开），而非连接建立时——
-  //    此刻终端已运行良久，OSC 7/标题追踪的 cwd 一定就绪；连接时立即解析大概率
-  //    只能拿到 home 兜底值；
+  // 终端目录跟随（与成熟产品一致）：OSC 7 / 标题 / cd 拦截触发即时推送跟随，
+  // 800ms 轮询作为兜底（覆盖无 OSC 7 的 shell、漏报等场景）。
+  // 1. 触发时机为"面板激活"而非连接建立时——此刻终端已运行良久，OSC 7/标题追踪的
+  //    cwd 一定就绪；连接时立即解析大概率只能拿到 home 兜底值；
   // 2. filesInitDone 守卫：init 未完成时导航会被 init 的 setCurrentPath(home) 覆盖，
   //    等 init 置位后本 effect 会因依赖变化自动重跑，补上直达；
-  // 3. lastAppliedTerminalDirRef 守卫：终端目录没变时保留用户的手动导航，
-  //    cd 到新目录后再打开文件模块则跟随过去；重连时 init 重置该标记。
+  // 3. lastRawTerminalCwdRef / lastAppliedTerminalDirRef 双守卫：
+  //    - 终端目录没变时保留用户的手动导航，不被拽回；
+  //    - 快速通道只在原始 cwd 变化时才发起 statInfo 校验，避免每轮空转打后端；
+  // 4. 重连时 init 重置两个标记，允许重新直达。
   useEffect(() => {
     if (!isActive || !isConnected || isTelnet || isNetwork) return
     if (!filesInitDone) return
-    let cancelled = false
-    void (async () => {
-      const dir = await resolveTerminalDir()
-      if (cancelled) return
-      // 终端目录未变化：保留用户在文件模块内的手动导航，不重复直达
-      if (!dir || dir === lastAppliedTerminalDirRef.current) return
-      lastAppliedTerminalDirRef.current = dir
-      // 校验失败（null）时保持 init 设置的 home，属于预期的静默回退
-      if (dir !== currentPathRef.current) {
-        navigateTo(dir)
+    let disposed = false
+    let inFlight = false
+
+    const followTerminalDir = async () => {
+      if (disposed || inFlight) return
+      inFlight = true
+      try {
+        // 快速通道：先看原始 cwd 是否变化，未变化则不做任何校验/导航
+        const candidate = await getTerminalCwdCandidate()
+        if (disposed || !candidate) return
+        if (candidate === lastRawTerminalCwdRef.current) return
+        lastRawTerminalCwdRef.current = candidate
+
+        const dir = await resolveTerminalDir()
+        if (disposed || !dir) return
+        // 终端目录未变化：保留用户在文件模块内的手动导航，不重复直达
+        if (dir === lastAppliedTerminalDirRef.current) return
+        lastAppliedTerminalDirRef.current = dir
+        // 校验失败（null）时保持 init 设置的 home，属于预期的静默回退
+        if (dir !== currentPathRef.current) {
+          navigateTo(dir)
+        }
+      } catch {
+        // 探测异常静默，等待下一轮
+      } finally {
+        inFlight = false
       }
-    })()
-    return () => { cancelled = true }
-  }, [isActive, isConnected, isTelnet, isNetwork, filesInitDone, resolveTerminalDir, navigateTo])
+    }
+
+    void followTerminalDir() // 打开时立即直达一次
+    // 主通道：订阅终端 cwd 变化推送，即时跟随
+    const unsubscribe = subscribeTerminalCwdRef.current?.(() => {
+      void followTerminalDir()
+    })
+    // 兜底：800ms 轮询（覆盖推送漏报的 shell）
+    const interval = window.setInterval(followTerminalDir, 800)
+    return () => {
+      disposed = true
+      unsubscribe?.()
+      window.clearInterval(interval)
+    }
+  }, [isActive, isConnected, isTelnet, isNetwork, filesInitDone, getTerminalCwdCandidate, resolveTerminalDir, navigateTo])
 
   // 当 currentPath 变化时加载文件列表（跳过已由 navigateTo 同步发起的请求）
   useEffect(() => {
@@ -849,7 +926,8 @@ export function FilesModule({
   const rowVirtualizer = useVirtualizer({
     count: sortedFiles.length,
     getScrollElement: () => scrollContainerRef.current,
-    estimateSize: () => 41,
+    // 紧凑行高初值（text-sm 20px + py-1×2 8px + 边框 1px ≈ 29px，动态测量会自动校正）
+    estimateSize: () => 30,
     overscan: 10,
   })
 
@@ -940,69 +1018,83 @@ export function FilesModule({
 
   const permissionBadge = (perm?: string) => <PermissionBadge perm={perm} />
 
-  const openEditor = async (file: FileEntry) => {
-    // B7: 符号链接的 size 字段并不可信(可能为 0 或指向目标大小),
-    // 且编辑符号链接会破坏链接关系,这里直接禁止编辑符号链接
-    if (file.permissions?.startsWith('l')) {
-      toastRef.current.warning('不支持编辑符号链接')
-      return
-    }
-    // F4: 二进制文件扩展名拦截,避免在编辑器中加载乱码
+  // 判断文件是否可在预览弹框内编辑：文本类扩展名且不超 2MB（二进制扩展名拦截，避免加载乱码）
+  const isEditableFile = (file: FileEntry): boolean => {
     const ext = file.name.split('.').pop()?.toLowerCase() || ''
-    if (BINARY_EXT_SET.has(ext) && !TEXT_EXT_SET.has(ext)) {
-      toastRef.current.warning('不支持编辑此类型文件')
-      return
-    }
-    if (file.size > 2 * 1024 * 1024) {
-      setError(`${t('fs_err_file_too_large')} (${formatSize(file.size)})`)
-      return
-    }
-    setEditingFile(file.path)
-    setEditMode(ext === 'md' || ext === 'markdown' || HTML_EXT_SET.has(ext) ? 'preview' : 'edit')
-    setEditLoading(true)
-    try {
-      const result = await sshService.readFile(serverId, file.path)
-      const text = result.stdout || ''
-      if (isBinaryContent(text)) {
-        setEditingFile(null)
-        toastRef.current.warning('检测到文件包含二进制内容，无法在文本编辑器中打开')
-        return
-      }
-      setEditContent(text)
-    } catch (err) {
-      setEditingFile(null)
-      setError(err instanceof Error ? err.message : t('fs_err_read'))
-    } finally {
-      setEditLoading(false)
-    }
+    if (BINARY_EXT_SET.has(ext) && !TEXT_EXT_SET.has(ext)) return false
+    return file.size <= 2 * 1024 * 1024
   }
 
-  // 文件预览：不论是文档、多媒体还是文本/日志文件，在预览模式下统一交由 UniversalFileViewer 进行专业浏览与搜索
-  const openPreview = async (file: FileEntry) => {
+  // 应用解码结果到编辑器状态（refs 供异步保存逻辑读取最新值）
+  const applyDecodedText = (text: string, encoding: string, eol: TextEol, hasBom: boolean) => {
+    editFileEncodingRef.current = encoding
+    editFileEolRef.current = eol
+    editFileHasBomRef.current = hasBom
+    setEditFileEncoding(encoding)
+    setEditFileEol(eol)
+    setEditFileHasBom(hasBom)
+    editDirtyRef.current = false
+    setEditContent(text)
+  }
+
+  // 统一的文件查看器：预览 + 编辑一体（与 SFTP 面板一致），编辑在弹框内进行。
+  // mode='edit' 直接进入编辑态（双击/F4/右键编辑）；'preview' 进入预览态（右键预览/大文件降级）。
+  const openViewer = async (file: FileEntry, mode: 'preview' | 'edit') => {
     const kind = getFileKind(file.name)
     if (kind === 'unsupported') {
       toastRef.current.warning(t('fs_preview_unsupported'))
       return
     }
-
     const maxSize = 100 * 1024 * 1024
     if (file.size > maxSize) {
       toastRef.current.warning(`${t('fs_preview_too_large')} (${t('fs_preview_download_hint')})`)
       return
     }
+    // B7: 符号链接的 size 字段并不可信(可能为 0 或指向目标大小),
+    // 且编辑符号链接会破坏链接关系,这里直接禁止编辑符号链接
+    let editable = isEditableFile(file)
+    if (file.permissions?.startsWith('l')) {
+      if (mode === 'edit') {
+        toastRef.current.warning('不支持编辑符号链接')
+        return
+      }
+      editable = false
+    }
+    if (mode === 'edit' && !editable) {
+      // 大文件/二进制扩展名：编辑降级为只读预览
+      toastRef.current.warning(
+        file.size > 2 * 1024 * 1024
+          ? `${t('fs_err_file_too_large')} (${formatSize(file.size)})`
+          : '不支持编辑此类型文件',
+      )
+      mode = 'preview'
+    }
     setPreviewFile(file)
     setPreviewLoading(true)
     setPreviewError(null)
     setPreviewRawBytes(null)
+    setViewerMode(mode)
+    setViewerEditable(false) // 待文本解码成功后再置位，避免二进制内容闪现编辑态
     try {
       const base64 = await sshService.readBinaryFile(serverId, file.path)
-      const binaryString = atob(base64)
-      const len = binaryString.length
-      const bytes = new Uint8Array(len)
-      for (let i = 0; i < len; i++) {
-        bytes[i] = binaryString.charCodeAt(i)
-      }
+      const bytes = base64ToBytes(base64)
       setPreviewRawBytes(bytes)
+      if (editable) {
+        // 解码 + 编码检测（自动检测不准时可在弹框内手动切换编码重新打开）
+        const decoded = decodeTextFile(bytes)
+        if (isBinaryContent(decoded.text)) {
+          // 文本扩展名但实际是二进制内容：降级为预览态
+          if (mode === 'edit') {
+            toastRef.current.warning('检测到文件包含二进制内容，仅支持预览')
+          }
+          setViewerEditable(false)
+          setViewerMode('preview')
+        } else {
+          applyDecodedText(decoded.text, decoded.encoding, decoded.eol, decoded.hasBom)
+          setViewerEditable(true)
+          setViewerMode(mode)
+        }
+      }
     } catch (e) {
       setPreviewError((e as Error).message || t('fs_preview_failed'))
     } finally {
@@ -1010,25 +1102,72 @@ export function FilesModule({
     }
   }
 
-  const handleSave = async () => {
-    if (!editingFile) return
+  // 文件预览：不论是文档、多媒体还是文本/日志文件，统一在预览弹框中浏览
+  const openPreview = (file: FileEntry) => {
+    void openViewer(file, 'preview')
+  }
+
+  // 文件编辑：与预览共用同一弹框，直接进入编辑态
+  const openEditor = (file: FileEntry) => {
+    void openViewer(file, 'edit')
+  }
+
+  // 手动切换编码重新打开（Notepad++ 式「以 XX 编码打开」）：自动检测不准时的兜底。
+  // dirty 时由确认框把关（pendingEncodingChange），此处直接执行重读
+  const reopenWithEncoding = async (encoding: string) => {
+    if (!previewFile) return
     setEditLoading(true)
     try {
-      const backupResult = await sshService.backupFile(serverId, editingFile)
+      const base64 = await sshService.readBinaryFile(serverId, previewFile.path)
+      const bytes = base64ToBytes(base64)
+      const decoded = decodeTextWithEncoding(bytes, encoding)
+      if (isBinaryContent(decoded.text)) {
+        toastRef.current.warning('该编码下文件包含二进制内容，请选择其他编码')
+        return
+      }
+      applyDecodedText(decoded.text, encoding, decoded.eol, decoded.hasBom)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('fs_err_read'))
+    } finally {
+      setEditLoading(false)
+    }
+  }
+
+  // 编辑器内容变更入口：除标记 dirty 外与 setEditContent 等价
+  const handleEditContentChange = (val: string) => {
+    editDirtyRef.current = true
+    setEditContent(val)
+  }
+
+  const handleSave = async () => {
+    if (!previewFile) return
+    setEditLoading(true)
+    try {
+      const backupResult = await sshService.backupFile(serverId, previewFile.path)
       if (backupResult.exitCode !== 0) {
         toastRef.current.error(`${t('fs_err_backup')}: ${backupResult.stderr || t('common_unknown_error')}`, 1500)
         return
       }
-      const result = await sshService.writeFile(serverId, editingFile, editContent)
+      // 按原编码/换行符/BOM 回写：UTF-8 无 BOM 直接写文本，其余走 ::base64:: 原始字节写回
+      const encoding = editFileEncodingRef.current
+      const normalized = normalizeEol(editContent, editFileEolRef.current)
+      let contentToWrite: string
+      if (encoding === 'utf-8' && !editFileHasBomRef.current) {
+        contentToWrite = normalized
+      } else {
+        const bytes = encodeTextFile(normalized, encoding, editFileHasBomRef.current)
+        contentToWrite = `::base64::${bytesToBase64(bytes)}`
+      }
+      const result = await sshService.writeFile(serverId, previewFile.path, contentToWrite)
       if (result.exitCode !== 0) {
         toastRef.current.error(`${t('fs_err_save')}: ${result.stderr || t('common_unknown_error')}`, 1500)
       } else {
         toastRef.current.success(t('fs_save_success'), 1500)
-        setEditingFile(null)
+        editDirtyRef.current = false
         // 刷新文件所在父目录（而非 currentPath）：树状视图编辑深层文件时，
-        // currentPath 可能与 editingFile 不在同一层级，备份文件需在父目录才能看到
-        const parentPath = editingFile.includes('/')
-          ? editingFile.substring(0, editingFile.lastIndexOf('/')) || '/'
+        // currentPath 可能与编辑文件不在同一层级，备份文件需在父目录才能看到
+        const parentPath = previewFile.path.includes('/')
+          ? previewFile.path.substring(0, previewFile.path.lastIndexOf('/')) || '/'
           : '/'
         fetchFiles(parentPath)
         if (expandedPaths.has(parentPath) && parentPath !== currentPath) {
@@ -1132,6 +1271,12 @@ export function FilesModule({
       setError(err instanceof Error ? err.message : t('fs_err_rename'))
     }
   }
+
+  // 进入内联重命名态（预填原文件名），供 F2 / 右键 / 再次点击共用
+  const startRename = useCallback((file: { path: string; name: string }) => {
+    setRenamingFile(file.path)
+    setRenameValue(file.name)
+  }, [])
 
   const handleDelete = useCallback((paths: string[]) => {
     if (paths.length === 0) return
@@ -1387,7 +1532,7 @@ export function FilesModule({
       if (!isActive) return
       // 在输入框中不触发快捷键
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
-      if (editingFile) return
+      if (previewFile) return
 
       if (e.key === 'F5') {
         e.preventDefault()
@@ -1398,8 +1543,7 @@ export function FilesModule({
         e.preventDefault()
         const file = files.find(f => f.path === selectedFiles[0])
         if (file) {
-          setRenamingFile(file.path)
-          setRenameValue(file.name)
+          startRename(file)
         }
       }
       if (e.key === 'Delete' && selectedFiles.length > 0) {
@@ -1409,7 +1553,7 @@ export function FilesModule({
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedFiles, files, editingFile, handleRefresh, handleDelete, isActive])
+  }, [selectedFiles, files, previewFile, handleRefresh, handleDelete, isActive])
 
   // D1: 扁平化目录树,限制最大显示节点数,避免深目录展开后 DOM 节点激增
   const flattenedTree = useMemo(
@@ -1418,29 +1562,6 @@ export function FilesModule({
   )
   const visibleTreeNodes = flattenedTree.slice(0, MAX_TREE_NODES)
   const hasMoreTreeNodes = flattenedTree.length > MAX_TREE_NODES
-
-  if (editingFile) {
-    return (
-      <FileEditorView
-        editingFile={editingFile}
-        editContent={editContent}
-        setEditContent={setEditContent}
-        editLoading={editLoading}
-        editMode={editMode}
-        setEditMode={setEditMode}
-        onBack={() => setEditingFile(null)}
-        onSave={handleSave}
-        onBackup={handleBackup}
-        onFormatJsonSuccess={(isMultiLine) => {
-          toastRef.current.success(isMultiLine ? 'JSON 已压缩（单行）' : 'JSON 已格式化')
-        }}
-        onFormatJsonError={(errMsg) => {
-          toastRef.current.error('JSON 语法错误，无法格式化: ' + errMsg)
-        }}
-        t={t}
-      />
-    )
-  }
 
   // 排序图标
   const SortIcon = ({ field }: { field: SortField }) => {
@@ -1469,7 +1590,7 @@ export function FilesModule({
   }
 
   return (
-    <div className="flex h-full relative p-2 gap-1 bg-transparent overflow-hidden">
+    <div className="flex h-full relative p-1 gap-1 bg-transparent overflow-hidden">
       {/* 拖拽上传遮罩 */}
       {dragOver && (
         <div className="absolute inset-0 z-50 bg-primary/10 border-2 border-dashed border-primary rounded-lg flex items-center justify-center pointer-events-none">
@@ -1589,7 +1710,7 @@ export function FilesModule({
               <thead className="workspace-table-head">
                 <tr className="text-left text-muted-foreground border-b">
                   <th
-                    className="px-3 py-2 font-medium cursor-pointer hover:bg-accent/50 transition-colors select-none"
+                    className="px-2 py-1 font-medium cursor-pointer hover:bg-accent/50 transition-colors select-none"
                     onClick={() => toggleSort('name')}
                   >
                     <div className="flex items-center gap-1.5">
@@ -1598,7 +1719,7 @@ export function FilesModule({
                     </div>
                   </th>
                   <th
-                    className="px-3 py-2 font-medium cursor-pointer hover:bg-accent/50 transition-colors select-none w-24"
+                    className="px-2 py-1 font-medium cursor-pointer hover:bg-accent/50 transition-colors select-none w-24"
                     onClick={() => toggleSort('size')}
                   >
                     <div className="flex items-center gap-1.5">
@@ -1607,7 +1728,7 @@ export function FilesModule({
                     </div>
                   </th>
                   <th
-                    className="px-3 py-2 font-medium cursor-pointer hover:bg-accent/50 transition-colors select-none w-40"
+                    className="px-2 py-1 font-medium cursor-pointer hover:bg-accent/50 transition-colors select-none w-40"
                     onClick={() => toggleSort('modifiedTime')}
                   >
                     <div className="flex items-center gap-1.5">
@@ -1615,7 +1736,7 @@ export function FilesModule({
                       <SortIcon field="modifiedTime" />
                     </div>
                   </th>
-                  <th className="px-3 py-2 font-medium select-none w-32">
+                  <th className="px-2 py-1 font-medium select-none w-32">
                     <div className="flex items-center gap-1.5">
                       {t('fs_th_perm')}
                     </div>
@@ -1641,8 +1762,14 @@ export function FilesModule({
                         selectedFiles.includes(file.path) && 'is-selected'
                       )}
                       onMouseDown={(e) => {
+                        // 每次交互开始时清除双击标志，避免上次双击遗留的 true 误杀本次重命名
+                        if (e.button === 0) rowDblClickedRef.current = false
+                        // 内联重命名进行中：点击当前行交由输入框处理
+                        if (renamingFile === file.path) return
                         // 只响应左键，避免右键也触发选择逻辑（右键由 onContextMenu 处理）
                         if (e.button !== 0) return
+                        // 记录点击前是否已选中：用于「再次点击重命名」（仅点击前已选中时触发）
+                        const wasSelected = selectedFiles.includes(file.path)
                         // D4: 移除 flushSync,改为普通 setState,避免阻塞主线程
                         if (e.ctrlKey || e.metaKey) {
                           // Ctrl/Cmd+click: 切换选中状态
@@ -1654,8 +1781,28 @@ export function FilesModule({
                         } else {
                           setSelectedFiles([file.path])
                         }
+                        // 点击前已选中且无修饰键 → 标记待重命名；由 onClick 延时触发，避让双击进入目录/打开文件
+                        if (!e.ctrlKey && !e.metaKey && !e.shiftKey && wasSelected) {
+                          pendingRenameRef.current = file.path
+                        }
+                      }}
+                      onClick={() => {
+                        // 内联重命名中：忽略当前行点击，避免重复触发
+                        if (renamingFile === file.path) return
+                        const pending = pendingRenameRef.current
+                        pendingRenameRef.current = null
+                        if (!pending || pending !== file.path) return
+                        // 延时消歧：双击会在 click 后触发 onDoubleClick（已置 rowDblClickedRef），
+                        // 500ms（系统双击判定窗口）内发生双击则不重命名，交由双击进入目录/打开文件
+                        window.setTimeout(() => {
+                          if (rowDblClickedRef.current) return
+                          startRename(file)
+                        }, 500)
                       }}
                       onDoubleClick={() => {
+                        // 标记为双击，抑制「再次点击重命名」的延时触发
+                        rowDblClickedRef.current = true
+                        pendingRenameRef.current = null
                         if (file.isDirectory) {
                           navigateTo(file.path)
                         } else {
@@ -1685,7 +1832,7 @@ export function FilesModule({
                         setCtxMenu({ x: e.clientX, y: e.clientY, file })
                       }}
                     >
-                      <td className="px-3 py-2">
+                      <td className="px-2 py-1">
                         {renamingFile === file.path ? (
                           <Input
                             ref={(el) => {
@@ -1738,11 +1885,11 @@ export function FilesModule({
                           </div>
                         )}
                       </td>
-                      <td className="px-3 py-2 text-muted-foreground tabular-nums">
+                      <td className="px-2 py-1 text-muted-foreground tabular-nums">
                         {file.isDirectory ? '-' : formatSize(file.size)}
                       </td>
-                      <td className="px-3 py-2 text-muted-foreground">{file.modifiedTime}</td>
-                      <td className="px-3 py-2">{permissionBadge(file.permissions)}</td>
+                      <td className="px-2 py-1 text-muted-foreground">{file.modifiedTime}</td>
+                      <td className="px-2 py-1">{permissionBadge(file.permissions)}</td>
                     </tr>
                   )
                 })}
@@ -1757,23 +1904,6 @@ export function FilesModule({
           )}
           {/* 框选矩形（client 坐标 fixed 定位，不拦截事件） */}
           <MarqueeRect marquee={fileMarquee} />
-        </div>
-
-        {/* 状态栏 */}
-        <div className="flex items-center gap-3 px-3 py-1.5 border-t bg-card text-xs text-muted-foreground">
-          {/* D3: 切换目录时保留旧数据,在状态栏显示 loading 指示器 */}
-          {loading && files.length > 0 && (
-            <Loader2 className="h-3 w-3 animate-spin text-primary" />
-          )}
-          <span>{t('fs_items').replace('{n}', String(sortedFiles.length))}</span>
-          {selectedFiles.length > 0 && (
-            <>
-              <span className="text-muted-foreground/40">|</span>
-              <span>{t('fs_selected_items').replace('{n}', String(selectedFiles.length))}</span>
-            </>
-          )}
-          <div className="flex-1" />
-          <span className="text-muted-foreground/60">{t('fs_shortcuts_hint')}</span>
         </div>
       </div>
 
@@ -1834,7 +1964,23 @@ export function FilesModule({
         onCancel={() => setPendingDelete(null)}
       />
 
-      {/* 文件预览可调整大小对话框 */}
+      {/* 切换编码确认对话框（dirty 时）：重读磁盘会丢弃未保存的修改 */}
+      <ConfirmDialog
+        open={pendingEncodingChange !== null}
+        title="切换编码"
+        description="当前文件有未保存的修改。切换编码将从磁盘重新读取文件，未保存的内容将丢失。是否继续？"
+        confirmLabel="重新读取"
+        cancelLabel="取消"
+        variant="destructive"
+        onConfirm={() => {
+          const enc = pendingEncodingChange
+          setPendingEncodingChange(null)
+          if (enc) void reopenWithEncoding(enc)
+        }}
+        onCancel={() => setPendingEncodingChange(null)}
+      />
+
+      {/* 文件预览可调整大小对话框（预览 + 编辑一体，与 SFTP 面板一致） */}
       <ResizablePreviewDialog
         open={!!previewFile}
         onOpenChange={(open) => {
@@ -1842,34 +1988,153 @@ export function FilesModule({
             setPreviewFile(null)
             setPreviewRawBytes(null)
             setPreviewError(null)
+            setViewerMode('preview')
+            setViewerEditable(false)
+            editDirtyRef.current = false
           }
         }}
         title={previewFile?.name || ''}
         fileSize={previewFile?.size}
         icon={<Eye className="h-4 w-4 text-primary shrink-0" />}
-        extraHeaderActions={previewFile && previewFile.name.toLowerCase().endsWith('.json') && previewRawBytes ? (
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 px-2 text-xs"
-            onClick={() => {
-              try {
-                const text = new TextDecoder('utf-8').decode(previewRawBytes)
-                const parsed = JSON.parse(text)
-                const isMultiLine = text.includes('\n')
-                const formatted = isMultiLine ? JSON.stringify(parsed) : JSON.stringify(parsed, null, 2)
-                setPreviewRawBytes(new TextEncoder().encode(formatted))
-                toastRef.current.success(isMultiLine ? 'JSON 已压缩（单行）' : 'JSON 已格式化')
-              } catch (err) {
-                toastRef.current.error('JSON 语法错误，无法格式化: ' + (err instanceof Error ? err.message : String(err)))
-              }
-            }}
-            title="格式化 JSON (缩进排版 / 紧凑排版)"
-          >
-            <Braces className="h-3.5 w-3.5 mr-1 text-primary" />
-            <span>格式化</span>
-          </Button>
-        ) : undefined}
+        extraHeaderActions={previewFile ? (() => {
+          const ext = previewFile.name.split('.').pop()?.toLowerCase() || ''
+          const isJson = ext === 'json'
+          const ready = !previewLoading && !previewError
+          return (
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              {/* 编码选择（Notepad++ 式：手动切换重新打开）+ 换行符徽标 */}
+              {viewerEditable && ready && (
+                <>
+                  <select
+                    value={editFileEncoding}
+                    onChange={(e) => {
+                      const enc = e.target.value
+                      // dirty 时先确认：切换编码会从磁盘重读，未保存内容将丢失
+                      if (editDirtyRef.current && enc !== editFileEncoding) {
+                        setPendingEncodingChange(enc)
+                        return
+                      }
+                      void reopenWithEncoding(enc)
+                    }}
+                    className="h-7 rounded-md border border-input bg-background px-1.5 text-xs text-foreground cursor-pointer"
+                    title="编码 / Encoding"
+                  >
+                    {SUPPORTED_ENCODINGS.map((e) => (
+                      <option key={e.value} value={e.value}>
+                        {e.label}
+                      </option>
+                    ))}
+                  </select>
+                  <span
+                    className="rounded border border-border/60 bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground select-none"
+                    title="换行符"
+                  >
+                    {eolLabel(editFileEol)}
+                  </span>
+                </>
+              )}
+              {/* 格式化 JSON：编辑态操作文本内容，预览态操作原始字节 */}
+              {isJson && ready && viewerMode === 'edit' && editContent && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => {
+                    try {
+                      const parsed = JSON.parse(editContent)
+                      const isMultiLine = editContent.includes('\n')
+                      handleEditContentChange(isMultiLine ? JSON.stringify(parsed) : JSON.stringify(parsed, null, 2))
+                      toastRef.current.success(isMultiLine ? 'JSON 已压缩（单行）' : 'JSON 已格式化')
+                    } catch (err) {
+                      toastRef.current.error('JSON 语法错误，无法格式化: ' + (err instanceof Error ? err.message : String(err)))
+                    }
+                  }}
+                  title="格式化 JSON (缩进排版 / 紧凑排版)"
+                >
+                  <Braces className="h-3.5 w-3.5 mr-1 text-primary" />
+                  <span>格式化</span>
+                </Button>
+              )}
+              {isJson && ready && viewerMode === 'preview' && previewRawBytes && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => {
+                    try {
+                      const text = new TextDecoder('utf-8').decode(previewRawBytes)
+                      const parsed = JSON.parse(text)
+                      const isMultiLine = text.includes('\n')
+                      const formatted = isMultiLine ? JSON.stringify(parsed) : JSON.stringify(parsed, null, 2)
+                      setPreviewRawBytes(new TextEncoder().encode(formatted))
+                      toastRef.current.success(isMultiLine ? 'JSON 已压缩（单行）' : 'JSON 已格式化')
+                    } catch (err) {
+                      toastRef.current.error('JSON 语法错误，无法格式化: ' + (err instanceof Error ? err.message : String(err)))
+                    }
+                  }}
+                  title="格式化 JSON (缩进排版 / 紧凑排版)"
+                >
+                  <Braces className="h-3.5 w-3.5 mr-1 text-primary" />
+                  <span>格式化</span>
+                </Button>
+              )}
+              {/* 编辑/预览切换 */}
+              {viewerEditable && ready && viewerMode === 'preview' && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => setViewerMode('edit')}
+                  title={t('sftp_viewer_edit')}
+                >
+                  <Pencil className="h-3.5 w-3.5 mr-1" />
+                  <span>{t('sftp_viewer_edit')}</span>
+                </Button>
+              )}
+              {viewerEditable && ready && viewerMode === 'edit' && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => setViewerMode('preview')}
+                  title={t('sftp_viewer_preview')}
+                >
+                  <Eye className="h-3.5 w-3.5 mr-1" />
+                  <span>{t('sftp_viewer_preview')}</span>
+                </Button>
+              )}
+              {/* 备份 + 保存（仅编辑态） */}
+              {viewerEditable && viewerMode === 'edit' && (
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => void handleBackup(previewFile.path)}
+                  >
+                    <Shield className="h-3.5 w-3.5" />
+                    <span>{t('fs_create_backup')}</span>
+                  </Button>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    disabled={editLoading}
+                    onClick={handleSave}
+                    title={t('fs_save')}
+                  >
+                    {editLoading ? (
+                      <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                    ) : (
+                      <Save className="h-3.5 w-3.5 mr-1" />
+                    )}
+                    <span>{t('fs_save')}</span>
+                  </Button>
+                </>
+              )}
+            </div>
+          )
+        })() : undefined}
       >
         {previewLoading && (
           <div className="flex-1 flex items-center justify-center gap-2 text-muted-foreground min-h-64">
@@ -1883,14 +2148,25 @@ export function FilesModule({
           </div>
         )}
         {!previewLoading && !previewError && previewFile && (
-          <div className="w-full h-full flex flex-col overflow-hidden">
-            <UniversalFileViewer
-              data={previewRawBytes}
-              fileName={previewFile.name}
-              className="h-full"
-              onError={(err) => setPreviewError(err.message)}
-            />
-          </div>
+          viewerMode === 'edit' && viewerEditable ? (
+            <div className="w-full h-full">
+              <CodeEditor
+                value={editContent}
+                onValueChange={handleEditContentChange}
+                fileName={previewFile.name}
+                className="h-full"
+              />
+            </div>
+          ) : (
+            <div className="w-full h-full flex flex-col overflow-hidden">
+              <UniversalFileViewer
+                data={previewRawBytes}
+                fileName={previewFile.name}
+                className="h-full"
+                onError={(err) => setPreviewError(err.message)}
+              />
+            </div>
+          )
         )}
       </ResizablePreviewDialog>
 
@@ -1913,10 +2189,7 @@ export function FilesModule({
         onPreview={openPreview}
         onNavigateTo={navigateTo}
         onOpenEditor={openEditor}
-        onStartRename={(file) => {
-          setRenamingFile(file.path)
-          setRenameValue(file.name)
-        }}
+        onStartRename={startRename}
         onDownload={handleDownload}
         onDownloadArchive={handleDownloadArchive}
         onExtractArchive={handleExtractArchive}

@@ -1,9 +1,8 @@
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import type { PendingOverwrite } from "./sftp-types";
-
 export interface SftpOverwriteDialogProps {
-  pendingOverwrite: PendingOverwrite | null;
+  /** 仅需 title/description 用于展示；确认/取消由 onConfirm/onCancel 回调负责 */
+  pendingOverwrite: { title?: string; description?: string } | null;
   onConfirm: () => void;
   onCancel: () => void;
   t: (key: string) => string;
@@ -33,7 +32,7 @@ export function SftpOverwriteDialog({
             {pendingOverwrite?.description ?? ""}
           </p>
         </div>
-        <div className="px-6 pb-5 flex justify-end gap-2">
+        <div className="px-6 pb-5 flex flex-wrap justify-end gap-2">
           <Button
             variant="ghost"
             size="sm"

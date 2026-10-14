@@ -556,14 +556,14 @@ export function AuthDialog() {
               <div className="flex items-center gap-3">
                 <div className="relative">
                   <div className="h-11 w-11 rounded-full bg-primary/10 border border-primary/25 flex items-center justify-center font-bold text-primary text-sm uppercase shadow-inner">
-                    {user.email?.slice(0, 2) || 'QS'}
+                    {user?.email?.slice(0, 2) || 'QS'}
                   </div>
                   <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full bg-emerald-500 border-2 border-card" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold truncate text-foreground">{user.email || 'GitHub 授权账号'}</p>
+                  <p className="text-sm font-semibold truncate text-foreground">{user?.email || 'GitHub 授权账号'}</p>
                   <p className="text-[11px] text-muted-foreground truncate flex items-center gap-1.5 mt-0.5">
-                    {user.app_metadata.provider === 'github' ? (
+                    {user?.app_metadata?.provider === 'github' ? (
                       <span className="flex items-center gap-1 text-foreground/80">
                         <GitHubIcon className="h-3 w-3" /> GitHub OAuth
                       </span>

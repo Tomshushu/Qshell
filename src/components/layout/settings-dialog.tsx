@@ -1652,7 +1652,7 @@ function SettingsPanel({
                 </div>
 
                 {/* 防空闲断开 (Anti-Idle) */}
-                <div className="flex flex-col gap-3 rounded-lg border border-border/50 bg-muted/20 p-3">
+                <div className="flex flex-col gap-3">
                   <div className="flex items-center justify-between">
                     <SettingLabelWithHint
                       label={t("term_anti_idle")}
@@ -1665,7 +1665,7 @@ function SettingsPanel({
                   </div>
 
                   {(terminalAntiIdleEnabled ?? false) && (
-                    <div className="flex flex-col gap-3 pt-2 border-t border-border/40">
+                    <div className="flex flex-col gap-3 rounded-lg border border-border/50 bg-muted/20 p-3 animate-in fade-in-0 duration-150">
                       {/* 发送间隔 */}
                       <div className="flex items-center justify-between">
                         <span className="text-foreground font-medium">
@@ -3122,7 +3122,7 @@ function AuditLogsPanel() {
       {/* 确认清空弹窗 */}
       <ConfirmDialog
         open={showClearConfirm}
-        onOpenChange={setShowClearConfirm}
+        onCancel={() => setShowClearConfirm(false)}
         title={t("logs_confirm_clear_title")}
         description={t("logs_confirm_clear_desc")}
         confirmText={t("logs_confirm_btn")}

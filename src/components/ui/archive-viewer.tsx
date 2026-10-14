@@ -306,7 +306,8 @@ export function ArchiveViewer({
       } else if (isImg || isMedia) {
         const bytes = await node.entry.async('uint8array')
         const mime = isImg ? `image/${ext === 'svg' ? 'svg+xml' : ext}` : `${isMedia && AUDIO_EXTS.has(ext) ? 'audio' : 'video'}/${ext}`
-        const blob = new Blob([bytes], { type: mime })
+        // 拷贝为 ArrayBuffer-backed 视图，满足 BlobPart 类型要求
+        const blob = new Blob([new Uint8Array(bytes)], { type: mime })
         const url = URL.createObjectURL(blob)
         blobUrlRef.current = url
         setSubFileBlobUrl(url)

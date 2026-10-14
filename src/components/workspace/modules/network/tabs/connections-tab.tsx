@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from '@/i18n'
 import type { ConnPage } from '@/types/network'
+import type { NavigationContext, WorkspaceModule } from '@/types'
 import { sshService } from '@/services/ssh-service'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 
@@ -19,7 +20,7 @@ interface ConnectionsTabProps {
   connPage: ConnPage | null
   loading: boolean
   onRefresh: () => void
-  onNavigate?: (module: string, context?: { searchQuery?: string; view?: string }) => void
+  onNavigate?: (module: WorkspaceModule, context?: NavigationContext) => void
 }
 
 function formatEndpoint(address: string, port: number | string): string {
@@ -159,19 +160,9 @@ export function ConnectionsTab({
               placeholder={t('net_conn_search')}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-8 pl-8 text-xs w-full"
+              className="h-8 pl-8 text-xs w-full bg-background/80"
             />
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onRefresh}
-            disabled={loading}
-            className="h-8 text-xs gap-1 shrink-0"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-            {t('net_refresh')}
-          </Button>
         </div>
       </div>
 
@@ -183,7 +174,7 @@ export function ConnectionsTab({
             {t('net_conn_empty')}
           </div>
         ) : (
-          <div className="border rounded-lg bg-card overflow-hidden">
+          <div className="border border-border/70 rounded-xl bg-card shadow-xs overflow-hidden">
             <table className="w-full text-left text-xs border-collapse">
               <thead className="sticky top-0 bg-muted/95 backdrop-blur-xs z-10">
                 <tr className="border-b border-border/60 text-muted-foreground text-[11px] font-medium">
@@ -192,7 +183,7 @@ export function ConnectionsTab({
                   <th className="py-2.5 px-3">{t('net_conn_foreign')}</th>
                   <th className="py-2.5 px-3">{t('net_conn_state')}</th>
                   <th className="py-2.5 px-3">{t('net_conn_pid_proc')}</th>
-                  <th className="py-2.5 px-3 text-right">{t('common_action') || '操作'}</th>
+                  <th className="py-2.5 px-3 text-right">{t('common_action')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y font-mono text-[11px]">
@@ -281,14 +272,14 @@ export function ConnectionsTab({
 
       <ConfirmDialog
         open={killPid !== null}
-        onOpenChange={(v) => !v && setKillPid(null)}
+        onCancel={() => setKillPid(null)}
         title={t('net_conn_kill')}
         description={t('net_conn_kill_confirm').replace('{pid}', String(killPid))}
         confirmText={t('common_confirm') || '确认'}
         cancelText={t('common_cancel') || '取消'}
         variant="destructive"
         onConfirm={handleConfirmKill}
-        loading={isKilling}
+        pending={isKilling}
       />
     </div>
   )

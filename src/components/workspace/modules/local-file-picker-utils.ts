@@ -132,7 +132,8 @@ export function renderFileIcon(file: FileLike, size = 'h-4 w-4'): ReactNode {
   return renderThemedFileIcon(file, size)
 }
 
-export function getFileTypeLabel(file: LocalFile): string {
+// 仅依赖 name/isDirectory，放宽入参以同时兼容本地与远程条目
+export function getFileTypeLabel(file: { name: string; isDirectory: boolean }): string {
   if (file.isDirectory) return 'ft_folder'
   const ext = getFileExtension(file.name)
   if (!ext) return 'ft_file'

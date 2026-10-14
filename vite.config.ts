@@ -10,6 +10,8 @@ import pkg from './package.json' with { type: 'json' }
 export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
+    // iconv-lite / safer-buffer 依赖 Node 的 global（浏览器环境映射到 globalThis）
+    global: 'globalThis',
   },
   base: './',
   plugins: [react(), tailwindcss()],
@@ -17,7 +19,13 @@ export default defineConfig({
     alias: {
       '@': path.resolve(import.meta.dirname, './src'),
       '@napi-rs/canvas': path.resolve(import.meta.dirname, './src/lib/empty-module.ts'),
+      // Node 内置 buffer → npm buffer polyfill（iconv-lite 编码转换依赖；
+      // 带斜杠的后缀避免被当作 Node 内置模块外部化）
+      buffer: 'buffer/',
     },
+  },
+  optimizeDeps: {
+    include: ['buffer'],
   },
   // 防止 Vite 阻塞 Tauri 进程退出
   clearScreen: false,

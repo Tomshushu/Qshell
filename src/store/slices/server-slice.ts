@@ -196,59 +196,9 @@ export const createServerSlice: StateCreator<AppState, [], [], ServerSlice> = (
   loadServers: async () => {
     try {
       const dbServers = await sshService.listServers();
-      const normalizedServers = dbServers.map((s) => ({
-        id: s.id,
-        name: s.name,
-        host: s.host,
-        port: s.port,
-        username: s.username,
-        authType: s.auth_type || s.authType || "password",
-        password: s.password,
-        privateKeyPath: s.private_key_path || s.privateKeyPath || "",
-        privateKeyPassphrase: s.private_key_passphrase || s.privateKeyPassphrase,
-        agentIdentity: s.agent_identity || s.agentIdentity,
-        certificatePath: s.certificate_path || s.certificatePath,
-        sshKeyId: s.ssh_key_id || s.sshKeyId,
-        groupId: s.group_id || s.groupId || null,
-        tags: (() => {
-          if (Array.isArray(s.tags)) return s.tags;
-          if (typeof s.tags === "string" && s.tags.trim()) {
-            try {
-              const parsed = JSON.parse(s.tags);
-              return Array.isArray(parsed) ? parsed : [];
-            } catch {
-              return [];
-            }
-          }
-          return [];
-        })(),
-        notes: s.notes || "",
-        connectionTimeout: s.connection_timeout || s.connectionTimeout || 30,
-        favorite: !!s.favorite,
-        status: s.status || "unknown",
-        osType: s.os_type || s.osType || "",
-        osInfo: s.os_info || s.osInfo || "",
-        targetType: s.target_type || s.targetType || "linux",
-        protocol: s.protocol || "ssh",
-        protocols: (() => {
-          const raw = s.protocols;
-          if (Array.isArray(raw)) return raw;
-          if (typeof raw === "string" && raw) {
-            try {
-              const p = JSON.parse(raw);
-              return Array.isArray(p) ? p : ["ssh"];
-            } catch {
-              return ["ssh"];
-            }
-          }
-          return ["ssh"];
-        })(),
-        lastAccessedAt: s.last_accessed_at || s.lastAccessedAt,
-        proxyConfig: s.proxy_config || s.proxyConfig || null,
-        tunnelsConfig: s.tunnels_config || s.tunnelsConfig || null,
-        createdAt: s.created_at || s.createdAt,
-        updatedAt: s.updated_at || s.updatedAt,
-      }));
+      // sshService.listServers 已由适配层归一化（snake_case→camelCase、tags/protocols JSON 解析），
+      // 此处不再白名单重建——旧写法会丢失 rdpPort/bmcPort/lastDisconnectedAt 等字段
+      const normalizedServers = dbServers;
       get().setServers(normalizedServers);
       try {
         const trash = await sshService.listTrashServers();

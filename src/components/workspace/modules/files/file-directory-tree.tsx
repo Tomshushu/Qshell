@@ -38,7 +38,7 @@ export function FileDirectoryTree({
         className="bg-card/95 rounded-xl border border-border/70 shadow-sm flex flex-col overflow-hidden shrink-0"
         style={{ width: `${treeWidth}px` }}
       >
-        <div className="flex items-center justify-between px-3 py-2 border-b">
+        <div className="flex items-center justify-between px-2 py-1 border-b">
           <span className="text-sm font-medium">{t('fs_dir_tree')}</span>
           <Button
             variant="ghost"

@@ -1,6 +1,8 @@
 import { useState, useCallback, useEffect, useRef, useMemo, memo } from "react";
 import { SelectPopover } from '@/components/ui/select-popover'
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { Progress } from "@/components/ui/progress";
 import {
   Tooltip,
@@ -469,6 +471,12 @@ export function OverviewModule({
     setNetHistory([]);
   }, []);
 
+  const handleRefreshAll = useCallback(() => {
+    refreshMetrics();
+    fetchCpuInfo();
+    refreshProcesses();
+  }, [refreshMetrics, fetchCpuInfo, refreshProcesses]);
+
   // 初始加载
   useEffect(() => {
     let cancelled = false;
@@ -730,32 +738,41 @@ export function OverviewModule({
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-transparent">
-      <div className="shrink-0 border-b border-border/60 bg-card px-4 py-2.5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold">监控</h2>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">
-              实时资源与系统运行状态
-            </p>
-          </div>
-          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-            <span>
-              {lastUpdatedAt
-                ? `更新于 ${new Date(lastUpdatedAt).toLocaleTimeString()}`
-                : "等待采集"}
+      {/* 统一规范工具栏 */}
+      <div className="flex items-center justify-between h-11 px-4 border-b border-border/50 bg-muted/20 shrink-0">
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border border-primary/25 bg-primary/10 text-primary text-[11px] font-medium">
+            <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+            {metrics?.osName || t("module_overview")}
+          </span>
+          {(metrics?.uptime ?? 0) > 0 && (
+            <span className="text-[11px] text-muted-foreground/70 font-mono">
+              up {formatUptime(metrics?.uptime ?? 0, t)}
             </span>
-            <button
-              onClick={() => {
-                refreshMetrics();
-                fetchCpuInfo();
-              }}
-              className="rounded-md border border-border/60 p-1.5 hover:bg-accent"
-              title="刷新"
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-            </button>
-
-          </div>
+          )}
+        </div>
+        <div className="flex items-center gap-2.5 text-[11px] text-muted-foreground">
+          <span className="flex items-center gap-1 text-muted-foreground/70">
+            <Clock3 className="h-3 w-3" />
+            {lastUpdatedAt
+              ? `更新于 ${new Date(lastUpdatedAt).toLocaleTimeString()}`
+              : "等待采集"}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleRefreshAll}
+            disabled={loading || processLoading}
+            className="gap-1 h-7 text-xs"
+          >
+            <RefreshCw
+              className={cn(
+                "h-3.5 w-3.5",
+                (loading || processLoading) && "animate-spin"
+              )}
+            />
+            {t("ov_refresh")}
+          </Button>
         </div>
       </div>
       <div className="flex flex-1 flex-col overflow-auto p-4 space-y-3">
@@ -835,16 +852,9 @@ export function OverviewModule({
           <Card className="flex h-[310px] min-w-0 flex-col overflow-hidden border-border/60 shadow-sm">
             <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-xs">进程列表</CardTitle>
-              <button
-                type="button"
-                onClick={refreshProcesses}
-                className="rounded-md border border-border/60 p-1.5 hover:bg-accent"
-                title="刷新进程"
-              >
-                <RefreshCw
-                  className={`h-3 w-3 ${processLoading ? "animate-spin" : ""}`}
-                />
-              </button>
+              <span className="text-[10px] text-muted-foreground font-mono">
+                Top {sortedProcesses.length}
+              </span>
             </CardHeader>
             <CardContent className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
               <table className="w-full table-fixed text-[10px]">
@@ -1619,23 +1629,24 @@ export function OverviewModule({
 
   return (
     <div className="p-3 overflow-auto h-full space-y-2.5">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-card/80 px-4 py-3 shadow-sm">
-        <div className="flex items-center gap-3">
-          <div className="rounded-md bg-primary/10 p-2 text-primary">
-            <Gauge className="h-4 w-4" />
-          </div>
-          <div>
-            <h2 className="text-sm font-semibold">系统监控</h2>
-            <p className="text-[11px] text-muted-foreground">
-              基础指标 · 资源趋势 · 运维告警
-            </p>
-          </div>
+      {/* 顶部轻量状态与操作栏（与统一规范对齐，去除重复大标题与三层嵌套） */}
+      <div className="flex items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border border-primary/25 bg-primary/10 text-primary text-[11px] font-medium">
+            <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+            {metrics?.osName || t("module_overview")}
+          </span>
+          {(metrics?.uptime ?? 0) > 0 && (
+            <span className="text-[11px] text-muted-foreground/70 font-mono">
+              up {formatUptime(metrics?.uptime ?? 0, t)}
+            </span>
+          )}
         </div>
-        <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
-          <span className="flex items-center gap-1">
+        <div className="flex items-center gap-2.5 text-[11px]">
+          <span className="flex items-center gap-1 text-muted-foreground/70">
             <Clock3 className="h-3 w-3" />
             {lastUpdatedAt
-              ? `更新于 ${new Date(lastUpdatedAt).toLocaleTimeString()}`
+              ? `更新于 ${new Date(lastUpdatedAt as number).toLocaleTimeString()}`
               : "等待采集"}
           </span>
           <button
@@ -1643,12 +1654,12 @@ export function OverviewModule({
               refreshMetrics();
               fetchCpuInfo();
             }}
-            className="rounded-md border border-border/60 p-1.5 hover:bg-accent"
+            className="flex items-center gap-1 rounded-md border border-border/60 bg-muted/20 px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer"
             title="刷新监控"
           >
-            <RefreshCw className="h-3.5 w-3.5" />
+            <RefreshCw className={`h-3 w-3 ${loading ? "animate-spin" : ""}`} />
+            <span>刷新</span>
           </button>
-
         </div>
       </div>
       <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
@@ -1919,7 +1930,7 @@ export function OverviewModule({
                   <span className="text-red-500 ml-1">
                     {t("ov_zombies").replace(
                       "{n}",
-                      String(metrics.zombieProcesses),
+                      String(metrics?.zombieProcesses),
                     )}
                   </span>
                 ) : null}
@@ -2044,8 +2055,6 @@ export function OverviewModule({
                   <AreaChart
                     data={cpuChartData}
                     margin={{ top: 6, right: 6, left: 2, bottom: 2 }}
-                    isAnimationActive={false}
-                    animationDuration={0}
                   >
                     <defs>
                       <linearGradient
@@ -2081,8 +2090,8 @@ export function OverviewModule({
                         padding: "4px 8px",
                         borderRadius: "4px",
                       }}
-                      formatter={(v: number) => [
-                        `${safeFixed(v, 1)}%`,
+                      formatter={(v) => [
+                        `${safeFixed(Number(v), 1)}%`,
                         t("ov_usage"),
                       ]}
                     />
@@ -2181,9 +2190,11 @@ export function OverviewModule({
             {/* 堆叠条 - 根据 memView 切换 RAM/SWAP */}
             {(() => {
               if (memView === "ram") {
-                const b = metrics?.memBreakdown;
+                const bd = metrics?.memBreakdown;
                 const total = metrics?.memoryTotal ?? 0;
-                if (!b || total <= 0) return null;
+                if (!bd || total <= 0) return null;
+                // 注：本组件 render 函数体量过大，TS CFA 不再做自动窄化，需显式断言
+                const b = bd as NonNullable<typeof bd>;
                 // 用 safe() 包裹各项，避免 undefined 参与运算得到 NaN
                 const sum =
                   safe(b.systemReserved) +
@@ -2248,8 +2259,9 @@ export function OverviewModule({
             <div className="grid grid-cols-2 gap-x-6 gap-y-0.5 text-[11px] mt-1.5">
               {memView === "ram"
                 ? (() => {
-                    const b = metrics?.memBreakdown;
-                    if (!b) return null;
+                    const bd = metrics?.memBreakdown;
+                    if (!bd) return null;
+                    const b = bd as NonNullable<typeof bd>;
                     return (
                       <>
                         <div className="flex items-center gap-1.5 min-w-0">
@@ -2451,7 +2463,8 @@ export function OverviewModule({
                 const seen = new Map<string, { total: number; used: number }>();
                 for (const d of diskEntries) {
                   const existing = seen.get(d.filesystem);
-                  if (!existing || d.total > existing.total) {
+                  // CFA 在超大函数中失效，用可选链 + 兜底替代依赖窄化
+                  if (!existing || d.total > (existing?.total ?? -Infinity)) {
                     seen.set(d.filesystem, { total: d.total, used: d.used });
                   }
                 }
@@ -2497,7 +2510,7 @@ export function OverviewModule({
               >();
               for (const d of diskEntries) {
                 const existing = seen.get(d.filesystem);
-                if (!existing || d.total > existing.total) {
+                if (!existing || d.total > (existing?.total ?? -Infinity)) {
                   seen.set(d.filesystem, {
                     total: d.total,
                     used: d.used,
@@ -2740,7 +2753,7 @@ export function OverviewModule({
                 <Wifi className="h-3.5 w-3.5 text-cyan-500" />
                 <span className="text-sm font-medium">
                   {t("ov_nic")}
-                  {selectedNetData ? selectedNetData.interface : selectedIface}
+                  {selectedNetData?.interface ?? selectedIface}
                 </span>
               </div>
               <div className="flex items-center gap-2">
@@ -2809,8 +2822,8 @@ export function OverviewModule({
                         padding: "4px 8px",
                         borderRadius: "4px",
                       }}
-                      formatter={(v: number, name: string) => [
-                        formatKbps(v),
+                      formatter={(v, name) => [
+                        formatKbps(Number(v)),
                         name === "rxKbps" ? t("ov_receive") : t("ov_send"),
                       ]}
                     />
@@ -2843,7 +2856,8 @@ export function OverviewModule({
                 <span className="text-[11px] text-muted-foreground">错误</span>
                 <span className="ml-auto text-[11px] font-semibold tabular-nums text-green-500">
                   {selectedNetData
-                    ? selectedNetData.rxErrors + selectedNetData.txErrors
+                    ? (selectedNetData?.rxErrors ?? 0) +
+                      (selectedNetData?.txErrors ?? 0)
                     : "-"}
                 </span>
               </div>
@@ -2854,7 +2868,7 @@ export function OverviewModule({
                 </span>
                 <span className="ml-auto text-[11px] font-semibold tabular-nums text-blue-500">
                   {selectedNetData
-                    ? `${safeFixed(selectedNetData.dropRate * 100, 3)}%`
+                    ? `${safeFixed((selectedNetData?.dropRate ?? 0) * 100, 3)}%`
                     : "-"}
                 </span>
               </div>

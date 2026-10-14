@@ -58,7 +58,7 @@ export function resolveRelativePath(base: string, relative: string): string {
  * 清理路径末尾由 prompt 格式附带的标点符号（如 `]`、`$`、`#`、`>` 等）
  */
 function cleanPathTrailingPunctuation(rawPath: string): string {
-  return rawPath.replace(/[\]\)\$#>]+$/, '').trim()
+  return rawPath.replace(/[\])$#>]+$/, '').trim()
 }
 
 /**
@@ -104,7 +104,7 @@ export function extractPathFromShellTitle(title?: string | null, homeDir = ''): 
   // 2. 匹配典型的 `user@host: path` 或 `hostname: path` 模式
   // 例如: `ubuntu@server: /var/log`, `root@node1:/etc/nginx`, `user@host: ~/app`
   const userHostMatch = trimmed.match(
-    /(?:^|[\[\s])(?:[a-zA-Z0-9_.-]+@[a-zA-Z0-9_.-]+|[a-zA-Z0-9_.-]+)\s*[:]\s*(~(?:\/[^\s;]*)?|\/[^\s;]*)/
+    /(?:^|[\s[])(?:[a-zA-Z0-9_.-]+@[a-zA-Z0-9_.-]+|[a-zA-Z0-9_.-]+)\s*[:]\s*(~(?:\/[^\s;]*)?|\/[^\s;]*)/
   )
   if (userHostMatch && userHostMatch[1]) {
     let p = cleanPathTrailingPunctuation(userHostMatch[1])

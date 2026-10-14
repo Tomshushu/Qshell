@@ -98,7 +98,9 @@ const DialogContent = React.forwardRef<
       <DialogPrimitive.Content
         ref={ref}
         className={cn(
-          "relative grid w-[calc(100vw-2rem)] min-w-0 max-w-lg max-h-[calc(100vh-2.5rem)] gap-4 border border-border/60 glass-strong rounded-2xl p-6 shadow-xl duration-300 [overflow-wrap:anywhere] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
+          // overflow-y-auto：内容超高时的全局滚动兜底，防止文字被弹框边缘裁切。
+          // 自管理布局的弹框（p-0 + 内部滚动区）传入 overflow-hidden 即可覆盖此默认值
+          "relative grid w-[calc(100vw-2rem)] min-w-0 max-w-lg max-h-[calc(100vh-2.5rem)] overflow-y-auto gap-4 border border-border/60 glass-strong rounded-2xl p-6 shadow-xl duration-300 [overflow-wrap:anywhere] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
           isAnime && "anime-dialog-content border-pink-300/60 dark:border-pink-500/40",
           className
         )}

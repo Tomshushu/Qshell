@@ -19,7 +19,7 @@ import type { SshKey, Server as ServerType } from '@/types'
 import { OsIcon } from '@/pages/dashboard'
 
 /** 脱敏显示私钥路径（仅保留根/盘符 + 文件名） */
-function maskPrivateKeyPath(path: string): string {
+function maskPrivateKeyPath(path: string | undefined): string {
   if (!path) return ''
   const parts = path.split(/[\\/]/).filter(Boolean)
   if (parts.length <= 2) return path

@@ -50,7 +50,7 @@ export function FileToolbar({
   return (
     <>
       {/* Toolbar */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b bg-card flex-wrap">
+      <div className="flex items-center gap-1.5 px-2 py-1 border-b bg-card flex-wrap">
         {/* 面包屑导航 */}
         <div className="flex items-center gap-0.5 text-sm font-mono flex-1 min-w-0 overflow-hidden">
           <button
@@ -85,44 +85,44 @@ export function FileToolbar({
         <Button
           variant="ghost"
           size="icon"
-          className={cn('h-8 w-8', bookmarks.includes(currentPath) && 'text-yellow-500')}
+          className={cn('h-7 w-7', bookmarks.includes(currentPath) && 'text-yellow-500')}
           onClick={onToggleBookmark}
           title={bookmarks.includes(currentPath) ? t('common_remove_bookmark') : t('common_add_bookmark')}
         >
-          <Star className={cn('h-4 w-4', bookmarks.includes(currentPath) && 'fill-current')} />
+          <Star className={cn('h-3.5 w-3.5', bookmarks.includes(currentPath) && 'fill-current')} />
         </Button>
 
         <Button
           variant="ghost"
           size="sm"
-          className="h-8 text-sm gap-1.5"
+          className="h-7 text-sm gap-1"
           onClick={onRefresh}
           title={`${t('fs_refresh')} (F5)`}
         >
-          <RefreshCw className="h-4 w-4" />
+          <RefreshCw className="h-3.5 w-3.5" />
         </Button>
 
         <Button
           variant="ghost"
           size="sm"
-          className="h-8 text-sm gap-1.5"
+          className="h-7 text-sm gap-1"
           disabled={transferLoading === 'upload'}
           onClick={() => onNativeUpload(false)}
           title={t('fs_upload_file')}
         >
-          <Upload className="h-4 w-4" />
+          <Upload className="h-3.5 w-3.5" />
           <span className="hidden lg:inline">{t('fs_upload_file')}</span>
         </Button>
 
         <Button
           variant="ghost"
           size="sm"
-          className="h-8 text-sm gap-1.5"
+          className="h-7 text-sm gap-1"
           disabled={transferLoading === 'upload'}
           onClick={() => onNativeUpload(true)}
           title={t('fs_upload_folder')}
         >
-          <FolderInput className="h-4 w-4" />
+          <FolderInput className="h-3.5 w-3.5" />
           <span className="hidden lg:inline">{t('fs_upload_folder')}</span>
         </Button>
 
@@ -132,14 +132,14 @@ export function FileToolbar({
             placeholder={t('fs_search_placeholder')}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="h-8 pl-8 text-sm"
+            className="h-7 pl-8 text-sm"
           />
         </div>
       </div>
 
       {/* 书签栏 */}
       {bookmarks.length > 0 && (
-        <div className="flex items-center gap-1 px-3 py-1.5 border-b bg-muted/30 overflow-x-auto">
+        <div className="flex items-center gap-1 px-2 py-1 border-b bg-muted/30 overflow-x-auto">
           <Star className="h-3.5 w-3.5 text-yellow-500 fill-current shrink-0" />
           {bookmarks.map((bm) => (
             <button

@@ -117,6 +117,12 @@ export interface FileViewerState {
   error?: string;
   isBinary?: boolean;
   content?: string;
+  /** 文本文件检测到的编码（iconv 标签，如 'utf-8' / 'gb18030'），保存时按原编码回写 */
+  encoding?: string;
+  /** 文本文件主导换行符，保存时统一 */
+  eol?: '\r\n' | '\n' | '\r' | null;
+  /** 文件是否带 BOM，保存时按原样补回（参照 Notepad++） */
+  hasBom?: boolean;
   mediaSrc?: string;
   rawBytes?: Uint8Array;
   dirty?: boolean;

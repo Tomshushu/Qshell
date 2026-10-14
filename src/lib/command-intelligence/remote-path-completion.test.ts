@@ -19,7 +19,7 @@ describe('remote-path-completion LRU 缓存与生命周期测试', () => {
     execSpy.mockResolvedValue({
       stdout: 'dirA/\nfileB*\n',
       stderr: '',
-      code: 0,
+      exitCode: 0,
     })
 
     // 第一次调用：发起底层命令
@@ -38,7 +38,7 @@ describe('remote-path-completion LRU 缓存与生命周期测试', () => {
     execSpy.mockResolvedValue({
       stdout: 'file1\n',
       stderr: '',
-      code: 0,
+      exitCode: 0,
     })
 
     await listRemoteDir('srv-1', '/etc')

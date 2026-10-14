@@ -32,7 +32,7 @@ export function SftpDiagnosticsDialog({
           <DialogDescription>{t("sftp_diag_desc")}</DialogDescription>
         </DialogHeader>
         {sftpDiagnostics && (
-          <div className="space-y-4">
+          <div className="space-y-4 max-h-[55vh] overflow-y-auto -mx-1 px-1">
             {/* 状态概览 */}
             <div
               className={cn(

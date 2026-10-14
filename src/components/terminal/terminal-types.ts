@@ -64,6 +64,8 @@ export interface TerminalModuleProps {
   ) => void;
   /** 注册终端工作目录获取函数：供外层工作台在切换到文件模块等场景时获取当前终端所在目录 */
   registerGetCwd?: (fn: (() => string | undefined) | null) => void;
+  /** 终端当前工作目录变化回调（活跃终端 cd / OSC 7 上报时触发），供文件面板即时跟随 */
+  onCwdChange?: (cwd: string) => void;
   /** 用户在终端内触发手动重连（如断开状态下按回车）时的回调，用于唤醒工作台顶层连接流程与认证提示 */
   onReconnect?: () => void;
 }
@@ -149,9 +151,18 @@ export interface ZmodemModuleLike {
     to_terminal?: (octets: number[]) => void;
     sender?: (octets: number[]) => void;
     on_detect?: (detection: ZmodemDetectionLike) => void;
+    /** zmodem.js 内部重传/回退回调，透传即可 */
+    on_retract?: () => void;
   }) => ZmodemSentryLike;
   Browser?: {
-    send_files?: (session: ZmodemSessionLike, files: File[]) => Promise<unknown>;
+    send_files?: (
+      session: ZmodemSessionLike,
+      files: File[],
+      opts?: {
+        on_progress?: (file: File, transfer: unknown, piece: Uint8Array) => void;
+        on_send_response?: (xfer: unknown) => void;
+      },
+    ) => Promise<unknown>;
   };
 }
 

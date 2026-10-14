@@ -210,7 +210,7 @@ export function UniversalFileViewer({
   if (shouldVirtualizeText) {
     return (
       <LogViewer
-        data={data}
+        data={data ?? null}
         fileName={fileName}
         fileSize={dataSize}
         className={className}
@@ -253,7 +253,6 @@ export function UniversalFileViewer({
         height="100%"
         fit={fit}
         toolbar={effectiveToolbar}
-        download={false}
         theme={resolvedTheme}
         onError={onError}
       />

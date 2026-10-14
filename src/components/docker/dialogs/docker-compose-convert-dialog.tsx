@@ -9,16 +9,16 @@ export interface DockerComposeConvertDialogProps {
     runCmd: string;
     name: string;
     dir: string;
-    dirTouched?: boolean;
-    creating?: boolean;
+    dirTouched: boolean;
+    creating: boolean;
   } | null;
   setConvertDialog: React.Dispatch<
     React.SetStateAction<{
       runCmd: string;
       name: string;
       dir: string;
-      dirTouched?: boolean;
-      creating?: boolean;
+      dirTouched: boolean;
+      creating: boolean;
     } | null>
   >;
   convertPreview: { yaml: string; error: string | null };

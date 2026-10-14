@@ -269,10 +269,10 @@ export function ResizablePreviewDialog({
               <div className="fixed inset-0 z-[100] cursor-grabbing select-none" />
             )}
 
-            {/* 标题栏（可拖拽移动，双击最大化/还原） */}
+            {/* 标题栏（可拖拽移动，双击最大化/还原；flex-wrap 防窄窗口下操作按钮被裁切） */}
             <div
               className={cn(
-                "flex items-center justify-between px-3.5 py-2 border-b border-border/70 bg-muted/40 backdrop-blur-xs shrink-0 select-none",
+                "flex flex-wrap items-center justify-between gap-y-1 px-3.5 py-2 border-b border-border/70 bg-muted/40 backdrop-blur-xs shrink-0 select-none",
                 !isMaximized && "cursor-move"
               )}
               onMouseDown={handleHeaderMouseDown}
@@ -299,10 +299,10 @@ export function ResizablePreviewDialog({
                 {sideBadge}
               </div>
 
-              {/* 右侧：自定义操作、最大化/还原按钮、关闭按钮 */}
-              <div className="flex items-center gap-1.5 shrink-0" data-no-drag>
+              {/* 右侧：自定义操作、最大化/还原按钮、关闭按钮（flex-wrap 防窄窗口裁切） */}
+              <div className="flex flex-wrap items-center gap-1.5 min-w-0 justify-end" data-no-drag>
                 {extraHeaderActions && (
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex flex-wrap items-center gap-1.5 justify-end min-w-0">
                     {extraHeaderActions}
                     <div className="h-3.5 w-px bg-border/70 mx-0.5 shrink-0" />
                   </div>

@@ -193,10 +193,11 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
   const logsPausedRef = useRef(false)
   // Inspect 结构化/Raw 切换
   const [inspectTab, setInspectTab] = useState<'structured' | 'raw'>('structured')
-  // 运行新容器对话框（MVP basic）
+  // 运行新容器对话框（MVP basic）；editId 非空时为「从现有容器编辑」模式
   const [runDialog, setRunDialog] = useState<{
     name: string; image: string; ports: string; volumes: string
     env: string; restart: string; network: string; running: boolean
+    editId?: string | null
   } | null>(null)
   // 镜像详情模态框
   const [imageInspectModal, setImageInspectModal] = useState<{ id: string; data: string } | null>(null)
@@ -252,7 +253,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
     name: string; subPath: string; entries: { name: string; isDir: boolean; size: string; mtime: string }[]; error: string
   } | null>(null)
   // 镜像导出 / 导入
-  const [saveLoadDialog, setSaveLoadDialog] = useState<{ mode: 'save' | 'load'; selected: string[]; remotePath: string; result: string; loading: boolean; progress: { transferred: number; total: number } | null; localFile: { name: string; path: string } | null } | null>(null)
+  const [saveLoadDialog, setSaveLoadDialog] = useState<{ mode: 'save' | 'load'; selected: string[]; remotePath: string; result: string; loading: boolean; progress: { transferred: number; total: number } | null; localFile: { name: string; path: string } | null; imageRef?: string } | null>(null)
   // Compose 日志模态框
   const [composeLogsModal, setComposeLogsModal] = useState<{ name: string; data: string } | null>(null)
   // Service 级视图：哪些项目已展开；展开时调 docker_compose_services 拉取 services 列表。
@@ -969,7 +970,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
           const net = Array.isArray(arr) ? arr[0] : arr
           const cfg = net?.IPAM?.Config?.[0] || {}
           const containers: { name: string; ipv4: string }[] = net?.Containers
-            ? Object.values(net.Containers).map((c: { Name: string; IPv4Address?: string }) => ({ name: c.Name, ipv4: c.IPv4Address || '' }))
+            ? Object.values(net.Containers as Record<string, { Name: string; IPv4Address?: string }>).map((c) => ({ name: c.Name, ipv4: c.IPv4Address || '' }))
             : []
           setNetworkInspectModal((m) => m ? { ...m, driver: net?.Driver || n.driver, scope: net?.Scope || n.scope, subnet: cfg.Subnet || '', gateway: cfg.Gateway || '', containers } : m)
         } catch { /* 非 JSON 时保留基础信息 */ }
@@ -1075,7 +1076,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
   const openVolumeBrowse = useCallback(async (v: DockerVolume, subPath = '') => {
     setVolumeBrowseModal({ name: v.name, subPath, entries: [], error: '' })
     try {
-      const res = await sshService.dockerVolumeBrowse(serverId, v.name, subPath || null)
+      const res = await sshService.dockerVolumeBrowse(serverId, v.name, subPath || undefined)
       if (res.exitCode !== 0) {
         setVolumeBrowseModal({ name: v.name, subPath, entries: [], error: res.stderr || res.stdout || t('docker_volume_browse_failed') })
       } else {
@@ -2368,6 +2369,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
     const pulse = state === 'running' || state === 'restarting' || state === 'dead'
     // 健康检查标记：docker ps 的 Status 含 "(healthy)" / "(unhealthy)" / "(health: starting)"
     const health = /\((healthy|unhealthy|health: starting)\)/.exec(status)?.[1]
+    const cleanStatus = status.replace(/\s*\((healthy|unhealthy|health: starting)\)/, '').trim()
     const healthMark = health === 'healthy'
       ? { dot: 'bg-emerald-400', label: t('dk_health_healthy') }
       : health === 'unhealthy'
@@ -2378,7 +2380,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
     return (
       <StatusPill
         tone={tone}
-        label={status}
+        label={cleanStatus || status}
         pulse={pulse}
         extra={healthMark ? (
           <span className="inline-flex items-center gap-1 ml-0.5 pl-1.5 border-l border-border/40">
@@ -2540,11 +2542,10 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
 
       {/* 右侧内容区 */}
       <div className="flex-1 flex flex-col min-w-0">
-      {/* 上下文条：服务器 / Docker 版本常显（需求 §11.4）+ 视图专属操作 + 全局刷新 */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-border/60 bg-card flex-wrap">
-        <span className="text-sm font-medium text-foreground truncate max-w-[180px]">{serverName}</span>
+      {/* 上下文条：Docker 版本常显 + 视图专属操作 + 全局刷新 */}
+      <div className="flex items-center gap-2.5 px-4 h-11 border-b border-border/50 bg-muted/20 shrink-0 flex-wrap">
         {overview && (
-          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 text-emerald-400 text-[11px] font-medium whitespace-nowrap">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border border-emerald-500/25 bg-emerald-500/10 text-emerald-400 text-[11px] font-medium whitespace-nowrap">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
             Docker {overview.serverVersion}
           </span>
@@ -2600,7 +2601,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
               variant="outline"
               size="sm"
               className="h-7 gap-1 text-xs"
-              onClick={() => setSaveLoadDialog({ mode: 'save', selected: [], remotePath: '', result: '', loading: false, localFile: null })}
+              onClick={() => setSaveLoadDialog({ mode: 'save', selected: [], remotePath: '', result: '', loading: false, progress: null, localFile: null })}
             >
               <Save className="h-3.5 w-3.5" />
               {t('docker_image_save')}
@@ -2609,7 +2610,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
               variant="outline"
               size="sm"
               className="h-7 gap-1 text-xs"
-              onClick={() => setSaveLoadDialog({ mode: 'load', imageRef: '', remotePath: '', result: '', loading: false, localFile: null })}
+              onClick={() => setSaveLoadDialog({ mode: 'load', selected: [], imageRef: '', remotePath: '', result: '', loading: false, progress: null, localFile: null })}
             >
               <Upload className="h-3.5 w-3.5" />
               {t('docker_image_load')}
@@ -2752,25 +2753,14 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
         </div>
       )}
 
-      {/* 内容区域 */}
-      <div className="flex-1 overflow-auto">
+      {/* 内容区域（左右 16px，与弹框标题栏对齐） */}
+      <div className="flex-1 overflow-auto px-4">
         {/* === Overview 首页 === */}
         {view === 'overview' && (
           overviewLoading ? (
             <CardsSkeleton />
           ) : (
-            <div className="p-4 space-y-4">
-              {/* Docker 环境横幅：版本 / OS / 状态 */}
-              {overview && (
-                <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
-                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 text-emerald-400 text-[10px] font-medium">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    Docker {overview.serverVersion}
-                  </span>
-                  <span className="truncate font-mono text-[11px]">{overview.os} · {overview.ostype}</span>
-                </div>
-              )}
-
+            <div className="py-4 space-y-4">
               {/* 资源指标卡（点击跳转对应视图） */}
               {overview && (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -2781,7 +2771,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
                     icon={<Container className="h-3.5 w-3.5" />}
                     onClick={() => setView('containers')}
                     footer={overview.containersTotal > 0 ? (
-                      /* 三色占比条：运行=绿 / 暂停=黄 / 停止=灰（Portainer Dashboard 风格） */
+                      /* 三色占比条：运行=绿 / 暂停=黄 / 停止=灰 */
                       <div className="mt-2 flex h-1.5 rounded-full overflow-hidden bg-muted">
                         <div className="bg-emerald-500" style={{ width: `${(overview.containersRunning / overview.containersTotal) * 100}%` }} />
                         <div className="bg-amber-500" style={{ width: `${(overview.containersPaused / overview.containersTotal) * 100}%` }} />
@@ -2789,9 +2779,24 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
                       </div>
                     ) : undefined}
                   />
-                  <OverviewCard label={t('docker_view_images')} value={overview.images} icon={<Package className="h-3 w-3" />} onClick={() => setView('images')} />
-                  <OverviewCard label={t('docker_view_volumes')} value={overview.volumes} icon={<HardDrive className="h-3 w-3" />} onClick={() => setView('volumes')} />
-                  <OverviewCard label={t('docker_view_networks')} value={overview.networks} icon={<Network className="h-3 w-3" />} onClick={() => setView('networks')} />
+                  <OverviewCard
+                    label={t('docker_view_images')}
+                    value={overview.images}
+                    icon={<Package className="h-3.5 w-3.5" />}
+                    onClick={() => setView('images')}
+                  />
+                  <OverviewCard
+                    label={t('docker_view_volumes')}
+                    value={overview.volumes}
+                    icon={<HardDrive className="h-3.5 w-3.5" />}
+                    onClick={() => setView('volumes')}
+                  />
+                  <OverviewCard
+                    label={t('docker_view_networks')}
+                    value={overview.networks}
+                    icon={<Network className="h-3.5 w-3.5" />}
+                    onClick={() => setView('networks')}
+                  />
                 </div>
               )}
 
@@ -2809,7 +2814,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
                       {abnormal.map(c => (
                         <button
                           key={c.id}
-                          className="flex items-center justify-between w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-accent/50 transition-colors"
+                          className="flex items-center justify-between w-full text-left text-xs px-2.5 py-1.5 rounded-md hover:bg-accent/50 transition-colors"
                           onClick={() => openStatsModal(c)}
                         >
                           <span className="font-medium truncate">{c.name}</span>
@@ -2821,32 +2826,62 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
                 )
               })()}
 
-              {/* 运行中容器资源 Top 5（按 CPU 排序，10s 自动刷新） */}
+              {/* 运行中容器资源 Top 5（按 CPU 排序，升级精致微表格与进度指示） */}
               {(containerStats.length > 0 || statsLoading) && (
-                <div className="rounded-xl border border-border/60 bg-card/50 p-3">
-                  <div className="text-xs font-medium text-foreground mb-2 flex items-center gap-2">
-                    {t('dk_ov_top_cpu')}
-                    {statsLoading && <RefreshCw className="h-3 w-3 animate-spin text-muted-foreground" />}
+                <div className="rounded-xl border border-border/70 bg-card/60 p-3.5 shadow-xs">
+                  <div className="text-xs font-semibold text-foreground mb-2.5 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Cpu className="h-3.5 w-3.5 text-primary" />
+                      <span>{t('dk_ov_top_cpu')}</span>
+                    </div>
+                    {statsLoading ? (
+                      <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground font-normal">
+                        <RefreshCw className="h-3 w-3 animate-spin" />
+                        <span>{t('dk_stats_sampling')}</span>
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-muted-foreground font-mono">Top 5 by CPU</span>
+                    )}
                   </div>
                   {containerStats.length > 0 ? (
                     <div className="space-y-1">
                       {[...containerStats].sort((a, b) => b.cpu - a.cpu).slice(0, 5).map(row => {
                         const c = containers.find(cc => cc.name === row.name)
+                        const cpuPercent = Math.min(100, Math.max(0, row.cpu))
                         return (
                           <button
                             key={row.name}
-                            className="flex items-center justify-between w-full text-left text-xs px-2 py-1.5 rounded-md hover:bg-accent/50 transition-colors gap-3"
+                            className="group flex items-center justify-between w-full text-left text-xs px-2.5 py-1.5 rounded-lg border border-border/30 bg-muted/20 hover:bg-accent/50 hover:border-border/60 transition-all gap-3"
                             onClick={() => c && openStatsModal(c)}
                           >
-                            <span className="font-medium truncate flex-1 min-w-0">{row.name}</span>
-                            <span className="text-[10px] font-mono text-muted-foreground flex-shrink-0 w-20 text-right">CPU {row.cpu.toFixed(1)}%</span>
-                            <span className="text-[10px] font-mono text-muted-foreground flex-shrink-0 w-24 text-right">{t('dk_mem')} {row.memUsed}</span>
+                            <div className="flex items-center gap-2 min-w-0 flex-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                              <span className="font-medium text-foreground truncate">{row.name}</span>
+                            </div>
+                            {/* CPU 进度条与数值 */}
+                            <div className="flex items-center gap-2 w-32 shrink-0">
+                              <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+                                <div
+                                  className={cn(
+                                    "h-full rounded-full transition-all duration-300",
+                                    cpuPercent > 80 ? "bg-red-500" : cpuPercent > 50 ? "bg-amber-500" : "bg-primary"
+                                  )}
+                                  style={{ width: `${cpuPercent}%` }}
+                                />
+                              </div>
+                              <span className="text-[10px] font-mono text-muted-foreground w-12 text-right">
+                                {row.cpu.toFixed(1)}%
+                              </span>
+                            </div>
+                            <span className="text-[10px] font-mono text-muted-foreground/80 flex-shrink-0 w-24 text-right">
+                              {t('dk_mem')} {row.memUsed}
+                            </span>
                           </button>
                         )
                       })}
                     </div>
                   ) : (
-                    /* 首次采样占位：docker stats 需 1-2s+（容器多时更久） */
+                    /* 首次采样占位 */
                     <div className="space-y-2 pt-1">
                       {Array.from({ length: 3 }).map((_, i) => (
                         <div key={i} className="flex items-center justify-between px-2 py-1.5">
@@ -2892,7 +2927,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
           />
         ) : viewMode === 'list' ? (
           /* === 列表视图 === */
-          <div className="m-2 rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden">
+          <div className="my-2 rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden">
             {/* 批量操作工具栏：有选中项时出现 */}
             {selectedIds.size > 0 && (
               <div className="flex items-center gap-2 px-4 py-2 border-b border-border/40 bg-accent/30 flex-wrap">
@@ -2912,7 +2947,9 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
                 </Button>
               </div>
             )}
-            <table className="w-full text-xs">
+            {/* 横向滚动：窄容器下列宽不再压缩（容器名可读），整表左右滑动查看 */}
+            <div className="overflow-x-auto">
+            <table className="w-full text-xs min-w-[880px]">
             <thead className="workspace-table-head">
               <tr className="text-left text-muted-foreground/70">
                 <th className="px-3 py-2.5 w-8">
@@ -2956,7 +2993,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
                       })}
                     />
                   </td>
-                  <td className="px-4 py-3 font-medium max-w-[180px] truncate" title={c.name}>
+                  <td className="px-4 py-3 font-medium min-w-[210px] max-w-[320px] truncate" title={c.name}>
                     <div className="flex items-center gap-2.5">
                       <div className={cn(
                         "p-1.5 rounded-lg flex-shrink-0 transition-colors duration-300",
@@ -2970,21 +3007,21 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
                       </div>
                     </div>
                   </td>
-                  <td className="px-3 py-3 max-w-[180px] truncate" title={c.image}>
-                    <span className="truncate font-mono text-[10px] bg-muted/60 border border-border/30 px-2 py-0.5 rounded text-muted-foreground block w-fit max-w-full">
+                  <td className="px-3 py-2.5 min-w-[170px] max-w-[260px] truncate" title={c.image}>
+                    <span className="truncate font-mono text-[11px] text-foreground/85 block max-w-full">
                       {c.image}
                     </span>
                   </td>
-                  <td className="px-3 py-3 w-[100px] whitespace-nowrap">
+                  <td className="px-3 py-2.5 w-[100px] whitespace-nowrap">
                     <StatusBadge state={c.state} status={c.status} />
                   </td>
-                  <td className="px-3 py-3 max-w-[200px]">
+                  <td className="px-3 py-2.5 min-w-[130px]">
                     {parseHostPorts(c.ports).length > 0 ? (
-                      <div className="flex items-center gap-1 flex-wrap max-w-[200px]">
+                      <div className="flex items-center gap-1.5 flex-wrap max-w-[220px]">
                         {parseHostPorts(c.ports).map(p => (
-                          <span key={p} className="inline-flex items-center font-mono text-[10px] text-muted-foreground bg-accent/40 border border-border/50 rounded overflow-hidden">
+                          <span key={p} className="inline-flex items-center font-mono text-[10px] text-muted-foreground bg-muted/50 border border-border/60 rounded-md overflow-hidden hover:border-primary/40 hover:text-foreground transition-colors">
                             <button
-                              className="px-1.5 py-0.5 hover:bg-accent hover:text-foreground transition-colors"
+                              className="px-1.5 py-0.5 hover:bg-accent/60 transition-colors"
                               title={t('dk_port_copy')}
                               onClick={() => {
                                 navigator.clipboard.writeText(`${serverHost}:${p}`)
@@ -2994,7 +3031,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
                               {p}
                             </button>
                             <button
-                              className="px-1 py-0.5 border-l border-border/50 hover:bg-accent hover:text-foreground transition-colors"
+                              className="px-1 py-0.5 border-l border-border/50 hover:bg-primary/10 hover:text-primary transition-colors"
                               title={t('dk_port_open')}
                               onClick={() => window.open(`http://${serverHost}:${p}`, '_blank', 'noopener')}
                             >
@@ -3004,15 +3041,15 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
                         ))}
                       </div>
                     ) : (
-                      <span className="font-mono text-[10px] text-muted-foreground bg-accent/40 border border-border/50 px-1.5 py-0.5 rounded block truncate max-w-full" title={c.ports || '-'}>
+                      <span className="font-mono text-[10px] text-muted-foreground/60 block truncate max-w-full" title={c.ports || '-'}>
                         {c.ports || '-'}
                       </span>
                     )}
                   </td>
-                  <td className="px-3 py-3 text-muted-foreground text-[10px] font-medium w-[130px] truncate" title={c.createdAt || '-'}>
+                  <td className="px-3 py-2.5 text-muted-foreground text-[10px] font-medium whitespace-nowrap" title={c.createdAt || '-'}>
                     {c.createdAt || '-'}
                   </td>
-                  <td className="px-3 py-3 text-right">
+                  <td className="px-3 py-2.5 text-right">
                     <button
                       className="text-muted-foreground hover:text-foreground"
                       onClick={(e) => handleDropdownClick(e, c)}
@@ -3025,6 +3062,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
               ))}
             </tbody>
           </table>
+          </div>
           </div>
           ) : (
           /* === 卡片视图 === */
@@ -3105,8 +3143,9 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
               )}
             />
           ) : (
-            <div className="m-2 rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden">
-            <table className="w-full text-xs">
+            <div className="my-2 rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+            <table className="w-full text-xs min-w-[760px]">
               <thead className="workspace-table-head">
                 <tr className="text-left text-muted-foreground/70">
                   <th className="px-4 py-2.5 font-medium tracking-wider text-[10px] uppercase">{t('docker_image_repository')}</th>
@@ -3144,10 +3183,10 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
                     : { tone: 'zinc', label: t('docker_image_status_unused') }
                   return (
                     <tr key={`${img.repository}:${img.tag}:${img.id}`} className={cn('border-b border-border/30 transition-all duration-200 group', rowBg)}>
-                      <td className="px-4 py-3 font-medium max-w-[200px] truncate" title={img.repository}>
+                      <td className="px-4 py-3 font-medium min-w-[200px] max-w-[320px] truncate" title={img.repository}>
                         <span className={cn('truncate font-mono text-[11px]', isDangling && 'text-muted-foreground italic')}>{img.repository}</span>
                       </td>
-                      <td className="px-3 py-3 max-w-[120px] truncate">
+                      <td className="px-3 py-3 min-w-[110px] truncate">
                         <span className={cn(
                           'font-mono text-[10px] border px-2 py-0.5 rounded',
                           isDangling
@@ -3198,6 +3237,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
               </tbody>
             </table>
           </div>
+          </div>
           )
         )}
 
@@ -3208,8 +3248,9 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
           ) : networks.length === 0 ? (
             <EmptyState icon={<Network className="h-6 w-6" />} title={t('docker_no_networks')} />
           ) : (
-            <div className="m-2 rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden">
-            <table className="w-full text-xs">
+            <div className="my-2 rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+            <table className="w-full text-xs min-w-[560px]">
               <thead className="workspace-table-head">
                 <tr className="text-left text-muted-foreground/70">
                   <th className="px-4 py-2.5 font-medium tracking-wider text-[10px] uppercase">{t('docker_network_name')}</th>
@@ -3224,7 +3265,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
                   const isBuiltin = ['bridge', 'host', 'none'].includes(n.name)
                   return (
                     <tr key={n.name} className="border-b border-border/30 hover:bg-muted/30 transition-all duration-200 group">
-                      <td className="px-4 py-3 font-medium max-w-[240px] truncate font-mono text-[11px]" title={n.name}>{n.name}</td>
+                      <td className="px-4 py-3 font-medium min-w-[200px] max-w-[320px] truncate font-mono text-[11px]" title={n.name}>{n.name}</td>
                       <td className="px-3 py-3 font-mono text-[10px] text-muted-foreground">{n.driver}</td>
                       <td className="px-3 py-3 font-mono text-[10px] text-muted-foreground">{n.scope}</td>
                       <td className="px-3 py-3 text-right">
@@ -3252,6 +3293,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
               </tbody>
             </table>
           </div>
+          </div>
           )
         )}
 
@@ -3262,8 +3304,9 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
           ) : volumes.length === 0 ? (
             <EmptyState icon={<HardDrive className="h-6 w-6" />} title={t('docker_no_volumes')} />
           ) : (
-            <div className="m-2 rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden">
-            <table className="w-full text-xs">
+            <div className="my-2 rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+            <table className="w-full text-xs min-w-[560px]">
               <thead className="workspace-table-head">
                 <tr className="text-left text-muted-foreground/70">
                   <th className="px-4 py-2.5 font-medium tracking-wider text-[10px] uppercase">{t('docker_volume_name')}</th>
@@ -3306,6 +3349,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
                 ))}
               </tbody>
             </table>
+          </div>
           </div>
           )
         )}

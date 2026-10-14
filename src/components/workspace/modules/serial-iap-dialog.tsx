@@ -61,7 +61,7 @@ export function SerialIapDialog({
 
   // 协议模式配置
   // 协议标识：由后端透传给 IAP 引擎，这里放宽为 string，选项列表见下方协议 Pill 单选组
-  const [protocol, setProtocol] = useState<string>('ymodem-1k')
+  const [protocol, setProtocol] = useState<SerialIapConfig['protocol']>('ymodem-1k')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [preCommand, setPreCommand] = useState('')
   const [preBreakDuration, setPreBreakDuration] = useState('0')
@@ -475,7 +475,7 @@ export function SerialIapDialog({
                   key={item.key}
                   type="button"
                   disabled={isRunning}
-                  onClick={() => setProtocol(item.key)}
+                  onClick={() => setProtocol(item.key as SerialIapConfig['protocol'])}
                   className={cn(
                     "flex flex-col text-left p-2.5 rounded-lg border text-xs transition-all cursor-pointer",
                     protocol === item.key

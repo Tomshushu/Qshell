@@ -6,7 +6,6 @@ export function useKeyboardShortcuts() {
     const handleKeyDown = (e: KeyboardEvent) => {
       const {
         openTab,
-        closeTab,
         setActiveTab,
         tabs,
         activeTabId,
@@ -48,11 +47,14 @@ export function useKeyboardShortcuts() {
         return
       }
 
-      // Ctrl+W / Cmd+W: 关闭当前标签
+      // Ctrl+W / Cmd+W: 关闭当前标签（经统一守卫：首次二次确认，勾选「不再提醒」后直接关闭）
       if (hasMod && !e.shiftKey && key === 'w') {
         e.preventDefault()
         if (activeTabId) {
-          closeTab(activeTabId)
+          // TabStrip 常驻渲染，统一监听该事件弹确认框
+          window.dispatchEvent(
+            new CustomEvent('qshell:request-close-tab', { detail: activeTabId }),
+          )
         }
         return
       }

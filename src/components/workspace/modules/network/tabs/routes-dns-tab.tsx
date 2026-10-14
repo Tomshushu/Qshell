@@ -134,16 +134,6 @@ export function RoutesDnsTab({
               </h3>
               <span className="text-xs text-muted-foreground">({routeView?.routes.length || 0})</span>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onRefresh}
-              disabled={loading}
-              className="h-6 text-xs gap-1"
-            >
-              <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
-              {t('net_refresh')}
-            </Button>
           </div>
 
           <div className="border rounded-lg bg-card overflow-hidden">

@@ -472,7 +472,7 @@ function TabGroupView({ groupId }: { groupId: string }) {
   const activeTabId = useAppStore((s) => s.activeTabId);
   const dropTarget = useAppStore((s) => s.splitDropTarget);
   const focusGroup = useAppStore((s) => s.focusGroup);
-  const closeTab = useAppStore((s) => s.closeTab);
+
   const layout = useAppStore((s) => s.layout);
   const detachTabToTopLevel = useAppStore((s) => s.detachTabToTopLevel);
   const broadcastTabIds = useAppStore((s) => s.broadcastTabIds);
@@ -791,7 +791,13 @@ function TabGroupView({ groupId }: { groupId: string }) {
                 color: terminalTheme.ui.foreground,
                 opacity: 0.75,
               }}
-              onClick={() => closeTab(activeTab.id)}
+              onClick={() =>
+                window.dispatchEvent(
+                  new CustomEvent("qshell:request-close-tab", {
+                    detail: activeTab.id,
+                  }),
+                )
+              }
               title={t("tb_close")}
             >
               <X className="h-3 w-3" />

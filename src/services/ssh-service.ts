@@ -471,7 +471,7 @@ export const sshService = {
    */
   async getState(serverId: string): Promise<SshStateResult> {
     if (!backend) {
-      return { state: ConnectionState.Disconnected };
+      return { state: ConnectionState.Disconnected, generation: 0 };
     }
     return backend.ssh.getState(serverId);
   },
@@ -1342,16 +1342,18 @@ export const sshService = {
           'Cancel all transfers',
         );
       } else if (backend) {
+        const filesApi = backend.files;
         await withTransferCancelTimeout(
-          Promise.allSettled(records.map(r => backend.files.cancelTransfer(r.transferId))).then(() => undefined),
+          Promise.allSettled(records.map(r => filesApi.cancelTransfer(r.transferId))).then(() => undefined),
           'Cancel all transfers',
         );
       }
     } catch (err) {
       console.error('[sshService] cancelAllTransfers failed, fallback to per-transfer cancel:', err);
       if (backend) {
+        const filesApi = backend.files;
         await withTransferCancelTimeout(
-          Promise.allSettled(records.map(r => backend.files.cancelTransfer(r.transferId))).then(() => undefined),
+          Promise.allSettled(records.map(r => filesApi.cancelTransfer(r.transferId))).then(() => undefined),
           'Cancel all transfers fallback',
         ).catch(fallbackErr => {
           console.error('[sshService] cancel fallback timed out:', fallbackErr);
@@ -1363,6 +1365,7 @@ export const sshService = {
     // 按 serverId 分组，每台服务器最多 2 个并发清理，杜绝冲击 SSH MaxSessions 限制
     const pausedWithTmp = records.filter(r => !!r.tmpPath && !!r.serverId);
     if (pausedWithTmp.length > 0 && backend?.files?.cleanupTmpFile) {
+      const cleanupTmpFile = backend.files.cleanupTmpFile;
       const byServer = new Map<string, ActiveTransferRecord[]>();
       for (const rec of pausedWithTmp) {
         const list = byServer.get(rec.serverId) || [];
@@ -1379,7 +1382,7 @@ export const sshService = {
               const item = items[idx++];
               if (!item?.tmpPath) continue;
               try {
-                await backend.files.cleanupTmpFile(sid, item.tmpPath, item.isUpload);
+                await cleanupTmpFile(sid, item.tmpPath, item.isUpload);
               } catch (e) {
                 console.warn('[sshService] cleanup tmp file failed:', item.tmpPath, e);
               }

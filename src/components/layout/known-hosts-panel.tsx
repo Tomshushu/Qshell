@@ -117,7 +117,7 @@ export function KnownHostsPanel() {
         toast.success(res.message || t("known_hosts_deleted"));
         await fetchHosts();
       } else {
-        toast.error(res.message);
+        toast.error(res.message || t("common_error"));
       }
     } catch (err) {
       toast.error(String(err));
@@ -135,7 +135,7 @@ export function KnownHostsPanel() {
         toast.success(res.message || t("known_hosts_cleared"));
         await fetchHosts();
       } else {
-        toast.error(res.message);
+        toast.error(res.message || t("common_error"));
       }
     } catch (err) {
       toast.error(String(err));

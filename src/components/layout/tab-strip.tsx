@@ -3,6 +3,10 @@ import { createPortal } from "react-dom";
 import { useAppStore } from "@/store";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
+  isConfirmSuppressed,
+  suppressConfirm,
+} from "@/utils/confirm-suppress";
+import {
   X,
   Copy,
   Lock,
@@ -128,6 +132,8 @@ export function TabStrip({ tabs, className }: TabStripProps) {
     string | null
   >(null);
   const [showCloseConfirm, setShowCloseConfirm] = useState<string | null>(null);
+  // 「不再提醒」勾选态：勾选 + 确认后持久化，后续关闭标签直接执行
+  const [closeDontAskAgain, setCloseDontAskAgain] = useState(false);
   const [showServerPicker, setShowServerPicker] = useState(false);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
   const [serverQuery, setServerQuery] = useState("");
@@ -138,6 +144,31 @@ export function TabStrip({ tabs, className }: TabStripProps) {
     left: false,
     right: false,
   });
+
+  // 关闭标签统一入口：用户勾选过「不再提醒」则直接关闭，否则弹二次确认。
+  // X 按钮 / 右键菜单 / Ctrl+W / 分屏关闭按钮全部走这里，保证口径一致。
+  const tryCloseTab = useCallback(
+    (tabId: string) => {
+      if (isConfirmSuppressed("tab-close")) {
+        closeTab(tabId);
+      } else {
+        setCloseDontAskAgain(false);
+        setShowCloseConfirm(tabId);
+      }
+    },
+    [closeTab],
+  );
+
+  // 其他入口（全局快捷键 Ctrl+W、分屏窗格关闭按钮）通过事件请求关闭，由本组件统一弹确认
+  useEffect(() => {
+    const onRequestClose = (e: Event) => {
+      const tabId = (e as CustomEvent<string>).detail;
+      if (tabId) tryCloseTab(tabId);
+    };
+    window.addEventListener("qshell:request-close-tab", onRequestClose);
+    return () =>
+      window.removeEventListener("qshell:request-close-tab", onRequestClose);
+  }, [tryCloseTab]);
 
   // ── 拖拽相关 ─────────────────────────────────────────────────────────
   const [dragStartRect, setDragStartRect] = useState<{
@@ -452,7 +483,9 @@ export function TabStrip({ tabs, className }: TabStripProps) {
       // 首次激活
       if (!dragActiveRef.current) {
         if (isTauri && allTabsCount === 1) {
-          backend?.window.startDragging().catch(console.error);
+          if (backend?.window) {
+            backend.window.startDragging().catch(console.error);
+          }
           cleanupDrag();
           return;
         }
@@ -1380,7 +1413,7 @@ export function TabStrip({ tabs, className }: TabStripProps) {
                     )}
                     onClick={(e) => {
                       e.stopPropagation();
-                      setShowCloseConfirm(tab.id);
+                      tryCloseTab(tab.id);
                     }}
                     title={t("tb_close")}
                   >
@@ -1779,6 +1812,7 @@ export function TabStrip({ tabs, className }: TabStripProps) {
             }
 
             if (!ctxMenu.tab) return null;
+            const ctxTab = ctxMenu.tab;
             return (
               <div
                 data-ctx-menu
@@ -1788,13 +1822,13 @@ export function TabStrip({ tabs, className }: TabStripProps) {
                 onContextMenu={(e) => e.preventDefault()}
               >
                 {/* 仅终端会话标签支持：复制会话 / 重命名 */}
-                {ctxMenu.tab.serverId !== "sftp" && (
+                {ctxTab.serverId !== "sftp" && (
                   <>
                     <CtxMenuItem
                       icon={<Copy className="h-3.5 w-3.5" />}
                       label={t("tb_duplicate")}
                       onClick={() => {
-                        duplicateTab(ctxMenu.tab.id);
+                        duplicateTab(ctxTab.id);
                         setCtxMenu(null);
                       }}
                     />
@@ -1802,7 +1836,7 @@ export function TabStrip({ tabs, className }: TabStripProps) {
                     <CtxMenuItem
                       icon={<Pencil className="h-3.5 w-3.5" />}
                       label={t("tb_rename")}
-                      onClick={() => startRename(ctxMenu.tab)}
+                      onClick={() => startRename(ctxTab)}
                     />
 
                     <CtxMenuDivider />
@@ -1812,15 +1846,15 @@ export function TabStrip({ tabs, className }: TabStripProps) {
                 {/* 所有标签共用项：锁定 / 解锁 & 标签颜色 */}
                 <CtxMenuItem
                   icon={
-                    ctxMenu.tab.locked ? (
+                    ctxTab.locked ? (
                       <Unlock className="h-3.5 w-3.5" />
                     ) : (
                       <Lock className="h-3.5 w-3.5" />
                     )
                   }
-                  label={ctxMenu.tab.locked ? t("tb_unlock") : t("tb_lock")}
+                  label={ctxTab.locked ? t("tb_unlock") : t("tb_lock")}
                   onClick={() => {
-                    toggleTabLock(ctxMenu.tab.id);
+                    toggleTabLock(ctxTab.id);
                     setCtxMenu(null);
                   }}
                 />
@@ -1849,7 +1883,7 @@ export function TabStrip({ tabs, className }: TabStripProps) {
                           key={color.nameKey}
                           className="flex flex-col items-center gap-1 p-1 rounded-lg hover:bg-accent text-[10px] transition-colors duration-150"
                           onClick={() => {
-                            setTabColor(ctxMenu.tab.id, color.value);
+                            setTabColor(ctxTab.id, color.value);
                             setCtxMenu(null);
                           }}
                           title={t(color.nameKey)}
@@ -1880,10 +1914,10 @@ export function TabStrip({ tabs, className }: TabStripProps) {
                 <CtxMenuItem
                   icon={<X className="h-3.5 w-3.5" />}
                   label={t("tab_close_current")}
-                  disabled={ctxMenu.tab.locked}
+                  disabled={ctxTab.locked}
                   onClick={() => {
-                    if (!ctxMenu.tab.locked) {
-                      setShowCloseConfirm(ctxMenu.tab.id);
+                    if (!ctxTab.locked) {
+                      tryCloseTab(ctxTab.id);
                       setCtxMenu(null);
                     }
                   }}
@@ -1893,7 +1927,7 @@ export function TabStrip({ tabs, className }: TabStripProps) {
                   icon={<Plus className="h-3.5 w-3.5 rotate-45" />}
                   label={t("tab_close_others")}
                   onClick={() => {
-                    setShowCloseOthersConfirm(ctxMenu.tab.id);
+                    setShowCloseOthersConfirm(ctxTab.id);
                     setCtxMenu(null);
                   }}
                 />
@@ -1910,7 +1944,11 @@ export function TabStrip({ tabs, className }: TabStripProps) {
         description={t("tab_confirm_close_desc")}
         confirmLabel={t("tab_confirm_close_btn")}
         cancelLabel={t("tab_cancel_btn")}
+        showDontAskAgain
+        dontAskAgain={closeDontAskAgain}
+        onDontAskAgainChange={setCloseDontAskAgain}
         onConfirm={() => {
+          if (closeDontAskAgain) suppressConfirm("tab-close");
           if (showCloseConfirm) closeTab(showCloseConfirm);
           setShowCloseConfirm(null);
         }}

@@ -86,19 +86,51 @@ export function ServicesModule({ serverId, onNavigate, initialSearchQuery }: Ser
   const [resources, setResources] = useState<Record<string, ServiceResource> | null>(null)
   const [loadingResources, setLoadingResources] = useState(false)
 
+  // 按需采集资源：两次采样 CPUUsageNSec 求差算 CPU%，一次命令覆盖全部服务
+  const loadResources = useCallback(async () => {
+    setLoadingResources(true)
+    try {
+      const first: ServiceResourceRawMap = await sshService.serviceResources(serverId)
+      await new Promise((r) => setTimeout(r, CPU_SAMPLE_INTERVAL * 1000))
+      const second: ServiceResourceRawMap = await sshService.serviceResources(serverId)
+      const next: Record<string, ServiceResource> = {}
+      for (const [unit, cur] of Object.entries(second)) {
+        const prev = first[unit]
+        const curNs = cur?.cpuNs ?? 0
+        const prevNs = prev?.cpuNs ?? 0
+        const cpuPercent =
+          curNs >= prevNs ? ((curNs - prevNs) / 1e9 / CPU_SAMPLE_INTERVAL) * 100 : 0
+        next[unit] = {
+          memoryBytes: cur?.memoryBytes ?? 0,
+          tasks: cur?.tasks ?? 0,
+          cpuPercent,
+        }
+      }
+      setResources(next)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('svc_res_collect_fail'))
+    } finally {
+      setLoadingResources(false)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverId, t])
+
   const fetchServices = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
       const data = await sshService.listServices(serverId)
       setServices(data)
+      if (showResources) {
+        void loadResources()
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : t('svc_err_load'))
     } finally {
       setLoading(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverId])
+  }, [serverId, showResources, loadResources, t])
 
   useEffect(() => {
 
@@ -203,35 +235,6 @@ export function ServicesModule({ serverId, onNavigate, initialSearchQuery }: Ser
     setSelectedNames(new Set())
   }
 
-  // 按需采集资源：两次采样 CPUUsageNSec 求差算 CPU%，一次命令覆盖全部服务
-  const loadResources = useCallback(async () => {
-    setLoadingResources(true)
-    try {
-      const first: ServiceResourceRawMap = await sshService.serviceResources(serverId)
-      await new Promise((r) => setTimeout(r, CPU_SAMPLE_INTERVAL * 1000))
-      const second: ServiceResourceRawMap = await sshService.serviceResources(serverId)
-      const next: Record<string, ServiceResource> = {}
-      for (const [unit, cur] of Object.entries(second)) {
-        const prev = first[unit]
-        const curNs = cur?.cpuNs ?? 0
-        const prevNs = prev?.cpuNs ?? 0
-        const cpuPercent =
-          curNs >= prevNs ? ((curNs - prevNs) / 1e9 / CPU_SAMPLE_INTERVAL) * 100 : 0
-        next[unit] = {
-          memoryBytes: cur?.memoryBytes ?? 0,
-          tasks: cur?.tasks ?? 0,
-          cpuPercent,
-        }
-      }
-      setResources(next)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t('svc_res_collect_fail'))
-    } finally {
-      setLoadingResources(false)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverId])
-
   // 资源列开关：开启时采集一次，关闭时清空（不持续轮询）
   const toggleResources = async () => {
     if (showResources) {
@@ -261,35 +264,48 @@ export function ServicesModule({ serverId, onNavigate, initialSearchQuery }: Ser
 
   return (
     <div className="flex flex-col h-full bg-transparent">
-      {/* Toolbar */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-border/60 bg-card">
-        <Button onClick={fetchServices} disabled={loading} size="sm" className="gap-1 h-7 text-xs">
-          <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
+      {/* 统一规范工具栏 */}
+      <div className="flex items-center gap-2.5 px-4 h-11 border-b border-border/50 bg-muted/20 shrink-0 flex-wrap">
+        <Button
+          variant="ghost"
+          onClick={fetchServices}
+          disabled={loading}
+          size="sm"
+          className="gap-1 h-7 text-xs"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
           {t('svc_refresh')}
         </Button>
-        <div className="flex gap-1">
+
+        <div className="h-3.5 w-[1px] bg-border/60" />
+
+        <div className="flex items-center rounded-lg border border-border/50 bg-muted/40 p-0.5 text-xs">
           {(['all', 'running', 'stopped', 'failed'] as StatusFilter[]).map((f) => (
-            <Button
+            <button
               key={f}
-              variant={statusFilter === f ? 'secondary' : 'ghost'}
-              size="sm"
-              className="h-7 text-xs"
+              type="button"
+              className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-all ${
+                statusFilter === f ? 'bg-background text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground'
+              }`}
               onClick={() => setStatusFilter(f)}
             >
               {f === 'all' ? t('svc_all') : f === 'running' ? t('svc_running') : f === 'stopped' ? t('svc_stopped') : t('svc_failed')}
-            </Button>
+            </button>
           ))}
         </div>
+
         <div className="flex-1" />
+
         <div className="relative w-48">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
             placeholder={t('svc_search_placeholder')}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="h-7 pl-7 text-xs"
+            className="h-7 pl-8 text-xs bg-background/80"
           />
         </div>
+
         <Button
           size="sm"
           variant={showResources ? 'secondary' : 'ghost'}
@@ -298,26 +314,14 @@ export function ServicesModule({ serverId, onNavigate, initialSearchQuery }: Ser
           disabled={loadingResources}
           title={t('svc_res_toggle_hint')}
         >
-          {loadingResources ? <Loader2 className="h-3 w-3 animate-spin" /> : <BarChart3 className="h-3 w-3" />}
+          {loadingResources ? <Loader2 className="h-3 w-3 animate-spin" /> : <BarChart3 className="h-3.5 w-3.5" />}
           {t('svc_res_toggle')}
         </Button>
-        {showResources && (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7 text-xs"
-            onClick={() => void loadResources()}
-            disabled={loadingResources}
-            title={t('svc_batch_refresh')}
-          >
-            <RefreshCw className="h-3 w-3" />
-          </Button>
-        )}
       </div>
 
       {/* 批量操作工具栏（选中后出现） */}
       {selectedNames.size > 0 && (
-        <div className="flex items-center gap-2 px-3 py-2 border-b bg-accent/30 flex-wrap">
+        <div className="flex items-center gap-2 px-4 py-2 border-b border-border/40 bg-accent/30 flex-wrap">
           <span className="text-xs whitespace-nowrap">
             {t('svc_batch_selected').replace('{count}', String(selectedNames.size))}
           </span>
@@ -361,7 +365,7 @@ export function ServicesModule({ serverId, onNavigate, initialSearchQuery }: Ser
 
       {/* 批量失败明细：单个失败不阻塞其他任务，最终汇总展示 */}
       {batchFailures.length > 0 && (
-        <div className="px-3 py-2 bg-red-500/10 text-red-500 text-xs border-b">
+        <div className="px-4 py-2 bg-rose-500/10 text-rose-600 dark:text-rose-400 text-xs border-b border-rose-500/20">
           <div className="flex items-center">
             <span>{t('svc_batch_fail_title').replace('{count}', String(batchFailures.length))}</span>
             <Button variant="ghost" size="sm" className="h-4 text-[10px] ml-2" onClick={() => setBatchFailures([])}>
@@ -380,8 +384,8 @@ export function ServicesModule({ serverId, onNavigate, initialSearchQuery }: Ser
 
       {/* Error message */}
       {error && (
-        <div className="px-3 py-2 bg-red-500/10 text-red-500 text-xs border-b">
-          {error}
+        <div className="px-4 py-2 bg-rose-500/10 text-rose-600 dark:text-rose-400 text-xs border-b border-rose-500/20 flex items-center justify-between">
+          <span>{error}</span>
           <Button variant="ghost" size="sm" className="h-4 text-[10px] ml-2" onClick={() => setError(null)}>{t('svc_close')}</Button>
         </div>
       )}
@@ -399,8 +403,9 @@ export function ServicesModule({ serverId, onNavigate, initialSearchQuery }: Ser
             <p className="text-sm">{t('svc_empty')}</p>
           </div>
         ) : (
-          <div className="m-2 rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden">
-          <table className="w-full text-xs">
+          <div className="p-3">
+            <div className="rounded-xl border border-border/70 bg-card shadow-xs overflow-hidden">
+              <table className="w-full text-xs">
             <thead className="workspace-table-head">
               <tr className="text-left text-muted-foreground">
                 <th className="px-3 py-2 w-8">
@@ -511,6 +516,7 @@ export function ServicesModule({ serverId, onNavigate, initialSearchQuery }: Ser
             </tbody>
           </table>
           </div>
+        </div>
         )}
 
         {filteredServices.length === 0 && services.length > 0 && (

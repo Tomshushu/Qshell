@@ -79,17 +79,17 @@ export function PortsModule({ serverId, initialSearchQuery, initialSubTab = 'lis
 
   return (
     <div className="flex flex-col h-full bg-transparent">
-      {/* 顶部主工具栏：子 Tab 切换（系统监听 vs 端口转发） */}
-      <div className="flex items-center justify-between gap-3 px-3 py-2 border-b border-border/60 bg-card">
+      {/* 统一规范工具栏 */}
+      <div className="flex items-center justify-between gap-3 px-4 h-11 border-b border-border/50 bg-muted/20 shrink-0">
         {/* 子模块切换 Segmented Tabs */}
-        <div className="flex items-center gap-1 p-0.5 rounded-lg bg-muted/60 border border-border/50 text-xs">
+        <div className="flex items-center gap-1 p-0.5 rounded-lg bg-muted/40 border border-border/50 text-xs">
           <button
             type="button"
             onClick={() => setActiveSubTab('listening')}
             className={cn(
-              "flex items-center gap-1.5 px-3 py-1 rounded-md font-medium transition-all cursor-pointer select-none",
+              "flex items-center gap-1.5 px-3 py-1 rounded-md font-medium transition-all cursor-pointer select-none text-[11px]",
               activeSubTab === 'listening'
-                ? "bg-background text-foreground shadow-xs border border-border/40"
+                ? "bg-background text-foreground shadow-xs font-semibold"
                 : "text-muted-foreground hover:text-foreground"
             )}
           >
@@ -105,9 +105,9 @@ export function PortsModule({ serverId, initialSearchQuery, initialSubTab = 'lis
             type="button"
             onClick={() => setActiveSubTab('forward')}
             className={cn(
-              "flex items-center gap-1.5 px-3 py-1 rounded-md font-medium transition-all cursor-pointer select-none",
+              "flex items-center gap-1.5 px-3 py-1 rounded-md font-medium transition-all cursor-pointer select-none text-[11px]",
               activeSubTab === 'forward'
-                ? "bg-background text-foreground shadow-xs border border-border/40"
+                ? "bg-background text-foreground shadow-xs font-semibold"
                 : "text-muted-foreground hover:text-foreground"
             )}
           >
@@ -119,17 +119,17 @@ export function PortsModule({ serverId, initialSearchQuery, initialSubTab = 'lis
         {/* 仅在系统监听模式下显示右侧刷新与搜索 */}
         {activeSubTab === 'listening' && (
           <div className="flex items-center gap-2">
-            <Button onClick={fetchPorts} disabled={loading} size="sm" variant="outline" className="gap-1 h-7 text-xs">
-              <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
+            <Button onClick={fetchPorts} disabled={loading} size="sm" variant="ghost" className="gap-1 h-7 text-xs">
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
               {t('prts_refresh')}
             </Button>
             <div className="relative w-48">
-              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
               <Input
                 placeholder={t('prts_search_placeholder')}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="h-7 pl-7 text-xs"
+                className="h-7 pl-8 text-xs bg-background/80"
               />
             </div>
           </div>
@@ -140,8 +140,8 @@ export function PortsModule({ serverId, initialSearchQuery, initialSubTab = 'lis
         <>
           {/* Error message */}
           {error && (
-            <div className="px-3 py-2 bg-red-500/10 text-red-500 text-xs border-b">
-              {error}
+            <div className="px-4 py-2 bg-rose-500/10 text-rose-600 dark:text-rose-400 text-xs border-b border-rose-500/20 flex items-center justify-between">
+              <span>{error}</span>
               <Button variant="ghost" size="sm" className="h-4 text-[10px] ml-2" onClick={() => setError(null)}>{t('prts_close')}</Button>
             </div>
           )}
@@ -159,8 +159,9 @@ export function PortsModule({ serverId, initialSearchQuery, initialSubTab = 'lis
                 <p className="text-sm">{t('prts_empty')}</p>
               </div>
             ) : (
-              <div className="m-2 rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden">
-                <table className="w-full text-xs">
+              <div className="p-3">
+                <div className="rounded-xl border border-border/70 bg-card shadow-xs overflow-hidden">
+                  <table className="w-full text-xs">
                   <thead className="workspace-table-head">
                     <tr className="text-left text-muted-foreground">
                       <th className="px-3 py-2 font-medium">{t('prts_th_proto')}</th>
@@ -211,6 +212,7 @@ export function PortsModule({ serverId, initialSearchQuery, initialSubTab = 'lis
                   </tbody>
                 </table>
               </div>
+            </div>
             )}
 
             {filteredPorts.length === 0 && ports.length > 0 && (

@@ -5307,6 +5307,33 @@ body.sftp-dragging * {
   100% { transform: translateY(0); opacity: 1; }
 }
 
+/* 工作台文件面板：打开时从底部滑出（高度 0 → 目标值，终端被逐渐推上去）。
+   目标高度由组件经 --fd-panel-h 注入；display:none → 显示切换时动画自动重播 */
+@keyframes files-panel-slide-up {
+  0%   { height: 0; opacity: 0; }
+  100% { height: var(--fd-panel-h, 340px); opacity: 1; }
+}
+
+.files-panel-slide-up {
+  animation: files-panel-slide-up 0.32s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.files-panel-divider-in {
+  animation: apple-fade-in 0.32s ease-out;
+}
+
+@keyframes apple-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .files-panel-slide-up,
+  .files-panel-divider-in {
+    animation: none;
+  }
+}
+
 /* 淡入缩放 */
 @keyframes apple-fade-scale {
   0%   { transform: scale(0.95); opacity: 0; }

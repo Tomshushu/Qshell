@@ -669,6 +669,7 @@ export default {
   cd_default_title: "Confirm",
   cd_default_confirm: "OK",
   cd_default_cancel: "Cancel",
+  cd_dont_ask_again: "Don't ask again, proceed directly next time",
   ed_default_title: "Operation Failed",
   ed_ok: "Got it",
   tag_default_placeholder: "Enter tag and press Enter...",
@@ -1318,6 +1319,7 @@ export default {
   net_copy_success: "Copied to clipboard",
 
   // ========== Overview module ==========
+  ov_refresh: "Refresh",
   ov_connecting: "Connecting to server to fetch data...",
   ov_health_healthy: "Healthy",
   ov_health_warning: "Warning",
@@ -2929,6 +2931,7 @@ export default {
   quick_access_home: "Home",
 
   // ========== Common Toast ==========
+  common_action: "Actions",
   common_op_failed: "Operation failed",
   common_op_success: "Operation succeeded",
   common_delete_failed: "Delete failed",

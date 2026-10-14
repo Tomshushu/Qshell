@@ -186,6 +186,8 @@ export interface JumpHostNode {
   certificatePath?: string
   /** 关联的 ssh_keys 表 id（content-based 连接） */
   sshKeyId?: string
+  /** 关联密钥的展示名（仅前端编辑态使用，保存时不参与连接） */
+  keyName?: string
   /** 连接超时（秒） */
   connectionTimeout?: number
 }

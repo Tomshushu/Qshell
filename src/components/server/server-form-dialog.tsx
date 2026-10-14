@@ -517,10 +517,12 @@ export function ServerFormDialog({
           }
 
           const safeTags = (() => {
-            if (Array.isArray(existingServer.tags)) return existingServer.tags
-            if (typeof existingServer.tags === 'string' && existingServer.tags.trim()) {
+            // 历史数据可能存的是 JSON 字符串，运行时做双形态兼容
+            const rawTags = existingServer.tags as unknown as string[] | string
+            if (Array.isArray(rawTags)) return rawTags
+            if (typeof rawTags === 'string' && rawTags.trim()) {
               try {
-                const parsed = JSON.parse(existingServer.tags)
+                const parsed = JSON.parse(rawTags)
                 return Array.isArray(parsed) ? parsed : []
               } catch {
                 return []
@@ -818,7 +820,7 @@ export function ServerFormDialog({
             host: host.trim(),
             port: parseInt(rdpPort.trim(), 10) || 3389,
             username: username.trim(),
-            authType: 'password',
+            authType: 'password' as const,
             connectionTimeout: parseInt(connectionTimeout) || 30,
             targetType: 'windows',
             protocol: 'rdp',
@@ -1998,7 +2000,7 @@ export function ServerFormDialog({
                             onChange={(v) => setAgentIdentity(v ?? '')}
                             options={[
                               { value: '', label: '-- 使用 Agent 中的第一个身份 (默认) --' },
-                              ...agentIdentities.map((id, idx) => ({ value: id.publicKey, label: `${id.comment || id.fingerprint || `Identity ${idx + 1}`} (${id.keyType})` })),
+                              ...agentIdentities.map((id, idx) => ({ value: id.publicKeyBase64, label: `${id.algorithm} (${id.fingerprint || `Identity ${idx + 1}`})` })),
                             ]}
                             className="h-7 flex-1 font-mono"
                           />

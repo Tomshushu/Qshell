@@ -299,8 +299,8 @@ export const sortFiles = <T extends { name: string; isDirectory: boolean }>(
           ? (valA as string).localeCompare(valB as string)
           : (valB as string).localeCompare(valA as string);
       case "size":
-        valA = a.isDirectory ? 0 : "size" in a ? (a as LocalFileEntry).size : 0;
-        valB = b.isDirectory ? 0 : "size" in b ? (b as LocalFileEntry).size : 0;
+        valA = a.isDirectory ? 0 : "size" in a ? (a as unknown as LocalFileEntry).size : 0;
+        valB = b.isDirectory ? 0 : "size" in b ? (b as unknown as LocalFileEntry).size : 0;
         return order === "asc"
           ? (valA as number) - (valB as number)
           : (valB as number) - (valA as number);
@@ -316,8 +316,8 @@ export const sortFiles = <T extends { name: string; isDirectory: boolean }>(
         return order === "asc" ? timeA - timeB : timeB - timeA;
       }
       case "owner":
-        valA = "owner" in a ? (a as LocalFileEntry).owner || "" : "";
-        valB = "owner" in b ? (b as LocalFileEntry).owner || "" : "";
+        valA = "owner" in a ? (a as unknown as LocalFileEntry).owner || "" : "";
+        valB = "owner" in b ? (b as unknown as LocalFileEntry).owner || "" : "";
         return order === "asc"
           ? (valA as string).localeCompare(valB as string)
           : (valB as string).localeCompare(valA as string);

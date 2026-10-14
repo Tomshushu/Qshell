@@ -13,6 +13,8 @@ import { I18nProvider } from '@/i18n/i18n-provider'
 import { useTranslation } from '@/i18n'
 import { sshService } from '@/services/ssh-service'
 import { backend, isTauri } from '@/services/api'
+import type { SshKeyInput } from '@/services/api'
+import type { WorkspaceTab } from '@/types'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { AlertCircle, Copy, ShieldCheck } from 'lucide-react'
@@ -294,57 +296,9 @@ function AppContent() {
   const loadServers = useCallback(async () => {
     try {
       const dbServers = await sshService.listServers()
-      const normalizedServers = dbServers.map((s) => ({
-        id: s.id,
-        name: s.name,
-        host: s.host,
-        port: s.port,
-        username: s.username,
-        authType: s.auth_type || s.authType || 'password',
-        password: s.password,
-        privateKeyPath: s.private_key_path || s.privateKeyPath || '',
-        privateKeyPassphrase: s.private_key_passphrase || s.privateKeyPassphrase,
-        agentIdentity: s.agent_identity || s.agentIdentity,
-        certificatePath: s.certificate_path || s.certificatePath,
-        sshKeyId: s.ssh_key_id || s.sshKeyId,
-        // 所属分组 ID（服务器 ↔ 分组归属关系）。
-        // 注意：这里的对象是逐字段重建的白名单，一旦漏掉某字段，
-        // 后端返回的值会在重建时丢失（此前 groupId 即因此重启后丢失）。
-        groupId: s.group_id || s.groupId || null,
-        // Rust 端 tags 存储为 JSON 字符串，安全解析为数组
-        tags: (() => {
-          if (Array.isArray(s.tags)) return s.tags
-          if (typeof s.tags === 'string' && s.tags.trim()) {
-            try {
-              const parsed = JSON.parse(s.tags)
-              return Array.isArray(parsed) ? parsed : []
-            } catch {
-              return []
-            }
-          }
-          return []
-        })(),
-        notes: s.notes || '',
-        connectionTimeout: s.connection_timeout || s.connectionTimeout || 30,
-        favorite: !!s.favorite,
-        status: s.status || 'unknown',
-        osType: s.os_type || s.osType || '',
-        osInfo: s.os_info || s.osInfo || '',
-        targetType: s.target_type || s.targetType || 'linux',
-        protocol: s.protocol || 'ssh',
-        // protocols 存储为 JSON 字符串（如 '["ssh","rdp"]'），解析为数组
-        protocols: (() => {
-          const raw = s.protocols
-          if (Array.isArray(raw)) return raw
-          if (typeof raw === 'string' && raw) { try { const p = JSON.parse(raw); return Array.isArray(p) ? p : ['ssh'] } catch { return ['ssh'] } }
-          return ['ssh']
-        })(),
-        lastAccessedAt: s.last_accessed_at || s.lastAccessedAt,
-        proxyConfig: s.proxy_config || s.proxyConfig || null,
-        tunnelsConfig: s.tunnels_config || s.tunnelsConfig || null,
-        createdAt: s.created_at || s.createdAt,
-        updatedAt: s.updated_at || s.updatedAt,
-      }))
+      // sshService.listServers 已由适配层归一化（snake_case→camelCase、tags/protocols JSON 解析），
+      // 此处不再白名单重建——旧写法会丢失 rdpPort/bmcPort/lastDisconnectedAt 等字段
+      const normalizedServers = dbServers
       setServers(normalizedServers)
       // 同步回收站待删除数量
       try {

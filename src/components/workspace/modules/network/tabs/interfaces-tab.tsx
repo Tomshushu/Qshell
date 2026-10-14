@@ -71,16 +71,6 @@ export function InterfacesTab({
           <h3 className="text-sm font-semibold">{t('net_tab_interfaces')}</h3>
           <span className="text-xs text-muted-foreground">({interfaces.length})</span>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onRefresh}
-          disabled={loading}
-          className="h-7 text-xs gap-1"
-        >
-          <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
-          {t('net_refresh')}
-        </Button>
       </div>
 
       {interfaces.length === 0 ? (

@@ -201,7 +201,7 @@ export function FileContextMenu({
             {activeSubMenu === 'new' && (
               <div
                 className={cn(
-                  'absolute -top-1.5 flex flex-col min-w-[10rem] glass-strong rounded-xl border border-border/60 shadow-xl p-1.5 text-xs text-popover-foreground select-none animate-in fade-in-0 zoom-in-95 duration-100',
+                  'absolute -top-1.5 flex flex-col min-w-[12rem] glass-strong rounded-xl border border-border/60 shadow-xl p-1.5 text-xs text-popover-foreground select-none animate-in fade-in-0 zoom-in-95 duration-100',
                   newSub.side === 'right' ? 'left-full ml-1' : 'right-full mr-1'
                 )}
                 onMouseEnter={keepSubMenuOpen}
@@ -215,8 +215,8 @@ export function FileContextMenu({
                   }}
                 >
                   <FolderPlus className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span>{t('fs_new_folder')}</span>
-                  <ContextMenuShortcut>Ctrl+Shift+N</ContextMenuShortcut>
+                  <span className="whitespace-nowrap">{t('fs_new_folder')}</span>
+                  <ContextMenuShortcut className="shrink-0">Ctrl+Shift+N</ContextMenuShortcut>
                 </button>
                 <button
                   className={itemClass}

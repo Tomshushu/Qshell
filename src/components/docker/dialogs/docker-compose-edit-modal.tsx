@@ -64,20 +64,20 @@ export interface DockerComposeEditModalProps {
     path: string;
     content: string;
     original: string;
-    loading?: boolean;
-    saving?: boolean;
-    error?: string;
-    view?: "edit" | "diff";
+    loading: boolean;
+    saving: boolean;
+    error: string | null;
+    view: "edit" | "diff";
   } | null;
   setComposeEditModal: React.Dispatch<
     React.SetStateAction<{
       path: string;
       content: string;
       original: string;
-      loading?: boolean;
-      saving?: boolean;
-      error?: string;
-      view?: "edit" | "diff";
+      loading: boolean;
+      saving: boolean;
+      error: string | null;
+      view: "edit" | "diff";
     } | null>
   >;
   composeValidating: boolean;

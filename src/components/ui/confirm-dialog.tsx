@@ -34,6 +34,10 @@ interface ConfirmDialogProps {
   widthClass?: string
   /** 异步操作（pending）进行中仍允许通过取消按钮/× 触发 onCancel（如长时间传输的取消） */
   allowCancelWhilePending?: boolean
+  /** 显示「不再提醒」勾选框（勾选 + 确认后由调用方持久化偏好，后续同类操作直接执行） */
+  showDontAskAgain?: boolean
+  dontAskAgain?: boolean
+  onDontAskAgainChange?: (checked: boolean) => void
 }
 
 export function ConfirmDialog({
@@ -51,6 +55,9 @@ export function ConfirmDialog({
   children,
   widthClass,
   allowCancelWhilePending = false,
+  showDontAskAgain = false,
+  dontAskAgain = false,
+  onDontAskAgainChange,
 }: ConfirmDialogProps) {
   const { t } = useTranslation()
   const cancelRef = useRef<HTMLButtonElement>(null)
@@ -120,7 +127,23 @@ export function ConfirmDialog({
 
         {children && <div className="min-w-0 max-w-full overflow-hidden mt-1">{children}</div>}
 
-        <DialogFooter className="flex items-center justify-end gap-2.5 pt-2 sm:justify-end">
+        {showDontAskAgain && (
+          <label
+            htmlFor="confirm-dialog-dont-ask"
+            className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer select-none w-fit"
+          >
+            <input
+              type="checkbox"
+              id="confirm-dialog-dont-ask"
+              checked={dontAskAgain}
+              onChange={(e) => onDontAskAgainChange?.(e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-border accent-primary cursor-pointer"
+            />
+            {t('cd_dont_ask_again')}
+          </label>
+        )}
+
+        <DialogFooter className="flex flex-wrap items-center justify-end gap-2.5 pt-2 sm:justify-end">
           <Button
             ref={cancelRef}
             variant="outline"

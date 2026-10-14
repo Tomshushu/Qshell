@@ -11,7 +11,7 @@ export interface DockerDeployModalProps {
     projectName: string;
     running: boolean;
     exitCode: number | null;
-    error?: string;
+    error: string | null;
     startedAt: number;
     lastChunkAt: number;
     text: string;

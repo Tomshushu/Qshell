@@ -132,6 +132,18 @@ import {
   isLogFileName,
   isBinaryContent,
 } from '@/components/workspace/modules/local-file-picker-utils'
+import {
+  decodeReadResult,
+  decodeTextWithEncoding,
+  encodeTextFile,
+  normalizeEol,
+  detectEol,
+  bytesToBase64,
+  base64ToBytes,
+  SUPPORTED_ENCODINGS,
+  eolLabel,
+} from '@/utils/text-file-codec'
+import { isConfirmSuppressed, suppressConfirm } from '@/utils/confirm-suppress'
 import { UniversalFileViewer } from '@/components/ui/universal-file-viewer'
 import { MarkdownViewer } from '@/components/ui/markdown-viewer'
 import { ResizablePreviewDialog } from '@/components/ui/resizable-preview-dialog'
@@ -412,6 +424,8 @@ export function SftpPanel() {
 
   // 关闭服务器标签前的二次确认：记录待关闭的服务器 id
   const [pendingCloseServerId, setPendingCloseServerId] = useState<string | null>(null)
+  // 「不再提醒」勾选态：勾选 + 确认后持久化，后续断开服务器直接执行
+  const [closeServerDontAskAgain, setCloseServerDontAskAgain] = useState(false)
 
   // Edit Permissions states
   const [permissionsTarget, setPermissionsTarget] = useState<FileEntry | null>(null)
@@ -662,6 +676,8 @@ export function SftpPanel() {
   const [viewer, setViewer] = useState<FileViewerState>(INITIAL_VIEWER_STATE)
   const viewerRef = useRef(viewer)
   viewerRef.current = viewer
+  // 待确认的编码切换（viewer dirty 时先弹确认框，避免未保存内容静默丢失）
+  const [pendingViewerEncoding, setPendingViewerEncoding] = useState<string | null>(null)
   // 防竞态 token：每次 openFileViewer 递增，旧请求的 setViewer 通过 token 校验被丢弃
   const viewerTokenRef = useRef(0)
   // 本地图片用 createObjectURL 创建 blob URL，需在关闭/重开时 revoke 避免内存泄漏
@@ -790,10 +806,10 @@ export function SftpPanel() {
           .map(p => filteredRemoteFilesRef.current.find(f => f.path === p))
           .filter((f): f is FileEntry => !!f)
       : isSourceLeftRemote
-        ? selected
-            .map(p => filteredLocalFilesRef.current.find(f => f.path === p))
-            .filter((f): f is FileEntry => !!f)
-        : undefined
+      ? (selected
+          .map(p => filteredLocalFilesRef.current.find(f => f.path === p))
+          .filter((f): f is LocalFileEntry => !!f) as unknown as FileEntry[])
+      : undefined
     fileClipboardRef.current = {
       sourceSide: side,
       sourceServerId: isSourceRightRemote
@@ -880,15 +896,15 @@ export function SftpPanel() {
           }
         }
       } else if (isText || isCsvOrTsv) {
-        // 文本或 CSV/TSV：读取字符串
+        // 文本或 CSV/TSV：读取 + 编码检测解码（files_read 对非 UTF-8 返回 ::base64:: 前缀）
         if (side === 'remote' && serverId) {
           const res = await sshService.readFile(serverId, file.path)
           if (res.exitCode !== 0) throw new Error(res.stderr || t('sftp_read_failed'))
-          const text = res.stdout || ''
-          if (isBinaryContent(text)) {
+          const decoded = decodeReadResult(res.stdout || '')
+          if (isBinaryContent(decoded.text)) {
             updateIfMine({ loading: false, isBinary: true, error: tRef.current('sftp_viewer_binary_unsupported') })
           } else {
-            updateIfMine({ loading: false, isBinary: false, content: text })
+            updateIfMine({ loading: false, isBinary: false, content: decoded.text, encoding: decoded.encoding, eol: decoded.eol, hasBom: decoded.hasBom })
           }
         } else {
           try {
@@ -896,7 +912,10 @@ export function SftpPanel() {
             if (isBinaryContent(text)) {
               updateIfMine({ loading: false, isBinary: true, error: tRef.current('sftp_viewer_binary_unsupported') })
             } else {
-              updateIfMine({ loading: false, isBinary: false, content: text })
+              // 本地文本：剥离 UTF-8 BOM 字符并记录，保存时补回；EOL 检测与远程保持一致
+              const hasBom = text.startsWith('\uFEFF')
+              const body = hasBom ? text.slice(1) : text
+              updateIfMine({ loading: false, isBinary: false, content: body, encoding: 'utf-8', eol: detectEol(body), hasBom })
             }
           } catch (e: unknown) {
             throw new Error(getErrorMessage(e, t('sftp_read_local_file_failed')), { cause: e })
@@ -958,10 +977,22 @@ export function SftpPanel() {
     setViewer(v => ({ ...v, saving: true }))
     try {
       if (viewer.side === 'remote' && viewer.serverId) {
-        const res = await sshService.writeFile(viewer.serverId, viewer.path, viewer.content)
+        // 按原编码/换行符/BOM 回写：UTF-8 无 BOM 直接写文本，其余走 ::base64:: 原始字节写回
+        const encoding = viewer.encoding || 'utf-8'
+        const hasBom = viewer.hasBom ?? false
+        const normalized = normalizeEol(viewer.content, viewer.eol ?? null)
+        let contentToWrite: string
+        if (encoding === 'utf-8' && !hasBom) {
+          contentToWrite = normalized
+        } else {
+          contentToWrite = `::base64::${bytesToBase64(encodeTextFile(normalized, encoding, hasBom))}`
+        }
+        const res = await sshService.writeFile(viewer.serverId, viewer.path, contentToWrite)
         if (res.exitCode !== 0) throw new Error(res.stderr || t('sftp_write_failed'))
       } else {
-        await writeLocal(viewer.path, viewer.content)
+        // 本地：与远程一致做 EOL 归一；BOM 以 UTF-8 BOM 字符形式补回
+        const normalized = normalizeEol(viewer.content, viewer.eol ?? null)
+        await writeLocal(viewer.path, (viewer.hasBom ? '\uFEFF' : '') + normalized)
       }
       setViewer(v => ({ ...v, saving: false, dirty: false, mode: 'preview' }))
     } catch (e: unknown) {
@@ -969,6 +1000,29 @@ export function SftpPanel() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewer])
+
+  /** 手动切换编码重新打开（Notepad++ 式「以 XX 编码打开」）：自动检测不准时的兜底 */
+  const reopenViewerWithEncoding = useCallback(async (encoding: string) => {
+    const v = viewerRef.current
+    if (v.side !== 'remote' || !v.serverId || v.loading) return
+    const myToken = ++viewerTokenRef.current
+    setViewer(prev => ({ ...prev, loading: true, token: myToken }))
+    const updateIfMine = (patch: Partial<FileViewerState>) => {
+      setViewer(prev => (prev.token === myToken ? { ...prev, ...patch } : prev))
+    }
+    try {
+      const b64 = await sshService.readBinaryFile(v.serverId, v.path)
+      if (!b64) throw new Error(tRef.current('sftp_read_failed'))
+      const decoded = decodeTextWithEncoding(base64ToBytes(b64), encoding)
+      if (isBinaryContent(decoded.text)) {
+        updateIfMine({ loading: false, isBinary: true, error: tRef.current('sftp_viewer_binary_unsupported') })
+        return
+      }
+      updateIfMine({ loading: false, isBinary: false, content: decoded.text, encoding, eol: decoded.eol, hasBom: decoded.hasBom })
+    } catch (e: unknown) {
+      updateIfMine({ loading: false, error: getErrorMessage(e, String(e)) })
+    }
+  }, [])
 
   /** 格式化/紧凑 JSON 内容 */
   const formatViewerJson = useCallback(() => {
@@ -1219,7 +1273,8 @@ export function SftpPanel() {
       }
 
       if (!mountedRef.current || localDirReqIdRef.current !== reqId) return // 过期响应/组件已卸载，丢弃
-      setLocalFiles(resFiles)
+      // 左面板列表可能装远程条目（左面板为远程时），历史运行时语义如此，此处显式断言
+      setLocalFiles(resFiles as LocalFileEntry[])
       
       if (activeSideType === 'local') {
         writeLastLocalPath(pathString)
@@ -1463,8 +1518,8 @@ export function SftpPanel() {
     setSyncBrowsing(false)
     setCompareActive(false)
     syncPairRootRef.current = null
-    setRightViewMode(tab.viewMode)
-    setRightShowHidden(tab.showHidden)
+    setRightViewMode(tab.viewMode ?? 'list')
+    setRightShowHidden(tab.showHidden ?? false)
     // 重置递归搜索状态
     setSearchMode('filter')
     setRecursiveSearchPattern('')
@@ -1731,8 +1786,8 @@ export function SftpPanel() {
       // Windows 远程：获取盘符列表用于磁盘切换栏
       if (srv?.targetType === 'windows') {
         try {
-          const drives = await backend.files.listDrives(sftpConnId)
-          setRemoteDrives(drives)
+          const drives = await backend?.files.listDrives(sftpConnId)
+          setRemoteDrives(drives || ['C:\\'])
         } catch {
           setRemoteDrives(['C:\\'])
         }
@@ -1795,8 +1850,8 @@ export function SftpPanel() {
       const srv = servers.find(s => s.id === toBaseServerId(targetServerId))
       if (srv?.targetType === 'windows') {
         try {
-          const drives = await backend.files.listDrives(targetServerId)
-          setRemoteDrives(drives)
+          const drives = await backend?.files.listDrives(targetServerId)
+          setRemoteDrives(drives || ['C:\\'])
         } catch {
           setRemoteDrives(['C:\\'])
         }
@@ -2243,7 +2298,7 @@ export function SftpPanel() {
           setRemoteDisconnectedError(null)
           if (wasDisconnected) {
             const targetPath = rightTabsRef.current.find(t => t.id === activeRightTabIdRef.current)?.path || remotePathRef.current || '/'
-            loadRemoteDirectoryRef.current(data.serverId, targetPath).catch(console.error)
+            Promise.resolve(loadRemoteDirectoryRef.current(data.serverId, targetPath)).catch(console.error)
           }
         }
         setRightTabs(prev => prev.map(t =>
@@ -3394,6 +3449,7 @@ export function SftpPanel() {
     setTransferRecords(prev => [{
       transferId,
       type: 'download' as const,
+      serverId: sid || '',
       fileName: archiveName,
       sourcePath: entry.path,
       targetPath: joinPath(localPath, archiveName),
@@ -3471,7 +3527,7 @@ export function SftpPanel() {
       }
       setExtractionProgress(22)
       setExtractionProgressPhase(t('sftp_extract_phase_prepare'))
-      let result = await sshService.extractArchive(sid, entry.path)
+      let result = await sshService.extractArchive(sid ?? null, entry.path)
       if (!mountedRef.current) return
       if (!result.success && result.error === 'EXTRACT_TOOL_MISSING') {
         const confirmed = await new Promise<boolean>(resolve => {
@@ -3485,7 +3541,7 @@ export function SftpPanel() {
         showTransferNotice(t('sftp_extract_tool_installing').replace('{tool}', result.message || ''))
         setExtractionProgress(35)
         setExtractionProgressPhase(t('sftp_extract_phase_install').replace('{tool}', result.message || ''))
-        const installed = await sshService.installExtractionTool(sid, entry.path)
+        const installed = await sshService.installExtractionTool(sid ?? null, entry.path)
         if (!mountedRef.current) return
         if (!installed.success) {
           const message = installed.error || t('sftp_extract_tool_install_failed')
@@ -3496,7 +3552,7 @@ export function SftpPanel() {
         }
         setExtractionProgress(52)
         setExtractionProgressPhase(t('sftp_extract_phase_extract'))
-        result = await sshService.extractArchive(sid, entry.path)
+        result = await sshService.extractArchive(sid ?? null, entry.path)
       }
       if (!result.success && result.error === 'EXTRACT_TARGET_EXISTS') {
         const action = await new Promise<'overwrite' | 'keep' | 'cancel'>(resolve => {
@@ -3507,7 +3563,7 @@ export function SftpPanel() {
           setExtractionProgressPhase(t('sftp_extract_phase_canceled'))
           return
         }
-        result = await sshService.extractArchive(sid, entry.path, action)
+        result = await sshService.extractArchive(sid ?? null, entry.path, action)
         if (!mountedRef.current) return
       }
       if (!result.success) {
@@ -3807,6 +3863,10 @@ export function SftpPanel() {
   // SFTP 配置诊断（检测 Windows 服务端 SFTP 配置状态）
   const handleDiagnoseSftp = async () => {
     if (!selectedServerId) return
+    if (!backend) {
+      toast.error(tRef.current('sftp_diag_failed'))
+      return
+    }
     setDiagnosingSftp(true)
     try {
       const result = await backend.files.diagnoseSftp(selectedServerId)
@@ -4626,7 +4686,7 @@ export function SftpPanel() {
       } else {
         if (selectedServerId) {
           if (leftSideType === 'remote' && leftServerId) {
-            void handleServerToServerTransfer(leftServerId, selectedServerId, remotePath, [entry], remoteFiles)
+            void handleServerToServerTransfer(leftServerId, selectedServerId, remotePath, [entry as unknown as FileEntry], remoteFiles)
           } else {
             void handleUploadLocalPaths(selectedServerId, remotePath, [entry.path], remoteFiles)
           }
@@ -4936,7 +4996,7 @@ export function SftpPanel() {
                 const paths = isSelected
                   ? Array.from(selectedLocalPaths)
                   : [file.path]
-                dragPointerRef.current = { source: 'local', files, paths, startX: e.clientX, startY: e.clientY }
+                dragPointerRef.current = { source: 'local', files: files as unknown as FileEntry[], paths, startX: e.clientX, startY: e.clientY }
               }}
               onDoubleClick={() => {
                 clearCardHover()
@@ -4947,7 +5007,7 @@ export function SftpPanel() {
                 } else {
                   if (leftSideType === 'remote' && leftServerId) {
                     if (selectedServerId && remotePath) {
-                      void handleServerToServerTransfer(leftServerId, selectedServerId, remotePath, [file], remoteFiles)
+                      void handleServerToServerTransfer(leftServerId, selectedServerId, remotePath, [file as unknown as FileEntry], remoteFiles)
                     } else {
                       showTransferNotice(tRef.current('sftp_paste_target_not_connected'))
                     }
@@ -5105,7 +5165,7 @@ export function SftpPanel() {
                     }
                   } else {
                     if (selectedServerId && remotePath) {
-                      void handleDownloadRemoteFiles([file], remoteFiles)
+                      void handleDownloadRemoteFiles(selectedServerId, localPath, [file], localFiles)
                     } else {
                       showTransferNotice(tRef.current('sftp_paste_target_not_connected'))
                     }
@@ -5421,7 +5481,7 @@ export function SftpPanel() {
                   if (isLeftRemote) {
                     const files = localFiles.filter(f => selectedLocalPaths.has(f.path) && f.name !== '..')
                     if (files.length > 0) {
-                      void handleServerToServerTransfer(leftServerId, selectedServerId, remotePath, files, remoteFiles)
+                      void handleServerToServerTransfer(leftServerId, selectedServerId, remotePath, files as unknown as FileEntry[], remoteFiles)
                     }
                   } else {
                     void handleUploadLocalPaths(selectedServerId, remotePath, valid, remoteFiles)
@@ -5598,7 +5658,7 @@ export function SftpPanel() {
                                     const paths = isSelected
                                       ? Array.from(selectedLocalPaths)
                                       : [file.path]
-                                    dragPointerRef.current = { source: 'local', files, paths, startX: e.clientX, startY: e.clientY }
+                                    dragPointerRef.current = { source: 'local', files: files as unknown as FileEntry[], paths, startX: e.clientX, startY: e.clientY }
                                   }}
                                   onDoubleClick={() => {
                                      dblClickedRef.current = true
@@ -5608,7 +5668,7 @@ export function SftpPanel() {
                                      } else {
                                        if (leftSideType === 'remote' && leftServerId) {
                                          if (selectedServerId && remotePath) {
-                                           void handleServerToServerTransfer(leftServerId, selectedServerId, remotePath, [file], remoteFiles)
+                                           void handleServerToServerTransfer(leftServerId, selectedServerId, remotePath, [file as unknown as FileEntry], remoteFiles)
                                          } else {
                                            showTransferNotice(tRef.current('sftp_paste_target_not_connected'))
                                          }
@@ -5723,15 +5783,15 @@ export function SftpPanel() {
                                     {file.name === '..' ? '' : t(getFileTypeLabel(file))}
                                   </span>
                                   <span className="text-left text-[11px] text-muted-foreground font-mono truncate pl-3">
-                                    {file.name === '..' ? '' : (leftSideType === 'remote' ? ((file as FileEntry).modifiedTime || '-') : (file.modified || '-'))}
+                                    {file.name === '..' ? '' : (leftSideType === 'remote' ? ((file as unknown as FileEntry).modifiedTime || '-') : (file.modified || '-'))}
                                   </span>
                                   {leftSideType === 'remote' && (
                                     <>
                                       <span className="text-left text-[11px] text-muted-foreground font-mono truncate pl-3">
-                                        {file.name === '..' ? '' : ((file as FileEntry).permissions || '-')}
+                                        {file.name === '..' ? '' : ((file as unknown as FileEntry).permissions || '-')}
                                       </span>
                                       <span className="text-left text-[11px] text-muted-foreground font-mono truncate pl-3">
-                                        {file.name === '..' ? '' : ((file as FileEntry).owner || ((file as FileEntry).uid != null ? String((file as FileEntry).uid) : '-'))}
+                                        {file.name === '..' ? '' : ((file as unknown as FileEntry).owner || ((file as unknown as FileEntry).uid != null ? String((file as unknown as FileEntry).uid) : '-'))}
                                       </span>
                                     </>
                                   )}
@@ -5794,7 +5854,7 @@ export function SftpPanel() {
                                         ? localFiles.filter(f => selectedLocalPaths.has(f.path) && f.name !== '..')
                                         : [localContextMenuFile]
                                       if (files.length > 0) {
-                                        void handleServerToServerTransfer(leftServerId, selectedServerId, remotePath, files, remoteFiles)
+                                        void handleServerToServerTransfer(leftServerId, selectedServerId, remotePath, files as unknown as FileEntry[], remoteFiles)
                                       }
                                       return
                                     }
@@ -5840,7 +5900,7 @@ export function SftpPanel() {
                                             } catch (e) {
                                               console.warn(`Failed to fetch live files for session ${tab.serverId}:`, e)
                                             }
-                                            await handleServerToServerTransfer(leftServerId, tab.serverId, tab.path, files, destFiles)
+                                            await handleServerToServerTransfer(leftServerId, tab.serverId, tab.path, files as unknown as FileEntry[], destFiles)
                                           } catch (err) {
                                             console.error(`s2s transfer to session ${tab.serverId} failed:`, err)
                                           }
@@ -6101,7 +6161,13 @@ export function SftpPanel() {
                         onClick={(e) => {
                           e.stopPropagation()
                           if (tab.serverId || tab.connectingId) {
-                            setPendingCloseServerId(tab.id)
+                            // 已勾选「不再提醒」时直接断开，否则弹二次确认
+                            if (isConfirmSuppressed('sftp-close-server')) {
+                              void closeRightTab(tab.id)
+                            } else {
+                              setCloseServerDontAskAgain(false)
+                              setPendingCloseServerId(tab.id)
+                            }
                           } else {
                             void closeRightTab(tab.id)
                           }
@@ -6111,7 +6177,12 @@ export function SftpPanel() {
                             e.preventDefault()
                             e.stopPropagation()
                             if (tab.serverId || tab.connectingId) {
-                              setPendingCloseServerId(tab.id)
+                              if (isConfirmSuppressed('sftp-close-server')) {
+                                void closeRightTab(tab.id)
+                              } else {
+                                setCloseServerDontAskAgain(false)
+                                setPendingCloseServerId(tab.id)
+                              }
                             } else {
                               void closeRightTab(tab.id)
                             }
@@ -7251,14 +7322,18 @@ export function SftpPanel() {
         />
       </ConfirmDialog>
 
-      {/* C2. 关闭（断开）服务器标签二次确认 */}
+      {/* C2. 关闭（断开）服务器标签二次确认（勾选「不再提醒」后直接断开） */}
       <ConfirmDialog
         open={!!pendingCloseServerId}
         title={t('sftp_close_server_title')}
         description={t('sftp_close_server_desc')}
         confirmText={t('sftp_close_server_confirm')}
         cancelText={t('sftp_cancel')}
+        showDontAskAgain
+        dontAskAgain={closeServerDontAskAgain}
+        onDontAskAgainChange={setCloseServerDontAskAgain}
         onConfirm={() => {
+          if (closeServerDontAskAgain) suppressConfirm('sftp-close-server')
           if (pendingCloseServerId) void closeRightTab(pendingCloseServerId)
           setPendingCloseServerId(null)
         }}
@@ -7306,6 +7381,22 @@ export function SftpPanel() {
           setViewer(INITIAL_VIEWER_STATE)
         }}
         onCancel={() => setShowCloseViewerConfirm(false)}
+      />
+
+      {/* 切换编码确认对话框（dirty 时）：重读磁盘会丢弃未保存的修改 */}
+      <ConfirmDialog
+        open={pendingViewerEncoding !== null}
+        title="切换编码"
+        description="当前文件有未保存的修改。切换编码将从磁盘重新读取文件，未保存的内容将丢失。是否继续？"
+        confirmText="重新读取"
+        cancelText="取消"
+        variant="destructive"
+        onConfirm={() => {
+          const enc = pendingViewerEncoding
+          setPendingViewerEncoding(null)
+          if (enc) void reopenViewerWithEncoding(enc)
+        }}
+        onCancel={() => setPendingViewerEncoding(null)}
       />
 
       {/* E. 编辑权限与所有权 */}
@@ -7894,7 +7985,38 @@ export function SftpPanel() {
           const isJson = ext === 'json'
           if (!isEditable && !isJson) return null
           return (
-            <div className="flex items-center gap-1.5">
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              {/* 编码选择（Notepad++ 式：手动切换重新打开）+ 换行符徽标 */}
+              {isEditable && viewer.side === 'remote' && !viewer.loading && !viewer.error && (
+                <>
+                  <select
+                    value={viewer.encoding || 'utf-8'}
+                    onChange={(e) => {
+                      const enc = e.target.value
+                      // dirty 时先确认：切换编码会从磁盘重读，未保存内容将丢失
+                      if (viewer.dirty && enc !== (viewer.encoding || 'utf-8')) {
+                        setPendingViewerEncoding(enc)
+                        return
+                      }
+                      void reopenViewerWithEncoding(enc)
+                    }}
+                    className="h-7 rounded-md border border-input bg-background px-1.5 text-xs text-foreground cursor-pointer"
+                    title="编码 / Encoding"
+                  >
+                    {SUPPORTED_ENCODINGS.map((e) => (
+                      <option key={e.value} value={e.value}>
+                        {e.label}
+                      </option>
+                    ))}
+                  </select>
+                  <span
+                    className="rounded border border-border/60 bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground select-none"
+                    title="换行符"
+                  >
+                    {eolLabel(viewer.eol ?? null)}
+                  </span>
+                </>
+              )}
               {isJson && !viewer.loading && !viewer.error && viewer.content && (
                 <Button
                   variant="outline"

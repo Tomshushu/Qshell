@@ -180,78 +180,61 @@ export function DiagnosticsTab({
   return (
     <div className="flex-1 min-h-0 h-full overflow-y-auto p-4 space-y-4">
       {/* 6-Layer Quick Check Input Section */}
-      <Card className="border bg-card shadow-sm">
-        <CardHeader className="p-4 pb-2">
-          <CardTitle className="text-sm font-semibold flex items-center justify-between">
+      <Card className="border border-border/70 bg-card/60 shadow-xs">
+        <CardHeader className="p-3.5 pb-2">
+          <CardTitle className="text-sm font-semibold flex items-center justify-between flex-wrap gap-2">
             <div className="flex items-center gap-2">
               <Zap className="h-4 w-4 text-primary" />
               <span>{t('net_diag_quick_title')}</span>
             </div>
             <div className="flex items-center gap-1.5 text-xs">
-              <span className="text-muted-foreground">{t('net_diag_proto_label')}:</span>
-              <div className="flex items-center rounded-md border bg-muted/40 p-0.5 text-xs font-mono">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setProtocol('https')
-                    setPort('443')
-                  }}
-                  className={`px-2 py-0.5 rounded transition-colors ${
-                    protocol === 'https' ? 'bg-background font-bold text-foreground shadow-sm' : 'text-muted-foreground'
-                  }`}
-                >
-                  HTTPS
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setProtocol('http')
-                    setPort('80')
-                  }}
-                  className={`px-2 py-0.5 rounded transition-colors ${
-                    protocol === 'http' ? 'bg-background font-bold text-foreground shadow-sm' : 'text-muted-foreground'
-                  }`}
-                >
-                  HTTP
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setProtocol('tcp')}
-                  className={`px-2 py-0.5 rounded transition-colors ${
-                    protocol === 'tcp' ? 'bg-background font-bold text-foreground shadow-sm' : 'text-muted-foreground'
-                  }`}
-                >
-                  TCP
-                </button>
+              <span className="text-muted-foreground text-[11px]">{t('net_diag_proto_label')}:</span>
+              <div className="flex items-center rounded-lg border border-border/50 bg-muted/40 p-0.5 text-xs font-mono">
+                {(['https', 'http', 'tcp'] as const).map((proto) => (
+                  <button
+                    key={proto}
+                    type="button"
+                    onClick={() => {
+                      setProtocol(proto)
+                      if (proto === 'https') setPort('443')
+                      else if (proto === 'http') setPort('80')
+                    }}
+                    className={`px-2 py-0.5 rounded-md transition-all text-[11px] font-medium uppercase ${
+                      protocol === proto ? 'bg-background font-bold text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    {proto}
+                  </button>
+                ))}
               </div>
             </div>
           </CardTitle>
         </CardHeader>
 
-        <CardContent className="p-4 pt-1 space-y-3">
+        <CardContent className="p-3.5 pt-1 space-y-3">
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
             <div className="relative flex-1">
-              <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Globe className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
               <Input
                 placeholder={t('net_input_placeholder')}
                 value={target}
                 onChange={(e) => setTarget(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && !isRunning && handleRunDiagnosis()}
-                className="h-9 pl-9 text-xs font-mono"
+                className="h-8 pl-8 text-xs font-mono bg-background/80"
               />
             </div>
             <Input
               placeholder={t('net_port_placeholder')}
               value={port}
               onChange={(e) => setPort(e.target.value)}
-              className="h-9 w-20 text-xs font-mono text-center shrink-0"
+              className="h-8 w-18 text-xs font-mono text-center shrink-0 bg-background/80"
             />
             <Button
               onClick={handleRunDiagnosis}
               disabled={!target.trim() || isRunning}
-              className="h-9 text-xs gap-1.5 px-4 shrink-0 font-medium"
+              className="h-8 text-xs gap-1.5 px-3.5 shrink-0 font-medium"
             >
-              {isRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4 fill-current" />}
+              {isRunning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5 fill-current" />}
               {isRunning ? t('net_diag_running') : t('net_diag_run_btn')}
             </Button>
           </div>

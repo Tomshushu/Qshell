@@ -31,7 +31,6 @@ import {
   Network,
 } from "lucide-react";
 import { WorkspaceModuleModal } from "@/components/workspace/workspace-module-modal";
-import { TransferPanel } from "@/components/workspace/transfer-panel";
 import { cn } from "@/lib/utils";
 import { sshService } from "@/services/ssh-service";
 import { ConnectionState, SshErrorKind } from "@/services/ssh-connection-state";
@@ -121,6 +120,25 @@ export function WorkspacePage({
   }, []);
   const resolveTerminalCwd = useCallback(async (): Promise<string | null> => {
     return terminalGetCwdRef.current?.() ?? null;
+  }, []);
+
+  // 终端 cwd 变化推送 → 文件面板订阅：终端侧 OSC 7/标题/cd 拦截触发即时通知，
+  // 文件面板订阅后立即跟随（轮询仅作兜底）
+  const terminalCwdListenersRef = useRef(new Set<() => void>());
+  const notifyTerminalCwdChanged = useCallback(() => {
+    terminalCwdListenersRef.current.forEach((fn) => {
+      try {
+        fn();
+      } catch {
+        /* 订阅回调异常不影响终端 */
+      }
+    });
+  }, []);
+  const subscribeTerminalCwd = useCallback((fn: () => void) => {
+    terminalCwdListenersRef.current.add(fn);
+    return () => {
+      terminalCwdListenersRef.current.delete(fn);
+    };
   }, []);
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
@@ -378,6 +396,94 @@ export function WorkspacePage({
   }, [setServerConnected, setServerState, updateServer, serverId, connId, routeAuthenticationFailure, t]);
 
   const [moduleContext, setModuleContext] = useState<({ module: WorkspaceModule } & NavigationContext) | null>(null);
+  // 文件面板：终端下方可折叠面板的开关状态（文件模块不再走弹窗）
+  const [filesPanelOpen, setFilesPanelOpen] = useState(false);
+  // 滑出动画只在「点击打开」后的短暂窗口内挂载动画类：
+  // 若动画类常驻，任何 display:none → 恢复显示的场景（如顶部切换服务器再切回，
+  // 工作台为保活渲染）都会重播滑出动画——切换服务器时要求状态保持、纹丝不动
+  const [filesPanelAnimActive, setFilesPanelAnimActive] = useState(false);
+
+  // 文件面板高度（像素，可拖拽分隔条调节，跨会话持久化）
+  const FILES_PANEL_MIN_HEIGHT = 160;
+  const FILES_PANEL_DEFAULT_HEIGHT = 340;
+  // 面板滑出动画时长，须与 index.css 中 .files-panel-slide-up 的 0.32s 保持一致
+  const FILES_PANEL_ANIM_MS = 320;
+  const filesPanelAnimTimerRef = useRef<number | null>(null);
+  const [filesPanelHeight, setFilesPanelHeight] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem("qshell.files-panel-height");
+      const n = saved ? Number(saved) : NaN;
+      return Number.isFinite(n) && n >= FILES_PANEL_MIN_HEIGHT ? n : FILES_PANEL_DEFAULT_HEIGHT;
+    } catch {
+      return FILES_PANEL_DEFAULT_HEIGHT;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("qshell.files-panel-height", String(filesPanelHeight));
+    } catch {
+      /* 存储不可用时静默忽略 */
+    }
+  }, [filesPanelHeight]);
+
+  // 工作台内容区容器 ref：用于在拖拽调节时按实际可用高度做上限约束
+  const contentAreaRef = useRef<HTMLDivElement>(null);
+  const filesResizeRef = useRef<{ startY: number; startHeight: number } | null>(null);
+  const filesResizeRafRef = useRef<number | null>(null);
+  const startFilesPanelResize = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      const container = contentAreaRef.current;
+      const maxHeight = Math.max(
+        FILES_PANEL_MIN_HEIGHT,
+        (container ? container.clientHeight : window.innerHeight) - 140,
+      );
+      const startY = e.clientY;
+      const startHeight = filesPanelHeight;
+      filesResizeRef.current = { startY, startHeight };
+
+      // 拖拽开始：广播 split-resize-start 冻结终端画布像素尺寸并抑制逐帧 fit，
+      // 避免拖拽调整高度时 rows/cols 逐帧变动引发 PTY SIGWINCH 信号风暴与日志反复回流跳动
+      window.dispatchEvent(new Event("split-resize-start"));
+
+      const onMouseMove = (ev: MouseEvent) => {
+        if (!filesResizeRef.current) return;
+        if (filesResizeRafRef.current !== null) return;
+        const currentClientY = ev.clientY;
+        filesResizeRafRef.current = requestAnimationFrame(() => {
+          filesResizeRafRef.current = null;
+          if (!filesResizeRef.current) return;
+          // 向上拖 = 面板增高；向下拖 = 面板降低
+          const delta = filesResizeRef.current.startY - currentClientY;
+          const next = Math.max(
+            FILES_PANEL_MIN_HEIGHT,
+            Math.min(maxHeight, filesResizeRef.current.startHeight + delta),
+          );
+          setFilesPanelHeight(next);
+        });
+      };
+      const onMouseUp = () => {
+        filesResizeRef.current = null;
+        if (filesResizeRafRef.current !== null) {
+          cancelAnimationFrame(filesResizeRafRef.current);
+          filesResizeRafRef.current = null;
+        }
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+
+        // 拖拽结束：广播 split-resize-end 解除终端画布尺寸冻结，单次平稳对齐最终高度
+        window.dispatchEvent(new Event("split-resize-end"));
+      };
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
+      document.body.style.cursor = "ns-resize";
+      document.body.style.userSelect = "none";
+    },
+    [filesPanelHeight],
+  );
 
   const handleModuleChange = (module: WorkspaceModule, context?: NavigationContext) => {
     let targetModule = module;
@@ -385,6 +491,36 @@ export function WorkspacePage({
     if (module === "forward") {
       targetModule = "ports";
       targetContext = { ...context, subTab: "forward" };
+    }
+    // 文件模块：改为终端下方可折叠面板，点击切换开/关（不切换模块、不弹窗）
+    if (targetModule === "files") {
+      // telnet / 不支持文件管理的目标类型：不响应，避免按钮高亮但面板不出现
+      const filesAvailable =
+        isModuleAvailable(server?.targetType, "files") && server?.protocol !== "telnet";
+      if (!filesAvailable) return;
+      // 面板高度动画期间冻结终端画布（复用分屏拖拽的 split-resize-start/end 机制）：
+      // 否则 ResizeObserver 逐帧 fit 导致 rows 反复变化，日志文字上下跳动。
+      // 冻结期间画布纹丝不动（底部被面板逐渐覆盖），动画结束后一次性对齐最终尺寸
+      window.dispatchEvent(new CustomEvent("split-resize-start"));
+      if (filesPanelAnimTimerRef.current) {
+        window.clearTimeout(filesPanelAnimTimerRef.current);
+      }
+      filesPanelAnimTimerRef.current = window.setTimeout(() => {
+        filesPanelAnimTimerRef.current = null;
+        window.dispatchEvent(new CustomEvent("split-resize-end"));
+      }, FILES_PANEL_ANIM_MS + 60);
+      // 仅在「由关到开」时挂载滑出动画类（见 filesPanelAnimActive 注释）
+      if (!filesPanelOpen) {
+        setFilesPanelAnimActive(true);
+        window.setTimeout(() => setFilesPanelAnimActive(false), FILES_PANEL_ANIM_MS + 120);
+      }
+      setFilesPanelOpen((v) => !v);
+      // 断连状态下打开文件面板时自动触发重连（与切换模块的行为保持一致）
+      if (!isConnected && !connecting && wasConnected && sshService.isAvailable()) {
+        reconnectManager.retryImmediately(connId);
+        handleConnect();
+      }
+      return;
     }
     // 如果点击当前已打开的附属功能弹框模块，再次点击则收起/关闭弹框（切回终端）
     if (currentTab && currentTab.module === targetModule && targetModule !== "terminal") {
@@ -761,12 +897,24 @@ export function WorkspacePage({
     isSerialServer ||
     (isConnected && (!isTerminalModule || terminalReady));
 
-  // 是否开启附属功能弹窗（除终端、RDP、BMC外的所有模块，点击后作为工作台附属弹窗弹出）
+  // 是否开启附属功能弹窗（除终端、RDP、BMC、文件外的所有模块，点击后作为工作台附属弹窗弹出）
   const isModalModule =
     !isSplitPane &&
     !isTerminalModule &&
     !isRdpModule &&
-    !isBmcModule;
+    !isBmcModule &&
+    effectiveModule !== "files";
+
+  // 文件面板可用性：连接可用且目标类型支持文件管理（telnet 不支持）
+  const filesPanelAvailable =
+    !isSplitPane &&
+    (isConnected || wasConnected) &&
+    isModuleAvailable(server?.targetType, "files") &&
+    server?.protocol !== "telnet";
+  // 文件面板是否可见：可用且用户已展开
+  const showFilesPanel = filesPanelOpen && filesPanelAvailable;
+  // 文件面板是否处于激活态（供 FilesModule 处理拖拽/直达等全局事件）
+  const filesPanelActive = isActive && showFilesPanel && !isModalModule;
 
   const getModalConfig = (mod: WorkspaceModule) => {
     switch (mod) {
@@ -811,6 +959,7 @@ export function WorkspacePage({
       onShowDiagnostics={() => setShowConnectionDiagnostics(true)}
       toolbarPosition="top"
       serialToolbar={isSerialServer && currentTab.module === "terminal" ? null : serialToolbar}
+      filesPanelOpen={filesPanelOpen}
     />
   ) : null;
 
@@ -946,7 +1095,7 @@ export function WorkspacePage({
     <div className="flex flex-col h-full bg-background">
       {moduleTabs}
       {/* Module content */}
-      <div className="flex-1 overflow-hidden relative bg-canvas/30">
+      <div ref={contentAreaRef} className="flex-1 overflow-hidden relative bg-canvas/30 flex flex-col">
         {/* RDP / BMC 专属连接遮罩 */}
         {!isFullyReady && (isRdpModule || isBmcModule) && renderConnectionOverlay()}
 
@@ -957,10 +1106,10 @@ export function WorkspacePage({
             - RDP 模块：独立于 SSH 连接，始终可渲染
             - 其他模块：仅在已连接(Ready)时渲染，避免在 Connecting 阶段发起请求报错，
               且断开→重连后自然 remount 触发数据重新加载 */}
-        {/* 终端主模块：作为工作台底座全尺寸常驻，永不卸载断连，日志实时可见 */}
+        {/* 终端主模块：作为工作台底座常驻（文件面板打开时收缩为上方区域），永不卸载断连，日志实时可见 */}
         <div
           className={cn(
-            "h-full w-full relative",
+            "flex-1 min-h-0 w-full relative",
             (isRdpModule || isBmcModule) && "hidden",
           )}
           onMouseDown={() => {
@@ -984,11 +1133,61 @@ export function WorkspacePage({
             registerOutputActions={registerTerminalOutputActions}
             registerSerialToolbar={setSerialToolbar}
             registerGetCwd={registerTerminalGetCwd}
+            onCwdChange={notifyTerminalCwdChanged}
             onReconnect={handleConnect}
           />
         </div>
 
-        {/* 附属功能弹窗（文件、监控、Docker、服务、进程、网络、端口等） */}
+        {/* 文件模块：终端下方可折叠面板（边用终端边上传/管理文件）。
+            保活渲染：面板收起时仅 CSS 隐藏不卸载，SFTP 连接/目录树/滚动位置得以保留
+            （与旧弹窗 keepMounted 语义一致）；收起时 filesPanelActive=false，轮询与订阅自动停止 */}
+        {filesPanelAvailable && (
+          <>
+            {/* 拖拽分隔条：向上拖动增高面板，双击恢复默认高度 */}
+            {showFilesPanel && (
+              <div
+                className={cn(
+                  "group relative z-10 shrink-0 h-1.5 cursor-ns-resize border-t border-border/50 bg-transparent transition-colors hover:bg-primary/20 active:bg-primary/30",
+                  filesPanelAnimActive && "files-panel-divider-in",
+                )}
+                onMouseDown={startFilesPanelResize}
+                onDoubleClick={() => setFilesPanelHeight(FILES_PANEL_DEFAULT_HEIGHT)}
+                title="拖动调节文件面板高度，双击恢复默认"
+              >
+                <div className="absolute left-1/2 top-1/2 h-0.5 w-12 -translate-x-1/2 -translate-y-1/2 rounded-full bg-border/70 transition-colors group-hover:bg-primary/50" />
+              </div>
+            )}
+
+            {/* 文件面板：无标题栏，直接铺满内容区以最大化可用空间（开关由顶部「文件」按钮控制）；
+                打开时从底部滑出（height 0 → 目标值，终端被逐渐推上去）。
+                动画类仅由 filesPanelAnimActive 窗口控制：切换服务器标签（display 切换）不重播 */}
+            <div
+              className={cn(
+                "shrink-0 flex flex-col bg-background overflow-hidden",
+                filesPanelAnimActive && showFilesPanel && "files-panel-slide-up",
+                !showFilesPanel && "hidden",
+              )}
+              style={
+                {
+                  height: filesPanelHeight,
+                  '--fd-panel-h': `${filesPanelHeight}px`,
+                } as React.CSSProperties
+              }
+            >
+              <div className="min-h-0 flex-1">
+                <FilesModule
+                  serverId={connId}
+                  isConnected={isConnected}
+                  isActive={filesPanelActive}
+                  getTerminalCwd={resolveTerminalCwd}
+                  subscribeTerminalCwd={subscribeTerminalCwd}
+                />
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* 附属功能弹窗（监控、Docker、服务、进程、网络、端口等） */}
         {!isSplitPane && (
           <WorkspaceModuleModal
             open={isModalModule}
@@ -999,30 +1198,9 @@ export function WorkspacePage({
             title={modalConfig.title}
             icon={modalConfig.icon}
             keepMounted={true}
-            extraHeaderActions={
-              currentTab.module === "files" ? <TransferPanel /> : undefined
-            }
           >
             {/* 弹框内连接状态提示（未连接时） */}
             {!isFullyReady && isModalModule && renderConnectionOverlay()}
-
-            {/* Files 模块保活渲染：SFTP 连接与文件目录树状态始终保留 */}
-            {(isConnected || wasConnected) &&
-              isModuleAvailable(server?.targetType, "files") &&
-              server?.protocol !== "telnet" && (
-                <div
-                  className={
-                    currentTab.module === "files" ? "h-full" : "hidden h-full"
-                  }
-                >
-                  <FilesModule
-                    serverId={connId}
-                    isConnected={isConnected}
-                    isActive={isActive && currentTab.module === "files"}
-                    getTerminalCwd={resolveTerminalCwd}
-                  />
-                </div>
-              )}
 
             {/* 其他模块仅在对应 module 激活且已连接时渲染 */}
             {isConnected && (

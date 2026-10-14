@@ -45,4 +45,5 @@ export type * from './types'
 
 
 // 代理（Proxy）相关类型直接从 @/types 导出
+export type { SshKey, SshKeyInput, SshKeyUpdate } from '@/types'
 export type { ProxyAuthType } from '@/types'

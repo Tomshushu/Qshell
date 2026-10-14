@@ -4,17 +4,12 @@ import { Button } from "@/components/ui/button";
 import { HardDrive, Trash2, X } from "lucide-react";
 import { useTranslation } from "@/i18n";
 import { ListSkeleton } from "../docker-utils";
+import type { SystemDfRow } from "@/services/api";
 
 export interface DockerSystemDfModalProps {
   dfModal: {
     loading: boolean;
-    rows: Array<{
-      dfType: string;
-      total: number;
-      active: number;
-      size: string;
-      reclaimable: string;
-    }>;
+    rows: SystemDfRow[];
   } | null;
   onClose: () => void;
   onPrune: () => void;
