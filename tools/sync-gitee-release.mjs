@@ -57,6 +57,7 @@ async function getOrCreateGiteeRelease(tag) {
   }
 
   console.log(`[Gitee] Creating new release for tag: ${tag}`)
+  const cleanVer = tag.replace(/^v/, '')
   const releaseBody = `## 🚀 Qshell ${tag} 正式版本发布
 
 > 现代化极速终端与多协议服务器管理工作台。国内高速镜像托管发布。
@@ -65,11 +66,11 @@ async function getOrCreateGiteeRelease(tag) {
 
 | 操作系统与架构 | 安装包类型 | 国内极速直链 (10~25MB/s) |
 | :--- | :--- | :--- |
-| **Windows 64位** | 安装包 (.exe) | [⚡ 点击极速下载](https://gh-proxy.com/https://github.com/Tomshushu/Qshell/releases/download/${tag}/Qshell_${tag.replace(/^v/, '')}_x64-setup.exe) |
-| **macOS Apple Silicon** | 镜像包 (.dmg) | [⚡ 点击极速下载](https://gh-proxy.com/https://github.com/Tomshushu/Qshell/releases/download/${tag}/Qshell_${tag.replace(/^v/, '')}_aarch64.dmg) |
-| **macOS 压缩包** | 应用包 (.app.tar.gz) | [⚡ 点击极速下载](https://gh-proxy.com/https://github.com/Tomshushu/Qshell/releases/download/${tag}/Qshell_aarch64.app.tar.gz) |
-| **Linux (全平台通用)** | 便携版 (.AppImage) | [⚡ 点击极速下载](https://gh-proxy.com/https://github.com/Tomshushu/Qshell/releases/download/${tag}/Qshell_${tag.replace(/^v/, '')}_amd64.AppImage) |
-| **Linux (Debian/Ubuntu)** | 安装包 (.deb) | [⚡ 点击极速下载](https://gh-proxy.com/https://github.com/Tomshushu/Qshell/releases/download/${tag}/Qshell_${tag.replace(/^v/, '')}_amd64.deb) |
+| **Windows 64位** | 安装包 (.exe) | [⚡ 点击极速下载](https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}/releases/download/${tag}/Qshell_${cleanVer}_x64-setup.exe) |
+| **macOS Apple Silicon** | 镜像包 (.dmg) | [⚡ 点击极速下载](https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}/releases/download/${tag}/Qshell_${cleanVer}_aarch64.dmg) |
+| **macOS 压缩包** | 应用包 (.app.tar.gz) | [⚡ 点击极速下载](https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}/releases/download/${tag}/Qshell_${cleanVer}_aarch64.app.tar.gz) |
+| **Linux (全平台通用)** | 便携版 (.AppImage) | [⚡ 点击极速下载](https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}/releases/download/${tag}/Qshell_${cleanVer}_amd64.AppImage) |
+| **Linux (Debian/Ubuntu)** | 安装包 (.deb) | [⚡ 点击极速下载](https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}/releases/download/${tag}/Qshell_${cleanVer}_amd64.deb) |
 
 ---
 *注：Qshell 客户端内置智能动态双通道测速，更新时将自动优选国内最畅通的直连节点。*`
