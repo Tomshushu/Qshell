@@ -58,6 +58,7 @@ export const useAppStore = create<AppState>()(
         terminalAntiIdleMode: state.terminalAntiIdleMode,
         terminalAntiIdleCustomString: state.terminalAntiIdleCustomString,
         terminalCopyPaste: state.terminalCopyPaste,
+        terminalSelectionToolbar: state.terminalSelectionToolbar,
         terminalBellSound: state.terminalBellSound,
         terminalDrawBoldInBrightColors: state.terminalDrawBoldInBrightColors,
         terminalHintEnabled: state.terminalHintEnabled,

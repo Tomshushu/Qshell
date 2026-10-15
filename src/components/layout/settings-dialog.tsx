@@ -1016,6 +1016,8 @@ function SettingsPanel({
     setTerminalAntiIdleCustomString,
     terminalCopyPaste,
     setTerminalCopyPaste,
+    terminalSelectionToolbar,
+    setTerminalSelectionToolbar,
     uiSoundEnabled,
     setUiSoundEnabled,
     terminalBellSound,
@@ -1651,6 +1653,18 @@ function SettingsPanel({
                   <Switch
                     checked={terminalCopyPaste ?? false}
                     onCheckedChange={setTerminalCopyPaste}
+                  />
+                </div>
+
+                {/* Selection Quick Floating Toolbar */}
+                <div className="flex items-center justify-between">
+                  <SettingLabelWithHint
+                    label={t("term_selection_toolbar")}
+                    desc={t("term_selection_toolbar_desc")}
+                  />
+                  <Switch
+                    checked={terminalSelectionToolbar ?? true}
+                    onCheckedChange={setTerminalSelectionToolbar}
                   />
                 </div>
 

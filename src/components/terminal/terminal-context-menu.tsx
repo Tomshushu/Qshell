@@ -16,6 +16,7 @@ import type { ContextMenuState } from "./terminal-types";
 
 export interface TerminalContextMenuProps {
   ctxMenu: ContextMenuState | null;
+  isLightTerminal?: boolean;
   onClose: () => void;
   onCopy: () => void;
   onCopyAll: () => void;
@@ -40,6 +41,7 @@ export interface TerminalContextMenuProps {
 
 export function TerminalContextMenu({
   ctxMenu,
+  isLightTerminal = false,
   onClose,
   onCopy,
   onCopyAll,
@@ -65,195 +67,329 @@ export function TerminalContextMenu({
 
   if (!ctxMenu) return null;
 
-  // 边界检测：预估宽度 220（含右侧快捷键提示），高度 240（含清屏子菜单项）
-  const pos = clampMenuToViewport(ctxMenu.x, ctxMenu.y, 220, 240);
+  // 边界检测：预估宽度 220（含右侧快捷键提示），高度 260（含清屏与录制子项）
+  const pos = clampMenuToViewport(ctxMenu.x, ctxMenu.y, 220, 260);
+  const isSubmenuLeft =
+    typeof window !== "undefined" && pos.left + 220 + 210 > window.innerWidth;
 
   return (
     <div
-      className="fixed z-50 min-w-[160px] bg-popover border rounded-xl shadow-md py-1 text-sm terminal-context-menu"
+      className={cn(
+        "fixed z-50 min-w-[190px] rounded-xl select-none transition-all duration-150 animate-in fade-in zoom-in-95 p-1 terminal-context-menu",
+        isLightTerminal
+          ? "bg-white/90 text-slate-800 border border-slate-200/80 shadow-[0_12px_32px_-6px_rgba(0,0,0,0.18),0_0_0_1px_rgba(0,0,0,0.04)] backdrop-blur-xl"
+          : "bg-[#13141f]/92 text-slate-100 border border-white/10 shadow-[0_16px_36px_-8px_rgba(0,0,0,0.7),0_0_0_1px_rgba(255,255,255,0.06)] backdrop-blur-xl",
+      )}
       style={{ left: pos.left, top: pos.top }}
       onMouseDown={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
       onClick={onClose}
     >
+      {/* 复制 */}
       <button
+        type="button"
         className={cn(
-          "w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-accent transition-colors",
+          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+          isLightTerminal
+            ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+            : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
           !ctxMenu.hasSelection && "opacity-40 pointer-events-none",
         )}
         onClick={onCopy}
       >
-        <Copy className="h-3.5 w-3.5" />
-        {t("tm_copy")}
-        <span className="ml-auto text-[10px] text-muted-foreground">
+        <Copy className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+        <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_copy")}</span>
+        <span className={cn("ml-auto text-[10px] font-mono tracking-tight", isLightTerminal ? "text-slate-400" : "text-slate-400/70")}>
           Ctrl+Shift+C
         </span>
       </button>
+
+      {/* 复制全部输出 */}
       <button
-        className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-accent transition-colors"
+        type="button"
+        className={cn(
+          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+          isLightTerminal
+            ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+            : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+        )}
         onClick={onCopyAll}
       >
-        <Copy className="h-3.5 w-3.5" />
-        {t("tm_copy_all")}
+        <Copy className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+        <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_copy_all")}</span>
       </button>
+
+      {/* 粘贴 */}
       <button
-        className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-accent transition-colors"
+        type="button"
+        className={cn(
+          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+          isLightTerminal
+            ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+            : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+        )}
         onClick={onPaste}
       >
-        <ClipboardPaste className="h-3.5 w-3.5" />
-        {t("tm_paste")}
-        <span className="ml-auto text-[10px] text-muted-foreground">
+        <ClipboardPaste className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+        <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_paste")}</span>
+        <span className={cn("ml-auto text-[10px] font-mono tracking-tight", isLightTerminal ? "text-slate-400" : "text-slate-400/70")}>
           Ctrl+Shift+V
         </span>
       </button>
+
+      {/* 粘贴选中内容 */}
       <button
+        type="button"
         className={cn(
-          "w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-accent transition-colors",
+          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+          isLightTerminal
+            ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+            : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
           !ctxMenu.hasSelection && "opacity-40 pointer-events-none",
         )}
         onClick={onPasteSelection}
       >
-        <Clipboard className="h-3.5 w-3.5" />
-        {t("tm_paste_selected")}
+        <Clipboard className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+        <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_paste_selected")}</span>
       </button>
-      <div className="my-1 border-t" />
+
+      <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
+
+      {/* 搜索 */}
       <button
-        className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-accent transition-colors"
+        type="button"
+        className={cn(
+          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+          isLightTerminal
+            ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+            : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+        )}
         onClick={(e) => {
           e.stopPropagation();
           onSearch();
         }}
       >
-        <Search className="h-3.5 w-3.5" />
-        {t("tm_search")}
-        <span className="ml-auto text-[10px] text-muted-foreground">
+        <Search className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+        <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_search")}</span>
+        <span className={cn("ml-auto text-[10px] font-mono tracking-tight", isLightTerminal ? "text-slate-400" : "text-slate-400/70")}>
           Ctrl+Shift+F
         </span>
       </button>
-      <div className="my-1 border-t" />
-      {/* 清屏：悬停展开子菜单，仿 Xshell */}
+
+      <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
+
+      {/* 清屏：悬停展开子菜单 */}
       <div className="relative group">
         <button
-          className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-accent transition-colors"
+          type="button"
+          className={cn(
+            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+            isLightTerminal
+              ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+              : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+          )}
           onClick={(e) => e.stopPropagation()}
         >
-          <Trash2 className="h-3.5 w-3.5" />
-          {t("tm_clear")}
-          <ChevronRight className="h-3.5 w-3.5 ml-auto" />
+          <Trash2 className="h-3.5 w-3.5 text-rose-400 shrink-0" />
+          <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_clear")}</span>
+          <ChevronRight className="h-3.5 w-3.5 ml-auto opacity-60" />
         </button>
-        <div className="hidden group-hover:block absolute left-full top-0 -mt-1 min-w-[200px] bg-popover border rounded-xl shadow-md py-1 z-50">
+        <div
+          className={cn(
+            "hidden group-hover:block absolute top-0 -mt-1 min-w-[190px] rounded-xl overflow-hidden select-none transition-all duration-150 animate-in fade-in zoom-in-95 p-1 z-50",
+            isSubmenuLeft ? "right-full" : "left-full",
+            isLightTerminal
+              ? "bg-white/95 text-slate-800 border border-slate-200/80 shadow-[0_12px_32px_-6px_rgba(0,0,0,0.18),0_0_0_1px_rgba(0,0,0,0.04)] backdrop-blur-xl"
+              : "bg-[#13141f]/95 text-slate-100 border border-white/10 shadow-[0_16px_36px_-8px_rgba(0,0,0,0.7),0_0_0_1px_rgba(255,255,255,0.06)] backdrop-blur-xl",
+          )}
+        >
           <button
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-accent transition-colors"
+            type="button"
+            className={cn(
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+              isLightTerminal
+                ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+            )}
             onClick={onClearScreen}
           >
-            {t("tm_clear_screen")}
-            <span className="ml-auto text-[10px] text-muted-foreground">
+            <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_clear_screen")}</span>
+            <span className={cn("ml-auto text-[10px] font-mono tracking-tight", isLightTerminal ? "text-slate-400" : "text-slate-400/70")}>
               L
             </span>
           </button>
           <button
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-accent transition-colors"
+            type="button"
+            className={cn(
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+              isLightTerminal
+                ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+            )}
             onClick={onClearScrollback}
           >
-            {t("tm_clear_scrollback")}
-            <span className="ml-auto text-[10px] text-muted-foreground">
+            <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_clear_scrollback")}</span>
+            <span className={cn("ml-auto text-[10px] font-mono tracking-tight", isLightTerminal ? "text-slate-400" : "text-slate-400/70")}>
               O
             </span>
           </button>
           <button
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-accent transition-colors"
+            type="button"
+            className={cn(
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+              isLightTerminal
+                ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+            )}
             onClick={onClearAll}
           >
-            {t("tm_clear_all")}
-            <span className="ml-auto text-[10px] text-muted-foreground">
+            <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_clear_all")}</span>
+            <span className={cn("ml-auto text-[10px] font-mono tracking-tight", isLightTerminal ? "text-slate-400" : "text-slate-400/70")}>
               N
             </span>
           </button>
         </div>
       </div>
-      <div className="my-1 border-t" />
+
+      <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
+
+      {/* 锁定会话 */}
       {onLockSession && (
         <button
-          className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-accent transition-colors text-amber-500/90 hover:text-amber-500"
+          type="button"
+          className={cn(
+            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left text-amber-500/90 hover:text-amber-500",
+            isLightTerminal ? "hover:bg-amber-500/10" : "hover:bg-amber-500/15",
+          )}
           onClick={onLockSession}
         >
-          <Lock className="h-3.5 w-3.5" />
-          {t("tm_lock_session") || "锁定会话"}
-          <span className="ml-auto text-[10px] text-muted-foreground">
+          <Lock className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+          <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_lock_session") || "锁定会话"}</span>
+          <span className={cn("ml-auto text-[10px] font-mono tracking-tight", isLightTerminal ? "text-amber-600/70" : "text-amber-400/70")}>
             Ctrl+Alt+L
           </span>
         </button>
       )}
-      <div className="my-1 border-t" />
-      {/* 日志：悬停展开子菜单，仿 Xshell */}
+
+      {onLockSession && (
+        <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
+      )}
+
+      {/* 日志：悬停展开子菜单 */}
       <div className="relative group">
         <button
-          className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-accent transition-colors"
+          type="button"
+          className={cn(
+            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+            isLightTerminal
+              ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+              : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+          )}
           onClick={(e) => e.stopPropagation()}
         >
-          <FileText className="h-3.5 w-3.5" />
-          {t("tm_log")}
-          <ChevronRight className="h-3.5 w-3.5 ml-auto" />
+          <FileText className="h-3.5 w-3.5 text-violet-400 shrink-0" />
+          <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_log")}</span>
+          <ChevronRight className="h-3.5 w-3.5 ml-auto opacity-60" />
         </button>
-        <div className="hidden group-hover:block absolute left-full top-0 -mt-1 min-w-[200px] bg-popover border rounded-xl shadow-md py-1 z-50">
+        <div
+          className={cn(
+            "hidden group-hover:block absolute top-0 -mt-1 min-w-[200px] rounded-xl overflow-hidden select-none transition-all duration-150 animate-in fade-in zoom-in-95 p-1 z-50",
+            isSubmenuLeft ? "right-full" : "left-full",
+            isLightTerminal
+              ? "bg-white/95 text-slate-800 border border-slate-200/80 shadow-[0_12px_32px_-6px_rgba(0,0,0,0.18),0_0_0_1px_rgba(0,0,0,0.04)] backdrop-blur-xl"
+              : "bg-[#13141f]/95 text-slate-100 border border-white/10 shadow-[0_16px_36px_-8px_rgba(0,0,0,0.7),0_0_0_1px_rgba(255,255,255,0.06)] backdrop-blur-xl",
+          )}
+        >
           <button
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-accent transition-colors"
+            type="button"
+            className={cn(
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+              isLightTerminal
+                ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+            )}
             onClick={onToggleRecording}
           >
-            {activeTermId && recordingTermIds.has(activeTermId)
-              ? t("recording_stop_menu")
-              : t("recording_start_menu")}
+            <span className="truncate tracking-tight font-sans text-[11.5px]">
+              {activeTermId && recordingTermIds.has(activeTermId)
+                ? t("recording_stop_menu")
+                : t("recording_start_menu")}
+            </span>
           </button>
           <button
+            type="button"
             className={cn(
-              "w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors",
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
               activeTermId &&
                 recordingTermIds.has(activeTermId) &&
                 !recordingPausedIds.has(activeTermId)
-                ? "hover:bg-accent"
+                ? isLightTerminal
+                  ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                  : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100"
                 : "opacity-40 pointer-events-none",
             )}
             onClick={onPauseRecording}
           >
-            {t("recording_pause_menu")}
+            <span className="truncate tracking-tight font-sans text-[11.5px]">{t("recording_pause_menu")}</span>
           </button>
           <button
+            type="button"
             className={cn(
-              "w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors",
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
               activeTermId && recordingPausedIds.has(activeTermId)
-                ? "hover:bg-accent"
+                ? isLightTerminal
+                  ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                  : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100"
                 : "opacity-40 pointer-events-none",
             )}
             onClick={onResumeRecording}
           >
-            {t("recording_resume_menu")}
+            <span className="truncate tracking-tight font-sans text-[11.5px]">{t("recording_resume_menu")}</span>
           </button>
-          <div className="my-1 border-t" />
+
+          <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
+
           <button
+            type="button"
             disabled={isOpening}
             className={cn(
-              "w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors",
-              isOpening ? "opacity-50 pointer-events-none" : "hover:bg-accent",
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+              isOpening
+                ? "opacity-50 pointer-events-none"
+                : isLightTerminal
+                  ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                  : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
             )}
             onClick={onOpenLogFile}
           >
-            {t("recording_open_file")}
+            <span className="truncate tracking-tight font-sans text-[11.5px]">{t("recording_open_file")}</span>
           </button>
           <button
+            type="button"
             disabled={isOpening}
             className={cn(
-              "w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors",
-              isOpening ? "opacity-50 pointer-events-none" : "hover:bg-accent",
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+              isOpening
+                ? "opacity-50 pointer-events-none"
+                : isLightTerminal
+                  ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                  : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
             )}
             onClick={onOpenLogFolder}
           >
-            {t("recording_open_folder")}
+            <span className="truncate tracking-tight font-sans text-[11.5px]">{t("recording_open_folder")}</span>
           </button>
           <button
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-accent transition-colors"
+            type="button"
+            className={cn(
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+              isLightTerminal
+                ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+            )}
             onClick={onChooseLogDirectory}
           >
-            {t("recording_choose_dir")}
+            <span className="truncate tracking-tight font-sans text-[11.5px]">{t("recording_choose_dir")}</span>
           </button>
         </div>
       </div>

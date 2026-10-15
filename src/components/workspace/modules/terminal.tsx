@@ -175,6 +175,7 @@ import {
   TerminalPasteConfirmDialog,
   TerminalTransferDialog,
   TerminalContextMenu,
+  TerminalSelectionToolbar,
   TerminalSearchBar,
   TerminalRecordingBadge,
   TerminalHintPanel,
@@ -280,6 +281,16 @@ export function TerminalModule({
     y: number;
     hasSelection: boolean;
   } | null>(null);
+  const ctxMenuRef = useLatestRef(ctxMenu);
+  // 划词快捷浮动操作条状态
+  const [selectionToolbar, setSelectionToolbar] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    text: string;
+  } | null>(null);
+  const selectionToolbarRef = useLatestRef(selectionToolbar);
+  const selectionTimerRef = useRef<number | null>(null);
   const [showSearch, setShowSearch] = useState(false);
   const showSearchRef = useRef(false);
   showSearchRef.current = showSearch;
@@ -662,6 +673,10 @@ export function TerminalModule({
   );
   const terminalHighlightRules = useAppStore((s) => s.terminalHighlightRules);
   const terminalCopyPaste = useAppStore((s) => s.terminalCopyPaste);
+  const terminalSelectionToolbar = useAppStore(
+    (s) => s.terminalSelectionToolbar ?? true,
+  );
+  const terminalSelectionToolbarRef = useLatestRef(terminalSelectionToolbar);
   const terminalBellSound = useAppStore((s) => s.terminalBellSound);
   // ref 镜像：onBell 回调只注册一次，直接用闭包变量会读到过期值，导致开关改了不生效
   const terminalBellSoundRef = useLatestRef(terminalBellSound ?? false);
@@ -1558,6 +1573,12 @@ export function TerminalModule({
     if (!container) return;
 
     const handler = (e: Event) => {
+      if (selectionTimerRef.current !== null) {
+        clearTimeout(selectionTimerRef.current);
+        selectionTimerRef.current = null;
+      }
+      setSelectionToolbar(null);
+
       const detail = (e as CustomEvent).detail;
       setCtxMenu({
         x: detail.x,
@@ -4545,6 +4566,7 @@ export function TerminalModule({
       // 右键菜单
       const contextMenuHandler = (e: Event) => {
         e.preventDefault();
+        setSelectionToolbar(null);
         const selection = term.getSelection();
         const hasSelection = !!selection;
 
@@ -4588,13 +4610,59 @@ export function TerminalModule({
         container.removeEventListener("contextmenu", contextMenuHandler),
       );
 
-      // 鼠标抬起时自动复制选中文本
-      const mouseUpHandler = () => {
+      // 鼠标按下时清除快捷工具条
+      const mouseDownHandler = () => {
+        if (selectionTimerRef.current !== null) {
+          clearTimeout(selectionTimerRef.current);
+          selectionTimerRef.current = null;
+        }
+        setSelectionToolbar(null);
+      };
+      container.addEventListener("mousedown", mouseDownHandler);
+      termCleanups.push(() =>
+        container.removeEventListener("mousedown", mouseDownHandler),
+      );
+
+      // 鼠标抬起时处理自动复制与划词快捷工具条
+      const mouseUpHandler = (e: MouseEvent) => {
+        // 关键防护 1：仅允许鼠标左键（button === 0）触发划词快捷条！
+        // 右键 (button === 2) 或中键 (button === 1) 抬起时严禁触发，防止右键时误弹造成双菜单重叠
+        if (e.button !== 0) {
+          if (selectionTimerRef.current !== null) {
+            clearTimeout(selectionTimerRef.current);
+            selectionTimerRef.current = null;
+          }
+          setSelectionToolbar(null);
+          return;
+        }
+
         if (useAppStore.getState().terminalCopyPaste ?? false) {
           const selection = term.getSelection();
           if (selection) {
             navigator.clipboard.writeText(selection);
           }
+        }
+        if (terminalSelectionToolbarRef.current) {
+          if (selectionTimerRef.current !== null) {
+            clearTimeout(selectionTimerRef.current);
+          }
+          selectionTimerRef.current = window.setTimeout(() => {
+            selectionTimerRef.current = null;
+            if (isUnmountedRef.current) return;
+            // 关键防护 2：如果当前右键菜单已经打开，绝对不弹划词工具条
+            if (ctxMenuRef.current) return;
+            const sel = term.getSelection();
+            if (sel && sel.trim().length > 0) {
+              setSelectionToolbar({
+                visible: true,
+                x: e.clientX,
+                y: e.clientY,
+                text: sel,
+              });
+            } else {
+              setSelectionToolbar(null);
+            }
+          }, 25);
         }
       };
       container.addEventListener("mouseup", mouseUpHandler);
@@ -4605,6 +4673,11 @@ export function TerminalModule({
       // Ctrl / Cmd + Mouse Wheel 动态缩放终端字号
       const wheelHandler = (e: WheelEvent) => {
         setCtxMenu(null);
+        if (selectionTimerRef.current !== null) {
+          clearTimeout(selectionTimerRef.current);
+          selectionTimerRef.current = null;
+        }
+        setSelectionToolbar(null);
         const isMac = navigator.userAgent.includes("Mac");
         const hasModifier = e.ctrlKey || (isMac && e.metaKey);
         if (hasModifier) {
@@ -8319,6 +8392,7 @@ export function TerminalModule({
 
       <TerminalContextMenu
         ctxMenu={ctxMenu}
+        isLightTerminal={activeTheme?.type === "light"}
         onClose={() => setCtxMenu(null)}
         onCopy={handleCopy}
         onCopyAll={() => void copyAllOutput()}
@@ -8339,6 +8413,18 @@ export function TerminalModule({
         recordingPausedIds={recordingPausedIds}
         isOpening={isOpening}
         onLockSession={handleTriggerAppLock}
+      />
+
+      <TerminalSelectionToolbar
+        visible={!!selectionToolbar?.visible}
+        x={selectionToolbar?.x ?? 0}
+        y={selectionToolbar?.y ?? 0}
+        selectedText={selectionToolbar?.text ?? ""}
+        isLightTerminal={activeTheme?.type === "light"}
+        onClose={() => setSelectionToolbar(null)}
+        onCopy={handleCopy}
+        onPasteSelection={handlePasteSelection}
+        onSearch={handleSearch}
       />
 
       <TerminalPasteConfirmDialog
