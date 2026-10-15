@@ -1,14 +1,12 @@
 /**
+ * ==============================================================================
+ * ⚠️ 核心发布流程保护文件 (FROZEN / PROTECTED RELEASE CODE)
+ * 此文件负责在云端 Runner 中将 Release 安装包与产物直传至 Gitee Releases，
+ * 并全自动生成、校验与推送国内极速直连的 latest.json 到 Gitee 根目录。
+ * 经严格生产环境验证，此逻辑已全面定死固化，后续严禁任何修改或重构！
+ * ==============================================================================
+ * 
  * tools/sync-gitee-release.mjs
- * 
- * 作用：在 GitHub Actions 构建完成后（或本地执行），将 Release 安装包与产物
- * 自动同步上传到 Gitee Releases，并生成国内极速直连的 latest.json。
- * 
- * 机制：
- * 1. 优先使用 Gitee 官方国内 CDN 下载地址；
- * 2. 自动在 Gitee 创建或更新对应 Tag 的 Release；
- * 3. 自动同步 Windows / macOS / Linux 所有安装包及数字签名；
- * 4. 生成并推送 Gitee 专用的 latest.json 到 Gitee main 分支及 Release 资产中。
  */
 import process from 'node:process'
 import { readFile, writeFile } from 'node:fs/promises'

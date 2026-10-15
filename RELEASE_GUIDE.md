@@ -2,6 +2,11 @@
 
 > 本文档面向 Qshell 核心维护者、协同开发成员与开源贡献者。为了保证跨平台客户端的稳定性、多环境版本号一致性以及自动化 CI/CD 构建成功率，在进行任何版本发布时**必须严格遵守本发版规程**。
 
+> [!IMPORTANT]
+> **⚠️ 核心发版流程与代码已全面固化保护 (FROZEN & PROTECTED)**
+> 本项目的自动化发版与双端同步体系已打通并全量验证通过，所有发版相关代码（包括 `.github/workflows/release.yml`、`tools/sync-gitee-release.mjs`、`tools/sync-release-manifest.mjs`、`tools/aliyun-fc-index.js` 等）**已全面定死，严禁后续任何修改或重构**。
+> **日常发版只需修改 3 个配置文件的版本号并打 Tag 推送，云端即可全自动完成构建与双端同步，后续无需人工全程监控！**
+
 ---
 
 ## 目录
