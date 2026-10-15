@@ -21,11 +21,17 @@ interface ShortcutState {
   /** 获取动作定义元信息 */
   getDefinition: (actionId: string) => ShortcutDefinition | undefined
 
+  /** 查找指定加速键是否与其它动作产生冲突（实时录制感知） */
+  findConflict: (actionId: string, accelerator: string) => ShortcutDefinition | undefined
+
   /** 设置/修改快捷键绑定，并检测是否有热键冲突 */
   setBinding: (actionId: string, accelerator: string) => {
     success: boolean
     conflictActionId?: string
   }
+
+  /** 清空指定动作的快捷键绑定（置为空） */
+  clearBinding: (actionId: string) => void
 
   /** 重置单个快捷键为系统默认 */
   resetBinding: (actionId: string) => void
@@ -57,8 +63,9 @@ export const useShortcutStore = create<ShortcutState>()(
       },
 
       getBinding: (actionId: string) => {
-        const custom = get().customBindings[actionId]
-        if (custom) return custom
+        if (actionId in get().customBindings) {
+          return get().customBindings[actionId]
+        }
         const def = get().getDefinition(actionId)
         if (!def) return ''
         return resolveDefaultKey(def, isMacPlatform())
@@ -69,12 +76,12 @@ export const useShortcutStore = create<ShortcutState>()(
         return acceleratorToDisplayKeys(binding, isMacPlatform())
       },
 
-      setBinding: (actionId: string, accelerator: string) => {
+      findConflict: (actionId: string, accelerator: string) => {
+        if (!accelerator) return undefined
         const isMac = isMacPlatform()
         const targetParsed = parseAccelerator(accelerator, isMac)
+        if (!targetParsed.key) return undefined
 
-        // 冲突检测：查找是否有其它同作用域或全局动作使用了相同组合键
-        let conflictActionId: string | undefined
         for (const def of SHORTCUT_DEFINITIONS) {
           if (def.id === actionId) continue
           const otherBinding = get().getBinding(def.id)
@@ -88,22 +95,36 @@ export const useShortcutStore = create<ShortcutState>()(
             otherParsed.key.toLowerCase() === targetParsed.key.toLowerCase()
 
           if (isSame) {
-            conflictActionId = def.id
-            break
+            return def
           }
         }
+        return undefined
+      },
+
+      setBinding: (actionId: string, accelerator: string) => {
+        const conflictDef = get().findConflict(actionId, accelerator)
+        const conflictActionId = conflictDef?.id
 
         // 保存新映射
         set((state) => {
           const next = { ...state.customBindings, [actionId]: accelerator }
-          // 如果产生冲突且用户确认绑定，自动将原动作置为空或解除
+          // 如果产生冲突且用户确认绑定，将冲突方的绑定置空以避免按键打架
           if (conflictActionId) {
-            delete next[conflictActionId]
+            next[conflictActionId] = ''
           }
           return { customBindings: next }
         })
 
         return { success: true, conflictActionId }
+      },
+
+      clearBinding: (actionId: string) => {
+        set((state) => ({
+          customBindings: {
+            ...state.customBindings,
+            [actionId]: '',
+          },
+        }))
       },
 
       resetBinding: (actionId: string) => {

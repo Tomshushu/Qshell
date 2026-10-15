@@ -5,6 +5,7 @@ import {
   matchesShortcut,
   eventToAccelerator,
   acceleratorToDisplayKeys,
+  getPressedModifiers,
 } from '../shortcut-matcher'
 
 describe('shortcut-matcher', () => {
@@ -73,4 +74,15 @@ describe('shortcut-matcher', () => {
     expect(acceleratorToDisplayKeys('Mod+K', true)).toEqual(['⌘', 'K'])
     expect(acceleratorToDisplayKeys('Ctrl+Shift+Tab', false)).toEqual(['Ctrl', 'Shift', 'Tab'])
   })
+
+  it('getPressedModifiers extracts active modifier keys', () => {
+    const event = new KeyboardEvent('keydown', {
+      key: 'Control',
+      ctrlKey: true,
+      shiftKey: true,
+    })
+    expect(getPressedModifiers(event, false)).toEqual(['Ctrl', 'Shift'])
+    expect(getPressedModifiers(event, true)).toEqual(['⌃', '⇧'])
+  })
 })
+

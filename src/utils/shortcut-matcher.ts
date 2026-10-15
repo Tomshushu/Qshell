@@ -172,6 +172,16 @@ export function eventToAccelerator(event: KeyboardEvent, isMac = isMacPlatform()
   return parts.join('+')
 }
 
+/** 获取当前事件中被按住的修饰键列表（供录制浮层实时感知按住态） */
+export function getPressedModifiers(event: KeyboardEvent, isMac = isMacPlatform()): string[] {
+  const mods: string[] = []
+  if (event.ctrlKey) mods.push(isMac ? '⌃' : 'Ctrl')
+  if (event.altKey) mods.push(isMac ? '⌥' : 'Alt')
+  if (event.shiftKey) mods.push(isMac ? '⇧' : 'Shift')
+  if (event.metaKey) mods.push(isMac ? '⌘' : 'Cmd')
+  return mods
+}
+
 /**
  * 将加速键字符串分解为展示用徽章单元数组
  * 如 'Mod+K' -> Win: ['Ctrl', 'K']，Mac: ['⌘', 'K']
