@@ -3340,8 +3340,10 @@ export function TerminalModule({
         cleanups.push(unsubscribe);
 
         // 补获已缓冲的历史数据并渲染
+        let historyData: string | null = null;
         try {
           const history = await sshService.getShellHistory(sessionId);
+          historyData = history;
           if (history) {
             const safeHistory = stripUnsafeEscapes(
               isSerial
@@ -3374,7 +3376,7 @@ export function TerminalModule({
         // 标记历史渲染完毕，并冲刷在加载历史期间接收到的实时缓冲数据
         historyWritten = true;
         if (pendingBuffer) {
-          const bufferToWrite = history && history.endsWith(pendingBuffer) ? "" : pendingBuffer;
+          const bufferToWrite = historyData && historyData.endsWith(pendingBuffer) ? "" : pendingBuffer;
           if (bufferToWrite) {
             if (isSerial) writeShellOutput(termId, xtermInfo.term, bufferToWrite);
             else writeTerminalOutput(termId, xtermInfo.term, stripUnsafeEscapes(bufferToWrite));
@@ -5184,8 +5186,10 @@ export function TerminalModule({
         cleanups.push(unsubscribe);
 
         // 补获已缓冲的历史数据并渲染
+        let historyData: string | null = null;
         try {
           const history = await sshService.getShellHistory(sessionId);
+          historyData = history;
           // await 后检查卸载，防止向已卸载的终端写入数据
           if (isUnmountedRef.current || !sshService.isSessionAlive(sessionId)) {
             cleanups.slice().reverse().forEach((fn) => {
@@ -5229,7 +5233,7 @@ export function TerminalModule({
         historyWritten = true;
         if (pendingBuffer) {
           // 若 pendingBuffer 已在拉取的 history 尾部出现，避免重复写入
-          const bufferToWrite = history && history.endsWith(pendingBuffer) ? "" : pendingBuffer;
+          const bufferToWrite = historyData && historyData.endsWith(pendingBuffer) ? "" : pendingBuffer;
           if (bufferToWrite) {
             if (isSerial) writeShellOutput(termId, term, bufferToWrite);
             else writeTerminalOutput(termId, term, stripUnsafeEscapes(bufferToWrite));
@@ -5829,9 +5833,13 @@ export function TerminalModule({
     toggleRecording,
   ]);
 
-  // 异步拉取并缓存远程用户的 home 目录路径，供路径解析时替换 ~ 使用
+  // 异步拉取并缓存远程用户的 home 目录路径，供路径解析时替换 ~ 使用。
+  // 等待首个 Shell 连接就绪后再拉取，彻底杜绝 SFTP 通道抢占首个会话连接导致 MOTD 丢失。
+  const hasConnectedShell = Array.from(terminals.values()).some(
+    (t) => t.status === "connected" && !!t.sessionId,
+  );
   useEffect(() => {
-    if (!isConnected || !serverId) return;
+    if (!isConnected || !serverId || !hasConnectedShell) return;
     sshService
       .getHomeDirectory(serverId)
       .then((h) => {
@@ -5840,7 +5848,7 @@ export function TerminalModule({
         }
       })
       .catch(() => {});
-  }, [isConnected, serverId]);
+  }, [isConnected, serverId, hasConnectedShell]);
 
   // 向外层工作台注册获取当前终端 CWD 的回调
   useEffect(() => {

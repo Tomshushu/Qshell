@@ -1695,6 +1695,10 @@ pub struct SshConnection {
     /// 所有 SFTP 方法都是 &self，Arc<SftpSession> 可安全共享。
     /// session 在连接断开时随 SshConnection 一起 drop。
     sftp_cache: tokio::sync::Mutex<Option<std::sync::Arc<russh_sftp::client::SftpSession>>>,
+    /// 确保首次打开终端交互式 PTY Shell 优先于后台非交互通道（SFTP / exec），
+    /// 防止非交互通道抢先触发 OpenSSH PAM pam_open_session 导致 loginmsg (MOTD) 被提前清除。
+    first_shell_ready: Arc<AtomicBool>,
+    first_shell_notify: Arc<tokio::sync::Notify>,
 }
 
 impl SshConnection {
@@ -1712,6 +1716,8 @@ impl SshConnection {
             transport,
             heartbeat_cancel: Arc::new(AtomicBool::new(false)),
             sftp_cache: tokio::sync::Mutex::new(None),
+            first_shell_ready: Arc::new(AtomicBool::new(false)),
+            first_shell_notify: Arc::new(tokio::sync::Notify::new()),
         })
     }
 
@@ -1732,6 +1738,8 @@ impl SshConnection {
             transport,
             heartbeat_cancel: Arc::new(AtomicBool::new(false)),
             sftp_cache: tokio::sync::Mutex::new(None),
+            first_shell_ready: Arc::new(AtomicBool::new(false)),
+            first_shell_notify: Arc::new(tokio::sync::Notify::new()),
         })
     }
 
@@ -1752,6 +1760,8 @@ impl SshConnection {
             transport,
             heartbeat_cancel: Arc::new(AtomicBool::new(false)),
             sftp_cache: tokio::sync::Mutex::new(None),
+            first_shell_ready: Arc::new(AtomicBool::new(false)),
+            first_shell_notify: Arc::new(tokio::sync::Notify::new()),
         })
     }
 
@@ -1772,11 +1782,26 @@ impl SshConnection {
             transport,
             heartbeat_cancel: Arc::new(AtomicBool::new(false)),
             sftp_cache: tokio::sync::Mutex::new(None),
+            first_shell_ready: Arc::new(AtomicBool::new(false)),
+            first_shell_notify: Arc::new(tokio::sync::Notify::new()),
         })
+    }
+
+    /// 确保终端交互式 PTY Shell 优先建立，避免后台通道（SFTP / exec）抢占首个会话通道导致服务端的 PAM MOTD 欢迎词被提前清空。
+    pub async fn wait_for_first_shell(&self, max_wait_ms: u64) {
+        if self.first_shell_ready.load(Ordering::SeqCst) {
+            return;
+        }
+        let notified = self.first_shell_notify.notified();
+        if self.first_shell_ready.load(Ordering::SeqCst) {
+            return;
+        }
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(max_wait_ms), notified).await;
     }
 
     /// Execute a command on the remote server (async).
     pub async fn execute(&self, command: &str, timeout_secs: u64) -> SshResult<CommandOutput> {
+        self.wait_for_first_shell(1000).await;
         ExecManager::new(&self.transport).execute(command, timeout_secs).await
     }
 
@@ -1787,12 +1812,17 @@ impl SshConnection {
         stdin_data: &[u8],
         timeout_secs: u64,
     ) -> SshResult<CommandOutput> {
+        self.wait_for_first_shell(1000).await;
         ExecManager::new(&self.transport).execute_with_stdin(command, stdin_data, timeout_secs).await
     }
 
     /// Create an interactive shell channel (returns the channel for PTY setup).
     pub async fn create_shell_channel(&self) -> SshResult<russh::Channel<russh::client::Msg>> {
-        self.transport.open_session_channel().await
+        let ch = self.transport.open_session_channel().await?;
+        if !self.first_shell_ready.swap(true, Ordering::SeqCst) {
+            self.first_shell_notify.notify_waiters();
+        }
+        Ok(ch)
     }
 
     /// 打开一条 direct-tcpip 通道（Local / Dynamic 端口转发使用）。
@@ -1829,6 +1859,7 @@ impl SshConnection {
     /// 所有 SFTP 方法都是 `&self`，`Arc<SftpSession>` 可安全共享。
     /// 避免每次操作都新建 channel + SftpSession（解决 session 竞争导致的超时）。
     pub async fn create_sftp_session(&self) -> SshResult<std::sync::Arc<russh_sftp::client::SftpSession>> {
+        self.wait_for_first_shell(1000).await;
         // 先检查缓存
         {
             let cache = self.sftp_cache.lock().await;
@@ -1852,6 +1883,7 @@ impl SshConnection {
     /// 传输使用独立 session 可与目录浏览操作互不干扰。
     /// session 用完自动 drop 时关闭 channel。
     pub async fn create_dedicated_sftp_session(&self) -> SshResult<russh_sftp::client::SftpSession> {
+        self.wait_for_first_shell(1000).await;
         FileManager::new(&self.transport).create_sftp_session().await
     }
 

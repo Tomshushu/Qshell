@@ -636,11 +636,12 @@ export function ShortcutSettingsPanel() {
       {/* 恢复全部默认确认弹窗 */}
       <ConfirmDialog
         open={showResetAllConfirm}
-        onOpenChange={setShowResetAllConfirm}
+        onCancel={() => setShowResetAllConfirm(false)}
         title={t('shortcut_reset_all_confirm_title')}
         description={t('shortcut_reset_all_confirm_desc')}
         onConfirm={() => {
           resetAll()
+          setShowResetAllConfirm(false)
           toast.success(t('msg_save_success') || '已恢复所有默认快捷键')
         }}
       />

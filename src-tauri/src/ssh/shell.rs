@@ -495,7 +495,7 @@ pub async fn shell_create(
                         Some(ShellCmd::Close) | None => break,
                     },
                     msg = ch.wait(), if !paused => match msg {
-                        Some(ChannelMsg::Data { data }) => {
+                        Some(ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. }) => {
                             if !zmodem_mode {
                                 if let Some(deadline) = sigint_drain_until {
                                     if tokio::time::Instant::now() >= deadline {
