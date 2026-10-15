@@ -177,6 +177,30 @@ fn sessions() -> &'static Arc<Mutex<HashMap<String, ShellSession>>> {
 }
 
 /// Create an interactive shell session (PTY) with xterm-256color terminal.
+/// 智能解析类似 /etc/issue.net 的转义序列宏（如 \S, \r, \m, \s, \n）。
+///
+/// Linux 控制台 (agetty) 本地登录会自动展开这些宏为发行版名、内核和架构，
+/// 但 OpenSSH 通过 `Banner /etc/issue.net` 发送欢迎语时按协议原样直传，
+/// 导致远程客户端直接显示原始未解析字符串 "\S Kernel \r on an \m"。
+/// 此处在回填 history 与透传给前端前进行智能回填展开。
+fn expand_issue_banner(banner: &str, os_type: Option<&str>, os_info: Option<&str>) -> String {
+    if !banner.contains("\\S") && !banner.contains("\\s") && !banner.contains("\\r") && !banner.contains("\\m") {
+        return banner.to_string();
+    }
+    let parts: Vec<&str> = os_info.unwrap_or("").split('|').map(|s| s.trim()).collect();
+    let pretty_name = parts.first().copied().filter(|s| !s.is_empty())
+        .or(os_type.filter(|s| !s.is_empty()))
+        .unwrap_or("Linux");
+    let arch = parts.get(1).copied().filter(|s| !s.is_empty()).unwrap_or("x86_64");
+    let kernel = parts.get(2).copied().filter(|s| !s.is_empty()).unwrap_or("");
+
+    banner
+        .replace("\\S", pretty_name)
+        .replace("\\s", "Linux")
+        .replace("\\r", kernel)
+        .replace("\\m", arch)
+}
+
 /// Output is pushed to the frontend via the `ssh:shell-output` event.
 ///
 /// This function is ASYNC — it waits for the SSH channel + PTY to be fully
@@ -196,7 +220,14 @@ pub async fn shell_create(
         .get_connection_with_generation(&server_id)
         .map_err(|e| format!("Shell: not connected: {}", e))?;
 
-    let banner = conn.auth_banner();
+    let banner = if let Some(raw_banner) = conn.auth_banner() {
+        let server_cfg = crate::commands::ssh::load_server_config(&server_id).await.ok();
+        let os_type = server_cfg.as_ref().map(|s| s.target_type.as_str());
+        let os_info = server_cfg.as_ref().and_then(|s| s.os_info.as_deref());
+        Some(expand_issue_banner(&raw_banner, os_type, os_info))
+    } else {
+        None
+    };
     let sid = session_id.clone();
 
     // Channel + PTY setup (must complete BEFORE registering session)

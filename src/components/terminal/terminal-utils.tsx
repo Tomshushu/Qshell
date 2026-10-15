@@ -92,12 +92,52 @@ export const stripAnsiForRecording = (s: string): string => {
   );
 };
 
+/**
+ * 智能解析类似 /etc/issue.net 的转义序列宏（如 \S, \r, \m, \s, \n）。
+ *
+ * Linux 控制台 (agetty) 本地登录会自动展开这些宏为发行版名、内核和架构，
+ * 但 OpenSSH 通过 `Banner /etc/issue.net` 直传时原样发送，导致显示原始 "\S Kernel \r on an \m"。
+ * 此函数在客户端展示时进行智能解析与友好回填。
+ */
+export function expandIssueBanner(
+  text: string,
+  serverInfo?: { osType?: string; osInfo?: string; host?: string; name?: string },
+): string {
+  if (
+    !text ||
+    (!text.includes("\\S") &&
+      !text.includes("\\s") &&
+      !text.includes("\\r") &&
+      !text.includes("\\m"))
+  ) {
+    return text;
+  }
+  const parts = serverInfo?.osInfo
+    ? serverInfo.osInfo.split("|").map((s) => s.trim())
+    : [];
+  const prettyName =
+    parts[0] ||
+    (serverInfo?.osType ? serverInfo.osType.toUpperCase() : "Linux");
+  const arch = parts[1] || "x86_64";
+  const kernel = parts[2] || "";
+  const hostname = serverInfo?.name || serverInfo?.host || "localhost";
+
+  return text
+    .replace(/\\S/g, prettyName)
+    .replace(/\\s/g, "Linux")
+    .replace(/\\r/g, kernel)
+    .replace(/\\m/g, arch)
+    .replace(/\\n/g, hostname);
+}
+
 export const writeMotdIfMissing = (
   termInstance: Terminal,
   motd: string,
   history: string,
+  serverInfo?: { osType?: string; osInfo?: string; host?: string; name?: string },
 ) => {
-  const safeMotd = stripUnsafeEscapes(motd);
+  const expandedMotd = expandIssueBanner(motd, serverInfo);
+  const safeMotd = stripUnsafeEscapes(expandedMotd);
   const safeHistory = stripUnsafeEscapes(history);
   if (!safeMotd || !safeMotd.trim()) {
     termInstance.write(safeHistory);

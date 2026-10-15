@@ -5212,7 +5212,7 @@ export function TerminalModule({
                     highlightRulesRef.current,
                   ),
             );
-            writeMotdIfMissing(term, bannerText, safeHistory);
+            writeMotdIfMissing(term, bannerText, safeHistory, currentServer);
           } else if (history) {
             const safeHistory = stripUnsafeEscapes(
               isSerial
