@@ -89,7 +89,9 @@ function AppContent() {
     localStorage.removeItem('qshell-workspace-session-v1')
     localStorage.removeItem('sftp_pending_transfers')
     void useAuthStore.getState().init()
-    void useSyncStore.getState().init()
+    void useSyncStore.getState().init().then(() => {
+      void useSyncStore.getState().checkStartupSync()
+    })
     void sendStartupPulse()
 
     if (isTauri) {

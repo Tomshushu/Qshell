@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { X, Maximize2, Minimize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useTranslation } from "@/i18n";
 
 interface WorkspaceModuleModalProps {
   open: boolean;
@@ -22,6 +23,7 @@ export function WorkspaceModuleModal({
   extraHeaderActions,
   keepMounted = true,
 }: WorkspaceModuleModalProps) {
+  const { t } = useTranslation();
   const [isMaximized, setIsMaximized] = useState(false);
   const [hasOpened, setHasOpened] = useState(open);
 
@@ -96,7 +98,7 @@ export function WorkspaceModuleModal({
               size="icon"
               className="h-7 w-7 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground"
               onClick={() => setIsMaximized((prev) => !prev)}
-              title={isMaximized ? "还原窗口" : "最大化窗口"}
+              title={isMaximized ? t("modal_restore") : t("modal_maximize")}
             >
               {isMaximized ? (
                 <Minimize2 className="h-3.5 w-3.5" />
@@ -110,7 +112,7 @@ export function WorkspaceModuleModal({
               size="icon"
               className="h-7 w-7 rounded-lg hover:bg-destructive/15 hover:text-destructive text-muted-foreground transition-colors"
               onClick={onClose}
-              title="关闭 (Esc)"
+              title={t("modal_close_esc")}
             >
               <X className="h-4 w-4" />
             </Button>

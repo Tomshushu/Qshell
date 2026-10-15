@@ -960,7 +960,7 @@ export function SftpPanel() {
     if (!v.open || v.isImage) return
     if (v.mode === 'preview') {
       if (v.fileSize && v.fileSize > 2 * 1024 * 1024) {
-        toastRef.current.warning('文件大于 2MB，仅支持只读预览，暂不支持直接编辑')
+        toastRef.current.warning(tRef.current('sftp_edit_too_large'))
         return
       }
     }

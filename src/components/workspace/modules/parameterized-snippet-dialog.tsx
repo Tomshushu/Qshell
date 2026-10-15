@@ -141,7 +141,7 @@ export function ParameterizedSnippetDialog({
                 <span>{p.label}</span>
                 {p.defaultValue && (
                   <span className="text-[10px] text-muted-foreground/60 font-mono">
-                    默认: {p.defaultValue}
+                    {t('snippet_param_default_label', { val: p.defaultValue })}
                   </span>
                 )}
               </label>
@@ -150,7 +150,7 @@ export function ParameterizedSnippetDialog({
                 onChange={(e) =>
                   setValues((prev) => ({ ...prev, [p.key]: e.target.value }))
                 }
-                placeholder={p.defaultValue || `输入 ${p.label}...`}
+                placeholder={p.defaultValue || t('snippet_param_input_ph', { label: p.label })}
                 className="h-8 text-xs font-mono"
                 autoFocus={idx === 0}
                 onKeyDown={(e) => {

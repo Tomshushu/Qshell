@@ -370,10 +370,12 @@ interface I18nContextType {
 
 export const I18nContext = createContext<I18nContextType | null>(null);
 
-export function translate(key: string): string {
+export function translate(key: string, params?: Record<string, string | number>): string {
   const language = useAppStore.getState?.()?.language || "zh-CN";
   const langTranslations = TRANSLATIONS[language] || TRANSLATIONS["en"];
-  return langTranslations[key] || TRANSLATIONS["en"][key] || String(key);
+  const template = langTranslations[key] || TRANSLATIONS["en"][key] || String(key);
+  if (!params) return template;
+  return template.replace(/\{(\w+)\}/g, (_, name: string) => String(params[name] ?? `{${name}}`));
 }
 
 export function useTranslation() {

@@ -31,17 +31,20 @@ import { isTauri } from '@/services/api'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
-function formatRelativeTime(isoStr: string | null): string {
+function formatRelativeTime(
+  isoStr: string | null,
+  t: (k: string, p?: Record<string, string | number>) => string,
+): string {
   if (!isoStr) return ''
   try {
     const diffMs = Date.now() - new Date(isoStr).getTime()
     const diffSec = Math.floor(diffMs / 1000)
-    if (diffSec < 60) return '刚刚'
+    if (diffSec < 60) return t('time_just_now')
     const diffMin = Math.floor(diffSec / 60)
-    if (diffMin < 60) return `${diffMin}分钟前`
+    if (diffMin < 60) return t('time_mins_ago', { n: diffMin })
     const diffHour = Math.floor(diffMin / 60)
-    if (diffHour < 24) return `${diffHour}小时前`
-    return new Date(isoStr).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
+    if (diffHour < 24) return t('time_hours_ago', { n: diffHour })
+    return new Date(isoStr).toLocaleDateString()
   } catch {
     return ''
   }
@@ -84,14 +87,14 @@ export function TabBar() {
     if (!masterPassword) {
       setSettingsTab('account')
       setShowSettings(true)
-      toast.warning('请先设置同步主密码以保护您的配置')
+      toast.warning(t('sync_toast_pwd_needed_for_backup'))
       return
     }
     const res = await backup()
     if (res.success) {
-      toast.success('配置已成功加密同步至云端私有仓库！')
+      toast.success(t('sync_toast_backup_quick_success'))
     } else {
-      toast.error(`同步失败: ${res.error}`)
+      toast.error(t('sync_toast_backup_quick_failed', { error: res.error ?? '' }))
     }
   }
 
@@ -188,8 +191,11 @@ export function TabBar() {
             className="group h-full px-2.5 flex items-center gap-1.5 border-l border-border/40 text-[11px] text-foreground hover:bg-muted/40 transition-colors focus:outline-none data-[state=open]:bg-muted/60 select-none cursor-pointer"
             title={
               isConfigured && currentUser
-                ? `${currentUser.name || currentUser.login} (@${currentUser.login}) - 点击展开控制菜单`
-                : '账户与设置 - 点击展开控制菜单'
+                ? t('tab_user_menu_tooltip_bound', {
+                    name: currentUser.name || currentUser.login,
+                    login: currentUser.login,
+                  })
+                : t('tab_user_menu_tooltip_unbound')
             }
           >
             {isSyncing ? (
@@ -200,7 +206,7 @@ export function TabBar() {
                     provider === 'gitee' ? 'text-red-500' : 'text-primary',
                   )}
                 />
-                <span className="text-[10px] hidden sm:inline font-medium">同步中</span>
+                <span className="text-[10px] hidden sm:inline font-medium">{t('sync_syncing')}</span>
               </div>
             ) : isConfigured && currentUser ? (
               <div className="flex items-center gap-1.5">
@@ -224,7 +230,7 @@ export function TabBar() {
             ) : (
               <div className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground">
                 <Settings className="h-3.5 w-3.5 shrink-0" />
-                <span className="text-[11px] hidden sm:inline font-medium">设置</span>
+                <span className="text-[11px] hidden sm:inline font-medium">{t('nav_settings')}</span>
                 <ChevronDown className="h-3 w-3 opacity-60 shrink-0 transition-transform duration-200 group-data-[state=open]:rotate-180" />
               </div>
             )}
@@ -239,7 +245,7 @@ export function TabBar() {
               setShowSettings(true)
             }}
             className="p-2.5 rounded-lg bg-muted/40 hover:bg-muted/70 transition-colors border border-border/50 cursor-pointer group select-none"
-            title="点击前往云同步管理"
+            title={t('sync_manage_menu')}
           >
             {isConfigured && currentUser ? (
               <div className="flex items-center gap-2.5">
@@ -276,10 +282,10 @@ export function TabBar() {
                   </div>
                   <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-emerald-500">
                     <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    <span>云同步就绪</span>
+                    <span>{t('sync_ready_badge')}</span>
                     {lastSyncTime && (
                       <span className="text-muted-foreground ml-auto">
-                        {formatRelativeTime(lastSyncTime)}
+                        {formatRelativeTime(lastSyncTime, t)}
                       </span>
                     )}
                   </div>
@@ -292,10 +298,10 @@ export function TabBar() {
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="text-xs font-semibold text-foreground">
-                    多端云同步 (未配置)
+                    {t('sync_unconfigured_title')}
                   </div>
                   <p className="text-[10px] text-muted-foreground mt-0.5 leading-tight">
-                    点击前往绑定私有仓库
+                    {t('sync_unconfigured_hint')}
                   </p>
                 </div>
               </div>
@@ -314,7 +320,7 @@ export function TabBar() {
               >
                 <CloudUpload className="h-3.5 w-3.5 text-primary shrink-0" />
                 <div className="flex-1 flex items-center justify-between">
-                  <span>立即同步备份</span>
+                  <span>{t('sync_quick_backup')}</span>
                   {isSyncing && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
                 </div>
               </DropdownMenuItem>
@@ -328,7 +334,7 @@ export function TabBar() {
               className="text-xs gap-2 py-2 cursor-pointer"
             >
               <Cloud className="h-3.5 w-3.5 text-primary shrink-0" />
-              <span>云同步管理...</span>
+              <span>{t('sync_manage_menu')}</span>
             </DropdownMenuItem>
 
             <DropdownMenuItem
@@ -339,7 +345,7 @@ export function TabBar() {
               className="text-xs gap-2 py-2 cursor-pointer"
             >
               <Settings className="h-3.5 w-3.5 text-foreground/80 shrink-0" />
-              <span>系统偏好设置...</span>
+              <span>{t('settings_pref_menu')}</span>
             </DropdownMenuItem>
           </DropdownMenuGroup>
         </DropdownMenuContent>

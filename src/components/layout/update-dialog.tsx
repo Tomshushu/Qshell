@@ -35,6 +35,7 @@ import {
   Activity,
 } from 'lucide-react'
 import type { UpdaterMirrorsReport, PreferredMirror } from '@/store/updater-store'
+import { useTranslation } from '@/i18n'
 
 function formatBytes(bytes: number): string {
   if (!bytes || bytes <= 0) return '0 B'
@@ -55,6 +56,7 @@ function MirrorStatusCard({
   setPreferredMirror: (mirror: PreferredMirror) => void
   onRefresh: () => void
 }) {
+  const { t } = useTranslation()
   if (!report) return null
 
   return (
@@ -62,12 +64,12 @@ function MirrorStatusCard({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5 text-[11px] font-semibold text-foreground">
           <Activity className="h-3.5 w-3.5 text-primary" />
-          <span>下载节点测速与通道</span>
+          <span>{t('ota_mirror_speed_channel')}</span>
         </div>
         <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
-          <span className="text-[10px] text-muted-foreground/80">通道:</span>
+          <span className="text-[10px] text-muted-foreground/80">{t('ota_channel_label')}</span>
           {(['auto', 'gitee', 'github'] as const).map((m) => {
-            const label = m === 'auto' ? '自动测速' : m === 'gitee' ? 'Gitee' : 'GitHub'
+            const label = m === 'auto' ? t('ota_channel_auto') : m === 'gitee' ? 'Gitee' : 'GitHub'
             const active = preferredMirror === m
             return (
               <button
@@ -100,15 +102,15 @@ function MirrorStatusCard({
           }`}
         >
           <div className="flex items-center gap-1 min-w-0">
-            <span className="truncate">⚡ Gitee 国内源</span>
+            <span className="truncate">{t('ota_mirror_gitee')}</span>
             {report.preferred === 'gitee' && (
               <span className="text-[9px] px-1 py-0.2 rounded bg-emerald-500 text-white font-bold shrink-0">
-                优选
+                {t('ota_mirror_preferred')}
               </span>
             )}
           </div>
           <span className="font-mono text-[10px] shrink-0">
-            {report.gitee.available ? `${report.gitee.latencyMs}ms` : '离线'}
+            {report.gitee.available ? `${report.gitee.latencyMs}ms` : t('ota_mirror_offline')}
           </span>
         </div>
 
@@ -121,15 +123,15 @@ function MirrorStatusCard({
           }`}
         >
           <div className="flex items-center gap-1 min-w-0">
-            <span className="truncate">🌐 GitHub 官方</span>
+            <span className="truncate">{t('ota_mirror_github')}</span>
             {report.preferred === 'github' && (
               <span className="text-[9px] px-1 py-0.2 rounded bg-emerald-500 text-white font-bold shrink-0">
-                优选
+                {t('ota_mirror_preferred')}
               </span>
             )}
           </div>
           <span className="font-mono text-[10px] shrink-0">
-            {report.github.available ? `${report.github.latencyMs}ms` : '超时/拦截'}
+            {report.github.available ? `${report.github.latencyMs}ms` : t('ota_mirror_timeout')}
           </span>
         </div>
       </div>
@@ -138,6 +140,7 @@ function MirrorStatusCard({
 }
 
 export function UpdateDialog() {
+  const { t } = useTranslation()
   const {
     isDialogOpen,
     closeDialog,
@@ -181,25 +184,25 @@ export function UpdateDialog() {
               <div>
                 <DialogTitle className="text-base font-bold text-foreground">
                   {isReadyToRelaunch
-                    ? '更新已就绪，准备重启'
+                    ? t('ota_ready_relaunch_title')
                     : errorMessage
-                    ? (updateAvailable ? '更新下载遇到问题' : '检查更新遇到问题')
+                    ? (updateAvailable ? t('ota_download_error_title') : t('ota_check_error_title'))
                     : updateAvailable
-                    ? `发现新版本 v${updateInfo?.version}`
+                    ? t('ota_found_new_version', { version: updateInfo?.version ?? '' })
                     : isChecking
-                    ? '正在检查新版本...'
-                    : '已是最新版本'}
+                    ? t('ota_checking_title')
+                    : t('ota_latest_title')}
                 </DialogTitle>
                 <DialogDescription className="text-xs text-muted-foreground">
                   {isReadyToRelaunch
-                    ? '新版本安装包已验证完毕，重启即可生效'
+                    ? t('ota_ready_desc')
                     : errorMessage
-                    ? (updateAvailable ? '更新安装包下载未成功，请检查网络或系统代理后重试' : '未能成功获取更新信息')
+                    ? (updateAvailable ? t('ota_download_failed_desc') : t('ota_check_failed_desc'))
                     : updateAvailable
-                    ? '建议及时升级以获取最新功能与安全修复'
+                    ? t('ota_found_desc')
                     : isChecking
-                    ? '正在连接官方更新服务器获取版本清单'
-                    : '当前安装的 Qshell 运行在最新版本'}
+                    ? t('ota_connecting_desc')
+                    : t('ota_latest_desc')}
                 </DialogDescription>
               </div>
             </div>
@@ -209,7 +212,7 @@ export function UpdateDialog() {
           {isChecking && (
             <div className="py-8 text-center space-y-3">
               <RotateCw className="h-8 w-8 text-primary animate-spin mx-auto" />
-              <p className="text-xs text-muted-foreground">正在核对版本清单与数字签名...</p>
+              <p className="text-xs text-muted-foreground">{t('ota_checking_signatures')}</p>
             </div>
           )}
 
@@ -221,7 +224,7 @@ export function UpdateDialog() {
                   <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
                   <div className="space-y-1.5 text-left flex-1 min-w-0">
                     <p className="font-semibold text-destructive">
-                      {updateAvailable ? '更新下载遇到问题' : '检查更新失败'}
+                      {updateAvailable ? t('ota_download_error_title') : t('ota_check_failed')}
                     </p>
                     <div className="max-h-36 overflow-y-auto rounded-lg bg-background/60 p-2.5 border border-destructive/15">
                       <p className="text-muted-foreground text-[11px] leading-relaxed font-mono break-all [overflow-wrap:anywhere] whitespace-pre-wrap select-text">
@@ -244,7 +247,7 @@ export function UpdateDialog() {
               <div className="p-3 rounded-xl border border-border/80 bg-muted/30 space-y-2 text-xs">
                 <p className="font-medium text-foreground flex items-center gap-1.5 text-[11px]">
                   <ExternalLink className="h-3.5 w-3.5 text-primary" />
-                  如遇国内网络拦截，可直接通过浏览器高速下载：
+                  {t('ota_browser_download_hint')}
                 </p>
                 <div className="flex flex-wrap gap-2 pt-0.5">
                   <Button
@@ -253,7 +256,7 @@ export function UpdateDialog() {
                     className="h-8 text-[11px] gap-1.5 bg-background hover:bg-accent text-foreground"
                     onClick={() => void openExternalUrl('https://gitee.com/Tom-shushu/qshell/releases')}
                   >
-                    <span>⚡ Gitee 国内极速镜像</span>
+                    <span>{t('ota_btn_gitee_mirror')}</span>
                   </Button>
                   <Button
                     variant="outline"
@@ -261,14 +264,14 @@ export function UpdateDialog() {
                     className="h-8 text-[11px] gap-1.5 bg-background hover:bg-accent text-foreground"
                     onClick={() => void openExternalUrl('https://github.com/Tomshushu/Qshell/releases')}
                   >
-                    <span>🌐 GitHub 官方 Release</span>
+                    <span>{t('ota_btn_github_release')}</span>
                   </Button>
                 </div>
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-1">
                 <Button variant="outline" size="sm" className="text-xs h-8.5" onClick={closeDialog}>
-                  关闭
+                  {t('common_close')}
                 </Button>
                 <Button
                   size="sm"
@@ -282,7 +285,7 @@ export function UpdateDialog() {
                   }}
                 >
                   <RotateCw className="h-3.5 w-3.5" />
-                  重试
+                  {t('common_retry')}
                 </Button>
               </div>
             </div>
@@ -294,8 +297,8 @@ export function UpdateDialog() {
               <div className="p-4 rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-center space-y-2">
                 <CheckCircle2 className="h-8 w-8 text-emerald-500 mx-auto" />
                 <div className="space-y-0.5">
-                  <p className="text-sm font-semibold text-foreground">您的软件处于最新状态</p>
-                  <p className="text-xs text-muted-foreground">无需任何操作，畅享极速体验。</p>
+                  <p className="text-sm font-semibold text-foreground">{t('ota_up_to_date_title')}</p>
+                  <p className="text-xs text-muted-foreground">{t('ota_up_to_date_desc')}</p>
                 </div>
               </div>
 
@@ -309,7 +312,7 @@ export function UpdateDialog() {
 
               <div className="flex justify-end pt-1">
                 <Button size="sm" className="text-xs h-8.5 px-5" onClick={closeDialog}>
-                  好，知道了
+                  {t('ota_got_it')}
                 </Button>
               </div>
             </div>
@@ -327,7 +330,7 @@ export function UpdateDialog() {
                 </div>
                 <div className="flex items-center gap-1 text-[11px] text-emerald-500 font-medium">
                   <ShieldCheck className="h-3.5 w-3.5" />
-                  <span>官方签名认证</span>
+                  <span>{t('ota_signed_badge')}</span>
                 </div>
               </div>
 
@@ -341,9 +344,9 @@ export function UpdateDialog() {
 
               {/* 更新日志详情 */}
               <div className="space-y-1.5">
-                <label className="text-[11px] font-semibold text-muted-foreground">更新日志</label>
+                <label className="text-[11px] font-semibold text-muted-foreground">{t('ota_changelog')}</label>
                 <div className="max-h-48 overflow-y-auto p-3 rounded-xl border border-border/60 bg-muted/20 text-xs text-foreground/90 whitespace-pre-wrap leading-relaxed font-sans select-text">
-                  {updateInfo.body?.trim() || '日常问题修复与性能优化。'}
+                  {updateInfo.body?.trim() || t('ota_default_changelog')}
                 </div>
               </div>
 
@@ -353,7 +356,7 @@ export function UpdateDialog() {
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-muted-foreground font-medium flex items-center gap-1.5">
                       <Download className="h-3.5 w-3.5 text-primary animate-bounce" />
-                      正在下载更新包...
+                      {t('ota_downloading')}
                     </span>
                     <span className="font-mono font-semibold text-foreground">
                       {downloadProgress.percentage}%
@@ -371,7 +374,7 @@ export function UpdateDialog() {
               {isReadyToRelaunch && (
                 <div className="p-3 rounded-xl border border-emerald-500/25 bg-emerald-500/10 text-xs text-emerald-500 flex items-center gap-2 font-medium">
                   <CheckCircle2 className="h-4 w-4 shrink-0" />
-                  <span>更新包已准备就绪，点击下方按钮立即重启生效。</span>
+                  <span>{t('ota_ready_notice')}</span>
                 </div>
               )}
 
@@ -392,7 +395,7 @@ export function UpdateDialog() {
                         }
                       }}
                     >
-                      跳过此版本
+                      {t('ota_skip_version')}
                     </Button>
                     <div className="flex items-center gap-2">
                       <Button
@@ -402,7 +405,7 @@ export function UpdateDialog() {
                         disabled={isDownloading}
                         onClick={closeDialog}
                       >
-                        稍后提醒
+                        {t('ota_remind_later')}
                       </Button>
                       <Button
                         size="sm"
@@ -413,12 +416,12 @@ export function UpdateDialog() {
                         {isDownloading ? (
                           <>
                             <RotateCw className="h-3.5 w-3.5 animate-spin" />
-                            下载中 ({downloadProgress.percentage}%)
+                            {t('ota_downloading_pct', { percentage: downloadProgress.percentage })}
                           </>
                         ) : (
                           <>
                             <Download className="h-3.5 w-3.5" />
-                            立即更新
+                            {t('ota_update_now')}
                           </>
                         )}
                       </Button>
@@ -431,7 +434,7 @@ export function UpdateDialog() {
                     onClick={() => void relaunchApp()}
                   >
                     <RotateCw className="h-3.5 w-3.5" />
-                    立即重启并完成升级
+                    {t('ota_restart_now')}
                   </Button>
                 )}
               </div>

@@ -7,6 +7,7 @@ import {
   SYNC_TERMINAL_BACKGROUNDS_STORAGE_KEY,
 } from '../sync-store'
 import { useAppStore } from '@/store'
+import * as giteeAdapter from '@/services/sync/gitee-sync-adapter'
 
 const { mockRemote, mockSshService } = vi.hoisted(() => {
   return {
@@ -25,6 +26,7 @@ const { mockRemote, mockSshService } = vi.hoisted(() => {
       addGroup: vi.fn(async () => ({ success: true })),
       addKey: vi.fn(async () => ({ success: true })),
       updateKey: vi.fn(async () => ({ success: true })),
+      listTags: vi.fn(async () => ['prod']),
       listTagsAll: vi.fn(async () => [{ id: 'tag-1', name: 'prod', createdAt: 1000 }]),
       restoreTags: vi.fn(async () => 1),
       listKnownHosts: vi.fn(async () => [{ host: '192.168.1.10', port: 22, keyType: 'ssh-ed25519', keyValue: 'AAAAC3Nza...', fingerprint: 'SHA256:abc', createdAt: 1000 }]),
@@ -272,4 +274,127 @@ describe('Sync Store (Dual Engine Gitee + GitHub & Full Profile E2EE)', () => {
     expect(mockSshService.restoreBookmarks).toHaveBeenCalled()
     expect(mockSshService.restoreBackgrounds).toHaveBeenCalled()
   })
+
+  it('compares cloud and local configuration on startup and only syncs when inconsistent', async () => {
+    const store = useSyncStore.getState()
+    await store.setToken('valid_gitee_token', 'gitee')
+    store.setMasterPassword('auto_sync_pwd')
+    expect(store.autoSync).toBe(true)
+
+    const restoreSpy = vi.spyOn(useSyncStore.getState(), 'restore')
+    const backupSpy = vi.spyOn(useSyncStore.getState(), 'backup')
+
+    // 1. 当配置指纹完全一致时：零同步请求
+    const matchingPayload = {
+      format: 'qshell-backup-package',
+      version: '2.0.0',
+      timestamp: new Date().toISOString(),
+      servers: [{ id: 'srv-1', name: 'Test Server', host: '192.168.1.10', port: 22, username: 'root', tags: '["prod"]' }],
+      groups: [{ id: 'grp-1', name: 'Production', parentId: null }],
+      sshKeys: [{ id: 'key-1', name: 'My Key', keyType: 'private' }],
+    }
+    const encryptedMatching = await import('@/utils/crypto-sync').then((m) =>
+      m.encryptData(JSON.stringify(matchingPayload), 'auto_sync_pwd')
+    )
+    vi.mocked(giteeAdapter.getBackupHistory).mockResolvedValueOnce({
+      success: true,
+      history: [{ sha: 'sha-1', message: 'test', date: new Date().toISOString() }],
+    })
+    vi.mocked(giteeAdapter.downloadBackupFile).mockResolvedValueOnce({
+      success: true,
+      content: encryptedMatching,
+    })
+
+    await useSyncStore.getState().checkStartupSync()
+    expect(restoreSpy).not.toHaveBeenCalled()
+    expect(backupSpy).not.toHaveBeenCalled()
+
+    // 2. 当云端存在更新快照且与本地不一致时：自动还原到本地
+    const newerCloudPayload = {
+      ...matchingPayload,
+      servers: [
+        ...matchingPayload.servers,
+        { id: 'srv-2', name: 'New Cloud Server', host: '192.168.1.20', port: 22, username: 'root' },
+      ],
+    }
+    const encryptedNewer = await import('@/utils/crypto-sync').then((m) =>
+      m.encryptData(JSON.stringify(newerCloudPayload), 'auto_sync_pwd')
+    )
+    vi.mocked(giteeAdapter.getBackupHistory).mockResolvedValueOnce({
+      success: true,
+      history: [{ sha: 'sha-cloud-newer', message: 'cloud newer', date: new Date(Date.now() + 10000).toISOString() }],
+    })
+    vi.mocked(giteeAdapter.downloadBackupFile).mockResolvedValueOnce({
+      success: true,
+      content: encryptedNewer,
+    })
+    useSyncStore.setState({
+      lastSyncTime: new Date(Date.now() - 50000).toISOString(),
+    })
+
+    await useSyncStore.getState().checkStartupSync()
+    expect(restoreSpy).toHaveBeenCalledTimes(1)
+
+    // 3. 当禁用 autoSync 时：启动检测跳过
+    restoreSpy.mockClear()
+    backupSpy.mockClear()
+    useSyncStore.getState().setAutoSync(false)
+    await useSyncStore.getState().checkStartupSync()
+    expect(restoreSpy).not.toHaveBeenCalled()
+    expect(backupSpy).not.toHaveBeenCalled()
+  })
+
+  it('should paginate backup history starting with 3 snapshots and support load more and collapse', async () => {
+    useSyncStore.setState({
+      provider: 'gitee',
+      currentToken: 'valid_gitee_token',
+      currentUser: { id: 1, login: 'gitee_user', name: 'Gitee Tester', avatar_url: '', html_url: '' },
+      historyLimit: 3,
+      hasMoreHistory: false,
+    })
+
+    const mock3Snapshots = [
+      { sha: 'sha-1', message: 'v1', date: '2026-10-15T10:00:00Z' },
+      { sha: 'sha-2', message: 'v2', date: '2026-10-15T11:00:00Z' },
+      { sha: 'sha-3', message: 'v3', date: '2026-10-15T12:00:00Z' },
+    ]
+    vi.mocked(giteeAdapter.getBackupHistory).mockResolvedValueOnce({
+      success: true,
+      history: mock3Snapshots,
+    })
+
+    await useSyncStore.getState().fetchHistory()
+    expect(giteeAdapter.getBackupHistory).toHaveBeenCalledWith('valid_gitee_token', 'gitee_user', undefined, undefined, 3)
+    expect(useSyncStore.getState().historyList).toHaveLength(3)
+    expect(useSyncStore.getState().hasMoreHistory).toBe(true)
+
+    // Load more history (increments limit by 10 -> 13)
+    const mockMoreSnapshots = [
+      ...mock3Snapshots,
+      { sha: 'sha-4', message: 'v4', date: '2026-10-15T13:00:00Z' },
+    ]
+    vi.mocked(giteeAdapter.getBackupHistory).mockResolvedValueOnce({
+      success: true,
+      history: mockMoreSnapshots,
+    })
+
+    await useSyncStore.getState().loadMoreHistory()
+    expect(giteeAdapter.getBackupHistory).toHaveBeenCalledWith('valid_gitee_token', 'gitee_user', undefined, undefined, 13)
+    expect(useSyncStore.getState().historyLimit).toBe(13)
+    expect(useSyncStore.getState().historyList).toHaveLength(4)
+    // Returned 4 items, which is < 13, so hasMoreHistory should be false
+    expect(useSyncStore.getState().hasMoreHistory).toBe(false)
+
+    // Reset history limit back to 3
+    vi.mocked(giteeAdapter.getBackupHistory).mockResolvedValueOnce({
+      success: true,
+      history: mock3Snapshots,
+    })
+
+    await useSyncStore.getState().resetHistoryLimit()
+    expect(giteeAdapter.getBackupHistory).toHaveBeenCalledWith('valid_gitee_token', 'gitee_user', undefined, undefined, 3)
+    expect(useSyncStore.getState().historyLimit).toBe(3)
+    expect(useSyncStore.getState().historyList).toHaveLength(3)
+  })
 })
+

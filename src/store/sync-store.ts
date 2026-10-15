@@ -16,6 +16,7 @@ import * as giteeAdapter from '@/services/sync/gitee-sync-adapter'
 import * as githubAdapter from '@/services/sync/github-sync-adapter'
 import { sshService } from '@/services/ssh-service'
 import { useAppStore } from '@/store'
+import { translate } from '@/i18n'
 import type { Server, ServerGroup, LogBookmark } from '@/types'
 import type {
   SshKey,
@@ -50,6 +51,7 @@ export const GITHUB_LAST_SYNC_STORAGE_KEY = 'qshell_github_last_sync_time'
 export const MASTER_PASSWORD_STORAGE_KEY = 'qshell_sync_master_password'
 export const SYNC_INCLUDE_CREDENTIALS_STORAGE_KEY = 'qshell_sync_include_credentials'
 export const SYNC_TERMINAL_BACKGROUNDS_STORAGE_KEY = 'qshell_sync_terminal_backgrounds'
+export const AUTO_SYNC_STORAGE_KEY = 'qshell_sync_auto_sync'
 
 export interface RestoreStats {
   servers: number
@@ -87,6 +89,7 @@ export interface SyncState {
   masterPassword: string
   syncPasswords: boolean
   syncTerminalBackgrounds: boolean
+  autoSync: boolean
 
   giteeUser: SyncUser | null
   githubUser: SyncUser | null
@@ -99,6 +102,9 @@ export interface SyncState {
   lastSyncTime: string | null
   lastSyncResult: { success: boolean; msg: string } | null
   historyList: BackupCommitInfo[]
+  historyLimit: number
+  hasMoreHistory: boolean
+  isLoadingMoreHistory: boolean
   isSyncDialogOpen: boolean
 
   // Actions
@@ -110,12 +116,17 @@ export interface SyncState {
   clearMasterPassword: () => void
   setSyncPasswords: (enabled: boolean) => void
   setSyncTerminalBackgrounds: (enabled: boolean) => void
+  setAutoSync: (enabled: boolean) => void
+  triggerAutoSync: (source?: string) => void
+  checkStartupSync: () => Promise<void>
   backup: (overridePassword?: string) => Promise<{ success: boolean; error?: string }>
   restore: (
     overridePassword?: string,
     commitSha?: string,
   ) => Promise<{ success: boolean; stats?: RestoreStats; error?: string }>
-  fetchHistory: () => Promise<void>
+  fetchHistory: (limit?: number) => Promise<void>
+  loadMoreHistory: () => Promise<void>
+  resetHistoryLimit: () => Promise<void>
   openSyncDialog: () => void
   closeSyncDialog: () => void
 
@@ -194,6 +205,34 @@ async function resolveMediaPath(p: string | undefined, isVideo = false): Promise
   return p
 }
 
+function computeConfigFingerprint(
+  servers: any[],
+  groups: any[],
+  keys: any[],
+): string {
+  const normServers = (servers || [])
+    .map((s) => ({
+      id: s.id,
+      name: s.name,
+      host: s.host,
+      port: s.port,
+      username: s.username,
+      groupId: s.groupId || '',
+      tags: typeof s.tags === 'string' ? s.tags : JSON.stringify(s.tags || []),
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id))
+
+  const normGroups = (groups || [])
+    .map((g) => ({ id: g.id, name: g.name, parentId: g.parentId || '' }))
+    .sort((a, b) => a.id.localeCompare(b.id))
+
+  const normKeys = (keys || [])
+    .map((k) => ({ id: k.id, name: k.name, keyType: k.keyType }))
+    .sort((a, b) => a.id.localeCompare(b.id))
+
+  return JSON.stringify({ s: normServers, g: normGroups, k: normKeys })
+}
+
 export const useSyncStore = create<SyncState>((set, get) => ({
   provider: 'gitee',
   giteeToken: '',
@@ -201,6 +240,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   masterPassword: '',
   syncPasswords: true,
   syncTerminalBackgrounds: true,
+  autoSync: true,
   giteeUser: null,
   githubUser: null,
   currentUser: null,
@@ -210,6 +250,9 @@ export const useSyncStore = create<SyncState>((set, get) => ({
   lastSyncTime: null,
   lastSyncResult: null,
   historyList: [],
+  historyLimit: 3,
+  hasMoreHistory: false,
+  isLoadingMoreHistory: false,
   isSyncDialogOpen: false,
 
   openSyncDialog: () => set({ isSyncDialogOpen: true }),
@@ -243,6 +286,15 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     } catch {
       /* ignore */
     }
+    let savedAutoSync = true
+    try {
+      const a = localStorage.getItem(AUTO_SYNC_STORAGE_KEY)
+      if (a !== null) {
+        savedAutoSync = a === 'true'
+      }
+    } catch {
+      /* ignore */
+    }
 
     const currentToken = savedProvider === 'gitee' ? savedGiteeToken : savedGitHubToken
     const currentSyncTime = savedProvider === 'gitee' ? savedGiteeSyncTime : savedGitHubSyncTime
@@ -254,6 +306,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       masterPassword: savedMasterPassword,
       syncPasswords: true,
       syncTerminalBackgrounds: true,
+      autoSync: savedAutoSync,
       currentToken,
       isConfigured: Boolean(currentToken),
       lastSyncTime: currentSyncTime,
@@ -263,7 +316,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     if (savedProvider === 'gitee' && savedGiteeToken) {
       const res = await giteeAdapter.verifyGiteeToken(savedGiteeToken)
       if (res.success && res.user) {
-        set({ giteeUser: res.user, currentUser: res.user })
+        set({ giteeUser: res.user, currentUser: res.user, isConfigured: true })
         void get().fetchHistory()
       } else {
         set({ isConfigured: false, giteeUser: null, currentUser: null })
@@ -271,7 +324,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     } else if (savedProvider === 'github' && savedGitHubToken) {
       const res = await githubAdapter.verifyGitHubToken(savedGitHubToken)
       if (res.success && res.user) {
-        set({ githubUser: res.user, currentUser: res.user })
+        set({ githubUser: res.user, currentUser: res.user, isConfigured: true })
         void get().fetchHistory()
       } else {
         set({ isConfigured: false, githubUser: null, currentUser: null })
@@ -296,6 +349,9 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       lastSyncTime,
       lastSyncResult: null,
       historyList: [],
+      historyLimit: 3,
+      hasMoreHistory: false,
+      isLoadingMoreHistory: false,
     })
 
     if (currentToken && currentUser) {
@@ -310,7 +366,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     const prov = targetProvider || get().provider
     const trimmed = token.trim()
     if (!trimmed) {
-      return { success: false, error: `请输入有效的 ${prov === 'gitee' ? 'Gitee' : 'GitHub'} 访问令牌` }
+      return { success: false, error: translate('sync_err_token_invalid', { platform: prov === 'gitee' ? 'Gitee' : 'GitHub' }) }
     }
 
     set({ isSyncing: true })
@@ -334,7 +390,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         void get().fetchHistory()
         return { success: true }
       }
-      return { success: false, error: res.error || 'Gitee 令牌验证失败' }
+      return { success: false, error: res.error || translate('sync_err_gitee_token_failed') }
     } else {
       const res = await githubAdapter.verifyGitHubToken(trimmed)
       set({ isSyncing: false })
@@ -355,7 +411,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         void get().fetchHistory()
         return { success: true }
       }
-      return { success: false, error: res.error || 'GitHub 令牌验证失败' }
+      return { success: false, error: res.error || translate('sync_err_github_token_failed') }
     }
   },
 
@@ -413,16 +469,92 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     set({ syncTerminalBackgrounds: enabled })
   },
 
+  setAutoSync: (enabled: boolean) => {
+    setSavedItem(AUTO_SYNC_STORAGE_KEY, String(enabled))
+    set({ autoSync: enabled })
+  },
+
+  triggerAutoSync: () => {},
+
+  checkStartupSync: async () => {
+    const { provider, currentToken, currentUser, masterPassword, autoSync, isSyncing, lastSyncTime } = get()
+    if (!currentToken || !currentUser || !masterPassword || !autoSync || isSyncing) {
+      return
+    }
+
+    try {
+      await get().fetchHistory()
+      const history = get().historyList
+      if (history.length === 0) {
+        // 云端仓库尚无历史备份，若本地已有服务器资产，则自动初次备份上云
+        const localServers = await sshService.listServers()
+        if (localServers.length > 0) {
+          await get().backup()
+        }
+        return
+      }
+
+      // 1. 获取云端最新快照密文并尝试本地解密比对
+      let downloadRes: { success: boolean; content?: string; error?: string }
+      if (provider === 'gitee') {
+        downloadRes = await giteeAdapter.downloadBackupFile(currentToken, currentUser.login)
+      } else {
+        downloadRes = await githubAdapter.downloadBackupFile(currentToken, currentUser.login)
+      }
+
+      if (!downloadRes.success || !downloadRes.content) {
+        return
+      }
+
+      const decryptedPlaintext = await decryptData(downloadRes.content, masterPassword)
+      const cloudPayload: SyncPayload = JSON.parse(decryptedPlaintext)
+      if (cloudPayload.format !== 'qshell-backup-package') {
+        return
+      }
+
+      // 2. 提取本地配置指纹与云端配置指纹进行一致性比对
+      const localServers = await sshService.listServersForSync()
+      const localGroups = await sshService.listGroups()
+      const localKeys = await sshService.listKeysForSync()
+
+      const cloudFp = computeConfigFingerprint(
+        cloudPayload.servers || [],
+        cloudPayload.groups || [],
+        cloudPayload.sshKeys || [],
+      )
+      const localFp = computeConfigFingerprint(localServers, localGroups, localKeys)
+
+      // 3. 若配置指纹完全一致，说明本地与云端已保持同步，无需产生任何云端提交与同步读写
+      if (cloudFp === localFp) {
+        return
+      }
+
+      // 4. 若不一致，判定云端较新还是本地较新
+      const cloudCommitTime = history[0]?.date ? new Date(history[0].date).getTime() : 0
+      const localLastTime = lastSyncTime ? new Date(lastSyncTime).getTime() : 0
+
+      if (!lastSyncTime || cloudCommitTime > localLastTime) {
+        // 云端存在更新快照（由其他设备上传），自动拉取并还原到本地
+        await get().restore()
+      } else {
+        // 本地有未上云改动，自动推送备份至云端
+        await get().backup()
+      }
+    } catch (err) {
+      console.warn('[AutoSync] Startup comparison failed silently:', err)
+    }
+  },
+
   backup: async (overridePassword?: string) => {
     const { provider, currentToken, currentUser, masterPassword, syncPasswords, syncTerminalBackgrounds } = get()
     const password = overridePassword !== undefined ? overridePassword : masterPassword
 
     const providerLabel = provider === 'gitee' ? 'Gitee' : 'GitHub'
     if (!currentToken || !currentUser) {
-      return { success: false, error: `请先绑定并验证 ${providerLabel} 访问令牌` }
+      return { success: false, error: translate('sync_err_bind_first', { platform: providerLabel }) }
     }
     if (!password || password.trim().length === 0) {
-      return { success: false, error: '请先设置用于端到端加密的同步主密码' }
+      return { success: false, error: translate('sync_err_set_pwd_first') }
     }
 
     set({ isSyncing: true, lastSyncResult: null })
@@ -624,7 +756,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       if (!uploadRes.success) {
         set({
           isSyncing: false,
-          lastSyncResult: { success: false, msg: uploadRes.error || `上传到 ${providerLabel} 失败` },
+          lastSyncResult: { success: false, msg: uploadRes.error || translate('sync_err_upload_failed', { platform: providerLabel }) },
         })
         return { success: false, error: uploadRes.error }
       }
@@ -638,14 +770,14 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         lastSyncTime: nowIso,
         lastSyncResult: {
           success: true,
-          msg: `备份成功！已加密同步 ${servers.length} 台服务器与全量个性化设置至 ${providerLabel} 私有仓。`,
+          msg: translate('sync_msg_backup_success', { count: servers.length, platform: providerLabel }),
         },
       })
 
       void get().fetchHistory()
       return { success: true }
     } catch (err: unknown) {
-      const errorMsg = (err as Error)?.message || '备份处理异常'
+      const errorMsg = (err as Error)?.message || translate('sync_err_backup_exception')
       set({
         isSyncing: false,
         lastSyncResult: { success: false, msg: errorMsg },
@@ -660,10 +792,10 @@ export const useSyncStore = create<SyncState>((set, get) => ({
 
     const providerLabel = provider === 'gitee' ? 'Gitee' : 'GitHub'
     if (!currentToken || !currentUser) {
-      return { success: false, error: `请先绑定并验证 ${providerLabel} 访问令牌` }
+      return { success: false, error: translate('sync_err_bind_first', { platform: providerLabel }) }
     }
     if (!password || password.trim().length === 0) {
-      return { success: false, error: '请输入用于解密该备份的同步主密码' }
+      return { success: false, error: translate('sync_err_enter_pwd') }
     }
 
     set({ isSyncing: true, lastSyncResult: null })
@@ -692,7 +824,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       if (!downloadRes.success || !downloadRes.content) {
         set({
           isSyncing: false,
-          lastSyncResult: { success: false, msg: downloadRes.error || '拉取备份失败' },
+          lastSyncResult: { success: false, msg: downloadRes.error || translate('sync_err_download_failed') },
         })
         return { success: false, error: downloadRes.error }
       }
@@ -702,7 +834,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       const payload: SyncPayload = JSON.parse(decryptedPlaintext)
 
       if (payload.format !== 'qshell-backup-package' || !Array.isArray(payload.servers)) {
-        throw new Error('解密后的数据包格式校验不符合规范')
+        throw new Error(translate('sync_err_invalid_format'))
       }
 
       // 3. 还原分组到本地 SQLite
@@ -952,17 +1084,33 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       } catch {
         /* ignore */
       }
+      try {
+        const refreshedGroups = await sshService.listGroups()
+        useAppStore.getState().setServerGroups(refreshedGroups)
+      } catch {
+        /* ignore */
+      }
+      try {
+        await useAppStore.getState().loadTags()
+      } catch {
+        /* ignore */
+      }
 
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('refresh-terminal-theme'))
         window.dispatchEvent(new Event('recent-connections-changed'))
       }
 
+      const nowIso = new Date().toISOString()
+      const lastSyncKey = provider === 'gitee' ? GITEE_LAST_SYNC_STORAGE_KEY : GITHUB_LAST_SYNC_STORAGE_KEY
+      setSavedItem(lastSyncKey, nowIso)
+
       set({
         isSyncing: false,
+        lastSyncTime: nowIso,
         lastSyncResult: {
           success: true,
-          msg: `恢复成功！已从 ${providerLabel} 云端同步导入 ${importedCount} 台服务器和全量个性化配置。`,
+          msg: translate('sync_msg_restore_success', { platform: providerLabel, count: importedCount }),
         },
       })
 
@@ -980,7 +1128,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         },
       }
     } catch (err: unknown) {
-      const errorMsg = (err as Error)?.message || '解密恢复异常'
+      const errorMsg = (err as Error)?.message || translate('sync_err_restore_exception')
       set({
         isSyncing: false,
         lastSyncResult: { success: false, msg: errorMsg },
@@ -989,20 +1137,42 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     }
   },
 
-  fetchHistory: async () => {
-    const { provider, currentToken, currentUser } = get()
+  fetchHistory: async (limit?: number) => {
+    const { provider, currentToken, currentUser, historyLimit } = get()
     if (!currentToken || !currentUser) return
 
+    const effectiveLimit = limit ?? historyLimit ?? 3
     let res: { success: boolean; history?: BackupCommitInfo[]; error?: string }
     if (provider === 'gitee') {
-      res = await giteeAdapter.getBackupHistory(currentToken, currentUser.login)
+      res = await giteeAdapter.getBackupHistory(currentToken, currentUser.login, undefined, undefined, effectiveLimit)
     } else {
-      res = await githubAdapter.getBackupHistory(currentToken, currentUser.login)
+      res = await githubAdapter.getBackupHistory(currentToken, currentUser.login, undefined, undefined, effectiveLimit)
     }
 
     if (res.success && res.history) {
-      set({ historyList: res.history })
+      set({
+        historyList: res.history,
+        hasMoreHistory: res.history.length >= effectiveLimit,
+      })
     }
+  },
+
+  loadMoreHistory: async () => {
+    const currentLimit = get().historyLimit
+    const newLimit = currentLimit + 10
+    set({ isLoadingMoreHistory: true })
+    await get().fetchHistory(newLimit)
+    const list = get().historyList
+    set({
+      historyLimit: newLimit,
+      hasMoreHistory: list.length >= newLimit,
+      isLoadingMoreHistory: false,
+    })
+  },
+
+  resetHistoryLimit: async () => {
+    set({ historyLimit: 3, isLoadingMoreHistory: false })
+    await get().fetchHistory(3)
   },
 
   // 现有方法别名（100% 保持原有兼容性）

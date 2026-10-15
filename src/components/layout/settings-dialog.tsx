@@ -1122,7 +1122,7 @@ function SettingsPanel({
             }`}
           >
             <Cloud className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
-            <span className="flex-1 truncate">云端同步 (Gitee / GitHub)</span>
+            <span className="flex-1 truncate">{t("sync_tab_title")}</span>
           </button>
           <button
             onClick={() => setSubTab("terminal")}
@@ -1319,13 +1319,13 @@ function SettingsPanel({
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
                     <span className="text-sm font-bold text-foreground flex items-center gap-2">
-                      软件在线更新 (OTA)
+                      {t("ota_title")}
                       <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
                         v{appVersion}
                       </span>
                     </span>
                     <p className="text-muted-foreground text-[11px]">
-                      基于 Tauri v2 官方更新内核与 Minisign 防篡改数字签名校验
+                      {t("ota_desc")}
                     </p>
                   </div>
                   <Button
@@ -1338,14 +1338,14 @@ function SettingsPanel({
                     }}
                   >
                     <RotateCw className={`h-3.5 w-3.5 ${isCheckingUpdate ? 'animate-spin' : ''}`} />
-                    {isCheckingUpdate ? '检查中...' : '检查更新'}
+                    {isCheckingUpdate ? t("ota_checking") : t("ota_check_btn")}
                   </Button>
                 </div>
 
                 <div className="flex items-center justify-between pt-3 border-t">
                   <SettingLabelWithHint
-                    label="启动时自动检查更新"
-                    desc="应用启动后在后台静默检测是否有新版本，发现时将及时提醒"
+                    label={t("ota_auto_check")}
+                    desc={t("ota_auto_check_desc")}
                   />
                   <Switch
                     checked={autoCheckOnStartup}
@@ -1356,9 +1356,9 @@ function SettingsPanel({
                 {skippedVersion && (
                   <div className="flex items-center justify-between pt-3 border-t text-xs">
                     <div className="space-y-0.5">
-                      <div className="font-medium text-foreground">已跳过版本</div>
+                      <div className="font-medium text-foreground">{t("ota_skipped_version_title")}</div>
                       <div className="text-muted-foreground text-[11px]">
-                        您此前选择了跳过 v{skippedVersion}，应用启动时将不再主动提醒
+                        {t("ota_skipped_version_desc", { version: skippedVersion })}
                       </div>
                     </div>
                     <Button
@@ -1367,7 +1367,7 @@ function SettingsPanel({
                       className="h-7 text-xs px-2.5 text-primary border-primary/30 hover:bg-primary/10"
                       onClick={() => resetSkippedVersion()}
                     >
-                      恢复提醒
+                      {t("ota_restore_reminder")}
                     </Button>
                   </div>
                 )}
@@ -1713,15 +1713,15 @@ function SettingsPanel({
                 <div className="border-t border-border/60 pt-5 flex flex-col gap-4">
                   <div className="flex items-center justify-between">
                     <SettingLabelWithHint
-                      label="终端缓存与录制"
-                      desc="限制本地日志缓存行数与会话录制参数，数值越大可回看更多内容，也会增加内存占用。"
+                      label={t("term_cache_record_title")}
+                      desc={t("term_cache_record_desc")}
                       className="font-semibold text-foreground text-xs"
                     />
                   </div>
                   <div className="flex flex-col gap-2">
                     <SettingLabelWithHint
-                      label="回滚行数"
-                      desc="范围 1,000 ~ 128,000 行。行数越大可保留更多历史日志，默认 5,000 行。"
+                      label={t("term_scrollback_title")}
+                      desc={t("term_scrollback_desc")}
                       className="text-muted-foreground font-normal"
                     />
                     <div className="flex flex-wrap items-center gap-2">
@@ -1760,8 +1760,8 @@ function SettingsPanel({
                   </div>
                   <div className="flex flex-col gap-1.5">
                     <SettingLabelWithHint
-                      label="终端编码"
-                      desc="用于新建和重连终端会话，默认 UTF-8。"
+                      label={t("term_encoding_title")}
+                      desc={t("term_encoding_desc")}
                       className="text-muted-foreground font-normal"
                     />
                     <TerminalEncodingSelect
@@ -1771,8 +1771,8 @@ function SettingsPanel({
                   </div>
                   <div className="flex flex-col gap-1.5">
                     <SettingLabelWithHint
-                      label="录制文件保存目录"
-                      desc="录制内容会持续写入文件，不再占用终端内存缓存。"
+                      label={t("term_record_dir_title")}
+                      desc={t("term_record_dir_desc")}
                       className="text-muted-foreground font-normal"
                     />
                     <div className="flex gap-2">
@@ -1780,7 +1780,7 @@ function SettingsPanel({
                         readOnly
                         value={
                           terminalRecordingDirectory ||
-                          "未设置（首次录制时选择）"
+                          t("term_record_dir_unset")
                         }
                         className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs text-muted-foreground outline-none"
                       />
@@ -1792,20 +1792,20 @@ function SettingsPanel({
                           const selected = await openDialog({
                             directory: true,
                             multiple: false,
-                            title: "选择终端录制保存目录",
+                            title: t("term_record_dir_dialog_title"),
                           });
                           if (typeof selected === "string")
                             setTerminalRecordingDirectory(selected);
                         }}
                       >
-                        选择目录
+                        {t("term_record_dir_choose_btn")}
                       </Button>
                     </div>
                   </div>
                   <div className="flex flex-col gap-1.5">
                     <SettingLabelWithHint
-                      label="单个录制文件最大大小"
-                      desc="范围 50 MB - 2 GB。达到上限后自动创建下一个分卷，录制不会中断。"
+                      label={t("term_record_max_size_title")}
+                      desc={t("term_record_max_size_desc")}
                       className="text-muted-foreground font-normal"
                     />
                     <div className="flex items-center gap-2">

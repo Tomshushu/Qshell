@@ -2764,7 +2764,7 @@ export function TerminalModule({
                 recordingWriteErrorNotifiedRef.current.add(termId);
                 if (!isUnmountedRef.current) {
                   setRecordingTermIds(active);
-                  toastRef.current.warning("录制写入速度跟不上日志流，已自动停止录制");
+                  toastRef.current.warning(t("term_recording_overflow"));
                 }
               }
             } else {
@@ -2790,7 +2790,9 @@ export function TerminalModule({
                 if (!isUnmountedRef.current) {
                   setRecordingTermIds(active);
                   toastRef.current.error(
-                    `录制写入失败，已停止录制：${error instanceof Error ? error.message : String(error)}`,
+                    t("term_recording_failed", {
+                      error: error instanceof Error ? error.message : String(error),
+                    }),
                   );
                 }
               }
@@ -3085,20 +3087,20 @@ export function TerminalModule({
       // E2：手动重连进度反馈在终端内输出进度信息
       if (isSerial) {
         xtermInfo.term.writeln(
-          `\r\n\x1b[90m正在重新打开串口 ${serialCfg.portName} (${serialCfg.baudRate} baud)...\x1b[0m`,
+          `\r\n\x1b[90m${t("term_connecting_serial", { port: serialCfg.portName, baud: serialCfg.baudRate })}\x1b[0m`,
         );
       } else if (isTelnet) {
         xtermInfo.term.writeln(
-          `\r\n\x1b[90m正在连接 ${host || "Telnet"}:${port}...\x1b[0m`,
+          `\r\n\x1b[90m${t("term_connecting_telnet", { host: host || "Telnet", port: String(port) })}\x1b[0m`,
         );
       } else {
         if (host && username) {
           xtermInfo.term.writeln(
-            `\r\n\x1b[90m正在连接 ${username}@${host}:${port}...\x1b[0m`,
+            `\r\n\x1b[90m${t("term_connecting_ssh", { username, host, port: String(port) })}\x1b[0m`,
           );
         } else {
           xtermInfo.term.writeln(
-            `\r\n\x1b[90m正在连接服务器...\x1b[0m`,
+            `\r\n\x1b[90m${t("term_connecting_server")}\x1b[0m`,
           );
         }
       }
@@ -3151,7 +3153,7 @@ export function TerminalModule({
         const cols = xtermInfo.term.cols > 0 ? xtermInfo.term.cols : 80;
         const rows = xtermInfo.term.rows > 0 ? xtermInfo.term.rows : 24;
         // E2：进度反馈创建 Shell 会话前提示
-        xtermInfo.term.writeln(`\x1b[90m正在创建 Shell 会话...\x1b[0m`);
+        xtermInfo.term.writeln(`\x1b[90m${t("term_creating_shell")}\x1b[0m`);
         const result = isSerial
           ? await sshService.createSerialShell(
               serverId,
@@ -3855,7 +3857,7 @@ export function TerminalModule({
         });
         if (lastStatus !== "reconnecting") {
           xtermInstances.current.forEach(({ term }) => {
-            term.writeln(`\r\n\x1b[90m正在重新连接服务器...\x1b[0m`);
+            term.writeln(`\r\n\x1b[90m${t("term_reconnecting_server")}\x1b[0m`);
           });
         }
       } else if (state.status === "exhausted") {
@@ -7340,11 +7342,11 @@ export function TerminalModule({
     const dur = customMs || serialBreakDuration || 250;
     try {
       const result = await sshService.setSerialBreak(sessionId, dur);
-      if (!result.success) throw new Error(result.error || "后端未能发送 Break 信号");
-      toastRef.current.success(`已向串口发送 Break 打断信号 (${dur}ms)`, 2000);
+      if (!result.success) throw new Error(result.error || "Backend failed to send Break");
+      toastRef.current.success(t("term_break_sent", { dur }), 2000);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      toastRef.current.error(`发送 Break 信号失败: ${msg}`, 3000);
+      toastRef.current.error(t("term_break_failed", { error: msg }), 3000);
     }
   }, [activeTermId, serialBreakDuration, t]);
 
@@ -7358,12 +7360,12 @@ export function TerminalModule({
     const next = !serialDtr;
     try {
       const result = await sshService.setSerialDtr(sessionId, next);
-      if (!result.success) throw new Error(result.error || "后端未能设置 DTR");
+      if (!result.success) throw new Error(result.error || "Backend failed to set DTR");
       setSerialDtr(next);
-      toastRef.current.info(`DTR 电平已设为: ${next ? "HIGH (高)" : "LOW (低)"}`, 1500);
+      toastRef.current.info(t("term_dtr_set", { level: next ? "HIGH" : "LOW" }), 1500);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      toastRef.current.error(`设置 DTR 失败: ${msg}`, 3000);
+      toastRef.current.error(t("term_dtr_failed", { error: msg }), 3000);
     }
   }, [activeTermId, serialDtr, t]);
 
@@ -7377,12 +7379,12 @@ export function TerminalModule({
     const next = !serialRts;
     try {
       const result = await sshService.setSerialRts(sessionId, next);
-      if (!result.success) throw new Error(result.error || "后端未能设置 RTS");
+      if (!result.success) throw new Error(result.error || "Backend failed to set RTS");
       setSerialRts(next);
-      toastRef.current.info(`RTS 电平已设为: ${next ? "HIGH (高)" : "LOW (低)"}`, 1500);
+      toastRef.current.info(t("term_rts_set", { level: next ? "HIGH" : "LOW" }), 1500);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      toastRef.current.error(`设置 RTS 失败: ${msg}`, 3000);
+      toastRef.current.error(t("term_rts_failed", { error: msg }), 3000);
     }
   }, [activeTermId, serialRts, t]);
 
@@ -7651,7 +7653,7 @@ export function TerminalModule({
   const swapEndianness = useCallback((chunkSize: 2 | 4 | 0) => {
     const clean = serialSendText.replace(/[^0-9a-fA-F]/g, "").toUpperCase();
     if (!clean || clean.length % 2 !== 0) {
-      toastRef.current.warning("请先输入有效且完整字节的十六进制数据");
+      toastRef.current.warning(t("term_hex_input_invalid"));
       return;
     }
     const bytes = clean.match(/.{1,2}/g) || [];
@@ -7682,13 +7684,13 @@ export function TerminalModule({
     }
     toastRef.current.success(
       chunkSize === 2
-        ? "已完成 16位 (2字节) 大小端翻转"
+        ? t("term_endian_flipped_16")
         : chunkSize === 4
-          ? "已完成 32位 (4字节) 大小端翻转"
-          : "已完成全字节序列倒序",
+          ? t("term_endian_flipped_32")
+          : t("term_bytes_reversed"),
       1500
     );
-  }, [serialSendText]);
+  }, [serialSendText, t]);
 
   // 模式切换时自动双向转换内容（ASCII ↔ HEX）
   const handleSwitchSendType = useCallback(async (newType: "ascii" | "hex") => {
@@ -8089,7 +8091,7 @@ export function TerminalModule({
             <div className="flex items-center justify-between gap-2 text-xs">
               <div className="min-w-0">
                 <div className="truncate font-medium text-foreground" title={serialFileProgress.name}>
-                  正在发送 {serialFileProgress.name}
+                  {t("term_sending_file", { name: serialFileProgress.name })}
                 </div>
                 <div className="mt-0.5 font-mono text-[10.5px] text-muted-foreground">
                   {serialFileProgress.sent.toLocaleString()} / {serialFileProgress.total.toLocaleString()} B
@@ -8101,7 +8103,7 @@ export function TerminalModule({
                 className="h-7 px-2 text-[11px] text-destructive"
                 onClick={() => { serialFileTransferActiveRef.current = false; }}
               >
-                取消
+                {t("common_cancel")}
               </Button>
             </div>
             <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">

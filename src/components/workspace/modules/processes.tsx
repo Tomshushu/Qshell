@@ -27,7 +27,7 @@ import {
   Copy,
 } from 'lucide-react'
 import { sshService } from '@/services/ssh-service'
-import { useTranslation } from '@/i18n'
+import { useTranslation, translate } from '@/i18n'
 import { useToast } from '@/components/ui/toast'
 import { useAppStore } from '@/store'
 import { extractBaseServerId } from '@/services/ssh-connection-state'
@@ -70,10 +70,10 @@ function formatRuntime(seconds: number): string {
   const h = Math.floor((seconds % 86400) / 3600)
   const m = Math.floor((seconds % 3600) / 60)
   const s = seconds % 60
-  if (d > 0) return `${d}天 ${h}时`
-  if (h > 0) return `${h}时 ${m}分`
-  if (m > 0) return `${m}分 ${s}秒`
-  return `${s}秒`
+  if (d > 0) return `${d}${translate('time_days')} ${h}${translate('time_hours')}`
+  if (h > 0) return `${h}${translate('time_hours')} ${m}${translate('time_minutes')}`
+  if (m > 0) return `${m}${translate('time_minutes')} ${s}${translate('time_seconds')}`
+  return `${s}${translate('time_seconds')}`
 }
 
 function cpuClass(v: number): string {

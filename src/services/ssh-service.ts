@@ -187,6 +187,10 @@ const tabSessions = new Map<string, Set<string>>();
 /** tabId → 当前可见/活动终端的 sessionId。广播只允许写入这个会话。 */
 const tabActiveSessions = new Map<string, string>();
 
+function notifyDataMutated(_source: string) {
+  // 仅在应用启动时按需比对同步，日常操作不触发自动同步
+}
+
 export const sshService = {
   /**
    * 检查是否在可用的 Tauri 桌面环境中
@@ -213,7 +217,9 @@ export const sshService = {
     server: Omit<Server, "createdAt" | "updatedAt">,
   ): Promise<OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.servers.add(server);
+    const res = await backend.servers.add(server);
+    if (res.success) notifyDataMutated('addServer');
+    return res;
   },
 
   async updateServer(
@@ -221,12 +227,16 @@ export const sshService = {
     updates: Partial<Server>,
   ): Promise<OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.servers.update(id, updates);
+    const res = await backend.servers.update(id, updates);
+    if (res.success) notifyDataMutated('updateServer');
+    return res;
   },
 
   async deleteServer(id: string): Promise<OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.servers.delete(id);
+    const res = await backend.servers.delete(id);
+    if (res.success) notifyDataMutated('deleteServer');
+    return res;
   },
 
   // ==================== 回收站 ====================
@@ -237,32 +247,44 @@ export const sshService = {
 
   async restoreServer(id: string): Promise<OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.servers.restore(id);
+    const res = await backend.servers.restore(id);
+    if (res.success) notifyDataMutated('restoreServer');
+    return res;
   },
 
   async purgeServer(id: string): Promise<OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.servers.purge(id);
+    const res = await backend.servers.purge(id);
+    if (res.success) notifyDataMutated('purgeServer');
+    return res;
   },
 
   async deleteServersBatch(ids: string[]): Promise<OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.servers.deleteBatch(ids);
+    const res = await backend.servers.deleteBatch(ids);
+    if (res.success) notifyDataMutated('deleteServersBatch');
+    return res;
   },
 
   async restoreServersBatch(ids: string[]): Promise<OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.servers.restoreBatch(ids);
+    const res = await backend.servers.restoreBatch(ids);
+    if (res.success) notifyDataMutated('restoreServersBatch');
+    return res;
   },
 
   async purgeServersBatch(ids: string[]): Promise<OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.servers.purgeBatch(ids);
+    const res = await backend.servers.purgeBatch(ids);
+    if (res.success) notifyDataMutated('purgeServersBatch');
+    return res;
   },
 
   async cleanupTrash(retentionDays: number): Promise<number> {
     if (!backend) return 0;
-    return backend.servers.cleanupTrash(retentionDays);
+    const count = await backend.servers.cleanupTrash(retentionDays);
+    if (count > 0) notifyDataMutated('cleanupTrash');
+    return count;
   },
 
   async getServer(id: string): Promise<Server | null> {
@@ -299,7 +321,9 @@ export const sshService = {
     password: string,
   ): Promise<ImportResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.servers.import(filePath, password);
+    const res = await backend.servers.import(filePath, password);
+    if (res.imported > 0) notifyDataMutated('importServers');
+    return res;
   },
 
   async parseExternalImport(
@@ -315,7 +339,9 @@ export const sshService = {
     skipDuplicates = true,
   ): Promise<ImportResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.servers.importExternal(candidates, skipDuplicates);
+    const res = await backend.servers.importExternal(candidates, skipDuplicates);
+    if (res.imported > 0) notifyDataMutated('importExternalServers');
+    return res;
   },
 
   // ==================== 服务器分组（树形目录） ====================
@@ -330,7 +356,9 @@ export const sshService = {
     id?: string,
   ): Promise<OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.serverGroups.add({ id, name, parentId: parentId ?? null });
+    const res = await backend.serverGroups.add({ id, name, parentId: parentId ?? null });
+    if (res.success) notifyDataMutated('addGroup');
+    return res;
   },
 
   async updateGroup(
@@ -338,12 +366,16 @@ export const sshService = {
     updates: { name?: string; parentId?: string | null },
   ): Promise<OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.serverGroups.update(id, updates);
+    const res = await backend.serverGroups.update(id, updates);
+    if (res.success) notifyDataMutated('updateGroup');
+    return res;
   },
 
   async deleteGroup(id: string): Promise<OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.serverGroups.delete(id);
+    const res = await backend.serverGroups.delete(id);
+    if (res.success) notifyDataMutated('deleteGroup');
+    return res;
   },
 
   // ==================== SSH 密钥库 ====================
@@ -362,12 +394,23 @@ export const sshService = {
 
   async addKey(input: SshKeyInput): Promise<OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.sshKeys.add(input);
+    const res = await backend.sshKeys.add(input);
+    if (res.success) notifyDataMutated('addKey');
+    return res;
   },
 
   async updateKey(id: string, updates: SshKeyUpdate): Promise<OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.sshKeys.update(id, updates);
+    const res = await backend.sshKeys.update(id, updates);
+    if (res.success) notifyDataMutated('updateKey');
+    return res;
+  },
+
+  async deleteKey(id: string): Promise<OperationResult> {
+    if (!backend) throw new Error(NOT_AVAILABLE);
+    const res = await backend.sshKeys.delete(id);
+    if (res.success) notifyDataMutated('deleteKey');
+    return res;
   },
 
   // ==================== 标签目录（独立存储） ====================
@@ -378,17 +421,21 @@ export const sshService = {
 
   async createTag(name: string): Promise<string> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.tags.create(name);
+    const res = await backend.tags.create(name);
+    notifyDataMutated('createTag');
+    return res;
   },
 
   async renameTag(oldName: string, newName: string): Promise<void> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.tags.rename(oldName, newName);
+    await backend.tags.rename(oldName, newName);
+    notifyDataMutated('renameTag');
   },
 
   async deleteTag(name: string): Promise<void> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.tags.delete(name);
+    await backend.tags.delete(name);
+    notifyDataMutated('deleteTag');
   },
 
   async listTagsAll(): Promise<import("./api/types").TagRow[]> {
@@ -535,7 +582,9 @@ export const sshService = {
     serverId: string,
   ): Promise<import("./api/types").OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.ssh.resetKnownHost(serverId);
+    const res = await backend.ssh.resetKnownHost(serverId);
+    if (res.success) notifyDataMutated('knownHosts');
+    return res;
   },
 
   /** 列出所有已知主机公钥指纹记录 */
@@ -551,13 +600,17 @@ export const sshService = {
     keyType?: string,
   ): Promise<import("./api/types").OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.ssh.deleteKnownHost(host, port, keyType);
+    const res = await backend.ssh.deleteKnownHost(host, port, keyType);
+    if (res.success) notifyDataMutated('knownHosts');
+    return res;
   },
 
   /** 清空全部已记录的已知主机公钥 */
   async clearAllKnownHosts(): Promise<import("./api/types").OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.ssh.clearAllKnownHosts();
+    const res = await backend.ssh.clearAllKnownHosts();
+    if (res.success) notifyDataMutated('knownHosts');
+    return res;
   },
 
   /** 批量恢复已知主机公钥指纹记录 */
@@ -1939,7 +1992,9 @@ export const sshService = {
   },
   async addFavCmd(cmd: string, desc: string): Promise<OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.favCmds.add(cmd, desc);
+    const res = await backend.favCmds.add(cmd, desc);
+    if (res.success) notifyDataMutated('addFavCmd');
+    return res;
   },
   async updateFavCmd(
     id: string,
@@ -1947,11 +2002,15 @@ export const sshService = {
     desc: string,
   ): Promise<OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.favCmds.update(id, cmd, desc);
+    const res = await backend.favCmds.update(id, cmd, desc);
+    if (res.success) notifyDataMutated('updateFavCmd');
+    return res;
   },
   async deleteFavCmd(id: string): Promise<OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.favCmds.delete(id);
+    const res = await backend.favCmds.delete(id);
+    if (res.success) notifyDataMutated('deleteFavCmd');
+    return res;
   },
 
   async restoreFavCmds(cmds: import("./api/types").FavoriteCommand[]): Promise<OperationResult> {

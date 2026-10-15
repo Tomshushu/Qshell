@@ -197,11 +197,11 @@ export function TerminalSelectionToolbar({
             ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
             : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
         )}
-        title={t("tm_search") || "在当前终端中搜索"}
+        title={t("tm_search_tooltip")}
       >
         <Search className="h-3.5 w-3.5 text-amber-400 shrink-0" />
         <span className="truncate tracking-tight font-sans text-[11.5px]">
-          {t("tm_search") || "搜索"}
+          {t("tm_search")}
         </span>
       </button>
 
@@ -215,11 +215,11 @@ export function TerminalSelectionToolbar({
             ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
             : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
         )}
-        title={t("tm_web_search") || "在浏览器中搜索选中文本"}
+        title={t("tm_web_search_tooltip")}
       >
         <Globe className="h-3.5 w-3.5 text-purple-400 shrink-0" />
         <span className="truncate tracking-tight font-sans text-[11.5px]">
-          {t("tm_web_search") || "网页搜索"}
+          {t("tm_web_search")}
         </span>
       </button>
     </div>

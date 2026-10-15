@@ -142,7 +142,7 @@ function ShortcutRecordModal({ definition, open, onClose }: ShortcutRecordModalP
       const otherName = other ? t(other.titleKey) : result.conflictActionId
       toast.warning(`${t('shortcut_conflict_warning')} (${otherName})`)
     } else {
-      toast.success(t('msg_save_success') || '快捷键已更新')
+      toast.success(t('shortcut_toast_updated'))
     }
     onClose()
   }
@@ -264,7 +264,7 @@ function ShortcutRecordModal({ definition, open, onClose }: ShortcutRecordModalP
                 size="sm"
                 onClick={() => {
                   resetBinding(definition.id)
-                  toast.success(t('msg_save_success') || '已恢复默认')
+                  toast.success(t('shortcut_toast_reset_single'))
                   onClose()
                 }}
                 className="text-xs text-muted-foreground hover:text-foreground h-8 gap-1.5"
@@ -403,7 +403,7 @@ export function ShortcutSettingsPanel() {
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder={
                 isKeySearching
-                  ? '请在键盘上按下快捷键组合...'
+                  ? t('shortcut_search_key_ph')
                   : t('shortcut_search_placeholder')
               }
               className={cn(
@@ -509,12 +509,12 @@ export function ShortcutSettingsPanel() {
           <Sparkles className="h-3.5 w-3.5 text-primary shrink-0" />
           <span>
             {isMac
-              ? '鼠标点击任意一行即可录制新按键；Cmd 对应 ⌘，Ctrl 对应 ⌃。'
-              : '鼠标点击任意一行即可录制新按键；支持实时冲突感知与一键重置。'}
+              ? t('shortcut_banner_tip_mac')
+              : t('shortcut_banner_tip_win')}
           </span>
         </div>
         <div className="text-[11px] text-muted-foreground/60 hidden sm:block">
-          共 {filteredList.length} 项快捷操作
+          {t('shortcut_total_count', { n: filteredList.length })}
         </div>
       </div>
 
@@ -535,7 +535,7 @@ export function ShortcutSettingsPanel() {
                   {scopeLabels[scopeKey]}
                 </span>
                 <span className="text-[10px] text-muted-foreground/60">
-                  {items.length} 项
+                  {t('shortcut_group_count', { n: items.length })}
                 </span>
               </div>
               <span
@@ -614,13 +614,13 @@ export function ShortcutSettingsPanel() {
       {/* 无匹配提示 */}
       {filteredList.length === 0 && (
         <div className="py-12 text-center text-xs text-muted-foreground space-y-1">
-          <div>未找到匹配的快捷键动作</div>
+          <div>{t('shortcut_no_match')}</div>
           {searchQuery && (
             <button
               onClick={() => setSearchQuery('')}
               className="text-primary hover:underline text-[11px]"
             >
-              清除搜索条件
+              {t('shortcut_clear_search')}
             </button>
           )}
         </div>
@@ -642,7 +642,7 @@ export function ShortcutSettingsPanel() {
         onConfirm={() => {
           resetAll()
           setShowResetAllConfirm(false)
-          toast.success(t('msg_save_success') || '已恢复所有默认快捷键')
+          toast.success(t('shortcut_toast_reset_all'))
         }}
       />
     </div>

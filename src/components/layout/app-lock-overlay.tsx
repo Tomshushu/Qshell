@@ -190,10 +190,7 @@ export function AppLockOverlay() {
     // 解除界面锁定状态
     unlockApp();
     setShowResetConfirm(false);
-    toast.success(
-      t("app_lock_reset_success_toast") ||
-        "应用锁已重置，已强制断开所有活跃会话以确保安全",
-    );
+    toast.success(t("app_lock_reset_success_toast"));
   }, [closeAllTabs, setAppLock, unlockApp, t, toast]);
 
   if (!isAppLocked) return null;
@@ -206,8 +203,8 @@ export function AppLockOverlay() {
       aria-modal="true"
       aria-label={
         showResetConfirm
-          ? t("app_lock_reset_confirm_title") || "确认重置应用锁？"
-          : t("app_lock_overlay_title") || "应用已锁定"
+          ? t("app_lock_reset_confirm_title")
+          : t("app_lock_overlay_title")
       }
       className="fixed inset-0 z-[99999] flex flex-col items-center justify-center bg-background/80 backdrop-blur-2xl p-6 select-none animate-in fade-in duration-200"
       onClick={() => {
@@ -229,13 +226,12 @@ export function AppLockOverlay() {
             </div>
 
             <h2 className="text-base font-semibold text-foreground tracking-tight">
-              {t("app_lock_reset_confirm_title") || "确认重置应用锁？"}
+              {t("app_lock_reset_confirm_title")}
             </h2>
 
             <div className="mt-2.5 rounded-xl border border-border/50 bg-muted/30 p-3 text-left">
               <p className="text-xs text-muted-foreground leading-relaxed">
-                {t("app_lock_reset_confirm_desc") ||
-                  "重置将清空应用锁密码并解除界面锁定。为保护生产服务器与资产安全，系统将立即强制掐断并关闭所有活跃的 SSH/SFTP 终端会话。是否继续？"}
+                {t("app_lock_reset_confirm_desc")}
               </p>
             </div>
 
@@ -249,7 +245,7 @@ export function AppLockOverlay() {
                   setShowResetConfirm(false);
                 }}
               >
-                {t("app_lock_reset_cancel_btn") || "取消"}
+                {t("app_lock_reset_cancel_btn")}
               </Button>
               <Button
                 type="button"
@@ -257,7 +253,7 @@ export function AppLockOverlay() {
                 className="flex-1 h-9 rounded-lg text-xs shadow-xs"
                 onClick={handleResetAppLock}
               >
-                {t("app_lock_reset_confirm_btn") || "确认重置并掐断连接"}
+                {t("app_lock_reset_confirm_btn")}
               </Button>
             </div>
           </div>
@@ -270,11 +266,10 @@ export function AppLockOverlay() {
             </div>
 
             <h2 className="text-base font-semibold text-foreground tracking-tight">
-              {t("app_lock_overlay_title") || "应用已锁定"}
+              {t("app_lock_overlay_title")}
             </h2>
             <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
-              {t("app_lock_pattern_overlay_subtitle") ||
-                "请绘制图案以解锁 · 离席防护生效中"}
+              {t("app_lock_pattern_overlay_subtitle")}
             </p>
 
             <div className="mt-4 rounded-2xl border border-border/60 bg-muted/20 p-2 shadow-inner">
@@ -292,7 +287,7 @@ export function AppLockOverlay() {
 
             {error && (
               <p className="text-xs font-medium text-destructive animate-in fade-in duration-150 mt-2 text-center">
-                {t("app_lock_pattern_wrong") || "图案错误，请重试"}
+                {t("app_lock_pattern_wrong")}
               </p>
             )}
 
@@ -306,15 +301,14 @@ export function AppLockOverlay() {
                 }}
                 className="text-[11px] text-muted-foreground/60 hover:text-foreground underline underline-offset-4 transition-colors"
               >
-                {t("app_lock_forgot_btn") || "忘记密码？安全重置"}
+                {t("app_lock_forgot_btn")}
               </button>
             </div>
 
             <div className="mt-4 flex items-center gap-1.5 text-[11px] text-muted-foreground/60">
               <ShieldCheck className="h-3.5 w-3.5 text-emerald-500/80 shrink-0" />
               <span>
-                {t("app_lock_safe_tip") ||
-                  "锁定期间界面已隔离，远端服务和数据传输不受影响"}
+                {t("app_lock_safe_tip")}
               </span>
             </div>
           </div>
@@ -327,11 +321,10 @@ export function AppLockOverlay() {
             </div>
 
             <h2 className="text-base font-semibold text-foreground tracking-tight">
-              {t("app_lock_overlay_title") || "应用已锁定"}
+              {t("app_lock_overlay_title")}
             </h2>
             <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
-              {t("app_lock_overlay_subtitle") ||
-                "离席防护生效中 · 后台所有 SSH 会话与任务持续运行"}
+              {t("app_lock_overlay_subtitle")}
             </p>
 
             <div className="mt-5 w-full space-y-2">
@@ -339,7 +332,7 @@ export function AppLockOverlay() {
                 <Input
                   ref={inputRef}
                   type={showPassword ? "text" : "password"}
-                  placeholder={t("app_lock_overlay_input_ph") || "输入解锁密码以继续"}
+                  placeholder={t("app_lock_overlay_input_ph")}
                   value={inputVal}
                   onChange={(e) => {
                     const nextVal = e.target.value;
@@ -364,7 +357,7 @@ export function AppLockOverlay() {
                   tabIndex={-1}
                   className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground/60 hover:text-foreground p-1 transition-colors"
                   onClick={() => setShowPassword((v) => !v)}
-                  title={showPassword ? t("common_hide") || "隐藏" : t("common_show") || "显示"}
+                  title={showPassword ? t("common_hide") : t("common_show")}
                 >
                   {showPassword ? (
                     <EyeOff className="h-3.5 w-3.5" />
@@ -376,13 +369,13 @@ export function AppLockOverlay() {
 
               {capsLockOn && !error && (
                 <p className="text-[11px] font-medium text-amber-500 animate-in fade-in duration-150">
-                  {t("app_lock_caps_lock_on") || "大写锁定已开启"}
+                  {t("app_lock_caps_lock_on")}
                 </p>
               )}
 
               {error && (
                 <p className="text-xs font-medium text-destructive animate-in fade-in duration-150">
-                  {t("app_lock_err_wrong") || "密码错误，请重新输入"}
+                  {t("app_lock_err_wrong")}
                 </p>
               )}
 
@@ -393,7 +386,7 @@ export function AppLockOverlay() {
                 disabled={!inputVal || isVerifying}
               >
                 <Unlock className="h-3.5 w-3.5" />
-                <span>{t("app_lock_overlay_unlock_btn") || "解锁应用"}</span>
+                <span>{t("app_lock_overlay_unlock_btn")}</span>
               </Button>
             </div>
 
@@ -407,15 +400,14 @@ export function AppLockOverlay() {
                 }}
                 className="text-[11px] text-muted-foreground/60 hover:text-foreground underline underline-offset-4 transition-colors"
               >
-                {t("app_lock_forgot_btn") || "忘记密码？安全重置"}
+                {t("app_lock_forgot_btn")}
               </button>
             </div>
 
             <div className="mt-4 flex items-center gap-1.5 text-[11px] text-muted-foreground/60">
               <ShieldCheck className="h-3.5 w-3.5 text-emerald-500/80 shrink-0" />
               <span>
-                {t("app_lock_safe_tip") ||
-                  "锁定期间界面已隔离，远端服务和数据传输不受影响"}
+                {t("app_lock_safe_tip")}
               </span>
             </div>
           </form>

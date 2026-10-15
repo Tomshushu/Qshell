@@ -183,13 +183,13 @@ export function StatusBar() {
         ) : isBmcServer ? (
           <>
             <Wifi className="h-3 w-3 text-success flex-shrink-0" />
-            <span className="truncate">{t('status_bmc_ready') || 'BMC 已就绪'} · {server?.host || '?'}</span>
+            <span className="truncate">{t('status_bmc_ready')} · {server?.host || '?'}</span>
             {copyIpButton}
           </>
         ) : isRdpServer ? (
           <>
             <Monitor className="h-3 w-3 text-primary flex-shrink-0" />
-            <span className="truncate">{t('rdp_ready') || '远程桌面'} · {server?.host || '?'}</span>
+            <span className="truncate">{t('rdp_ready')} · {server?.host || '?'}</span>
             {copyIpButton}
           </>
         ) : isSerialServer ? (
@@ -227,9 +227,9 @@ export function StatusBar() {
         {isSftpTab
           ? 'SFTP'
           : isBmcServer
-            ? (t('status_bmc_mode') || 'BMC 模式')
+            ? t('status_bmc_mode')
             : isRdpServer
-              ? (t('module_rdp') || '远程桌面')
+              ? t('module_rdp')
               : isSerialServer
                 ? t('status_serial_mode')
                 : t('status_ssh_mode')}

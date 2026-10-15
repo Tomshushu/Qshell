@@ -45,10 +45,10 @@ export function CaptureTab({ serverId, interfaces }: CaptureTabProps) {
       })
       setCaptureResult(res)
       if (!res.success) {
-        setError(res.error || '抓包未捕获到有效数据包')
+        setError(res.error || t('net_cap_err_empty'))
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : '抓包执行失败')
+      setError(err instanceof Error ? err.message : t('net_cap_err_failed'))
     } finally {
       setIsCapturing(false)
     }
@@ -82,7 +82,7 @@ export function CaptureTab({ serverId, interfaces }: CaptureTabProps) {
         <CardContent className="p-3.5 flex items-start gap-2.5 text-xs text-muted-foreground">
           <ShieldAlert className="h-4 w-4 text-primary shrink-0 mt-0.5" />
           <div className="space-y-1">
-            <span className="font-semibold text-foreground">抓包安全说明与权限限制</span>
+            <span className="font-semibold text-foreground">{t('net_cap_notice_title')}</span>
             <p className="leading-relaxed">
               {t('net_cap_notice')}
             </p>
@@ -153,7 +153,7 @@ export function CaptureTab({ serverId, interfaces }: CaptureTabProps) {
                 {t('net_cap_filter')}
               </label>
               <div className="flex items-center gap-1.5 text-[11px] font-mono">
-                <span className="text-muted-foreground">预设模版:</span>
+                <span className="text-muted-foreground">{t('net_cap_templates_label')}</span>
                 <button
                   type="button"
                   onClick={() => setBpfFilter('port 80 or port 443')}
@@ -180,7 +180,7 @@ export function CaptureTab({ serverId, interfaces }: CaptureTabProps) {
                   onClick={() => setBpfFilter('')}
                   className="px-1.5 py-0.5 rounded bg-muted hover:bg-accent text-muted-foreground text-[10px]"
                 >
-                  清空
+                  {t('common_clear')}
                 </button>
               </div>
             </div>
