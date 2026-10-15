@@ -4401,13 +4401,13 @@ export function TerminalModule({
             return false;
           }
 
-          // 全局快捷键透传：防止 xterm.js 捕获/吞掉 Ctrl+T (新标签)、Ctrl+W (关闭标签)、Ctrl+B (侧边栏)、
+          // 全局快捷键透传：防止 xterm.js 捕获/吞掉 Ctrl+T (新标签)、Ctrl+W (关闭标签)、Ctrl+K (命令面板)、
           // Ctrl+Tab / Ctrl+Shift+Tab (切标签)。
-          // 返回 false 阻止 xterm.js 内部处理及发送 ANSI 序列，让 DOM 事件自由冒泡到 window 的 useKeyboardShortcuts
+          // 返回 false 阻止 xterm.js 内部处理及发送 ANSI 序列，让 DOM 事件自由冒泡到 window 的快捷键监听器
           const isGlobalShortcut =
             (hasMod &&
               !event.shiftKey &&
-              (key === "t" || key === "w" || key === "b")) ||
+              (key === "t" || key === "w" || key === "k" || key === "b")) ||
             (event.ctrlKey && key === "tab");
 
           if (isGlobalShortcut) {
