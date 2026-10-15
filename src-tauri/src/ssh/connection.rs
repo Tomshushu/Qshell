@@ -227,11 +227,27 @@ struct ClientHandler {
     host: String,
     port: u16,
     server_id: String,
+    banner: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 #[async_trait]
 impl russh::client::Handler for ClientHandler {
     type Error = SshError;
+
+    /// 接收服务端在认证阶段发送的欢迎词（SSH_MSG_USERAUTH_BANNER，RFC 4252 Section 5.4）
+    async fn auth_banner(
+        &mut self,
+        banner: &str,
+        _session: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        if let Ok(mut b) = self.banner.lock() {
+            match b.as_mut() {
+                Some(existing) => existing.push_str(banner),
+                None => *b = Some(banner.to_string()),
+            }
+        }
+        Ok(())
+    }
 
     async fn check_server_key(
         &mut self,
@@ -313,6 +329,7 @@ pub struct SshTransport {
     server_id: String,
     host: String,
     port: u16,
+    banner: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 // ============================================================================
@@ -456,6 +473,7 @@ pub async fn connect_via_chained_jump(
                 host: hop0.host.clone(),
                 port: hop0.port,
                 server_id: String::new(),
+                banner: Arc::new(std::sync::Mutex::new(None)),
             },
         ),
     )
@@ -506,6 +524,7 @@ pub async fn connect_via_chained_jump(
                     host: hop.host.clone(),
                     port: hop.port,
                     server_id: String::new(),
+                    banner: Arc::new(std::sync::Mutex::new(None)),
                 },
             ),
         )
@@ -836,6 +855,7 @@ impl SshTransport {
 
         // russh 内部完成 SSH 协议协商及握手
         let handshake_timeout = deadline.saturating_duration_since(std::time::Instant::now());
+        let banner = Arc::new(std::sync::Mutex::new(None));
         let mut handle = timeout(handshake_timeout, russh::client::connect_stream(
             Arc::new(config),
             stream,
@@ -843,6 +863,7 @@ impl SshTransport {
                 host: host.clone(),
                 port,
                 server_id: server_id.clone(),
+                banner: banner.clone(),
             },
         ))
         .await
@@ -872,7 +893,7 @@ impl SshTransport {
             auth_elapsed);
 
         tracing::info!("[SSH Perf] {} Transport ready: 总耗时 {:?}", server_id, start.elapsed());
-        Ok(Self { handle: tokio::sync::Mutex::new(handle), server_id, host, port })
+        Ok(Self { handle: tokio::sync::Mutex::new(handle), server_id, host, port, banner })
     }
 
     /// 认证逻辑（从 connect 抽出，避免与 jump 分支耦合）
@@ -1166,6 +1187,11 @@ impl SshTransport {
 
     pub fn port(&self) -> u16 {
         self.port
+    }
+
+    /// 获取服务端在 SSH 用户认证阶段发送的欢迎词（SSH_MSG_USERAUTH_BANNER）
+    pub fn auth_banner(&self) -> Option<String> {
+        self.banner.lock().ok().and_then(|b| b.clone())
     }
 }
 
@@ -1879,6 +1905,11 @@ impl SshConnection {
     /// Transport 引用（供 shell/tail 直接使用）
     pub fn transport(&self) -> &SshTransport {
         &self.transport
+    }
+
+    /// 获取服务端在 SSH 用户认证阶段发送的欢迎词（SSH_MSG_USERAUTH_BANNER）
+    pub fn auth_banner(&self) -> Option<String> {
+        self.transport.auth_banner()
     }
 }
 

@@ -145,6 +145,7 @@ export interface DetectOsResult extends OperationResult {
 /** Shell 创建结果 */
 export interface CreateShellResult extends OperationResult {
   sessionId?: string;
+  banner?: string;
 }
 
 /** 测试连接结果 */

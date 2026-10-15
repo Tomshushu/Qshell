@@ -2300,6 +2300,8 @@ pub struct CreateShellResult {
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub banner: Option<String>,
 }
 
 /// 创建交互式 Shell（PTY）
@@ -2322,15 +2324,17 @@ pub async fn ssh_create_shell(
     };
     let window_label = window.label().to_string();
     match crate::ssh::shell::shell_create(app, window_label, server_id, c, r, encoding.unwrap_or_else(|| "utf-8".to_string())).await {
-        Ok(session_id) => Ok(CreateShellResult {
+        Ok((session_id, banner)) => Ok(CreateShellResult {
             success: true,
             error: None,
             session_id: Some(session_id),
+            banner,
         }),
         Err(e) => Ok(CreateShellResult {
             success: false,
             error: Some(e),
             session_id: None,
+            banner: None,
         }),
     }
 }

@@ -783,6 +783,8 @@ export const tauriAdapter: BackendAdapter = {
       rows,
       encoding = "utf-8",
     ): Promise<CreateShellResult> {
+      // 先注册全局事件监听，避免通道建立后首批 output/error/closed 事件丢失
+      await ensureShellListener();
       return safeInvoke<CreateShellResult>("ssh_create_shell", {
         serverId,
         cols,

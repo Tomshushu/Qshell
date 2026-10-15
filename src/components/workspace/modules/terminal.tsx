@@ -153,6 +153,7 @@ import {
   discardPendingXtermWrites,
   findSigintBoundary,
   stripUnsafeEscapes,
+  writeMotdIfMissing,
   stripAnsiForRecording,
   BYTES_PER_MB,
   MAX_PENDING_BUFFER,
@@ -3373,8 +3374,11 @@ export function TerminalModule({
         // 标记历史渲染完毕，并冲刷在加载历史期间接收到的实时缓冲数据
         historyWritten = true;
         if (pendingBuffer) {
-          if (isSerial) writeShellOutput(termId, xtermInfo.term, pendingBuffer);
-          else writeTerminalOutput(termId, xtermInfo.term, stripUnsafeEscapes(pendingBuffer));
+          const bufferToWrite = history && history.endsWith(pendingBuffer) ? "" : pendingBuffer;
+          if (bufferToWrite) {
+            if (isSerial) writeShellOutput(termId, xtermInfo.term, bufferToWrite);
+            else writeTerminalOutput(termId, xtermInfo.term, stripUnsafeEscapes(bufferToWrite));
+          }
         }
 
         const unsubscribeClosed = sshService.onShellClosed((data) => {
@@ -4801,6 +4805,7 @@ export function TerminalModule({
       // 创建 Shell 会话（SSH 或 Telnet）
       try {
         let sessionId: string;
+        let bannerText: string | undefined;
 
         const currentServer = server || useAppStore.getState().servers.find((s) => s.id === baseServerId);
         const host = currentServer?.host;
@@ -5057,6 +5062,7 @@ export function TerminalModule({
             return;
           }
           sessionId = result.sessionId;
+          bannerText = result.banner;
         }
 
         // 关键修复：createShell 成功后立即将 closeShell 加入 cleanups，
@@ -5191,7 +5197,19 @@ export function TerminalModule({
             });
             return;
           }
-          if (history) {
+          if (bannerText) {
+            // 欢迎语存在时，使用 writeMotdIfMissing 检查欢迎语是否已在 history 中，避免重复写入
+            const safeHistory = stripUnsafeEscapes(
+              isSerial
+                ? history || ""
+                : highlightKeywords(
+                    history || "",
+                    highlightEnabledRef.current,
+                    highlightRulesRef.current,
+                  ),
+            );
+            writeMotdIfMissing(term, bannerText, safeHistory);
+          } else if (history) {
             const safeHistory = stripUnsafeEscapes(
               isSerial
                 ? history
@@ -5210,8 +5228,12 @@ export function TerminalModule({
         // 标记历史渲染完毕，并冲刷在加载历史期间接收到的实时缓冲数据
         historyWritten = true;
         if (pendingBuffer) {
-          if (isSerial) writeShellOutput(termId, term, pendingBuffer);
-          else writeTerminalOutput(termId, term, stripUnsafeEscapes(pendingBuffer));
+          // 若 pendingBuffer 已在拉取的 history 尾部出现，避免重复写入
+          const bufferToWrite = history && history.endsWith(pendingBuffer) ? "" : pendingBuffer;
+          if (bufferToWrite) {
+            if (isSerial) writeShellOutput(termId, term, bufferToWrite);
+            else writeTerminalOutput(termId, term, stripUnsafeEscapes(bufferToWrite));
+          }
         }
         if (sessionId) {
           lastActivityTimesRef.current.set(sessionId, Date.now());

@@ -189,13 +189,14 @@ pub async fn shell_create(
     cols: u32,
     rows: u32,
     encoding: String,
-) -> Result<String, String> {
+) -> Result<(String, Option<String>), String> {
     let session_id = format!("shell-{}", uuid::Uuid::new_v4());
 
     let (conn, _generation) = SshManager::global()
         .get_connection_with_generation(&server_id)
         .map_err(|e| format!("Shell: not connected: {}", e))?;
 
+    let banner = conn.auth_banner();
     let sid = session_id.clone();
 
     // Channel + PTY setup (must complete BEFORE registering session)
@@ -239,6 +240,19 @@ pub async fn shell_create(
     let (tx, mut rx) = mpsc::channel::<ShellCmd>(64);
     let (interrupt_tx, mut interrupt_rx) = mpsc::unbounded_channel::<()>();
     let history = Arc::new(std::sync::Mutex::new(VecDeque::new()));
+    // 若连接在认证阶段收到服务端发送的欢迎词（SSH_MSG_USERAUTH_BANNER），预填入 history，
+    // 确保跨窗口拖拽迁移或拉取初始历史时完整保留欢迎语
+    if let Some(ref b) = banner {
+        let normalized = b.replace("\r\n", "\n").replace('\n', "\r\n");
+        let formatted = if !normalized.ends_with("\r\n") {
+            format!("{}\r\n", normalized)
+        } else {
+            normalized
+        };
+        if let Ok(mut hist) = history.lock() {
+            hist.extend(formatted.as_bytes().iter().copied());
+        }
+    }
     let cancel = Arc::new(AtomicBool::new(false));
     let done = Arc::new(tokio::sync::Notify::new());
     let normalized_encoding = super::terminal_encoding::normalize_encoding(&encoding);
@@ -685,7 +699,7 @@ pub async fn shell_create(
         done_for_task.notify_waiters();
     });
 
-    Ok(session_id)
+    Ok((session_id, banner))
 }
 
 /// 通过有界 channel 发送命令。reader 卡死（如 SSH 半开连接、网络静默断开）时
