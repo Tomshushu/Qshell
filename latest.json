@@ -5,15 +5,15 @@
   "platforms": {
     "linux-x86_64": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTWo3SmRaaTIzQmk0Yk0zRllYRERLSmE1MFFJUmFGRmFiSmRGZGpTZWF0dUxlcFdQWWlvaEFMU0hlZFhGMUJ5Vk5qbVhoT3ZZMWFRVmZVeUZzNU9XaXFaL3FiZ0pLVHdvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMDM0ODMyCWZpbGU6UXNoZWxsXzEuMC4xMF9hbWQ2NC5BcHBJbWFnZQpDV0NBeUluY0RDR2JreUxkSkdPd3NkZHExLzJPamJEUzA4UExvdkpHenhyVU8xa0lOSFMvSFBIZ3F5OFgvRGtvdXlIQ2tXNnlibkVFZm50ek5wb3FCdz09Cg==",
-      "url": "https://gh-proxy.com/https://github.com/Tomshushu/Qshell/releases/download/v1.0.10/Qshell_1.0.10_amd64.AppImage"
+      "url": "https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.10/Qshell_1.0.10_amd64.AppImage"
     },
     "linux-x86_64-appimage": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTWo3SmRaaTIzQmk0Yk0zRllYRERLSmE1MFFJUmFGRmFiSmRGZGpTZWF0dUxlcFdQWWlvaEFMU0hlZFhGMUJ5Vk5qbVhoT3ZZMWFRVmZVeUZzNU9XaXFaL3FiZ0pLVHdvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMDM0ODMyCWZpbGU6UXNoZWxsXzEuMC4xMF9hbWQ2NC5BcHBJbWFnZQpDV0NBeUluY0RDR2JreUxkSkdPd3NkZHExLzJPamJEUzA4UExvdkpHenhyVU8xa0lOSFMvSFBIZ3F5OFgvRGtvdXlIQ2tXNnlibkVFZm50ek5wb3FCdz09Cg==",
-      "url": "https://gh-proxy.com/https://github.com/Tomshushu/Qshell/releases/download/v1.0.10/Qshell_1.0.10_amd64.AppImage"
+      "url": "https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.10/Qshell_1.0.10_amd64.AppImage"
     },
     "linux-x86_64-deb": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTWo3SmRaaTIzQmh1WXd5aXVvanR0Q3Q0OHhTK25QZU1rK2MxSXg1Wi81L2FMbHJTMjF5TDJwMlZpL2Nqemo0Y05LNjFmTkdrOUFXenpoMEdqV3lpb05lSWUxU2YxRVFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMDM0ODMyCWZpbGU6UXNoZWxsXzEuMC4xMF9hbWQ2NC5kZWIKNVMzYXZHckxjeldscWZnRXBCbWozU1ZsOUY3VGpURVZMZEVhR2dKSnlCVGc5d2NKTkFJVUNOZk9RU2F6STFZRWZYTXhYUkFCSm96Vk9SRkY0bWtEQXc9PQo=",
-      "url": "https://gh-proxy.com/https://github.com/Tomshushu/Qshell/releases/download/v1.0.10/Qshell_1.0.10_amd64.deb"
+      "url": "https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.10/Qshell_1.0.10_amd64.deb"
     },
     "darwin-aarch64": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTWo3SmRaaTIzQnRzUWhCQ3lRdi9oWFBuVjAyY0VsTGRTRkxCbTJxTFhNZFFvUVFYdUJRVmtWK2F6bWlydmRtTG1WRWlQTDFmRlJsSy93MEg1WjF0UWI1OXVteFg1Znd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMDM0OTg2CWZpbGU6UXNoZWxsLmFwcC50YXIuZ3oKaktuRUNJYWY4amZDQU9EK1h5cTFvOG1pdUN5RVU5ZGcwaXFiaHVsYlExSlBTRE16bTJ2R1YwdE5xcUc5RWpIV2ZiakcvTFFIZUxhMUJ6L0o2VVk2RGc9PQo=",
