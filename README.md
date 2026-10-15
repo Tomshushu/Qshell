@@ -1,10 +1,13 @@
 <div align="center">
 
+<img src="./public/logo.png" alt="Qshell Logo" width="96" height="96" />
+
 # Qshell
 
 ### 🚀 现代化极速桌面终端与多协议服务器管理工作台
 
-[![Release](https://img.shields.io/badge/Release-v1.0.10-blue.svg?style=flat-square)](https://github.com/Tomshushu/Qshell/releases)
+[![GitHub Release](https://img.shields.io/badge/GitHub-v1.0.11-blue.svg?style=flat-square&logo=github)](https://github.com/Tomshushu/Qshell/releases)
+[![Gitee Release](https://img.shields.io/badge/Gitee-v1.0.11-red.svg?style=flat-square&logo=gitee)](https://gitee.com/Tom-shushu/qshell/releases)
 [![Tauri](https://img.shields.io/badge/Tauri-v2.0-24C8D8.svg?style=flat-square&logo=tauri)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-19.0-61DAFB.svg?style=flat-square&logo=react)](https://react.dev/)
 [![Rust](https://img.shields.io/badge/Rust-1.80+-DEA584.svg?style=flat-square&logo=rust)](https://www.rust-lang.org/)
@@ -13,7 +16,7 @@
 
 **轻量极速 · 零知识云漫游 · 全协议支持 · 多维运维集成 · 免 Agent 监控 · 企业级密码学保障**
 
-[下载最新发行版](https://github.com/Tomshushu/Qshell/releases) · [贡献指南](./CONTRIBUTING.md) · [发版标准 SOP](./RELEASE_GUIDE.md) · [报告 Bug](https://github.com/Tomshushu/Qshell/issues)
+[⚡ Gitee 国内极速下载](https://gitee.com/Tom-shushu/qshell/releases) · [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases) · [📖 核心特性](#-核心特性与亮点-key-features) · [📦 安装指南](#-安装与下载-download--installation) · [🤝 参与贡献](./CONTRIBUTING.md)
 
 </div>
 
@@ -40,7 +43,7 @@
 - **企业级密码学保障**：
   - **NIST SP 800-132**：采用 `PBKDF2-HMAC-SHA256`（100,000 次高强度迭代 + 16 字节高熵随机 Salt）派生密钥；
   - **NIST SP 800-38D**：`AES-256-GCM` 全包认证加密与 16 字节完整性标签防篡改；
-  - **零知识原则**：主密码永不上云，第三方平台（GitHub / Gitee 私有仓）仅持有高强度密文信封；支持脱敏模式（可选择不同步明文密码）。
+  - **零知识原则**：主密码与明文凭据永不上云，第三方平台（GitHub / Gitee 私有仓库）仅持有高强度密文信封；本地全量端到端加密同步资产与配置，支持 Token 与主密码一键安全复制。
 
 ### 3. 🖥️ 全协议资产管理与灵活认证
 - **全协议栈覆盖**：
@@ -101,17 +104,19 @@ graph TB
 
 ## 📦 安装与下载 (Download & Installation)
 
-Qshell 为各大主流操作系统提供了开箱即用的安装包与绿色免安装版：
+Qshell 为各大主流操作系统提供了开箱即用的安装包与绿色便携版：
 
-| 操作系统 | 推荐安装格式 | 支持架构 | 备注 |
-| :--- | :--- | :--- | :--- |
-| **Windows** | `.exe` (NSIS 安装包) | x86_64 / x64 | 推荐 Win 10 / 11 |
-| **macOS** | `.dmg` | Universal (Apple Silicon M 系列 & Intel) | 拖拽至 Applications 即可 |
-| **Linux** | `.AppImage` / `.deb` | x86_64 / amd64 | 赋予执行权限即可直接运行 |
+| 操作系统 | 架构 | 安装包格式 | 国内极速直链 (Gitee) | 全球发布源 (GitHub) |
+| :--- | :--- | :--- | :--- | :--- |
+| **Windows** | x86_64 / x64 | `.exe` (安装引导包) | [⚡ 下载 exe 安装包](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.11/Qshell_1.0.11_x64-setup.exe) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.11) |
+| **macOS** | Apple Silicon (M1/M2/M3/M4) | `.dmg` / `.tar.gz` | [⚡ 下载 aarch64 dmg](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.11/Qshell_1.0.11_aarch64.dmg) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.11) |
+| **macOS** | Intel x64 | `.dmg` | [⚡ 访问 Gitee 发行页](https://gitee.com/Tom-shushu/qshell/releases/tag/v1.0.11) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.11) |
+| **Linux** | x86_64 / amd64 | `.AppImage` (免安装) | [⚡ 下载 AppImage](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.11/Qshell_1.0.11_amd64.AppImage) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.11) |
+| **Linux** | x86_64 / Debian/Ubuntu | `.deb` (系统包) | [⚡ 下载 deb 包](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.11/Qshell_1.0.11_amd64.deb) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.11) |
 
-👉 **[前往 GitHub Releases 官方发布页下载最新版本](https://github.com/Tomshushu/Qshell/releases)**
-
-> **OTA 在线升级**：Qshell 客户端内置了 GitHub 与 Gitee 双源智能测速引擎，在【设置】->【检查更新】中可一键探测新版本并差量升级。
+> 💡 **国内用户建议优先前往 [Gitee Releases 发行页](https://gitee.com/Tom-shushu/qshell/releases)** 享受无障碍高速下载。
+> 
+> 🔄 **全自动无感 OTA 在线升级**：已安装 Qshell 的用户无须手动重新下载，客户端内置 GitHub 与 Gitee 双通道智能测速与 Minisign 验签更新引擎。在【设置】->【检查更新】中即可一键完成安全差量升级。
 
 ---
 
