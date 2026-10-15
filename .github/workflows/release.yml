@@ -21,26 +21,41 @@ jobs:
         with:
           script: |
             const tag = context.ref.replace("refs/tags/", "");
-            try {
-              const { data } = await github.rest.repos.createRelease({
+
+            // 1. 检索已有 Release，清理由于历史失败或重试遗留的同名 Draft Releases，避免在 GitHub 产生重复版本
+            const releases = await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 50
+            });
+            const staleDrafts = releases.data.filter(r => r.tag_name === tag && r.draft);
+            for (const stale of staleDrafts) {
+              console.log(`Cleaning up stale draft release ID: ${stale.id}`);
+              await github.rest.repos.deleteRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                tag_name: tag,
-                name: `Qshell ${tag}`,
-                body: 'Qshell 现代化极速终端与服务器管理工作台正式版本。详细更新内容请参阅版本提交日志。',
-                draft: true,
-                prerelease: false
+                release_id: stale.id
               });
-              return data.id;
-            } catch (err) {
-              const releases = await github.rest.repos.listReleases({
-                owner: context.repo.owner,
-                repo: context.repo.repo
-              });
-              const existing = releases.data.find(r => r.tag_name === tag);
-              if (existing) return existing.id;
-              throw err;
             }
+
+            // 2. 检查是否已有已发布的 Release
+            const published = releases.data.find(r => r.tag_name === tag && !r.draft);
+            if (published) {
+              console.log(`Found already published release ID: ${published.id}`);
+              return published.id;
+            }
+
+            // 3. 创建新的 Draft Release
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              name: `Qshell ${tag}`,
+              body: `## 🚀 Qshell ${tag} 正式版本发布\n\n现代化极速终端与多协议服务器管理工作台。详细更新内容请参阅版本提交日志。`,
+              draft: true,
+              prerelease: false
+            });
+            return data.id;
 
   build-tauri:
     needs: create-release
@@ -112,24 +127,14 @@ jobs:
         with:
           script: |
             const tag = context.ref.replace("refs/tags/", "");
-            const cleanVer = tag.replace(/^v/, '');
             const lines = [
               `## 🚀 Qshell ${tag} 正式版本发布`,
               '',
-              '> 现代化极速终端与多协议服务器管理工作台。国内高速镜像托管发布。',
+              '> 现代化极速终端与多协议服务器管理工作台。',
               '',
-              '### 📦 国内免翻墙极速下载通道 (推荐)',
-              '',
-              '| 操作系统与架构 | 安装包类型 | 国内极速直链 (10~25MB/s) |',
-              '| :--- | :--- | :--- |',
-              `| **Windows 64位** | 安装包 (.exe) | [⚡ 点击极速下载](https://ghproxy.net/https://github.com/${context.repo.owner}/${context.repo.repo}/releases/download/${tag}/Qshell_${cleanVer}_x64-setup.exe) |`,
-              `| **macOS Apple Silicon** | 镜像包 (.dmg) | [⚡ 点击极速下载](https://ghproxy.net/https://github.com/${context.repo.owner}/${context.repo.repo}/releases/download/${tag}/Qshell_${cleanVer}_aarch64.dmg) |`,
-              `| **macOS 压缩包** | 应用包 (.app.tar.gz) | [⚡ 点击极速下载](https://ghproxy.net/https://github.com/${context.repo.owner}/${context.repo.repo}/releases/download/${tag}/Qshell_${cleanVer}_aarch64.app.tar.gz) |`,
-              `| **Linux (全平台通用)** | 便携版 (.AppImage) | [⚡ 点击极速下载](https://ghproxy.net/https://github.com/${context.repo.owner}/${context.repo.repo}/releases/download/${tag}/Qshell_${cleanVer}_amd64.AppImage) |`,
-              `| **Linux (Debian/Ubuntu)** | 安装包 (.deb) | [⚡ 点击极速下载](https://ghproxy.net/https://github.com/${context.repo.owner}/${context.repo.repo}/releases/download/${tag}/Qshell_${cleanVer}_amd64.deb) |`,
-              '',
-              '---',
-              '*注：Qshell 客户端内置智能动态双通道测速，更新时将自动优选国内最畅通的直连节点。*'
+              '### 详细说明',
+              '- 详细更新内容请参阅 Commit 提交历史与版本变更记录。',
+              '- 客户端内置 OTA 自动增量更新与 Minisign 数字签名校验。'
             ];
             const body = lines.join('\n');
 
