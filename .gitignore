@@ -45,3 +45,6 @@ Thumbs.db
 # Python
 __pycache__/
 *.pyc
+
+# Local cloud function backup
+tools/aliyun-fc-index.js

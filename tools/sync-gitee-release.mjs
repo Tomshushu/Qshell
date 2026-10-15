@@ -12,7 +12,7 @@ import process from 'node:process'
 import { readFile, writeFile } from 'node:fs/promises'
 import { existsSync, readFileSync } from 'node:fs'
 
-const GITEE_TOKEN = process.env.GITEE_TOKEN || '12c9b9f0edf788cf0e5c308134e5e316'
+const GITEE_TOKEN = process.env.GITEE_TOKEN || ''
 const GITEE_OWNER = process.env.GITEE_OWNER || 'Tom-shushu'
 const GITEE_REPO = process.env.GITEE_REPO || 'qshell'
 let defaultTag = 'v1.0.3'
@@ -163,6 +163,11 @@ async function run() {
   console.log(`[Gitee Sync] Starting release sync for ${TAG_NAME}`)
   console.log(`[Gitee Sync] Target: https://gitee.com/${GITEE_OWNER}/${GITEE_REPO}`)
   console.log(`=======================================================`)
+
+  if (!GITEE_TOKEN) {
+    console.error(`[Gitee Sync] ❌ Error: GITEE_TOKEN is not defined in environment variables!`)
+    process.exit(1)
+  }
 
   const giteeRelease = await getOrCreateGiteeRelease(TAG_NAME)
   const existingAssets = (giteeRelease.assets || []).reduce((acc, a) => {

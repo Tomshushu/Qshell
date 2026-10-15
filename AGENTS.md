@@ -11,7 +11,7 @@
 - `[PROTECTED]` `.github/workflows/release.yml` —— GitHub Actions 自动化编译打包、多平台签名与双端同步流水线
 - `[PROTECTED]` `tools/sync-gitee-release.mjs` —— 云端 Runner 极速直传 Gitee Releases 与清单同步引擎
 - `[PROTECTED]` `tools/sync-release-manifest.mjs` —— Release 清单处理与国内镜像注入工具
-- `[PROTECTED]` `tools/aliyun-fc-index.js` —— 阿里云 Serverless 云函数国内转存与兜底校验逻辑
+- `[PROTECTED]` `tools/aliyun-fc-index.js` —— 阿里云 Serverless 云函数国内转存逻辑（已加入 .gitignore 忽略）
 
 ### 2. 行为准则 (Enforcement Rules)
 1. **禁止主动修改**：在进行任何常规业务功能开发、Bug 修复、UI 调整或依赖升级时，**绝对禁止**修改上述受保护文件。

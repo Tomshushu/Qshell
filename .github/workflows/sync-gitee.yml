@@ -22,7 +22,7 @@ jobs:
 
       - name: Sync to Gitee Releases
         env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN || '12c9b9f0edf788cf0e5c308134e5e316' }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
           GITEE_OWNER: 'Tom-shushu'
           GITEE_REPO: 'qshell'
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
