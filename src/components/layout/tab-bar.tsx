@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { SettingsDialog } from '@/components/layout/settings-dialog'
 import { TabStrip } from '@/components/layout/tab-strip'
+import { UserAvatar } from '@/components/ui/user-avatar'
 import { cn } from '@/lib/utils'
 import { isTauri } from '@/services/api'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
@@ -203,25 +204,18 @@ export function TabBar() {
               </div>
             ) : isConfigured && currentUser ? (
               <div className="flex items-center gap-1.5">
-                {currentUser.avatar_url ? (
-                  <img
-                    src={currentUser.avatar_url}
-                    alt="Avatar"
-                    className={cn(
-                      'h-4 w-4 rounded-full ring-1 shrink-0',
-                      provider === 'gitee' ? 'ring-red-500/50' : 'ring-primary/50',
-                    )}
-                  />
-                ) : (
-                  <div
-                    className={cn(
-                      'h-4 w-4 rounded-full font-bold text-[9px] flex items-center justify-center shrink-0',
-                      provider === 'gitee' ? 'bg-red-500/20 text-red-500' : 'bg-primary/20 text-primary',
-                    )}
-                  >
-                    {currentUser.name?.[0] || currentUser.login[0] || 'U'}
-                  </div>
-                )}
+                <UserAvatar
+                  url={currentUser.avatar_url}
+                  name={currentUser.name || currentUser.login}
+                  className={cn(
+                    'h-4 w-4 ring-1 shrink-0',
+                    provider === 'gitee' ? 'ring-red-500/50' : 'ring-primary/50',
+                  )}
+                  fallbackClassName={cn(
+                    'h-4 w-4 font-bold text-[9px] shrink-0',
+                    provider === 'gitee' ? 'bg-red-500/20 text-red-500' : 'bg-primary/20 text-primary',
+                  )}
+                />
                 <span className="hidden xl:inline max-w-[84px] truncate text-[11px] font-medium text-foreground">
                   {currentUser.name || currentUser.login}
                 </span>
@@ -249,20 +243,18 @@ export function TabBar() {
           >
             {isConfigured && currentUser ? (
               <div className="flex items-center gap-2.5">
-                {currentUser.avatar_url ? (
-                  <img
-                    src={currentUser.avatar_url}
-                    alt={currentUser.name}
-                    className={cn(
-                      'h-8 w-8 rounded-full ring-2 shrink-0',
-                      provider === 'gitee' ? 'ring-red-500/40' : 'ring-primary/40',
-                    )}
-                  />
-                ) : (
-                  <div className="h-8 w-8 rounded-full bg-primary/20 text-primary flex items-center justify-center font-bold text-xs shrink-0">
-                    {currentUser.name?.[0] || currentUser.login[0] || 'U'}
-                  </div>
-                )}
+                <UserAvatar
+                  url={currentUser.avatar_url}
+                  name={currentUser.name || currentUser.login}
+                  className={cn(
+                    'h-8 w-8 ring-2 shrink-0',
+                    provider === 'gitee' ? 'ring-red-500/40' : 'ring-primary/40',
+                  )}
+                  fallbackClassName={cn(
+                    'h-8 w-8 ring-2 shrink-0',
+                    provider === 'gitee' ? 'ring-red-500/40' : 'ring-primary/40',
+                  )}
+                />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-1">
                     <div className="font-semibold text-xs text-foreground truncate">

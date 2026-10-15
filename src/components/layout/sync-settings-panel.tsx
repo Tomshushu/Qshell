@@ -14,9 +14,9 @@ import { useState, useEffect } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Switch } from '@/components/ui/switch'
 import { useSyncStore, type SyncProvider } from '@/store/sync-store'
 import { useToast } from '@/components/ui/toast'
+import { UserAvatar } from '@/components/ui/user-avatar'
 import {
   isTelemetryEnabled,
   setTelemetryEnabled,
@@ -36,6 +36,8 @@ import {
   Lock,
   Eye,
   EyeOff,
+  Copy,
+  Check,
   GitBranch,
   Globe,
   Sparkles,
@@ -55,10 +57,6 @@ export function SyncSettingsPanel() {
     lastSyncTime,
     lastSyncResult,
     historyList,
-    syncPasswords,
-    setSyncPasswords,
-    syncTerminalBackgrounds,
-    setSyncTerminalBackgrounds,
     setProvider,
     setToken,
     clearToken,
@@ -73,6 +71,8 @@ export function SyncSettingsPanel() {
   const [inputToken, setInputToken] = useState('')
   const [isEditingToken, setIsEditingToken] = useState(false)
   const [showToken, setShowToken] = useState(false)
+  const [showConnectedToken, setShowConnectedToken] = useState(false)
+  const [copiedField, setCopiedField] = useState<'token' | 'password' | null>(null)
 
   const [inputMasterPassword, setInputMasterPassword] = useState(masterPassword)
   const [isEditingPassword, setIsEditingPassword] = useState(!masterPassword)
@@ -80,6 +80,22 @@ export function SyncSettingsPanel() {
 
   const [telemetryActive, setTelemetryActive] = useState(isTelemetryEnabled())
   const [isVerifying, setIsVerifying] = useState(false)
+
+  // 复制文本到剪贴板
+  const handleCopy = async (text: string, label: string, field: 'token' | 'password') => {
+    if (!text) {
+      toast.warning(`暂无${label}可复制`)
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedField(field)
+      toast.success(`${label}已复制到剪贴板`)
+      setTimeout(() => setCopiedField(null), 2000)
+    } catch {
+      toast.error('复制失败，请手动选择复制')
+    }
+  }
 
   // 当切换提供商或 Token 变更时同步
   useEffect(() => {
@@ -281,20 +297,18 @@ export function SyncSettingsPanel() {
 
             {isConfigured && currentUser && (
               <div className="flex items-center gap-3 rounded-xl bg-background/60 border border-border/40 p-2.5 px-4 shadow-sm shrink-0">
-                {currentUser.avatar_url ? (
-                  <img
-                    src={currentUser.avatar_url}
-                    alt={currentUser.name}
-                    className={cn(
-                      'h-10 w-10 rounded-full ring-2',
-                      isGitee ? 'ring-red-500/30' : 'ring-primary/30',
-                    )}
-                  />
-                ) : (
-                  <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold">
-                    {currentUser.name?.[0] || currentUser.login[0] || 'U'}
-                  </div>
-                )}
+                <UserAvatar
+                  url={currentUser.avatar_url}
+                  name={currentUser.name || currentUser.login}
+                  className={cn(
+                    'h-10 w-10 ring-2 shrink-0',
+                    isGitee ? 'ring-red-500/30' : 'ring-primary/30',
+                  )}
+                  fallbackClassName={cn(
+                    'h-10 w-10 bg-primary/10 text-primary font-bold text-sm ring-2 shrink-0',
+                    isGitee ? 'ring-red-500/30' : 'ring-primary/30',
+                  )}
+                />
                 <div className="text-left">
                   <div className="text-xs font-medium text-foreground truncate max-w-[120px]">
                     {currentUser.name || currentUser.login}
@@ -327,20 +341,18 @@ export function SyncSettingsPanel() {
                 </div>
 
                 <div className="flex items-center gap-3 p-3 rounded-xl border border-border/60 bg-muted/20">
-                  {currentUser.avatar_url ? (
-                    <img
-                      src={currentUser.avatar_url}
-                      alt={currentUser.name}
-                      className={cn(
-                        'h-10 w-10 rounded-full ring-2 shrink-0',
-                        isGitee ? 'ring-red-500/30' : 'ring-primary/30',
-                      )}
-                    />
-                  ) : (
-                    <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-xs shrink-0">
-                      {currentUser.name?.[0] || currentUser.login[0] || 'U'}
-                    </div>
-                  )}
+                  <UserAvatar
+                    url={currentUser.avatar_url}
+                    name={currentUser.name || currentUser.login}
+                    className={cn(
+                      'h-10 w-10 ring-2 shrink-0',
+                      isGitee ? 'ring-red-500/30' : 'ring-primary/30',
+                    )}
+                    fallbackClassName={cn(
+                      'h-10 w-10 bg-primary/10 text-primary font-bold text-xs ring-2 shrink-0',
+                      isGitee ? 'ring-red-500/30' : 'ring-primary/30',
+                    )}
+                  />
                   <div className="min-w-0 flex-1">
                     <div className="font-semibold text-xs text-foreground truncate">
                       {currentUser.name || currentUser.login}
@@ -353,14 +365,34 @@ export function SyncSettingsPanel() {
                 </div>
 
                 <div className="flex items-center justify-between text-[11px] text-muted-foreground px-0.5">
-                  <span className="flex items-center gap-1.5 font-mono truncate">
+                  <span className="flex items-center gap-1.5 font-mono truncate mr-2 min-w-0">
                     <Lock className="h-3 w-3 text-emerald-500 shrink-0" />
-                    <span>令牌：</span>
-                    <span className="text-foreground/80 font-mono">
-                      {currentToken ? `${currentToken.slice(0, 6)}••••••••${currentToken.slice(-4)}` : '••••••••'}
+                    <span className="shrink-0">令牌：</span>
+                    <span className="text-foreground/80 font-mono truncate">
+                      {showConnectedToken
+                        ? currentToken
+                        : (currentToken ? `${currentToken.slice(0, 6)}••••••••${currentToken.slice(-4)}` : '••••••••')}
                     </span>
                   </span>
-                  <span className="text-[10px] text-muted-foreground shrink-0 ml-2">权限: {isGitee ? 'projects' : 'repo'}</span>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <span className="text-[10px] text-muted-foreground mr-1">权限: {isGitee ? 'projects' : 'repo'}</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowConnectedToken(!showConnectedToken)}
+                      className="p-1 text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded transition-colors"
+                      title={showConnectedToken ? '隐藏令牌' : '查看完整令牌'}
+                    >
+                      {showConnectedToken ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleCopy(currentToken, `${isGitee ? 'Gitee' : 'GitHub'} 访问令牌`, 'token')}
+                      className="p-1 text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded transition-colors"
+                      title="复制令牌"
+                    >
+                      {copiedField === 'token' ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
                 </div>
 
                 <div className="flex items-center gap-2 pt-1 mt-auto">
@@ -419,15 +451,28 @@ export function SyncSettingsPanel() {
                     value={inputToken}
                     onChange={(e) => setInputToken(e.target.value)}
                     placeholder={isGitee ? '粘贴 Gitee 私人访问令牌...' : '粘贴 GitHub Personal Access Token (ghp_...)...'}
-                    className="pr-10 text-xs font-mono"
+                    className="pr-16 text-xs font-mono"
                   />
-                  <button
-                    type="button"
-                    onClick={() => setShowToken(!showToken)}
-                    className="absolute right-3 top-2.5 text-muted-foreground hover:text-foreground"
-                  >
-                    {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
+                  <div className="absolute right-2.5 top-2 flex items-center gap-1">
+                    {inputToken && (
+                      <button
+                        type="button"
+                        onClick={() => handleCopy(inputToken, `${isGitee ? 'Gitee' : 'GitHub'} 访问令牌`, 'token')}
+                        className="text-muted-foreground hover:text-foreground p-0.5 rounded transition-colors"
+                        title="复制令牌"
+                      >
+                        {copiedField === 'token' ? <Check className="h-4 w-4 text-emerald-500" /> : <Copy className="h-4 w-4" />}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setShowToken(!showToken)}
+                      className="text-muted-foreground hover:text-foreground p-0.5 rounded transition-colors"
+                      title={showToken ? '隐藏令牌' : '显示令牌'}
+                    >
+                      {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                 </div>
 
                 <div className="flex gap-2 pt-1 mt-auto">
@@ -479,29 +524,39 @@ export function SyncSettingsPanel() {
                 </div>
 
                 <div className="flex items-center justify-between p-3 rounded-xl border border-border/60 bg-muted/20">
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-3 min-w-0 flex-1 mr-2">
                     <div className="h-10 w-10 rounded-xl bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 flex items-center justify-center shrink-0">
                       <Lock className="h-5 w-5" />
                     </div>
-                    <div>
+                    <div className="min-w-0 flex-1">
                       <div className="text-xs font-semibold text-foreground flex items-center gap-2">
                         <span>主密码已锁定就绪</span>
                         <span className="text-[10px] text-emerald-500 font-normal px-1.5 py-0.2 rounded bg-emerald-500/10">防误触保护</span>
                       </div>
-                      <div className="text-[11px] font-mono text-muted-foreground mt-0.5">
+                      <div className="text-[11px] font-mono text-muted-foreground mt-0.5 truncate">
                         {showPassword ? masterPassword : '••••••••••••'} ({masterPassword.length} 位字符)
                       </div>
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="p-1.5 text-muted-foreground hover:text-foreground rounded-md transition-colors"
-                    title={showPassword ? '隐藏密码' : '查看密码'}
-                  >
-                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-md transition-colors"
+                      title={showPassword ? '隐藏密码' : '查看密码'}
+                    >
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleCopy(masterPassword, '同步主密码', 'password')}
+                      className="p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-md transition-colors"
+                      title="复制主密码"
+                    >
+                      {copiedField === 'password' ? <Check className="h-4 w-4 text-emerald-500" /> : <Copy className="h-4 w-4" />}
+                    </button>
+                  </div>
                 </div>
 
                 <div className="flex items-center justify-between text-[11px] text-muted-foreground px-0.5">
@@ -564,16 +619,29 @@ export function SyncSettingsPanel() {
                       if (e.key === 'Enter') handleSavePassword()
                     }}
                     placeholder="设置同步主密码（两端通用，请牢记）..."
-                    className="pr-10 text-xs"
+                    className="pr-16 text-xs"
                     autoFocus={isEditingPassword && Boolean(masterPassword)}
                   />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-2.5 text-muted-foreground hover:text-foreground"
-                  >
-                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
+                  <div className="absolute right-2.5 top-2 flex items-center gap-1">
+                    {inputMasterPassword && (
+                      <button
+                        type="button"
+                        onClick={() => handleCopy(inputMasterPassword, '同步主密码', 'password')}
+                        className="text-muted-foreground hover:text-foreground p-0.5 rounded transition-colors"
+                        title="复制主密码"
+                      >
+                        {copiedField === 'password' ? <Check className="h-4 w-4 text-emerald-500" /> : <Copy className="h-4 w-4" />}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="text-muted-foreground hover:text-foreground p-0.5 rounded transition-colors"
+                      title={showPassword ? '隐藏密码' : '显示密码'}
+                    >
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                 </div>
 
                 <div className="flex items-center gap-2 pt-1 mt-auto">
@@ -599,47 +667,6 @@ export function SyncSettingsPanel() {
             )}
           </CardContent>
         </Card>
-      </div>
-
-      {/* 3.5 凭据同步安全偏好 */}
-      <div className="flex items-center justify-between rounded-xl border border-border/60 bg-muted/20 p-4 shadow-sm">
-        <div className="space-y-0.5 pr-4">
-          <div className="text-xs font-semibold text-foreground flex items-center gap-2">
-            <span>端到端同步服务器连接密码与私钥口令</span>
-            <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-500 font-medium">推荐</span>
-          </div>
-          <p className="text-[11px] text-muted-foreground leading-relaxed">
-            开启后，服务器密码与私钥在本地经同步主密码高强度加密后同步，换电脑还原即可一键免密直连。
-            若关闭，则仅漫游主机 IP、端口、分组与标签拓扑信息，不包含任何敏感口令。
-          </p>
-        </div>
-        <Switch
-          checked={syncPasswords}
-          onCheckedChange={(checked) => {
-            setSyncPasswords(checked)
-            toast.info(checked ? '已开启服务器密码与密钥同步（端到端加密保护）' : '已关闭密码同步，仅同步服务器拓扑')
-          }}
-        />
-      </div>
-
-      {/* 3.6 终端壁纸与媒体漫游偏好 */}
-      <div className="flex items-center justify-between rounded-xl border border-border/60 bg-muted/20 p-4 shadow-sm">
-        <div className="space-y-0.5 pr-4">
-          <div className="text-xs font-semibold text-foreground flex items-center gap-2">
-            <span>同步终端自定义背景与视频（换机无感还原壁纸）</span>
-            <span className="text-[10px] px-1.5 py-0.2 rounded bg-primary/10 text-primary font-medium">壁纸漫游</span>
-          </div>
-          <p className="text-[11px] text-muted-foreground leading-relaxed">
-            开启后，本地自定义上传的终端壁纸与动态视频（单个≤15MB）将加密随同设置一并上云，换新机后无需重新上传配置。
-          </p>
-        </div>
-        <Switch
-          checked={syncTerminalBackgrounds}
-          onCheckedChange={(checked) => {
-            setSyncTerminalBackgrounds(checked)
-            toast.info(checked ? '已开启终端自定义背景与媒体漫游' : '已关闭背景漫游，仅同步主题样式配置')
-          }}
-        />
       </div>
 
       {/* 4. 备份与还原操作台 */}
