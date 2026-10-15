@@ -38,6 +38,7 @@ import {
 } from './local-file-picker-utils'
 import { UniversalFileViewer } from '@/components/ui/universal-file-viewer'
 import { ResizablePreviewDialog } from '@/components/ui/resizable-preview-dialog'
+import { useShortcutStore } from '@/store/shortcut-store'
 import { CodeEditor } from '@/components/ui/code-editor'
 import { ArchiveFileIcon } from '@/components/ui/file-icons'
 import { sshService } from '@/services/ssh-service'
@@ -1534,19 +1535,21 @@ export function FilesModule({
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       if (previewFile) return
 
-      if (e.key === 'F5') {
+      const { matchesAction } = useShortcutStore.getState()
+
+      if (matchesAction(e, 'sftp.refresh')) {
         e.preventDefault()
         handleRefresh()
       }
       // F2 重命名:仅单选时生效,多选时不触发
-      if (e.key === 'F2' && selectedFiles.length === 1) {
+      if (matchesAction(e, 'sftp.rename') && selectedFiles.length === 1) {
         e.preventDefault()
         const file = files.find(f => f.path === selectedFiles[0])
         if (file) {
           startRename(file)
         }
       }
-      if (e.key === 'Delete' && selectedFiles.length > 0) {
+      if (matchesAction(e, 'sftp.delete') && selectedFiles.length > 0) {
         e.preventDefault()
         handleDelete(selectedFiles)
       }

@@ -108,6 +108,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { playSound, SoundType } from "@/lib/sound";
+import { useShortcutStore } from "@/store/shortcut-store";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { writeFile, writeTextFile } from "@tauri-apps/plugin-fs";
 import { join } from "@tauri-apps/api/path";
@@ -4376,57 +4377,36 @@ export function TerminalModule({
           }
 
           // F11 切换终端全屏：xterm 默认会消费 F1-F12 功能键序列，
-          // 导致 window 上的 keydown 监听器收不到 F11。这里在 customKeyEventHandler
-          // 中拦截 F11，返回 false 阻止 xterm 处理，并手动触发全屏切换。
-          // onToggleFullscreen 闭包持有的引用调用稳定的 setIsTerminalFullscreen setter，
-          // 即使后续渲染创建新引用，功能仍然正确。
-          if (event.key === "F11" && onToggleFullscreen) {
+          const shortcutStore = useShortcutStore.getState();
+
+          // 终端全屏切换（支持自定义快捷键，默认 F11）
+          if (shortcutStore.matchesAction(event, "terminal.fullscreen") && onToggleFullscreen) {
             event.preventDefault();
-            event.stopPropagation(); // 阻止冒泡到 window，避免与 window keydown 监听器双重触发
+            event.stopPropagation();
             onToggleFullscreen();
             return false;
           }
-          const isMac = navigator.userAgent.includes("Mac");
-          const hasMod = event.ctrlKey || (isMac && event.metaKey);
-          const key = event.key?.toLowerCase();
 
-          // 终端离席锁屏快捷键：Ctrl+Alt+L (Mac: Cmd+Alt+L)
-          const isLockShortcut =
-            (event.ctrlKey && event.altKey && (key === "l" || event.code === "KeyL")) ||
-            (isMac && event.metaKey && event.altKey && (key === "l" || event.code === "KeyL"));
-          if (isLockShortcut) {
+          // 终端离席锁屏快捷键（支持自定义，默认 Mod+Alt+L）
+          if (shortcutStore.matchesAction(event, "app.lock")) {
             event.preventDefault();
             event.stopPropagation();
             handleTriggerAppLock();
             return false;
           }
 
-          // 全局快捷键透传：防止 xterm.js 捕获/吞掉 Ctrl+T (新标签)、Ctrl+W (关闭标签)、Ctrl+K (命令面板)、
-          // Ctrl+Tab / Ctrl+Shift+Tab (切标签)。
-          // 返回 false 阻止 xterm.js 内部处理及发送 ANSI 序列，让 DOM 事件自由冒泡到 window 的快捷键监听器
-          const isGlobalShortcut =
-            (hasMod &&
-              !event.shiftKey &&
-              (key === "t" || key === "w" || key === "k" || key === "b")) ||
-            (event.ctrlKey && key === "tab");
-
-          if (isGlobalShortcut) {
+          // 全局/标签页快捷键动态透传白名单（SkipShell 机制）：
+          // 若命中了任一用户自定义的全局动作（如命令面板、新标签、关标签、切标签等），
+          // 返回 false 阻止 xterm.js 捕获/消费，让原生 DOM 事件自由冒泡到 window 的全局快捷键监听器
+          if (shortcutStore.isGlobalAction(event)) {
             return false;
           }
 
-          const isC =
-            event.keyCode === 67 || event.code === "KeyC" || key === "c";
-          const isV =
-            event.keyCode === 86 || event.code === "KeyV" || key === "v";
-          const isF =
-            event.keyCode === 70 || event.code === "KeyF" || key === "f";
+          const isMac = navigator.userAgent.includes("Mac");
+          const isC = event.keyCode === 67 || event.code === "KeyC" || event.key?.toLowerCase() === "c";
 
-          // 复制：Windows/Linux 采用 Ctrl+Shift+C，Mac 采用 Cmd+C。
-          // Ctrl+C 保留给远端命令中断，避免日志刷屏时因为文本选区而吞掉 SIGINT。
-          const hasSelection = term.hasSelection();
-          const isCopy =
-            (event.ctrlKey && event.shiftKey && isC) ||
-            (isMac && event.metaKey && !event.ctrlKey && isC);
+          // 复制（支持自定义快捷键，默认 Win/Linux: Ctrl+Shift+C，Mac: Cmd+C）
+          const isCopy = shortcutStore.matchesAction(event, "terminal.copy");
           if (isCopy) {
             event.preventDefault();
             event.stopPropagation();
@@ -4438,16 +4418,14 @@ export function TerminalModule({
                 /* ignore */
               }
             }
-            // 复制后立即清除选区（对标 Windows Terminal / VS Code / Tabby 标准行为）
-            // 避免选区永久滞留导致后续按 Ctrl+C 被持续拦截为复制而无法发送 SIGINT 中断信号
             term.clearSelection();
             return false;
           }
 
           // Windows/Linux 下 Ctrl+C，或者 Mac 下按 Control+C：立即发送中断 (SIGINT)。
-          // 即使当前有文本选区也必须中断；复制固定使用 Ctrl+Shift+C / Cmd+C。
+          // 即使当前有文本选区也必须中断；复制固定使用绑定快捷键。
           if (
-            (!isMac && event.ctrlKey && !event.shiftKey && isC) ||
+            (!isMac && event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && isC) ||
             (isMac && event.ctrlKey && !event.metaKey && isC)
           ) {
             event.preventDefault();
@@ -4456,10 +4434,8 @@ export function TerminalModule({
             return false;
           }
 
-          // 粘贴：Windows/Linux 采用 Ctrl+Shift+V，Mac 采用 Cmd+V
-          const isPaste =
-            (event.ctrlKey && event.shiftKey && isV) ||
-            (isMac && event.metaKey && !event.ctrlKey && isV);
+          // 粘贴（支持自定义快捷键，默认 Win/Linux: Ctrl+Shift+V，Mac: Cmd+V）
+          const isPaste = shortcutStore.matchesAction(event, "terminal.paste");
           if (isPaste) {
             event.preventDefault();
             event.stopPropagation();
@@ -4468,7 +4444,7 @@ export function TerminalModule({
               .then((text) => {
                 const sid = xtermInstances.current.get(termId)?.sessionId;
                 if (text && sid) {
-                  // E3：通过统一入口粘贴，大文本时给出 toast.warning 提示
+                  // 通过统一入口粘贴，大文本时给出二次安全提示
                   pasteTextToShell(text, sid);
                 }
               })
@@ -4479,10 +4455,8 @@ export function TerminalModule({
             return false;
           }
 
-          // 搜索：Windows/Linux 采用 Ctrl+F 或 Ctrl+Shift+F，Mac 采用 Cmd+F
-          const isSearch =
-            (event.ctrlKey && isF) ||
-            (isMac && event.metaKey && !event.ctrlKey && isF);
+          // 搜索（支持自定义快捷键，默认 Mod+F）
+          const isSearch = shortcutStore.matchesAction(event, "terminal.search");
           if (isSearch) {
             event.preventDefault();
             event.stopPropagation();

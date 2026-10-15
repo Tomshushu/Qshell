@@ -24,6 +24,7 @@ import { useAppStore } from '@/store'
 import { UI_STYLES } from '@/styles/themes/registry'
 import { ServerFormDialog } from '@/components/server/server-form-dialog'
 import { SettingsDialog } from '@/components/layout/settings-dialog'
+import { useShortcutStore } from '@/store/shortcut-store'
 
 interface CommandItem {
   id: string
@@ -61,10 +62,10 @@ export function CommandPalette() {
   const servers = useAppStore((s) => s.servers)
   const serverGroups = useAppStore((s) => s.serverGroups)
 
-  // 全局快捷键 ⌘K / Ctrl+K 切换；同时监听事件桥（左侧栏按钮触发）
+  // 全局快捷键（默认 ⌘K / Ctrl+K，支持自定义）切换；同时监听事件桥（左侧栏按钮触发）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+      if (useShortcutStore.getState().matchesAction(e, 'app.commandPalette')) {
         e.preventDefault()
         setOpen((o) => !o)
       }

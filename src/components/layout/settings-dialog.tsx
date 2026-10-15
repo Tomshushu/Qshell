@@ -82,20 +82,7 @@ import { useAppVersion } from "@/utils/version";
 import { getAllFileIconThemes } from "@/components/file-icons";
 import { KnownHostsPanel } from "./known-hosts-panel";
 import { SyncSettingsPanel } from "./sync-settings-panel";
-
-// ── 快捷键管理数据（集中维护，便于后续扩展自定义功能） ──────────────────────────
-// 按键组合以数组形式表示，每个元素为一个按键单元（如 ['CTRL', 'SHIFT', 'H']）
-// scope 标识作用范围，用于分组渲染与视觉区分
-interface ShortcutItem {
-  keys: string[];
-  desc: string;
-  scope: "global" | "terminal" | "sftp" | "files" | "dashboard";
-}
-
-interface ShortcutGroup {
-  title: string;
-  items: ShortcutItem[];
-}
+import { ShortcutSettingsPanel } from "./shortcut-settings-panel";
 
 interface EncodingOption {
   value: string;
@@ -444,113 +431,6 @@ function TerminalEncodingSelect({
     </>
   );
 }
-
-// 快捷键分组定义：仅收录代码中真实生效的快捷键（与实际实现保持一致）
-// 数据来源：use-keyboard-shortcuts.ts / terminal.tsx / sftp-panel.tsx / files.tsx / dashboard.tsx
-const SHORTCUT_GROUPS: ShortcutGroup[] = [
-  {
-    title: "全局快捷键",
-    items: [
-      { keys: ["CTRL", "TAB"], desc: "切换到下一个标签", scope: "global" },
-      {
-        keys: ["CTRL", "SHIFT", "TAB"],
-        desc: "切换到上一个标签",
-        scope: "global",
-      },
-      { keys: ["CTRL", "B"], desc: "展开/收起侧边栏", scope: "global" },
-    ],
-  },
-  {
-    title: "终端快捷键",
-    items: [
-      {
-        keys: ["CTRL", "T"],
-        desc: "在同一服务器上打开新终端标签",
-        scope: "terminal",
-      },
-      { keys: ["CTRL", "W"], desc: "关闭当前终端标签", scope: "terminal" },
-      { keys: ["CTRL", "="], desc: "放大终端字号 +1", scope: "terminal" },
-      { keys: ["CTRL", "-"], desc: "缩小终端字号 -1", scope: "terminal" },
-      {
-        keys: ["CTRL", "0"],
-        desc: "重置终端字号为默认 13px",
-        scope: "terminal",
-      },
-      {
-        keys: ["CTRL", "SHIFT", "H"],
-        desc: "切换指令智能提示开关",
-        scope: "terminal",
-      },
-      {
-        keys: ["CTRL", "SHIFT", "C"],
-        desc: "复制终端选中文本",
-        scope: "terminal",
-      },
-      {
-        keys: ["CTRL", "SHIFT", "V"],
-        desc: "向终端粘贴文本",
-        scope: "terminal",
-      },
-      { keys: ["CTRL", "F"], desc: "打开终端搜索面板", scope: "terminal" },
-      { keys: ["F11"], desc: "切换终端全屏/退出全屏", scope: "terminal" },
-      { keys: ["TAB"], desc: "补全当前选中的指令提示项", scope: "terminal" },
-      { keys: ["ENTER"], desc: "执行命令或补全前缀", scope: "terminal" },
-      { keys: ["↑"], desc: "切换到上一个指令提示项", scope: "terminal" },
-      { keys: ["↓"], desc: "切换到下一个指令提示项", scope: "terminal" },
-      { keys: ["ESC"], desc: "关闭指令提示弹层/搜索面板", scope: "terminal" },
-    ],
-  },
-  {
-    title: "SFTP 快捷键",
-    items: [
-      { keys: ["CTRL", "A"], desc: "全选当前面板文件", scope: "sftp" },
-      {
-        keys: ["CTRL", "C"],
-        desc: "复制选中项（供跨面板粘贴）",
-        scope: "sftp",
-      },
-      { keys: ["CTRL", "V"], desc: "粘贴文件到当前焦点面板", scope: "sftp" },
-      { keys: ["CTRL", "SHIFT", "N"], desc: "新建文件夹", scope: "sftp" },
-      { keys: ["DELETE"], desc: "删除选中项", scope: "sftp" },
-      { keys: ["F2"], desc: "重命名选中项", scope: "sftp" },
-      { keys: ["F5"], desc: "刷新当前目录", scope: "sftp" },
-      { keys: ["BACKSPACE"], desc: "进入上级目录", scope: "sftp" },
-      { keys: ["ENTER"], desc: "进入目录/打开文件", scope: "sftp" },
-    ],
-  },
-  {
-    title: "文件管理器快捷键",
-    items: [
-      { keys: ["F5"], desc: "刷新文件列表", scope: "files" },
-      { keys: ["F2"], desc: "重命名选中文件（仅单选）", scope: "files" },
-      { keys: ["DELETE"], desc: "删除选中文件", scope: "files" },
-    ],
-  },
-  {
-    title: "Dashboard 快捷键",
-    items: [
-      { keys: ["CTRL", "F"], desc: "聚焦服务器搜索框", scope: "dashboard" },
-      { keys: ["/"], desc: "聚焦搜索框（非输入态）", scope: "dashboard" },
-    ],
-  },
-];
-
-// 作用范围标签配色
-const SCOPE_BADGE_CLASS: Record<ShortcutItem["scope"], string> = {
-  global: "bg-blue-500/15 text-blue-400 border-blue-500/30",
-  terminal: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
-  sftp: "bg-amber-500/15 text-amber-400 border-amber-500/30",
-  files: "bg-purple-500/15 text-purple-400 border-purple-500/30",
-  dashboard: "bg-pink-500/15 text-pink-400 border-pink-500/30",
-};
-
-const SCOPE_LABEL: Record<ShortcutItem["scope"], string> = {
-  global: "全局",
-  terminal: "终端",
-  sftp: "SFTP",
-  files: "文件",
-  dashboard: "面板",
-};
 
 interface SettingsDialogProps {
   open: boolean;
@@ -2236,77 +2116,7 @@ function SettingsPanel({
             </Card>
           </div>
         ) : subTab === "shortcuts" ? (
-          <div className="w-full max-w-4xl mx-auto space-y-4 select-none">
-            {/* 顶部说明栏 */}
-            <div className="flex items-center justify-between px-1">
-              <h2 className="text-base font-bold flex items-center gap-1.5">
-                <Keyboard className="h-4 w-4 text-primary" />
-                {t("shortcuts_title")}
-              </h2>
-              <span className="text-[11px] text-muted-foreground/70">
-                macOS 下 CTRL 对应 CMD（终端复制粘贴等少数快捷键除外）
-              </span>
-            </div>
-
-            {/* 分组渲染快捷键 */}
-            {SHORTCUT_GROUPS.map((group) => (
-              <Card
-                key={group.title}
-                className="border/50 bg-background shadow-sm rounded-lg overflow-hidden"
-              >
-                <div className="px-5 py-3 border-b bg-muted/30 flex items-center justify-between">
-                  <span className="text-sm font-bold">{group.title}</span>
-                  <span className="text-[10px] text-muted-foreground/60">
-                    {group.items.length} 项
-                  </span>
-                </div>
-                <div className="p-2">
-                  {/* 表头 */}
-                  <div className="grid grid-cols-[auto_1fr_auto] gap-3 px-3 py-1.5 text-[10px] font-bold text-muted-foreground/70 border-b">
-                    <span className="w-40">快捷键组合</span>
-                    <span>触发动作</span>
-                    <span className="w-12 text-center">范围</span>
-                  </div>
-                  {/* 条目 */}
-                  {group.items.map((item, idx) => (
-                    <div
-                      key={`${group.title}-${idx}`}
-                      className="grid grid-cols-[auto_1fr_auto] gap-3 items-center px-3 py-2 text-xs rounded-md hover:bg-muted/30 transition-colors"
-                    >
-                      <div className="flex items-center gap-1 w-40">
-                        {item.keys.map((k, i) => (
-                          <React.Fragment key={i}>
-                            {i > 0 && (
-                              <span className="text-muted-foreground/50 text-[10px]">
-                                +
-                              </span>
-                            )}
-                            <kbd className="px-1.5 py-0.5 rounded border bg-muted/40 font-mono font-semibold text-[10px] min-w-[20px] text-center">
-                              {k}
-                            </kbd>
-                          </React.Fragment>
-                        ))}
-                      </div>
-                      <span className="text-muted-foreground">{item.desc}</span>
-                      <span
-                        className={cn(
-                          "px-1.5 py-0.5 rounded border text-[9px] font-bold text-center w-12",
-                          SCOPE_BADGE_CLASS[item.scope],
-                        )}
-                      >
-                        {SCOPE_LABEL[item.scope]}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </Card>
-            ))}
-
-            {/* 底部提示 */}
-            <div className="text-[11px] text-muted-foreground/60 px-1 pt-1">
-              快捷键自定义功能将在后续版本支持。当前所有快捷键为固定映射，不可修改。
-            </div>
-          </div>
+          <ShortcutSettingsPanel />
         ) : subTab === "known_hosts" ? (
           <KnownHostsPanel />
         ) : subTab === "logs" ? (

@@ -75,6 +75,7 @@ import {
   removeRecentConnection,
   removeRecentConnections,
 } from '@/lib/recent-connections'
+import { useShortcutStore } from '@/store/shortcut-store'
 import { TagFilterPopover } from '@/components/dashboard/tag-filter-popover'
 import { DeviceTypeFilterPopover } from '@/components/dashboard/device-type-filter-popover'
 import { SERVER_DRAG_MIME, collectSubtreeIds, HOST_GROUP_ID } from '@/lib/server-groups'
@@ -291,8 +292,8 @@ export function Dashboard() {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null
       const isTyping = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
-      // Ctrl+F（或 Cmd+F on macOS）
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
+      // 搜索框快捷键（默认 Mod+F）
+      if (useShortcutStore.getState().matchesAction(e, 'dashboard.search')) {
         const input = searchInputRef.current
         if (!input) return
         e.preventDefault()
