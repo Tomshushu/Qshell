@@ -4138,4 +4138,6 @@ export default {
   ai_master_disabled_notice: "AI features are currently disabled globally. All model providers and automation configurations below are paused. Turn on the master switch above to re-activate immediately.",
   ai_offline_mode_banner: "Currently in local offline mode. Connect an LLM to unlock deep reasoning capabilities",
   ai_go_to_config: "Configure",
+  ai_maximize_btn: "Maximize (Right 1/3 Proportional)",
+  ai_restore_btn: "Restore Window",
 };

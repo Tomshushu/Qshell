@@ -224,5 +224,71 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
 
     vi.useRealTimers()
   })
+
+  it('supports maximizing to right 1/3 with preserved aspect ratio and restoring', () => {
+    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1800 })
+    Object.defineProperty(window, 'innerHeight', { writable: true, configurable: true, value: 1000 })
+
+    useAIStore.setState({ isFloatingAssistantOpen: true })
+    renderWithProviders(<FloatingAIAssistant />)
+
+    const dialog = screen.getByTestId('ai-assistant-dialog')
+    expect(dialog).toBeTruthy()
+
+    expect(dialog.style.width).toBe('420px')
+    expect(dialog.style.height).toBe('600px')
+
+    const maxBtn = screen.getByTestId('ai-maximize-toggle-btn')
+    expect(maxBtn).toBeTruthy()
+
+    // Click to maximize
+    act(() => {
+      fireEvent.click(maxBtn)
+    })
+
+    // 1/3 of 1800 is 600. Target height = 600 * (600 / 420) = 857.
+    // 857 < 1000 - 32 (968), so width = 600px, height = 857px.
+    // Position x = 1800 - 600 - 16 = 1184px, y = Math.floor((1000 - 857) / 2) = 71px.
+    expect(dialog.style.width).toBe('600px')
+    expect(dialog.style.height).toBe('857px')
+    expect(dialog.style.left).toBe('1184px')
+    expect(dialog.style.top).toBe('71px')
+
+    // Click to restore
+    act(() => {
+      fireEvent.click(maxBtn)
+    })
+
+    expect(dialog.style.width).toBe('420px')
+    expect(dialog.style.height).toBe('600px')
+  })
+
+  it('supports toggling maximize via double clicking header', () => {
+    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1800 })
+    Object.defineProperty(window, 'innerHeight', { writable: true, configurable: true, value: 1000 })
+
+    useAIStore.setState({ isFloatingAssistantOpen: true })
+    renderWithProviders(<FloatingAIAssistant />)
+
+    const dialog = screen.getByTestId('ai-assistant-dialog')
+    const header = dialog.firstElementChild as HTMLElement
+    expect(header).toBeTruthy()
+
+    // Double click header to maximize
+    act(() => {
+      fireEvent.doubleClick(header)
+    })
+
+    expect(dialog.style.width).toBe('600px')
+    expect(dialog.style.height).toBe('857px')
+
+    // Double click header again to restore
+    act(() => {
+      fireEvent.doubleClick(header)
+    })
+
+    expect(dialog.style.width).toBe('420px')
+    expect(dialog.style.height).toBe('600px')
+  })
 })
 
