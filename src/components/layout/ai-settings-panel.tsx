@@ -695,14 +695,9 @@ export function AISettingsPanel() {
 
       {/* 1. 已配置卡片区 (Configured Providers) */}
       <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-semibold text-foreground">
-            {t('ai_configured_section_title')}
-          </span>
-          <span className="text-[11px] text-muted-foreground/80">
-            {t('ai_single_active_hint')}
-          </span>
-        </div>
+        <span className="text-xs font-semibold text-foreground">
+          {t('ai_configured_section_title')}
+        </span>
 
         <Card className="border border-border/60 bg-muted/15 dark:bg-card/40 rounded-xl overflow-hidden shadow-2xs">
           {configuredProviders.length === 0 ? (
