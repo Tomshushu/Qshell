@@ -754,9 +754,9 @@ export function AISettingsPanel() {
 
                     {/* 右侧：健康检测 + 单选启用 + 编辑 + 删除 */}
                     <div className="flex items-center gap-2 shrink-0">
-                      {/* 健康检测按钮与延迟显示 */}
+                      {/* 健康检测按钮与延迟显示（固定宽度 w-[84px]，防止悬停与状态切换抖动） */}
                       {isTestingThis ? (
-                        <div className="h-7 px-2.5 rounded border border-border/60 bg-background text-[11px] text-primary flex items-center gap-1 font-mono">
+                        <div className="h-7 w-[84px] shrink-0 rounded border border-border/60 bg-background text-[11px] text-primary flex items-center justify-center gap-1 font-mono">
                           <Loader2 className="h-3 w-3 animate-spin text-primary" />
                           <span>{t('ai_test_pinging')}</span>
                         </div>
@@ -765,7 +765,7 @@ export function AISettingsPanel() {
                           type="button"
                           onClick={() => void testConfiguredProvider(item.id)}
                           title="点击重新检测延迟"
-                          className="h-7 px-2.5 rounded border border-emerald-500/25 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-mono flex items-center gap-1 transition-colors"
+                          className="h-7 w-[84px] shrink-0 rounded border border-emerald-500/25 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-mono flex items-center justify-center gap-1 transition-colors"
                         >
                           <Zap className="h-3 w-3 shrink-0" />
                           <span>⚡ {item.lastLatencyMs || 0}ms</span>
@@ -775,7 +775,7 @@ export function AISettingsPanel() {
                           type="button"
                           onClick={() => void testConfiguredProvider(item.id)}
                           title={item.lastTestError || '连接失败，点击重新检测'}
-                          className="h-7 px-2.5 rounded border border-destructive/25 bg-destructive/10 hover:bg-destructive/20 text-destructive text-[11px] flex items-center gap-1 transition-colors"
+                          className="h-7 w-[84px] shrink-0 rounded border border-destructive/25 bg-destructive/10 hover:bg-destructive/20 text-destructive text-[11px] flex items-center justify-center gap-1 transition-colors"
                         >
                           <AlertCircle className="h-3 w-3 shrink-0" />
                           <span>{t('ai_test_failed_msg')}</span>
@@ -786,25 +786,25 @@ export function AISettingsPanel() {
                           variant="outline"
                           size="sm"
                           onClick={() => void testConfiguredProvider(item.id)}
-                          className="h-7 px-2.5 text-[11px] gap-1 text-muted-foreground hover:text-foreground hover:border-primary/40"
+                          className="h-7 w-[84px] shrink-0 text-[11px] gap-1 text-muted-foreground hover:text-foreground hover:border-primary/40 justify-center"
                         >
                           <Activity className="h-3 w-3" />
                           <span>{t('ai_test_ping_btn')}</span>
                         </Button>
                       )}
 
-                      {/* 单选启用/停用按钮 */}
+                      {/* 单选启用/停用按钮（固定宽度 w-[68px]，杜绝悬浮文案替换引发的反复抖动） */}
                       {item.isEnabled ? (
                         <Button
                           type="button"
                           size="sm"
                           variant="outline"
                           onClick={() => toggleActiveProvider(item.id)}
-                          className="h-7 px-2.5 text-xs font-medium border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-destructive/10 hover:text-destructive hover:border-destructive/30 transition-all gap-1 group/btn"
+                          className="h-7 w-[68px] shrink-0 text-xs font-medium border-emerald-500/35 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-destructive/10 hover:text-destructive hover:border-destructive/35 transition-colors gap-1 justify-center"
+                          title={t('ai_status_disable_hint')}
                         >
-                          <Check className="h-3.5 w-3.5 group-hover/btn:hidden" />
-                          <span className="group-hover/btn:hidden">{t('ai_status_enabled')}</span>
-                          <span className="hidden group-hover/btn:inline">{t('ai_status_disable_btn')}</span>
+                          <Check className="h-3.5 w-3.5 shrink-0" />
+                          <span>{t('ai_status_enabled')}</span>
                         </Button>
                       ) : (
                         <Button
@@ -812,9 +812,10 @@ export function AISettingsPanel() {
                           size="sm"
                           variant="outline"
                           onClick={() => toggleActiveProvider(item.id)}
-                          className="h-7 px-2.5 text-xs font-medium border-border/80 hover:bg-primary/10 hover:text-primary hover:border-primary/40 transition-all"
+                          className="h-7 w-[68px] shrink-0 text-xs font-medium border-border/80 hover:bg-primary/10 hover:text-primary hover:border-primary/40 transition-colors justify-center"
+                          title={t('ai_status_enable_hint')}
                         >
-                          {t('ai_status_enable_btn')}
+                          <span>{t('ai_status_enable_btn')}</span>
                         </Button>
                       )}
 
