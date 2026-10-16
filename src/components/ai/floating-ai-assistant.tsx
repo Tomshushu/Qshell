@@ -242,9 +242,11 @@ export function FloatingAIAssistant() {
     dialogStartY: 0,
   })
 
-  // 窗口 resize 时安全校验
+  // 窗口 resize 时安全校验与响应式重绘
+  const [, setResizeTick] = useState(0)
   useEffect(() => {
     const handleResize = () => {
+      setResizeTick((t) => t + 1)
       setMascotOffset((prev) => ({
         right: Math.min(Math.max(12, prev.right), Math.max(12, window.innerWidth - MASCOT_SIZE - 12)),
         bottom: Math.min(Math.max(12, prev.bottom), Math.max(12, window.innerHeight - MASCOT_SIZE - 12)),
@@ -360,28 +362,24 @@ export function FloatingAIAssistant() {
     window.addEventListener('pointerup', onPointerUp)
   }
 
-  // 计算弹窗当前尺寸 (支持最大化 占右侧 1/3，严格保持 420:600 比例不变)
+  // 计算弹窗当前尺寸 (支持最大化：宽度占应用窗口 1/3，高度在应用窗口内铺满)
   const getDialogDimensions = () => {
     if (typeof window === 'undefined') {
       return { width: 420, height: 600 }
     }
 
     if (isMaximized) {
-      const maxAllowedHeight = window.innerHeight - 32
-      // 占屏幕右侧 1/3 宽度 (下限保底 420px，不超过屏幕可用宽度 - 32)
-      const targetWidth = Math.max(420, Math.min(Math.floor(window.innerWidth / 3), window.innerWidth - 32))
-      // 严格保持原始 420:600 (即 7:10) 纵横比不变
-      let calculatedHeight = Math.round(targetWidth * (600 / 420))
-      let calculatedWidth = targetWidth
-
-      if (calculatedHeight > maxAllowedHeight) {
-        calculatedHeight = maxAllowedHeight
-        calculatedWidth = Math.max(360, Math.round(calculatedHeight * (420 / 600)))
-      }
+      // 宽度占应用窗口右侧 1/3 (下限保底 380px，不超过屏幕可用宽度 - 32)
+      const targetWidth = Math.min(
+        Math.max(380, Math.floor(window.innerWidth / 3)),
+        window.innerWidth - 32,
+      )
+      // 高度不限制，在应用窗口内部占满 (上下各留 16px 呼吸边距)
+      const targetHeight = Math.max(360, window.innerHeight - 32)
 
       return {
-        width: calculatedWidth,
-        height: calculatedHeight,
+        width: targetWidth,
+        height: targetHeight,
       }
     }
 
@@ -718,7 +716,7 @@ export function FloatingAIAssistant() {
                     aria-label={
                       isMaximized
                         ? t('ai_restore_btn') || '还原窗口'
-                        : t('ai_maximize_btn') || '最大化 (右侧 1/3 等比例)'
+                        : t('ai_maximize_btn') || '最大化 (右侧 1/3 屏幕)'
                     }
                     onClick={() => {
                       setIsMaximized(!isMaximized)
@@ -736,7 +734,7 @@ export function FloatingAIAssistant() {
                 <TooltipContent side="bottom" className="text-xs">
                   {isMaximized
                     ? t('ai_restore_btn') || '还原窗口'
-                    : t('ai_maximize_btn') || '最大化 (右侧 1/3 等比例)'}
+                    : t('ai_maximize_btn') || '最大化 (右侧 1/3 屏幕)'}
                 </TooltipContent>
               </Tooltip>
 

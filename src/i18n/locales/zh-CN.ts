@@ -4069,6 +4069,6 @@ export default {
   ai_master_disabled_notice: "AI 功能当前已全局停用。下方所有模型提供商与自动化配置已暂停生效。重新开启上方总开关即可立即恢复。",
   ai_offline_mode_banner: "当前处于本地离线规则模式，接入大模型可解锁深度推理能力",
   ai_go_to_config: "去配置",
-  ai_maximize_btn: "最大化 (右侧 1/3 等比例)",
+  ai_maximize_btn: "最大化 (右侧 1/3 屏幕)",
   ai_restore_btn: "还原窗口",
 };

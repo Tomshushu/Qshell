@@ -225,7 +225,7 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
     vi.useRealTimers()
   })
 
-  it('supports maximizing to right 1/3 with preserved aspect ratio and restoring', () => {
+  it('supports maximizing to right 1/3 screen width with full window height and restoring', () => {
     Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1800 })
     Object.defineProperty(window, 'innerHeight', { writable: true, configurable: true, value: 1000 })
 
@@ -246,13 +246,12 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
       fireEvent.click(maxBtn)
     })
 
-    // 1/3 of 1800 is 600. Target height = 600 * (600 / 420) = 857.
-    // 857 < 1000 - 32 (968), so width = 600px, height = 857px.
-    // Position x = 1800 - 600 - 16 = 1184px, y = Math.floor((1000 - 857) / 2) = 71px.
+    // 1/3 of 1800 is 600px. Height occupies full window (1000 - 32 = 968px).
+    // Position x = 1800 - 600 - 16 = 1184px, y = 16px.
     expect(dialog.style.width).toBe('600px')
-    expect(dialog.style.height).toBe('857px')
+    expect(dialog.style.height).toBe('968px')
     expect(dialog.style.left).toBe('1184px')
-    expect(dialog.style.top).toBe('71px')
+    expect(dialog.style.top).toBe('16px')
 
     // Click to restore
     act(() => {
@@ -261,6 +260,29 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
 
     expect(dialog.style.width).toBe('420px')
     expect(dialog.style.height).toBe('600px')
+  })
+
+  it('supports maximizing in standard 1000x800 window where height expands to fill window', () => {
+    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1000 })
+    Object.defineProperty(window, 'innerHeight', { writable: true, configurable: true, value: 800 })
+
+    useAIStore.setState({ isFloatingAssistantOpen: true })
+    renderWithProviders(<FloatingAIAssistant />)
+
+    const dialog = screen.getByTestId('ai-assistant-dialog')
+    const maxBtn = screen.getByTestId('ai-maximize-toggle-btn')
+
+    act(() => {
+      fireEvent.click(maxBtn)
+    })
+
+    // Width = Math.max(380, Math.floor(1000 / 3)) = 380px.
+    // Height = 800 - 32 = 768px.
+    // Position x = 1000 - 380 - 16 = 604px, y = 16px.
+    expect(dialog.style.width).toBe('380px')
+    expect(dialog.style.height).toBe('768px')
+    expect(dialog.style.left).toBe('604px')
+    expect(dialog.style.top).toBe('16px')
   })
 
   it('supports toggling maximize via double clicking header', () => {
@@ -280,7 +302,7 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
     })
 
     expect(dialog.style.width).toBe('600px')
-    expect(dialog.style.height).toBe('857px')
+    expect(dialog.style.height).toBe('968px')
 
     // Double click header again to restore
     act(() => {
