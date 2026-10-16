@@ -8,7 +8,9 @@
 import { create } from 'zustand'
 import type {
   AIProvider,
+  AIProtocol,
   AISettings,
+  ConfiguredProvider,
   AIDiagnosisResult,
   AIPromptContext,
   CommandRiskAnalysis,
@@ -23,6 +25,7 @@ import {
 
 const AI_SETTINGS_STORAGE_KEY = 'qshell_ai_settings_v1'
 const AI_MODELS_CACHE_STORAGE_KEY = 'qshell_ai_models_cache_v1'
+const AI_CONFIGURED_PROVIDERS_KEY = 'qshell_ai_configured_providers_v1'
 
 const DEFAULT_SETTINGS: AISettings = {
   provider: 'deepseek',
@@ -57,6 +60,61 @@ function saveSettings(settings: AISettings): void {
   }
 }
 
+function loadSavedConfiguredProviders(fallbackSettings: AISettings): ConfiguredProvider[] {
+  try {
+    const raw = localStorage.getItem(AI_CONFIGURED_PROVIDERS_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        // Enforce single active provider constraint
+        let hasActive = false
+        return parsed.map((p) => {
+          if (p.isEnabled) {
+            if (!hasActive) {
+              hasActive = true
+              return { ...p, isEnabled: true }
+            }
+            return { ...p, isEnabled: false }
+          }
+          return p
+        })
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  // Auto-migration: if old settings has an API key or is Ollama, create initial configured provider
+  if (fallbackSettings.apiKey?.trim() || fallbackSettings.provider === 'ollama') {
+    const preset = AI_PROVIDER_PRESETS[fallbackSettings.provider]
+    const initialProvider: ConfiguredProvider = {
+      id: `prov_${fallbackSettings.provider}_${Date.now()}`,
+      provider: fallbackSettings.provider,
+      name: preset?.name || fallbackSettings.provider,
+      protocol: fallbackSettings.protocol || preset?.protocol || 'openai',
+      baseUrl: fallbackSettings.baseUrl || preset?.defaultBaseUrl || '',
+      apiKey: fallbackSettings.apiKey || '',
+      model: fallbackSettings.model || preset?.defaultModel || '',
+      temperature: fallbackSettings.temperature ?? 0.3,
+      maxTokens: fallbackSettings.maxTokens ?? 2048,
+      isEnabled: true,
+      createdAt: Date.now(),
+    }
+    saveConfiguredProviders([initialProvider])
+    return [initialProvider]
+  }
+
+  return []
+}
+
+function saveConfiguredProviders(providers: ConfiguredProvider[]): void {
+  try {
+    localStorage.setItem(AI_CONFIGURED_PROVIDERS_KEY, JSON.stringify(providers))
+  } catch {
+    /* ignore */
+  }
+}
+
 function loadSavedModelsCache(): Record<string, string[]> {
   try {
     const raw = localStorage.getItem(AI_MODELS_CACHE_STORAGE_KEY)
@@ -79,6 +137,10 @@ export interface AIStoreState {
   settings: AISettings
   isTestingConnection: boolean
   testResult: { success: boolean; latencyMs?: number; error?: string } | null
+
+  // 已配置的提供商列表
+  configuredProviders: ConfiguredProvider[]
+  testingProviderId: string | null
 
   // 动态模型拉取状态
   customModelsMap: Record<string, string[]>
@@ -109,6 +171,29 @@ export interface AIStoreState {
   selectProvider: (provider: AIProvider) => void
   testConnection: () => Promise<void>
   fetchModels: () => Promise<string[]>
+
+  // 提供商管理 Actions
+  saveConfiguredProvider: (
+    provider: Partial<ConfiguredProvider> & { provider: AIProvider },
+    activate?: boolean,
+  ) => string
+  removeConfiguredProvider: (id: string) => void
+  toggleActiveProvider: (id: string) => void
+  testConfiguredProvider: (id: string) => Promise<{ success: boolean; latencyMs?: number; error?: string }>
+  testProviderConfig: (config: {
+    provider: AIProvider
+    protocol: AIProtocol
+    baseUrl: string
+    apiKey: string
+    model?: string
+  }) => Promise<{ success: boolean; latencyMs?: number; error?: string }>
+  fetchModelsForConfig: (config: {
+    provider: AIProvider
+    protocol: AIProtocol
+    baseUrl: string
+    apiKey: string
+  }) => Promise<string[]>
+
   openDiagnosis: (snippet: string, context?: AIPromptContext) => void
   closeDiagnosis: () => void
   runDiagnosis: () => Promise<void>
@@ -117,10 +202,28 @@ export interface AIStoreState {
   runGenerateCommand: (userIntent: string) => Promise<void>
 }
 
+const initialSettings = loadSavedSettings()
+const initialConfigured = loadSavedConfiguredProviders(initialSettings)
+const activeProv = initialConfigured.find((p) => p.isEnabled)
+if (activeProv) {
+  initialSettings.provider = activeProv.provider
+  initialSettings.protocol = activeProv.protocol
+  initialSettings.baseUrl = activeProv.baseUrl
+  initialSettings.apiKey = activeProv.apiKey
+  initialSettings.model = activeProv.model
+  if (activeProv.temperature !== undefined) initialSettings.temperature = activeProv.temperature
+  if (activeProv.maxTokens !== undefined) initialSettings.maxTokens = activeProv.maxTokens
+} else if (initialConfigured.length > 0) {
+  initialSettings.apiKey = ''
+}
+
 export const useAIStore = create<AIStoreState>((set, get) => ({
-  settings: loadSavedSettings(),
+  settings: initialSettings,
   isTestingConnection: false,
   testResult: null,
+
+  configuredProviders: initialConfigured,
+  testingProviderId: null,
 
   customModelsMap: loadSavedModelsCache(),
   isFetchingModels: false,
@@ -202,6 +305,211 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
       set({ isFetchingModels: false, fetchModelsError: msg })
       throw err
     }
+  },
+
+  saveConfiguredProvider: (providerData, activate = true) => {
+    const providers = get().configuredProviders
+    const targetId = providerData.id || `prov_${providerData.provider}_${Date.now()}`
+    const existingIdx = providers.findIndex((p) => p.id === targetId)
+
+    const preset = AI_PROVIDER_PRESETS[providerData.provider]
+    const newEntry: ConfiguredProvider = {
+      id: targetId,
+      provider: providerData.provider,
+      name:
+        providerData.name?.trim() ||
+        preset?.name ||
+        providerData.provider,
+      protocol: providerData.protocol || preset?.protocol || 'openai',
+      baseUrl: providerData.baseUrl ?? (preset?.defaultBaseUrl || ''),
+      apiKey: providerData.apiKey ?? '',
+      model: providerData.model || (preset?.defaultModel || ''),
+      temperature: providerData.temperature ?? 0.3,
+      maxTokens: providerData.maxTokens ?? 2048,
+      isEnabled: activate || (existingIdx >= 0 ? providers[existingIdx].isEnabled : providers.length === 0),
+      lastTestedAt: providerData.lastTestedAt,
+      lastLatencyMs: providerData.lastLatencyMs,
+      lastTestStatus: providerData.lastTestStatus,
+      lastTestError: providerData.lastTestError,
+      createdAt: providerData.createdAt || Date.now(),
+    }
+
+    let updated: ConfiguredProvider[]
+    if (newEntry.isEnabled) {
+      // Ensure all others are disabled
+      updated = [
+        newEntry,
+        ...providers.filter((p) => p.id !== targetId).map((p) => ({ ...p, isEnabled: false })),
+      ]
+    } else {
+      if (existingIdx >= 0) {
+        updated = providers.map((p) => (p.id === targetId ? newEntry : p))
+      } else {
+        updated = [...providers, newEntry]
+      }
+    }
+
+    const currentSettings = get().settings
+    let nextSettings = { ...currentSettings }
+    if (newEntry.isEnabled) {
+      nextSettings = {
+        ...nextSettings,
+        provider: newEntry.provider,
+        protocol: newEntry.protocol,
+        baseUrl: newEntry.baseUrl,
+        apiKey: newEntry.apiKey,
+        model: newEntry.model,
+        temperature: newEntry.temperature ?? currentSettings.temperature,
+        maxTokens: newEntry.maxTokens ?? currentSettings.maxTokens,
+      }
+    }
+
+    set({ configuredProviders: updated, settings: nextSettings, testResult: null })
+    saveConfiguredProviders(updated)
+    saveSettings(nextSettings)
+    return targetId
+  },
+
+  removeConfiguredProvider: (id: string) => {
+    const providers = get().configuredProviders
+    const target = providers.find((p) => p.id === id)
+    const updated = providers.filter((p) => p.id !== id)
+
+    const currentSettings = get().settings
+    let nextSettings = { ...currentSettings }
+
+    if (target?.isEnabled) {
+      if (updated.length > 0) {
+        updated[0] = { ...updated[0], isEnabled: true }
+        nextSettings = {
+          ...nextSettings,
+          provider: updated[0].provider,
+          protocol: updated[0].protocol,
+          baseUrl: updated[0].baseUrl,
+          apiKey: updated[0].apiKey,
+          model: updated[0].model,
+          temperature: updated[0].temperature ?? currentSettings.temperature,
+          maxTokens: updated[0].maxTokens ?? currentSettings.maxTokens,
+        }
+      } else {
+        nextSettings = {
+          ...nextSettings,
+          apiKey: '',
+        }
+      }
+    }
+
+    set({ configuredProviders: updated, settings: nextSettings })
+    saveConfiguredProviders(updated)
+    saveSettings(nextSettings)
+  },
+
+  toggleActiveProvider: (id: string) => {
+    const providers = get().configuredProviders
+    const target = providers.find((p) => p.id === id)
+    if (!target) return
+
+    const willEnable = !target.isEnabled
+    const updated = providers.map((p) => {
+      if (p.id === id) {
+        return { ...p, isEnabled: willEnable }
+      }
+      return { ...p, isEnabled: false }
+    })
+
+    const currentSettings = get().settings
+    let nextSettings = { ...currentSettings }
+    if (willEnable) {
+      nextSettings = {
+        ...nextSettings,
+        provider: target.provider,
+        protocol: target.protocol,
+        baseUrl: target.baseUrl,
+        apiKey: target.apiKey,
+        model: target.model,
+        temperature: target.temperature ?? currentSettings.temperature,
+        maxTokens: target.maxTokens ?? currentSettings.maxTokens,
+      }
+    } else {
+      nextSettings = {
+        ...nextSettings,
+        apiKey: '',
+      }
+    }
+
+    set({ configuredProviders: updated, settings: nextSettings })
+    saveConfiguredProviders(updated)
+    saveSettings(nextSettings)
+  },
+
+  testConfiguredProvider: async (id: string) => {
+    const providers = get().configuredProviders
+    const target = providers.find((p) => p.id === id)
+    if (!target) return { success: false, error: '未找到提供商' }
+
+    set({ testingProviderId: id })
+    const res = await testConnection({
+      provider: target.provider,
+      protocol: target.protocol,
+      baseUrl: target.baseUrl,
+      apiKey: target.apiKey,
+      model: target.model,
+      temperature: target.temperature ?? 0.3,
+      maxTokens: target.maxTokens ?? 2048,
+      enableDlp: false,
+      maskPrivateIps: false,
+    })
+
+    const updated = get().configuredProviders.map((p) => {
+      if (p.id === id) {
+        return {
+          ...p,
+          lastTestedAt: Date.now(),
+          lastLatencyMs: res.latencyMs,
+          lastTestStatus: (res.success ? 'success' : 'failed') as 'success' | 'failed',
+          lastTestError: res.error || null,
+        }
+      }
+      return p
+    })
+
+    set({ configuredProviders: updated, testingProviderId: null })
+    saveConfiguredProviders(updated)
+    return res
+  },
+
+  testProviderConfig: async (config) => {
+    return await testConnection({
+      provider: config.provider,
+      protocol: config.protocol,
+      baseUrl: config.baseUrl,
+      apiKey: config.apiKey,
+      model: config.model || '',
+      temperature: 0.3,
+      maxTokens: 2048,
+      enableDlp: false,
+      maskPrivateIps: false,
+    })
+  },
+
+  fetchModelsForConfig: async (config) => {
+    const models = await fetchProviderModels({
+      provider: config.provider,
+      protocol: config.protocol,
+      baseUrl: config.baseUrl,
+      apiKey: config.apiKey,
+      model: '',
+      temperature: 0.3,
+      maxTokens: 2048,
+      enableDlp: false,
+      maskPrivateIps: false,
+    })
+    if (models.length > 0) {
+      const nextMap = { ...get().customModelsMap, [config.provider]: models }
+      set({ customModelsMap: nextMap })
+      saveModelsCache(nextMap)
+    }
+    return models
   },
 
   openDiagnosis: (snippet, context = {}) => {

@@ -31,6 +31,27 @@ export interface ProviderPreset {
   websiteUrl: string
   descriptionKey: string
   isDomestic: boolean
+  tagText: string
+  tagType: 'recommended' | 'domestic' | 'offline' | 'speed' | 'custom' | 'global'
+  subtitleKey: string
+}
+
+export interface ConfiguredProvider {
+  id: string
+  provider: AIProvider
+  name: string
+  protocol: AIProtocol
+  baseUrl: string
+  apiKey: string
+  model: string
+  temperature?: number
+  maxTokens?: number
+  isEnabled: boolean
+  lastTestedAt?: number
+  lastLatencyMs?: number
+  lastTestStatus?: 'success' | 'failed' | null
+  lastTestError?: string | null
+  createdAt?: number
 }
 
 export interface AISettings {
@@ -77,47 +98,59 @@ export interface AIPromptContext {
 export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
   deepseek: {
     id: 'deepseek',
-    name: 'DeepSeek (深度求索)',
+    name: 'DeepSeek',
     protocol: 'openai',
     defaultBaseUrl: 'https://api.deepseek.com',
     defaultModel: 'deepseek-chat',
     recommendedModels: ['deepseek-chat', 'deepseek-reasoner'],
     websiteUrl: 'https://platform.deepseek.com',
     descriptionKey: 'ai_provider_deepseek_desc',
+    subtitleKey: 'ai_provider_deepseek_sub',
     isDomestic: true,
+    tagText: '推荐',
+    tagType: 'recommended',
   },
   qwen: {
     id: 'qwen',
-    name: '通义千问 (DashScope)',
+    name: '通义千问 (Qwen)',
     protocol: 'openai',
     defaultBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     defaultModel: 'qwen-plus',
     recommendedModels: ['qwen-plus', 'qwen-max', 'qwen-turbo', 'qwen-2.5-coder-32b-instruct'],
     websiteUrl: 'https://dashscope.console.aliyun.com',
     descriptionKey: 'ai_provider_qwen_desc',
+    subtitleKey: 'ai_provider_qwen_sub',
     isDomestic: true,
+    tagText: '国内',
+    tagType: 'domestic',
   },
   glm: {
     id: 'glm',
-    name: '智谱清言 (BigModel)',
+    name: '智谱清言 (GLM)',
     protocol: 'openai',
     defaultBaseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     defaultModel: 'glm-4-flash',
     recommendedModels: ['glm-4-flash', 'glm-4-plus', 'glm-4-air'],
     websiteUrl: 'https://bigmodel.cn',
     descriptionKey: 'ai_provider_glm_desc',
+    subtitleKey: 'ai_provider_glm_sub',
     isDomestic: true,
+    tagText: '国内',
+    tagType: 'domestic',
   },
   moonshot: {
     id: 'moonshot',
-    name: '月之暗面 (Moonshot / Kimi)',
+    name: '月之暗面 (Kimi)',
     protocol: 'openai',
     defaultBaseUrl: 'https://api.moonshot.cn/v1',
     defaultModel: 'moonshot-v1-8k',
     recommendedModels: ['moonshot-v1-8k', 'moonshot-v1-32k', 'moonshot-v1-128k'],
     websiteUrl: 'https://platform.moonshot.cn',
     descriptionKey: 'ai_provider_moonshot_desc',
+    subtitleKey: 'ai_provider_moonshot_sub',
     isDomestic: true,
+    tagText: '长上下文',
+    tagType: 'domestic',
   },
   siliconflow: {
     id: 'siliconflow',
@@ -133,7 +166,10 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
     ],
     websiteUrl: 'https://siliconflow.cn',
     descriptionKey: 'ai_provider_siliconflow_desc',
+    subtitleKey: 'ai_provider_siliconflow_sub',
     isDomestic: true,
+    tagText: '推荐',
+    tagType: 'recommended',
   },
   openai: {
     id: 'openai',
@@ -144,7 +180,10 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
     recommendedModels: ['gpt-4o-mini', 'gpt-4o', 'o1-mini'],
     websiteUrl: 'https://platform.openai.com',
     descriptionKey: 'ai_provider_openai_desc',
+    subtitleKey: 'ai_provider_openai_sub',
     isDomestic: false,
+    tagText: '国际',
+    tagType: 'global',
   },
   anthropic: {
     id: 'anthropic',
@@ -155,7 +194,10 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
     recommendedModels: ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022'],
     websiteUrl: 'https://console.anthropic.com',
     descriptionKey: 'ai_provider_anthropic_desc',
+    subtitleKey: 'ai_provider_anthropic_sub',
     isDomestic: false,
+    tagText: '代码顶尖',
+    tagType: 'global',
   },
   gemini: {
     id: 'gemini',
@@ -166,29 +208,38 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
     recommendedModels: ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash-exp'],
     websiteUrl: 'https://aistudio.google.com',
     descriptionKey: 'ai_provider_gemini_desc',
+    subtitleKey: 'ai_provider_gemini_sub',
     isDomestic: false,
+    tagText: '多模态',
+    tagType: 'global',
   },
   groq: {
     id: 'groq',
-    name: 'Groq (全球极速推理)',
+    name: 'Groq (极速推理)',
     protocol: 'openai',
     defaultBaseUrl: 'https://api.groq.com/openai/v1',
     defaultModel: 'llama-3.3-70b-versatile',
     recommendedModels: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],
     websiteUrl: 'https://console.groq.com',
     descriptionKey: 'ai_provider_groq_desc',
+    subtitleKey: 'ai_provider_groq_sub',
     isDomestic: false,
+    tagText: '极速推理',
+    tagType: 'speed',
   },
   ollama: {
     id: 'ollama',
-    name: 'Ollama (本地/离线私有化)',
+    name: 'Ollama (本地离线)',
     protocol: 'openai',
     defaultBaseUrl: 'http://127.0.0.1:11434/v1',
     defaultModel: 'qwen2.5-coder:7b',
     recommendedModels: ['qwen2.5-coder:7b', 'deepseek-r1:8b', 'llama3.2', 'deepseek-coder-v2'],
     websiteUrl: 'https://ollama.com',
     descriptionKey: 'ai_provider_ollama_desc',
+    subtitleKey: 'ai_provider_ollama_sub',
     isDomestic: true,
+    tagText: '100%离线',
+    tagType: 'offline',
   },
   custom: {
     id: 'custom',
@@ -199,6 +250,9 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
     recommendedModels: [],
     websiteUrl: '',
     descriptionKey: 'ai_provider_custom_desc',
+    subtitleKey: 'ai_provider_custom_sub',
     isDomestic: false,
+    tagText: '自定义',
+    tagType: 'custom',
   },
 }
