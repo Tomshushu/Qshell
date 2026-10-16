@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Copy, ClipboardPaste, Search, Globe, Check } from "lucide-react";
+import { Copy, ClipboardPaste, Search, Globe, Check, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "@/i18n";
 import { playSound, SoundType } from "@/lib/sound";
+import { useAIStore } from "@/store/ai-store";
 
 export interface TerminalSelectionToolbarProps {
   visible: boolean;
@@ -32,7 +33,7 @@ const openExternalUrl = async (url: string) => {
 /**
  * 边界吸附计算：弹框左上角与选中区域右边对齐，并向下展开
  */
-function clampToolbarPosition(x: number, y: number, width = 140, height = 136) {
+function clampToolbarPosition(x: number, y: number, width = 148, height = 172) {
   const padding = 10;
   const vw = typeof window !== "undefined" ? window.innerWidth : 1000;
   const vh = typeof window !== "undefined" ? window.innerHeight : 800;
@@ -119,6 +120,13 @@ export function TerminalSelectionToolbar({
     onClose();
   };
 
+  const handleAIDiagnosis = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    playSound(SoundType.Click);
+    useAIStore.getState().openDiagnosis(selectedText);
+    onClose();
+  };
+
   return (
     <div
       role="toolbar"
@@ -176,6 +184,24 @@ export function TerminalSelectionToolbar({
         <ClipboardPaste className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
         <span className="truncate tracking-tight font-sans text-[11.5px]">
           {t("tm_paste_to_shell") || "粘贴至终端"}
+        </span>
+      </button>
+
+      {/* AI 智能诊断 / 解释 */}
+      <button
+        type="button"
+        onClick={handleAIDiagnosis}
+        className={cn(
+          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+          isLightTerminal
+            ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+            : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+        )}
+        title={t("tm_ai_diagnosis_tooltip")}
+      >
+        <Sparkles className="h-3.5 w-3.5 text-primary shrink-0" />
+        <span className="truncate tracking-tight font-sans text-[11.5px] font-medium text-primary">
+          {t("tm_ai_diagnose")}
         </span>
       </button>
 

@@ -181,6 +181,9 @@ import {
   TerminalHintPanel,
   SerialQuickSendEditor,
 } from "@/components/terminal";
+import { AIDiagnosisModal } from "@/components/ai/ai-diagnosis-modal";
+import { AICommandPalette } from "@/components/ai/ai-command-palette";
+import { useAIStore } from "@/store/ai-store";
 import {
   extractPathFromShellTitle,
   resolveRelativePath,
@@ -1754,6 +1757,21 @@ export function TerminalModule({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [getActiveTerm]);
 
+  // AI 智能指令生成与诊断触发
+  const handleAIGenerateCommand = useCallback(() => {
+    setCtxMenu(null);
+    useAIStore.getState().openCommandPalette();
+  }, []);
+
+  const handleAIDiagnosisFromContext = useCallback(() => {
+    const term = getActiveTerm();
+    const selection = term?.getSelection();
+    setCtxMenu(null);
+    if (selection) {
+      useAIStore.getState().openDiagnosis(selection);
+    }
+  }, [getActiveTerm]);
+
   // 粘贴安全确认阈值（字符数）。超过此值或包含换行时先确认。
   const PASTE_WARN_THRESHOLD = 10000;
 
@@ -3152,8 +3170,6 @@ export function TerminalModule({
         }
         const cols = xtermInfo.term.cols > 0 ? xtermInfo.term.cols : 80;
         const rows = xtermInfo.term.rows > 0 ? xtermInfo.term.rows : 24;
-        // E2：进度反馈创建 Shell 会话前提示
-        xtermInfo.term.writeln(`\x1b[90m${t("term_creating_shell")}\x1b[0m`);
         const result = isSerial
           ? await sshService.createSerialShell(
               serverId,
@@ -3807,8 +3823,6 @@ export function TerminalModule({
     const isSerial = server?.targetType === "serial" || server?.protocol === "serial";
     if (isTelnet || isSerial) return;
 
-    let lastPrintedSec = -1;
-    let lastPrintedAttempt = -1;
     let lastStatus = "";
 
     const unsubscribe = reconnectManager.subscribe(serverId, (state) => {
@@ -3827,21 +3841,6 @@ export function TerminalModule({
           terminalsRef.current = next;
           return next;
         });
-
-        // 倒计时提示：每轮开始时以及临近重试时提示终端
-        if (state.attempt !== lastPrintedAttempt || state.remainingSec !== lastPrintedSec) {
-          if (state.remainingSec % 2 === 0 || state.remainingSec <= 2 || state.attempt !== lastPrintedAttempt) {
-            lastPrintedSec = state.remainingSec;
-            lastPrintedAttempt = state.attempt;
-            xtermInstances.current.forEach(({ term }) => {
-              const msg = t("term_auto_reconnect_attempt")
-                .replace("{sec}", String(state.remainingSec))
-                .replace("{n}", String(state.attempt))
-                .replace("{max}", String(state.maxAttempts));
-              term.writeln(`\r\n\x1b[33m[${msg}]\x1b[0m\r\n`);
-            });
-          }
-        }
       } else if (state.status === "reconnecting") {
         setTerminals((prev) => {
           const next = new Map(prev);
@@ -3879,8 +3878,6 @@ export function TerminalModule({
         });
         toastRef.current.error(t("term_auto_reconnect_failed"));
       } else if (state.status === "idle") {
-        lastPrintedSec = -1;
-        lastPrintedAttempt = -1;
         // 如果服务器连接重新 Ready 且终端尚未恢复 Session，自动重连 Shell
         const serverState = useAppStore.getState().serverStates[serverId];
         if (serverState?.state === ConnectionState.Ready) {
@@ -4490,6 +4487,19 @@ export function TerminalModule({
             event.preventDefault();
             event.stopPropagation();
             handleSearch();
+            return false;
+          }
+
+          // AI 智能指令生成（Ctrl+I 或 Cmd+I）
+          if (
+            (event.ctrlKey || event.metaKey) &&
+            !event.shiftKey &&
+            !event.altKey &&
+            (event.key === "i" || event.key === "I" || event.code === "KeyI")
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            useAIStore.getState().openCommandPalette();
             return false;
           }
           // Tab: 指令提示补全（参考 Warp/Fig 等成熟终端）
@@ -8415,6 +8425,8 @@ export function TerminalModule({
         recordingPausedIds={recordingPausedIds}
         isOpening={isOpening}
         onLockSession={handleTriggerAppLock}
+        onAIGenerateCommand={handleAIGenerateCommand}
+        onAIDiagnosis={handleAIDiagnosisFromContext}
       />
 
       <TerminalSelectionToolbar
@@ -8437,6 +8449,22 @@ export function TerminalModule({
             writePasteText(pendingPaste.text, pendingPaste.sessionId);
           }
           setPendingPaste(null);
+        }}
+      />
+
+      <AIDiagnosisModal
+        onInsertToTerminal={(cmd) => {
+          if (activeTermIdRef.current && cmd) {
+            writePasteText(cmd, activeTermIdRef.current);
+          }
+        }}
+      />
+
+      <AICommandPalette
+        onInsertToTerminal={(cmd) => {
+          if (activeTermIdRef.current && cmd) {
+            writePasteText(cmd, activeTermIdRef.current);
+          }
         }}
       />
     </div>

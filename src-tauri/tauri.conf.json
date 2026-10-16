@@ -28,7 +28,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: blob: https://tae-api-cn.mchost.guru https://*.supabase.co https://avatars.githubusercontent.com https://*.githubusercontent.com https://gitee.com https://*.gitee.com https://foruda.gitee.com; media-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://tae-api-cn.mchost.guru https://*.supabase.co https://gitee.com https://*.gitee.com https://api.github.com https://*.github.com; font-src 'self' data:",
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: blob: https://tae-api-cn.mchost.guru https://*.supabase.co https://avatars.githubusercontent.com https://*.githubusercontent.com https://gitee.com https://*.gitee.com https://foruda.gitee.com; media-src 'self' asset: http://asset.localhost data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost https: http:; font-src 'self' data:",
       "assetProtocol": {
         "enable": true,
         "scope": [

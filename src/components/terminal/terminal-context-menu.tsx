@@ -8,6 +8,7 @@ import {
   ChevronRight,
   FileText,
   Lock,
+  Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { clampMenuToViewport } from "@/lib/menu-position";
@@ -33,6 +34,8 @@ export interface TerminalContextMenuProps {
   onOpenLogFile: () => void;
   onOpenLogFolder: () => void;
   onChooseLogDirectory: () => void;
+  onAIGenerateCommand?: () => void;
+  onAIDiagnosis?: () => void;
   activeTermId: string | null;
   recordingTermIds: Set<string>;
   recordingPausedIds: Set<string>;
@@ -58,6 +61,8 @@ export function TerminalContextMenu({
   onOpenLogFile,
   onOpenLogFolder,
   onChooseLogDirectory,
+  onAIGenerateCommand,
+  onAIDiagnosis,
   activeTermId,
   recordingTermIds,
   recordingPausedIds,
@@ -67,8 +72,8 @@ export function TerminalContextMenu({
 
   if (!ctxMenu) return null;
 
-  // 边界检测：预估宽度 220（含右侧快捷键提示），高度 260（含清屏与录制子项）
-  const pos = clampMenuToViewport(ctxMenu.x, ctxMenu.y, 220, 260);
+  // 边界检测：预估宽度 220（含右侧快捷键提示），高度 320（含 AI 项、清屏与录制子项）
+  const pos = clampMenuToViewport(ctxMenu.x, ctxMenu.y, 220, 320);
   const isSubmenuLeft =
     typeof window !== "undefined" && pos.left + 220 + 210 > window.innerWidth;
 
@@ -152,6 +157,49 @@ export function TerminalContextMenu({
         <Clipboard className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
         <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_paste_selected")}</span>
       </button>
+
+      <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
+
+      {/* AI 智能生成指令 */}
+      {onAIGenerateCommand && (
+        <button
+          type="button"
+          className={cn(
+            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+            isLightTerminal
+              ? "text-indigo-700 hover:bg-indigo-50 hover:text-indigo-900"
+              : "text-indigo-300 hover:bg-indigo-500/15 hover:text-indigo-200",
+          )}
+          onClick={onAIGenerateCommand}
+        >
+          <Sparkles className="h-3.5 w-3.5 text-indigo-400 shrink-0" />
+          <span className="truncate tracking-tight font-sans text-[11.5px] font-medium">
+            {t("tm_ai_command_gen") || "AI 智能生成指令"}
+          </span>
+          <span className={cn("ml-auto text-[10px] font-mono tracking-tight", isLightTerminal ? "text-indigo-600/70" : "text-indigo-400/70")}>
+            Ctrl+I
+          </span>
+        </button>
+      )}
+
+      {/* AI 诊断选中文本 */}
+      {onAIDiagnosis && ctxMenu.hasSelection && (
+        <button
+          type="button"
+          className={cn(
+            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+            isLightTerminal
+              ? "text-purple-700 hover:bg-purple-50 hover:text-purple-900"
+              : "text-purple-300 hover:bg-purple-500/15 hover:text-purple-200",
+          )}
+          onClick={onAIDiagnosis}
+        >
+          <Sparkles className="h-3.5 w-3.5 text-purple-400 shrink-0" />
+          <span className="truncate tracking-tight font-sans text-[11.5px] font-medium">
+            {t("tm_ai_diagnosis_menu") || "AI 诊断选中文本"}
+          </span>
+        </button>
+      )}
 
       <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
 

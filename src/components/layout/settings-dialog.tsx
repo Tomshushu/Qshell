@@ -83,6 +83,7 @@ import { getAllFileIconThemes } from "@/components/file-icons";
 import { KnownHostsPanel } from "./known-hosts-panel";
 import { SyncSettingsPanel } from "./sync-settings-panel";
 import { ShortcutSettingsPanel } from "./shortcut-settings-panel";
+import { AISettingsPanel } from "./ai-settings-panel";
 
 interface EncodingOption {
   value: string;
@@ -439,6 +440,7 @@ interface SettingsDialogProps {
     | "general"
     | "security"
     | "account"
+    | "ai"
     | "terminal"
     | "sftp"
     | "logs"
@@ -833,6 +835,7 @@ function SettingsPanel({
     | "general"
     | "security"
     | "account"
+    | "ai"
     | "terminal"
     | "sftp"
     | "logs"
@@ -841,7 +844,7 @@ function SettingsPanel({
   onOpenThemeDialog: () => void;
 }) {
   const [subTab, setSubTab] = useState<
-    "general" | "security" | "account" | "terminal" | "sftp" | "logs" | "shortcuts" | "known_hosts"
+    "general" | "security" | "account" | "ai" | "terminal" | "sftp" | "logs" | "shortcuts" | "known_hosts"
   >(defaultTab);
 
   useEffect(() => {
@@ -1123,6 +1126,17 @@ function SettingsPanel({
           >
             <Cloud className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
             <span className="flex-1 truncate">{t("sync_tab_title")}</span>
+          </button>
+          <button
+            onClick={() => setSubTab("ai")}
+            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-md text-xs transition-colors text-left ${
+              subTab === "ai"
+                ? "bg-accent/80 text-foreground font-semibold"
+                : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+            }`}
+          >
+            <Sparkles className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
+            <span className="flex-1 truncate">{t("sidebar_ai")}</span>
           </button>
           <button
             onClick={() => setSubTab("terminal")}
@@ -2641,6 +2655,8 @@ function SettingsPanel({
           </div>
         ) : subTab === "account" ? (
           <SyncSettingsPanel />
+        ) : subTab === "ai" ? (
+          <AISettingsPanel />
         ) : (
           <div className="w-full max-w-4xl mx-auto space-y-6">
             {/* 其它分类占位符 */}
