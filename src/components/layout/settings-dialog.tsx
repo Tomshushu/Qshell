@@ -470,7 +470,7 @@ export function SettingsDialog({ open, onOpenChange, defaultTab }: SettingsDialo
   return (
     <TooltipProvider delayDuration={200}>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-5xl h-[min(620px,calc(100vh-2rem))] flex flex-col p-0 overflow-hidden bg-background border rounded-xl gap-0">
+        <DialogContent className="max-w-5xl h-[min(680px,calc(100vh-2rem))] flex flex-col p-0 overflow-hidden bg-background border rounded-xl gap-0">
           <SettingsPanel defaultTab={defaultTab} onOpenThemeDialog={() => setShowThemeDialog(true)} />
         </DialogContent>
       {/* 主题弹框嵌套进设置 Dialog 内（而非兄弟节点），共享 DismissableLayer 作用域，
@@ -1081,199 +1081,201 @@ function SettingsPanel({
 
   return (
     <div className="flex h-full w-full bg-background overflow-hidden">
-      {/* 1. 左侧设置侧边栏 */}
-      <div className="w-56 flex-shrink-0 border-r bg-slate-50 dark:bg-zinc-900 flex flex-col p-4 select-none">
-        <div className="flex items-center gap-2 mb-4 px-2">
-          <div className="h-5 w-5 rounded-md overflow-hidden flex items-center justify-center flex-shrink-0 bg-slate-900 ring-1 ring-border/50">
-            <img src="/favicon.svg?v=2" alt="Qshell" className="h-3.5 w-3.5 object-contain" />
+      {/* 1. 左侧设置侧边栏（增加纵向滚动与 min-h-full 弹性容器，解决小屏或内容过长时底部选项被裁切遮挡问题） */}
+      <div className="w-56 flex-shrink-0 border-r bg-slate-50 dark:bg-zinc-900 select-none overflow-y-auto overscroll-contain h-full min-h-0 p-3">
+        <div className="flex flex-col min-h-full">
+          <div className="flex items-center gap-2 mb-3 px-2 shrink-0">
+            <div className="h-5 w-5 rounded-md overflow-hidden flex items-center justify-center flex-shrink-0 bg-slate-900 ring-1 ring-border/50">
+              <img src="/favicon.svg?v=2" alt="Qshell" className="h-3.5 w-3.5 object-contain" />
+            </div>
+            <span className="text-xs font-bold text-foreground tracking-tight">
+              Qshell
+            </span>
           </div>
-          <span className="text-xs font-bold text-foreground tracking-tight">
-            Qshell
-          </span>
-        </div>
 
-        {/* 设置子菜单 */}
-        <div className="flex flex-col gap-2">
-          <button
-            onClick={() => setSubTab("general")}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-md text-xs transition-colors text-left ${
-              subTab === "general"
-                ? "bg-accent/80 text-foreground font-semibold"
-                : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
-            }`}
-          >
-            <Settings className="h-3.5 w-3.5 flex-shrink-0" />
-            <span className="flex-1 truncate">{t("sidebar_general")}</span>
-          </button>
-          <button
-            onClick={() => setSubTab("security")}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-md text-xs transition-colors text-left ${
-              subTab === "security"
-                ? "bg-accent/80 text-foreground font-semibold"
-                : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
-            }`}
-          >
-            <ShieldCheck className="h-3.5 w-3.5 flex-shrink-0" />
-            <span className="flex-1 truncate">{t("sidebar_security")}</span>
-          </button>
-          <button
-            onClick={() => setSubTab("account")}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-md text-xs transition-colors text-left ${
-              subTab === "account"
-                ? "bg-accent/80 text-foreground font-semibold"
-                : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
-            }`}
-          >
-            <Cloud className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
-            <span className="flex-1 truncate">{t("sync_tab_title")}</span>
-          </button>
-          <button
-            onClick={() => setSubTab("ai")}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-md text-xs transition-colors text-left ${
-              subTab === "ai"
-                ? "bg-accent/80 text-foreground font-semibold"
-                : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
-            }`}
-          >
-            <Sparkles className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
-            <span className="flex-1 truncate">{t("sidebar_ai")}</span>
-          </button>
-          <button
-            onClick={() => setSubTab("terminal")}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-md text-xs transition-colors text-left ${
-              subTab === "terminal"
-                ? "bg-accent/80 text-foreground font-semibold"
-                : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
-            }`}
-          >
-            <Terminal className="h-3.5 w-3.5 flex-shrink-0" />
-            <span className="flex-1 truncate">{t("sidebar_terminal")}</span>
-          </button>
-          <button
-            onClick={() => setSubTab("sftp")}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-md text-xs transition-colors text-left ${
-              subTab === "sftp"
-                ? "bg-accent/80 text-foreground font-semibold"
-                : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
-            }`}
-          >
-            <FileDown className="h-3.5 w-3.5 flex-shrink-0" />
-            <span className="flex-1 truncate">{t("sidebar_sftp")}</span>
-          </button>
-          <button
-            onClick={() => setSubTab("logs")}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-md text-xs transition-colors text-left ${
-              subTab === "logs"
-                ? "bg-accent/80 text-foreground font-semibold"
-                : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
-            }`}
-          >
-            <Clock className="h-3.5 w-3.5 flex-shrink-0" />
-            <span className="flex-1 truncate">{t("sidebar_logs")}</span>
-          </button>
-          <button
-            onClick={() => setSubTab("shortcuts")}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-md text-xs transition-colors text-left ${
-              subTab === "shortcuts"
-                ? "bg-accent/80 text-foreground font-semibold"
-                : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
-            }`}
-          >
-            <Keyboard className="h-3.5 w-3.5 flex-shrink-0" />
-            <span className="flex-1 truncate">{t("sidebar_shortcuts")}</span>
-          </button>
-          <button
-            onClick={() => setSubTab("known_hosts")}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-md text-xs transition-colors text-left ${
-              subTab === "known_hosts"
-                ? "bg-accent/80 text-foreground font-semibold"
-                : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
-            }`}
-          >
-            <ShieldCheck className="h-3.5 w-3.5 flex-shrink-0" />
-            <span className="flex-1 truncate">{t("sidebar_known_hosts")}</span>
-          </button>
-        </div>
+          {/* 设置子菜单 */}
+          <div className="flex flex-col gap-1.5 shrink-0">
+            <button
+              onClick={() => setSubTab("general")}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+                subTab === "general"
+                  ? "bg-accent/80 text-foreground font-semibold"
+                  : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+              }`}
+            >
+              <Settings className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="flex-1 truncate">{t("sidebar_general")}</span>
+            </button>
+            <button
+              onClick={() => setSubTab("security")}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+                subTab === "security"
+                  ? "bg-accent/80 text-foreground font-semibold"
+                  : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+              }`}
+            >
+              <ShieldCheck className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="flex-1 truncate">{t("sidebar_security")}</span>
+            </button>
+            <button
+              onClick={() => setSubTab("account")}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+                subTab === "account"
+                  ? "bg-accent/80 text-foreground font-semibold"
+                  : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+              }`}
+            >
+              <Cloud className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
+              <span className="flex-1 truncate">{t("sync_tab_title")}</span>
+            </button>
+            <button
+              onClick={() => setSubTab("ai")}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+                subTab === "ai"
+                  ? "bg-accent/80 text-foreground font-semibold"
+                  : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+              }`}
+            >
+              <Sparkles className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
+              <span className="flex-1 truncate">{t("sidebar_ai")}</span>
+            </button>
+            <button
+              onClick={() => setSubTab("terminal")}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+                subTab === "terminal"
+                  ? "bg-accent/80 text-foreground font-semibold"
+                  : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+              }`}
+            >
+              <Terminal className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="flex-1 truncate">{t("sidebar_terminal")}</span>
+            </button>
+            <button
+              onClick={() => setSubTab("sftp")}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+                subTab === "sftp"
+                  ? "bg-accent/80 text-foreground font-semibold"
+                  : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+              }`}
+            >
+              <FileDown className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="flex-1 truncate">{t("sidebar_sftp")}</span>
+            </button>
+            <button
+              onClick={() => setSubTab("logs")}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+                subTab === "logs"
+                  ? "bg-accent/80 text-foreground font-semibold"
+                  : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+              }`}
+            >
+              <Clock className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="flex-1 truncate">{t("sidebar_logs")}</span>
+            </button>
+            <button
+              onClick={() => setSubTab("shortcuts")}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+                subTab === "shortcuts"
+                  ? "bg-accent/80 text-foreground font-semibold"
+                  : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+              }`}
+            >
+              <Keyboard className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="flex-1 truncate">{t("sidebar_shortcuts")}</span>
+            </button>
+            <button
+              onClick={() => setSubTab("known_hosts")}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+                subTab === "known_hosts"
+                  ? "bg-accent/80 text-foreground font-semibold"
+                  : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+              }`}
+            >
+              <ShieldCheck className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="flex-1 truncate">{t("sidebar_known_hosts")}</span>
+            </button>
+          </div>
 
-        {/* 侧边栏底部选项 */}
-        <div className="mt-auto border-t pt-4 flex flex-col gap-2">
-          {/* 语言选择 (Language Settings) —— hover 右侧展开 */}
-          <SidebarQuickSelect
-            label={t("language_settings")}
-            icon={<Globe className="h-3.5 w-3.5" />}
-            items={LANGUAGES.map((lang) => ({
-              value: lang.code,
-              label: lang.name,
-            }))}
-            value={language}
-            onSelect={(code) => setLanguage(code)}
-            getDisplay={(code) =>
-              LANGUAGES.find((lang) => lang.code === code)?.name ?? code
-            }
-          />
+          {/* 侧边栏底部选项 */}
+          <div className="mt-auto border-t pt-3 flex flex-col gap-1.5 shrink-0">
+            {/* 语言选择 (Language Settings) —— hover 右侧展开 */}
+            <SidebarQuickSelect
+              label={t("language_settings")}
+              icon={<Globe className="h-3.5 w-3.5" />}
+              items={LANGUAGES.map((lang) => ({
+                value: lang.code,
+                label: lang.name,
+              }))}
+              value={language}
+              onSelect={(code) => setLanguage(code)}
+              getDisplay={(code) =>
+                LANGUAGES.find((lang) => lang.code === code)?.name ?? code
+              }
+            />
 
-          {/* 主题选择 (Light / Dark) —— hover 右侧展开 */}
-          <SidebarQuickSelect
-            label={t("sidebar_app_theme")}
-            icon={<Palette className="h-3.5 w-3.5" />}
-            items={[
-              { value: "system", label: t("theme_system") },
-              { value: "dark", label: t("theme_dark") },
-              { value: "light", label: t("theme_light") },
-            ]}
-            value={theme}
-            onSelect={(v) => {
-              setTheme(v as "dark" | "light" | "system");
-              playSound(SoundType.Toggle);
-            }}
-            getDisplay={(v) =>
-              v === "system"
-                ? t("theme_system")
-                : v === "dark"
-                  ? t("theme_dark")
-                  : t("theme_light")
-            }
-          />
+            {/* 主题选择 (Light / Dark) —— hover 右侧展开 */}
+            <SidebarQuickSelect
+              label={t("sidebar_app_theme")}
+              icon={<Palette className="h-3.5 w-3.5" />}
+              items={[
+                { value: "system", label: t("theme_system") },
+                { value: "dark", label: t("theme_dark") },
+                { value: "light", label: t("theme_light") },
+              ]}
+              value={theme}
+              onSelect={(v) => {
+                setTheme(v as "dark" | "light" | "system");
+                playSound(SoundType.Toggle);
+              }}
+              getDisplay={(v) =>
+                v === "system"
+                  ? t("theme_system")
+                  : v === "dark"
+                    ? t("theme_dark")
+                    : t("theme_light")
+              }
+            />
 
-          {/* 界面风格（设计语言）：从注册表动态读取（支持自由插件化扩展） */}
-          <SidebarQuickSelect
-            label={t("sidebar_ui_style")}
-            icon={<Sparkles className="h-3.5 w-3.5" />}
-            items={UI_STYLES.map((s) => ({ value: s.id, label: t(s.nameKey) }))}
-            value={uiStyle}
-            onSelect={(v) => {
-              setUiStyle(v);
-              playSound(SoundType.Toggle);
-            }}
-            getDisplay={(v) => {
-              const item = UI_STYLES.find((s) => s.id === v);
-              return item ? t(item.shortNameKey) : v;
-            }}
-          />
+            {/* 界面风格（设计语言）：从注册表动态读取（支持自由插件化扩展） */}
+            <SidebarQuickSelect
+              label={t("sidebar_ui_style")}
+              icon={<Sparkles className="h-3.5 w-3.5" />}
+              items={UI_STYLES.map((s) => ({ value: s.id, label: t(s.nameKey) }))}
+              value={uiStyle}
+              onSelect={(v) => {
+                setUiStyle(v);
+                playSound(SoundType.Toggle);
+              }}
+              getDisplay={(v) => {
+                const item = UI_STYLES.find((s) => s.id === v);
+                return item ? t(item.shortNameKey) : v;
+              }}
+            />
 
-          {/* 外部入口暂保留布局，待官网和反馈服务接入后再启用跳转 */}
-          <button
-            type="button"
-            disabled
-            className="flex items-center gap-2.5 px-3 py-2.5 rounded-md text-xs text-muted-foreground/60 text-left cursor-not-allowed"
-            title={t("placeholder_title")}
-          >
-            <ExternalLink className="h-3.5 w-3.5 flex-shrink-0" />
-            <span className="flex-1">{t("sidebar_doc")}</span>
-          </button>
-          <button
-            type="button"
-            disabled
-            className="flex items-center gap-2.5 px-3 py-2.5 rounded-md text-xs text-muted-foreground/60 text-left cursor-not-allowed"
-            title={t("placeholder_title")}
-          >
-            <ExternalLink className="h-3.5 w-3.5 flex-shrink-0" />
-            <span className="flex-1">{t("sidebar_bug")}</span>
-          </button>
+            {/* 外部入口暂保留布局，待官网和反馈服务接入后再启用跳转 */}
+            <button
+              type="button"
+              disabled
+              className="flex items-center gap-2.5 px-3 py-2 rounded-md text-xs text-muted-foreground/60 text-left cursor-not-allowed shrink-0"
+              title={t("placeholder_title")}
+            >
+              <ExternalLink className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="flex-1">{t("sidebar_doc")}</span>
+            </button>
+            <button
+              type="button"
+              disabled
+              className="flex items-center gap-2.5 px-3 py-2 rounded-md text-xs text-muted-foreground/60 text-left cursor-not-allowed shrink-0"
+              title={t("placeholder_title")}
+            >
+              <ExternalLink className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="flex-1">{t("sidebar_bug")}</span>
+            </button>
 
-          <div className="flex items-center gap-2.5 px-3 py-2 text-[10px] text-muted-foreground/60 border-t mt-1">
-            <span className="flex-1">{t("sidebar_version")}</span>
-            <span>v{appVersion}</span>
+            <div className="flex items-center gap-2.5 px-3 py-1.5 text-[10px] text-muted-foreground/60 border-t mt-0.5 shrink-0">
+              <span className="flex-1">{t("sidebar_version")}</span>
+              <span>v{appVersion}</span>
+            </div>
           </div>
         </div>
       </div>
