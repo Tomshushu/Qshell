@@ -112,7 +112,7 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
   },
   qwen: {
     id: 'qwen',
-    name: '通义千问 (Qwen)',
+    name: 'Qwen',
     protocol: 'openai',
     defaultBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     defaultModel: 'qwen-plus',
@@ -132,7 +132,7 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
   },
   siliconflow: {
     id: 'siliconflow',
-    name: '硅基流动 (SiliconFlow)',
+    name: 'SiliconFlow',
     protocol: 'openai',
     defaultBaseUrl: 'https://api.siliconflow.cn/v1',
     defaultModel: 'deepseek-ai/DeepSeek-V3',
@@ -153,7 +153,7 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
   },
   ollama: {
     id: 'ollama',
-    name: 'Ollama (本地离线)',
+    name: 'Ollama',
     protocol: 'openai',
     defaultBaseUrl: 'http://127.0.0.1:11434/v1',
     defaultModel: 'deepseek-r1:8b',
@@ -174,7 +174,7 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
   },
   moonshot: {
     id: 'moonshot',
-    name: '月之暗面 (Kimi)',
+    name: 'Kimi',
     protocol: 'openai',
     defaultBaseUrl: 'https://api.moonshot.cn/v1',
     defaultModel: 'moonshot-v1-auto',
@@ -193,7 +193,7 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
   },
   glm: {
     id: 'glm',
-    name: '智谱清言 (GLM)',
+    name: 'GLM',
     protocol: 'openai',
     defaultBaseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     defaultModel: 'glm-4-plus',
@@ -207,7 +207,7 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
   },
   openai: {
     id: 'openai',
-    name: 'OpenAI 官方',
+    name: 'OpenAI',
     protocol: 'openai',
     defaultBaseUrl: 'https://api.openai.com/v1',
     defaultModel: 'gpt-4o',
@@ -221,7 +221,7 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
   },
   anthropic: {
     id: 'anthropic',
-    name: 'Anthropic (Claude)',
+    name: 'Claude',
     protocol: 'anthropic',
     defaultBaseUrl: 'https://api.anthropic.com/v1',
     defaultModel: 'claude-3-7-sonnet-20250219',
@@ -239,7 +239,7 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
   },
   gemini: {
     id: 'gemini',
-    name: 'Google Gemini',
+    name: 'Gemini',
     protocol: 'gemini',
     defaultBaseUrl: 'https://generativelanguage.googleapis.com',
     defaultModel: 'gemini-3.8-flash',
@@ -259,7 +259,7 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
   },
   groq: {
     id: 'groq',
-    name: 'Groq (极速推理)',
+    name: 'Groq',
     protocol: 'openai',
     defaultBaseUrl: 'https://api.groq.com/openai/v1',
     defaultModel: 'llama-3.3-70b-versatile',
@@ -273,7 +273,7 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
   },
   custom: {
     id: 'custom',
-    name: '自定义 (OpenAI Compatible)',
+    name: 'Custom',
     protocol: 'openai',
     defaultBaseUrl: '',
     defaultModel: '',
