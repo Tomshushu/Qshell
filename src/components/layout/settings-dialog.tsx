@@ -85,6 +85,21 @@ import { SyncSettingsPanel } from "./sync-settings-panel";
 import { ShortcutSettingsPanel } from "./shortcut-settings-panel";
 import { AISettingsPanel } from "./ai-settings-panel";
 
+const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+const openExternalUrl = async (url: string) => {
+  try {
+    if (isTauri) {
+      const { open } = await import("@tauri-apps/plugin-shell");
+      await open(url);
+    } else {
+      window.open(url, "_blank");
+    }
+  } catch {
+    window.open(url, "_blank");
+  }
+};
+
 interface EncodingOption {
   value: string;
   label: string;
@@ -1252,21 +1267,21 @@ function SettingsPanel({
               }}
             />
 
-            {/* 外部入口暂保留布局，待官网和反馈服务接入后再启用跳转 */}
+            {/* 外部入口：官方文档与 Bug 反馈 */}
             <button
               type="button"
-              disabled
-              className="flex items-center gap-2.5 px-3 py-2 rounded-md text-xs text-muted-foreground/60 text-left cursor-not-allowed shrink-0"
-              title={t("placeholder_title")}
+              onClick={() => void openExternalUrl("https://github.com/Tomshushu/Qshell#readme")}
+              className="flex items-center gap-2.5 px-3 py-2 rounded-md text-xs text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors text-left shrink-0 cursor-pointer"
+              title={t("sidebar_doc")}
             >
               <ExternalLink className="h-3.5 w-3.5 flex-shrink-0" />
               <span className="flex-1">{t("sidebar_doc")}</span>
             </button>
             <button
               type="button"
-              disabled
-              className="flex items-center gap-2.5 px-3 py-2 rounded-md text-xs text-muted-foreground/60 text-left cursor-not-allowed shrink-0"
-              title={t("placeholder_title")}
+              onClick={() => void openExternalUrl("https://github.com/Tomshushu/Qshell/issues")}
+              className="flex items-center gap-2.5 px-3 py-2 rounded-md text-xs text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors text-left shrink-0 cursor-pointer"
+              title={t("sidebar_bug")}
             >
               <ExternalLink className="h-3.5 w-3.5 flex-shrink-0" />
               <span className="flex-1">{t("sidebar_bug")}</span>
