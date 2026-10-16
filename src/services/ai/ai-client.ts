@@ -62,6 +62,42 @@ function buildGeminiEndpoint(baseUrl: string, model: string, apiKey: string): st
   return `${trimmed}/v1beta/models/${model}:generateContent?key=${apiKey}`
 }
 
+export function buildModelsEndpoint(baseUrl: string, protocol = 'openai'): string {
+  const trimmed = normalizeBaseUrl(baseUrl)
+  if (protocol === 'anthropic') {
+    if (trimmed.endsWith('/models')) return trimmed
+    if (trimmed.endsWith('/v1')) return `${trimmed}/models`
+    return `${trimmed}/v1/models`
+  }
+  if (protocol === 'gemini') {
+    if (trimmed.includes('/v1beta')) {
+      return trimmed.endsWith('/models') ? trimmed : `${trimmed}/models`
+    }
+    return `${trimmed}/v1beta/models`
+  }
+
+  // OpenAI-Compatible
+  if (trimmed.endsWith('/models')) return trimmed
+  if (trimmed.endsWith('/chat/completions')) {
+    return trimmed.replace(/\/chat\/completions$/, '/models')
+  }
+  if (
+    trimmed === 'https://api.openai.com' ||
+    trimmed === 'https://api.siliconflow.cn' ||
+    trimmed === 'https://api.moonshot.cn' ||
+    trimmed === 'https://api.groq.com/openai'
+  ) {
+    return `${trimmed}/v1/models`
+  }
+  if (trimmed === 'http://127.0.0.1:11434' || trimmed === 'http://localhost:11434') {
+    return `${trimmed}/v1/models`
+  }
+  if (trimmed === 'https://api.deepseek.com') {
+    return `${trimmed}/models`
+  }
+  return `${trimmed}/models`
+}
+
 /**
  * 通用单次请求派发
  */
@@ -196,6 +232,164 @@ export async function testConnection(
     const errorMsg = (err as Error)?.message || '连接失败'
     return { success: false, error: errorMsg }
   }
+}
+
+/**
+ * 动态拉取服务商支持的全部模型列表
+ */
+export async function fetchProviderModels(settings: AISettings): Promise<string[]> {
+  const protocol = settings.protocol || 'openai'
+  const baseUrl = normalizeBaseUrl(settings.baseUrl)
+  if (!baseUrl) {
+    throw new Error('请先填写或选择 API 接口地址 (Base URL)')
+  }
+
+  // 1. Ollama 专有兼容探针（优先探测 /api/tags，兼容 /v1/models）
+  if (settings.provider === 'ollama' || baseUrl.includes(':11434')) {
+    const hostRoot = baseUrl.replace(/\/v1\/?$/, '').replace(/\/api\/?$/, '')
+    try {
+      const res = await fetch(`${hostRoot}/api/tags`, {
+        headers: { 'Content-Type': 'application/json' },
+      })
+      if (res.ok) {
+        const data = await res.json()
+        if (Array.isArray(data.models)) {
+          const names = data.models
+            .map((m: { name?: string; model?: string }) => m.name || m.model)
+            .filter(Boolean) as string[]
+          if (names.length > 0) return names
+        }
+      }
+    } catch {
+      // 降级尝试标准 /v1/models
+    }
+  }
+
+  // 2. Google Gemini 协议
+  if (protocol === 'gemini') {
+    const key = settings.apiKey?.trim() || ''
+    if (!key) {
+      throw new Error('获取 Gemini 模型列表需要填写 API Key')
+    }
+    const endpoint = `${buildModelsEndpoint(baseUrl, 'gemini')}?key=${key}`
+    const res = await fetch(endpoint, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '')
+      throw new Error(`Gemini 模型拉取失败 (${res.status}): ${errText || res.statusText}`)
+    }
+    const data = await res.json()
+    if (Array.isArray(data.models)) {
+      return data.models
+        .filter((m: { name?: string; supportedGenerationMethods?: string[] }) => {
+          const methods = m.supportedGenerationMethods || []
+          return methods.includes('generateContent') || m.name?.includes('gemini')
+        })
+        .map((m: { name?: string }) => (m.name || '').replace(/^models\//, ''))
+        .filter(Boolean)
+    }
+    return []
+  }
+
+  // 3. Anthropic Claude 协议
+  if (protocol === 'anthropic') {
+    const key = settings.apiKey?.trim() || ''
+    if (!key) {
+      throw new Error('获取 Claude 模型列表需要填写 API Key')
+    }
+    const endpoint = buildModelsEndpoint(baseUrl, 'anthropic')
+    const res = await fetch(endpoint, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+      },
+    })
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '')
+      throw new Error(`Claude 模型拉取失败 (${res.status}): ${errText || res.statusText}`)
+    }
+    const data = await res.json()
+    if (Array.isArray(data.data)) {
+      return data.data.map((m: { id?: string; name?: string }) => m.id || m.name).filter(Boolean)
+    }
+    return []
+  }
+
+  // 4. OpenAI 兼容协议 (涵盖大部分平台)
+  const endpoint = buildModelsEndpoint(baseUrl, 'openai')
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  }
+  if (settings.apiKey?.trim()) {
+    headers.Authorization = `Bearer ${settings.apiKey.trim()}`
+  }
+
+  let res = await fetch(endpoint, { method: 'GET', headers })
+  // 若未找到且不含 /v1/，自动回退探测 /v1/models
+  if (res.status === 404 && !endpoint.includes('/v1/')) {
+    const fallbackEndpoint = `${baseUrl.replace(/\/+$/, '')}/v1/models`
+    try {
+      const fallbackRes = await fetch(fallbackEndpoint, { method: 'GET', headers })
+      if (fallbackRes.ok) res = fallbackRes
+    } catch {
+      // 忽略 fallback 异常
+    }
+  }
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '')
+    throw new Error(`模型列表拉取失败 (${res.status}): ${errText || res.statusText}`)
+  }
+
+  const data = await res.json()
+  let rawList: unknown[] = []
+  if (Array.isArray(data.data)) {
+    rawList = data.data
+  } else if (Array.isArray(data.models)) {
+    rawList = data.models
+  } else if (Array.isArray(data)) {
+    rawList = data
+  }
+
+  const modelNames: string[] = rawList
+    .map((m: unknown) => {
+      if (typeof m === 'string') return m
+      if (m && typeof m === 'object') {
+        const obj = m as Record<string, unknown>
+        return String(obj.id || obj.name || obj.model || '')
+      }
+      return ''
+    })
+    .filter(Boolean)
+
+  const uniqueModels = Array.from(new Set(modelNames))
+
+  // 智能排序：优先将对话/编程/推理模型置顶，将向量嵌入/语音/生图模型排在后面
+  const isChatModel = (id: string) => {
+    const lower = id.toLowerCase()
+    return (
+      !lower.includes('embedding') &&
+      !lower.includes('rerank') &&
+      !lower.includes('whisper') &&
+      !lower.includes('tts') &&
+      !lower.includes('moderation') &&
+      !lower.includes('dall-e') &&
+      !lower.includes('flux') &&
+      !lower.includes('stable-diffusion')
+    )
+  }
+
+  return uniqueModels.sort((a, b) => {
+    const aChat = isChatModel(a)
+    const bChat = isChatModel(b)
+    if (aChat && !bChat) return -1
+    if (!aChat && bChat) return 1
+    return a.localeCompare(b)
+  })
 }
 
 /**

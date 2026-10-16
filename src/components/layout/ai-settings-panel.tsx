@@ -12,6 +12,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { SelectPopover } from '@/components/ui/select-popover'
 import { useTranslation } from '@/i18n'
 import { useAIStore } from '@/store/ai-store'
 import {
@@ -32,6 +33,9 @@ import {
   EyeOff,
   ExternalLink,
   Zap,
+  RefreshCw,
+  Edit2,
+  List,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -44,11 +48,17 @@ export function AISettingsPanel() {
     isTestingConnection,
     testResult,
     testConnection,
+    customModelsMap,
+    isFetchingModels,
+    fetchModelsError,
+    fetchModels,
   } = useAIStore()
 
   const [showApiKey, setShowApiKey] = useState(false)
+  const [isManualInput, setIsManualInput] = useState(false)
 
   const currentPreset = AI_PROVIDER_PRESETS[settings.provider]
+  const fetchedModels = customModelsMap[settings.provider] || []
 
   return (
     <div className="w-full max-w-4xl mx-auto space-y-6 animate-in fade-in duration-300 pb-12">
@@ -248,16 +258,109 @@ export function AISettingsPanel() {
           {/* 模型名称 */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <label className="font-medium text-foreground">
-                {t('ai_model_name_label')}
-              </label>
+              <div className="flex items-center gap-2">
+                <label className="font-medium text-foreground">
+                  {t('ai_model_name_label')}
+                </label>
+                {fetchedModels.length > 0 && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-500 font-mono font-medium border border-emerald-500/20">
+                    {t('ai_models_count', { count: fetchedModels.length })}
+                  </span>
+                )}
+              </div>
+
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={isFetchingModels}
+                onClick={async () => {
+                  try {
+                    await fetchModels()
+                  } catch {
+                    // error captured in store
+                  }
+                }}
+                className="h-6 px-2 text-[11px] gap-1 hover:text-primary hover:border-primary/50 text-foreground"
+              >
+                <RefreshCw className={cn('h-3 w-3', isFetchingModels && 'animate-spin text-primary')} />
+                <span>
+                  {isFetchingModels
+                    ? t('ai_fetching_models')
+                    : t('ai_fetch_models_btn')}
+                </span>
+              </Button>
             </div>
-            <Input
-              value={settings.model}
-              onChange={(e) => updateSettings({ model: e.target.value })}
-              placeholder={currentPreset?.defaultModel || 'deepseek-chat'}
-              className="h-8 text-xs font-mono"
-            />
+
+            {/* 如果已拉取到模型列表且非纯手动模式，显示搜索下拉选择器；否则显示输入框 */}
+            {fetchedModels.length > 0 && !isManualInput ? (
+              <div className="flex items-center gap-2">
+                <SelectPopover
+                  value={settings.model || null}
+                  onChange={(val) => {
+                    if (val) updateSettings({ model: val })
+                  }}
+                  options={fetchedModels.map((m) => ({
+                    value: m,
+                    label: m,
+                  }))}
+                  searchable
+                  searchPlaceholder={t('ai_select_model_placeholder')}
+                  placeholder={t('ai_select_model_placeholder')}
+                  className="flex-1 h-8 text-xs font-mono"
+                  panelClassName="w-[340px] max-h-72"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsManualInput(true)}
+                  className="h-8 px-2 text-[11px] gap-1 text-muted-foreground hover:text-foreground shrink-0"
+                  title={t('ai_custom_model_mode')}
+                >
+                  <Edit2 className="h-3 w-3" />
+                  <span className="hidden sm:inline">{t('ai_custom_model_mode')}</span>
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <Input
+                  value={settings.model}
+                  onChange={(e) => updateSettings({ model: e.target.value })}
+                  placeholder={currentPreset?.defaultModel || 'deepseek-chat'}
+                  className="h-8 text-xs font-mono flex-1"
+                />
+                {fetchedModels.length > 0 && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsManualInput(false)}
+                    className="h-8 px-2 text-[11px] gap-1 text-muted-foreground hover:text-foreground shrink-0"
+                    title="从已拉取列表中选择"
+                  >
+                    <List className="h-3 w-3" />
+                    <span className="hidden sm:inline">选择列表</span>
+                  </Button>
+                )}
+              </div>
+            )}
+
+            {/* 拉取失败错误提示 */}
+            {fetchModelsError && (
+              <div className="text-[11px] text-destructive flex items-center gap-1.5 pt-1">
+                <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">{fetchModelsError}</span>
+              </div>
+            )}
+
+            {/* 未拉取时提示 */}
+            {fetchedModels.length === 0 && !fetchModelsError && (
+              <p className="text-[10px] text-muted-foreground/70 pt-0.5">
+                {t('ai_fetch_models_tip')}
+              </p>
+            )}
+
             {currentPreset?.recommendedModels && currentPreset.recommendedModels.length > 0 && (
               <div className="flex items-center gap-1.5 flex-wrap pt-1">
                 <span className="text-[10px] text-muted-foreground">{t('ai_recommended_models')}:</span>

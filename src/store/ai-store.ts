@@ -16,11 +16,13 @@ import type {
 import { AI_PROVIDER_PRESETS } from '@/types/ai'
 import {
   testConnection,
+  fetchProviderModels,
   diagnoseTerminalError,
   generateCommand,
 } from '@/services/ai/ai-client'
 
 const AI_SETTINGS_STORAGE_KEY = 'qshell_ai_settings_v1'
+const AI_MODELS_CACHE_STORAGE_KEY = 'qshell_ai_models_cache_v1'
 
 const DEFAULT_SETTINGS: AISettings = {
   provider: 'deepseek',
@@ -55,10 +57,33 @@ function saveSettings(settings: AISettings): void {
   }
 }
 
+function loadSavedModelsCache(): Record<string, string[]> {
+  try {
+    const raw = localStorage.getItem(AI_MODELS_CACHE_STORAGE_KEY)
+    if (raw) return JSON.parse(raw)
+  } catch {
+    /* ignore */
+  }
+  return {}
+}
+
+function saveModelsCache(cache: Record<string, string[]>): void {
+  try {
+    localStorage.setItem(AI_MODELS_CACHE_STORAGE_KEY, JSON.stringify(cache))
+  } catch {
+    /* ignore */
+  }
+}
+
 export interface AIStoreState {
   settings: AISettings
   isTestingConnection: boolean
   testResult: { success: boolean; latencyMs?: number; error?: string } | null
+
+  // 动态模型拉取状态
+  customModelsMap: Record<string, string[]>
+  isFetchingModels: boolean
+  fetchModelsError: string | null
 
   // 诊断弹窗状态
   isDiagnosisModalOpen: boolean
@@ -83,6 +108,7 @@ export interface AIStoreState {
   updateSettings: (partial: Partial<AISettings>) => void
   selectProvider: (provider: AIProvider) => void
   testConnection: () => Promise<void>
+  fetchModels: () => Promise<string[]>
   openDiagnosis: (snippet: string, context?: AIPromptContext) => void
   closeDiagnosis: () => void
   runDiagnosis: () => Promise<void>
@@ -95,6 +121,10 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
   settings: loadSavedSettings(),
   isTestingConnection: false,
   testResult: null,
+
+  customModelsMap: loadSavedModelsCache(),
+  isFetchingModels: false,
+  fetchModelsError: null,
 
   isDiagnosisModalOpen: false,
   diagnosisSnippet: '',
@@ -121,14 +151,22 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
     if (!preset) return
 
     const current = get().settings
+    const cachedModels = get().customModelsMap[provider]
+    let initialModel = preset.defaultModel
+    if (cachedModels && cachedModels.length > 0) {
+      initialModel = cachedModels.includes(preset.defaultModel)
+        ? preset.defaultModel
+        : cachedModels[0]
+    }
+
     const updated: AISettings = {
       ...current,
       provider,
       protocol: preset.protocol,
       baseUrl: preset.defaultBaseUrl,
-      model: preset.defaultModel,
+      model: initialModel,
     }
-    set({ settings: updated, testResult: null })
+    set({ settings: updated, testResult: null, fetchModelsError: null })
     saveSettings(updated)
   },
 
@@ -137,6 +175,33 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
     set({ isTestingConnection: true, testResult: null })
     const res = await testConnection(settings)
     set({ isTestingConnection: false, testResult: res })
+  },
+
+  fetchModels: async () => {
+    const { settings, customModelsMap } = get()
+    set({ isFetchingModels: true, fetchModelsError: null })
+    try {
+      const models = await fetchProviderModels(settings)
+      if (models.length > 0) {
+        const nextMap = { ...customModelsMap, [settings.provider]: models }
+        set({
+          customModelsMap: nextMap,
+          isFetchingModels: false,
+          fetchModelsError: null,
+        })
+        saveModelsCache(nextMap)
+        if (!settings.model || !models.includes(settings.model)) {
+          get().updateSettings({ model: models[0] })
+        }
+      } else {
+        set({ isFetchingModels: false })
+      }
+      return models
+    } catch (err: unknown) {
+      const msg = (err as Error)?.message || '拉取模型列表失败'
+      set({ isFetchingModels: false, fetchModelsError: msg })
+      throw err
+    }
   },
 
   openDiagnosis: (snippet, context = {}) => {
