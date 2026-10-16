@@ -545,6 +545,7 @@ export function FloatingAIAssistant() {
       {/* 1. 全局悬浮机器人吉祥物按钮 (相对窗口右下角弹性锚定，缩放全屏不漂移) */}
       <div
         data-testid="ai-mascot-trigger"
+        title={`${t('ai_assistant_title') || '运维小助手'} (Ctrl+Alt+A)`}
         style={{
           position: 'fixed',
           right: `${mascotOffset.right}px`,
@@ -612,7 +613,7 @@ export function FloatingAIAssistant() {
             <div className="flex items-center gap-2">
               <AIMascotAvatar size={24} mood={assistantMascotMood} showGlowRing={false} interactive={false} />
               <span className="text-xs font-bold text-foreground">
-                {t('ai_assistant_title') || '计算 AI 助手'}
+                {t('ai_assistant_title') || '运维小助手'}
               </span>
               <span className="text-[10px] px-1.5 py-0.2 rounded font-normal bg-primary/10 text-primary">
                 AIOps Copilot
@@ -724,7 +725,7 @@ export function FloatingAIAssistant() {
                       您好，欢迎使用
                     </h2>
                     <h1 className="text-lg font-extrabold bg-gradient-to-r from-blue-600 via-indigo-600 to-cyan-500 bg-clip-text text-transparent">
-                      AI 助手
+                      {t('ai_assistant_title') || '运维小助手'}
                     </h1>
                   </div>
                 </div>

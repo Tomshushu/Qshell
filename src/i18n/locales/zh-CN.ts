@@ -4060,10 +4060,10 @@ export default {
   ai_go_to_config_btn: "前往配置 AI 模型与 API Key",
 
   // 全局悬浮 AI 助手
-  ai_assistant_title: "计算 AI 助手",
-  ai_floating_mascot_title: "全局悬浮 AI 助手",
-  ai_floating_mascot_enable: "显示全局 AI 悬浮小人",
-  ai_floating_mascot_desc: "在客户端右下角常驻展示灵动的 AI 智能运维小人 Mascot。点击或快捷键 (Ctrl+Alt+A) 唤出对话窗，随时协助排障、生成命令与运维咨询。",
+  ai_assistant_title: "运维小助手",
+  ai_floating_mascot_title: "悬浮运维小助手",
+  ai_floating_mascot_enable: "显示桌面运维小助手",
+  ai_floating_mascot_desc: "在客户端右下角常驻展示灵动的「运维小助手」吉祥物 Mascot。点击或快捷键 (Ctrl+Alt+A) 唤出对话窗，随时协助排障、生成命令与运维咨询。",
   ai_master_switch_title: "启用 AI 运维与智能助手",
   ai_master_switch_desc: "全应用 AI 功能的总开关。关闭后将彻底禁用并隐藏悬浮小人、终端指令生成、报错一键诊断等所有 AI 入口。",
   ai_master_disabled_notice: "AI 功能当前已全局停用。下方所有模型提供商与自动化配置已暂停生效。重新开启上方总开关即可立即恢复。",
