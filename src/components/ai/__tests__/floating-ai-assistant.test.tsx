@@ -140,7 +140,7 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
     vi.useRealTimers()
   })
 
-  it('supports dragging the mascot button across the screen', () => {
+  it('supports dragging the mascot button across the screen (right/bottom offset)', () => {
     renderWithProviders(<FloatingAIAssistant />)
     const trigger = screen.getByTestId('ai-mascot-trigger')
     expect(trigger).toBeTruthy()
@@ -150,8 +150,26 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
     fireEvent.pointerMove(window, { clientX: 200, clientY: 250 })
     fireEvent.pointerUp(window)
 
-    // The trigger position was updated
-    expect(trigger.style.left).toBeDefined()
-    expect(trigger.style.top).toBeDefined()
+    // The trigger position was updated using right and bottom
+    expect(trigger.style.right).toBeDefined()
+    expect(trigger.style.bottom).toBeDefined()
+  })
+
+  it('supports dragging the dialog card by its header', () => {
+    useAIStore.setState({ isFloatingAssistantOpen: true })
+    renderWithProviders(<FloatingAIAssistant />)
+    const dialog = screen.getByTestId('ai-assistant-dialog')
+    expect(dialog).toBeTruthy()
+
+    // Header has drag listener
+    const header = dialog.firstElementChild as HTMLElement
+    expect(header).toBeTruthy()
+
+    fireEvent.pointerDown(header, { clientX: 300, clientY: 200, button: 0 })
+    fireEvent.pointerMove(window, { clientX: 400, clientY: 300 })
+    fireEvent.pointerUp(window)
+
+    expect(dialog.style.left).toBeDefined()
+    expect(dialog.style.top).toBeDefined()
   })
 })
