@@ -30,8 +30,6 @@ import {
   Rocket,
   HardDrive,
   Lightbulb,
-  Maximize2,
-  Minimize2,
   GripHorizontal,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -195,7 +193,6 @@ export function FloatingAIAssistant() {
 
   const [copiedCode, setCopiedCode] = useState<string | null>(null)
   const [insertedCode, setInsertedCode] = useState<string | null>(null)
-  const [isExpanded, setIsExpanded] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -345,21 +342,15 @@ export function FloatingAIAssistant() {
   }
 
   // 计算弹窗当前尺寸 (宽松黄金比例，告别细窄瘦高)
+  // 保持原有比例的卡片尺寸 (宽 420px，高 600px，与阿里云计算 AI 助手严格一致)
   const getDialogDimensions = () => {
     if (typeof window === 'undefined') {
-      return { width: 580, height: 520 }
-    }
-
-    if (isExpanded) {
-      return {
-        width: Math.min(920, Math.floor(window.innerWidth * 0.9)),
-        height: Math.min(680, Math.floor(window.innerHeight * 0.85)),
-      }
+      return { width: 420, height: 600 }
     }
 
     return {
-      width: Math.min(580, window.innerWidth - 32),
-      height: Math.min(520, window.innerHeight - 80),
+      width: Math.min(420, window.innerWidth - 32),
+      height: Math.min(600, window.innerHeight - 80),
     }
   }
 
@@ -369,15 +360,6 @@ export function FloatingAIAssistant() {
 
     if (typeof window === 'undefined') {
       return { x: 100, y: 100, width: dialogW, height: dialogH }
-    }
-
-    if (isExpanded) {
-      return {
-        x: Math.max(16, (window.innerWidth - dialogW) / 2),
-        y: Math.max(16, (window.innerHeight - dialogH) / 2),
-        width: dialogW,
-        height: dialogH,
-      }
     }
 
     if (dialogPosition !== null) {
@@ -411,7 +393,7 @@ export function FloatingAIAssistant() {
 
   // 弹窗顶部栏拖拽事件
   const handleDialogHeaderPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0 || isExpanded) return
+    if (e.button !== 0) return
 
     const cur = getEffectiveDialogPosition()
     dialogDragRef.current = {
@@ -611,7 +593,7 @@ export function FloatingAIAssistant() {
             onPointerDown={handleDialogHeaderPointerDown}
             className={cn(
               'flex items-center justify-between px-4 py-3 border-b border-border/60 bg-muted/25 select-none shrink-0',
-              !isExpanded && 'cursor-move hover:bg-muted/40 transition-colors',
+              'cursor-move hover:bg-muted/40 transition-colors',
             )}
           >
             {/* 左侧：小人微标 + 标题 + 拖拽手柄指示器 */}
@@ -623,11 +605,9 @@ export function FloatingAIAssistant() {
               <span className="text-[10px] px-1.5 py-0.2 rounded font-normal bg-primary/10 text-primary">
                 AIOps Copilot
               </span>
-              {!isExpanded && (
-                <div className="hidden sm:flex items-center text-muted-foreground/40 ml-1">
-                  <GripHorizontal className="h-3.5 w-3.5" />
-                </div>
-              )}
+              <div className="hidden sm:flex items-center text-muted-foreground/40 ml-1">
+                <GripHorizontal className="h-3.5 w-3.5" />
+              </div>
             </div>
 
             {/* 右侧：功能控制按钮 (阻止向上传递拖拽) */}
@@ -669,26 +649,6 @@ export function FloatingAIAssistant() {
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="text-xs">
                   会话记录
-                </TooltipContent>
-              </Tooltip>
-
-              {/* 宽屏展开/收缩切换 */}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    onClick={() => {
-                      setIsExpanded(!isExpanded)
-                      playSound(SoundType.Click)
-                    }}
-                    className="h-7 w-7 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground cursor-pointer"
-                  >
-                    {isExpanded ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" className="text-xs">
-                  {isExpanded ? '还原默认尺寸' : '展开全景大屏'}
                 </TooltipContent>
               </Tooltip>
 
