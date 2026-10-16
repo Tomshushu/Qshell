@@ -4058,4 +4058,10 @@ export default {
   tm_ai_command_gen: "AI 智能生成指令",
   tm_ai_diagnosis_menu: "AI 诊断选中文本",
   ai_go_to_config_btn: "前往配置 AI 模型与 API Key",
+
+  // 全局悬浮 AI 助手
+  ai_assistant_title: "计算 AI 助手",
+  ai_floating_mascot_title: "全局悬浮 AI 助手",
+  ai_floating_mascot_enable: "显示全局 AI 悬浮小人",
+  ai_floating_mascot_desc: "在客户端右下角常驻展示灵动的 AI 智能运维小人 Mascot。点击或快捷键 (Ctrl+Alt+A) 唤出对话窗，随时协助排障、生成命令与运维咨询。",
 };

@@ -95,6 +95,24 @@ export interface AIPromptContext {
   selectedText?: string
 }
 
+export type AIAssistantMode = 'agent' | 'chat'
+
+export type AIMascotMood = 'idle' | 'happy' | 'thinking' | 'blink'
+
+export interface AIAssistantMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  createdAt: number
+  mode?: AIAssistantMode
+  status?: 'sending' | 'streaming' | 'done' | 'error'
+  suggestedCommands?: Array<{
+    command: string
+    explanation?: string
+    risk?: CommandRiskAnalysis
+  }>
+}
+
 export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
   deepseek: {
     id: 'deepseek',

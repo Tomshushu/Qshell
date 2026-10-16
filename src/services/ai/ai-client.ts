@@ -13,6 +13,7 @@ import type {
   AIDiagnosisResult,
   AIPromptContext,
   CommandRiskAnalysis,
+  AIAssistantMode,
 } from '@/types/ai'
 import { sanitizeLogContent } from './dlp-sanitizer'
 import { evaluateCommandRisk } from './risk-evaluator'
@@ -539,3 +540,103 @@ ${cleanErrorSnippet.slice(-3000)}
     recommendedCommands,
   }
 }
+
+/**
+ * 场景三：全局 AI 悬浮助手多轮运维对话与 Agent 智能体交互
+ */
+export async function sendAssistantChat(
+  settings: AISettings,
+  history: Array<{ role: 'user' | 'assistant'; content: string }>,
+  mode: AIAssistantMode = 'agent',
+  context: AIPromptContext = {},
+): Promise<{
+  content: string
+  commands: Array<{
+    command: string
+    explanation?: string
+    risk: CommandRiskAnalysis
+  }>
+}> {
+  const isAgent = mode === 'agent'
+
+  const systemPrompt = isAgent
+    ? `你是 Qshell 全局智能终端运维 Agent。你具备全方位的 Linux 运维、云原生、Docker、Kubernetes、网络协议栈与 Shell 脚本专长。
+你的职责：
+1. 深入分析用户意图或运维问题，给出条理清晰、专业精准的解答和分步执行建议；
+2. 如果涉及命令行操作，请优先提供可直接执行的 Shell 命令，必须使用 \`\`\`bash 或 \`\`\`sh 独立代码块包裹；
+3. 对于高风险命令（如 rm -rf、mkfs、dd、reboot、iptables flush 等），务必在回答中突出强调安全防护建议；
+4. 语言简洁、直接、富有科技感与专家水准。`
+    : `你是 Qshell 桌面终端的 AI 智能助手。你友善、耐心且具备专业的 Linux 运维与开发知识。
+你的职责是帮助用户解答各种关于 SSH 远程连接、服务器配置、命令使用、Linux 原理与运维脚本的疑问。条理清晰，友好专业。`
+
+  const messages: ChatMessage[] = [
+    { role: 'system', content: systemPrompt },
+  ]
+
+  // Add contextual hint if present
+  if (context.currentDir || context.osType || context.selectedText) {
+    const contextItems: string[] = []
+    if (context.osType) contextItems.push(`操作系统: ${context.osType} ${context.osDistro || ''}`)
+    if (context.currentDir) contextItems.push(`当前工作目录: ${context.currentDir}`)
+    if (context.selectedText) {
+      const cleanSnippet = settings.enableDlp
+        ? sanitizeLogContent(context.selectedText, { maskPrivateIps: settings.maskPrivateIps })
+        : context.selectedText
+      contextItems.push(`用户选中内容: ${cleanSnippet}`)
+    }
+    messages.push({
+      role: 'system',
+      content: `[环境上下文参考]\n${contextItems.join('\n')}`,
+    })
+  }
+
+  // Sanitize user messages if DLP enabled
+  for (const item of history) {
+    const content = item.role === 'user' && settings.enableDlp
+      ? sanitizeLogContent(item.content, { maskPrivateIps: settings.maskPrivateIps })
+      : item.content
+    messages.push({
+      role: item.role,
+      content,
+    })
+  }
+
+  const rawOutput = await callModelApi(settings, messages, 2048)
+
+  // 提取输出中的 Shell 代码块
+  const commands: Array<{
+    command: string
+    explanation?: string
+    risk: CommandRiskAnalysis
+  }> = []
+
+  const codeBlockRegex = /```(?:bash|sh|shell)?\s*([\s\S]*?)```/gi
+  let match: RegExpExecArray | null
+  while ((match = codeBlockRegex.exec(rawOutput)) !== null) {
+    const rawCmd = match[1].trim()
+    if (rawCmd && !rawCmd.includes('\n') && rawCmd.length < 200) {
+      commands.push({
+        command: rawCmd,
+        risk: evaluateCommandRisk(rawCmd),
+      })
+    } else if (rawCmd) {
+      // 提取多行脚本中第一条非注释命令作为快速运行建议
+      const firstCmd = rawCmd
+        .split('\n')
+        .map((l) => l.trim())
+        .find((l) => l && !l.startsWith('#'))
+      if (firstCmd) {
+        commands.push({
+          command: firstCmd,
+          risk: evaluateCommandRisk(firstCmd),
+        })
+      }
+    }
+  }
+
+  return {
+    content: rawOutput,
+    commands,
+  }
+}
+

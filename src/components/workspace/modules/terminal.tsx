@@ -6483,14 +6483,25 @@ export function TerminalModule({
       }, 60);
     };
 
+    const handleInsertCommand = (e: Event) => {
+      const customEvent = e as CustomEvent<{ command?: string; execute?: boolean }>;
+      if (!isActiveRef.current || !isVisibleRef.current) return;
+      if (customEvent.detail?.command && activeTermIdRef.current) {
+        const text = customEvent.detail.command + (customEvent.detail.execute ? "\n" : "");
+        writePasteText(text, activeTermIdRef.current);
+      }
+    };
+
+    window.addEventListener("insert-terminal-command", handleInsertCommand);
     window.addEventListener("focus-active-terminal", handleFocusTrigger);
     window.addEventListener("focus", handleFocusTrigger);
 
     return () => {
+      window.removeEventListener("insert-terminal-command", handleInsertCommand);
       window.removeEventListener("focus-active-terminal", handleFocusTrigger);
       window.removeEventListener("focus", handleFocusTrigger);
     };
-  }, [focusActiveTerm]);
+  }, [focusActiveTerm, writePasteText]);
 
   // 鼠标交互焦点跟随：点击终端区域（且不在搜索栏内部）时，主动让搜索栏失焦，并将键盘焦点无缝转移给终端
   useEffect(() => {

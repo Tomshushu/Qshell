@@ -662,6 +662,8 @@ export function AISettingsPanel() {
     removeConfiguredProvider,
     toggleActiveProvider,
     testConfiguredProvider,
+    showFloatingMascot,
+    setShowFloatingMascot,
   } = useAIStore()
 
   // 弹窗状态
@@ -931,6 +933,36 @@ export function AISettingsPanel() {
             <Switch
               checked={settings.maskPrivateIps}
               onCheckedChange={(checked) => updateSettings({ maskPrivateIps: checked })}
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* 4. 全局悬浮 AI 助手 (Global Floating AI Assistant) */}
+      <Card className="border border-border/60 bg-muted/15 dark:bg-card/40 rounded-xl overflow-hidden shadow-2xs">
+        <CardContent className="p-5 space-y-4">
+          <div className="font-semibold text-xs text-foreground flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <Sparkles className="h-4 w-4 text-primary" />
+              <span>{t('ai_floating_mascot_title')}</span>
+            </div>
+            <span className="text-[10px] text-primary bg-primary/10 px-2 py-0.5 rounded-full font-normal">
+              Ctrl+Alt+A
+            </span>
+          </div>
+
+          <div className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-background/50">
+            <div className="space-y-0.5 pr-4">
+              <div className="text-xs font-medium text-foreground">
+                {t('ai_floating_mascot_enable')}
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                {t('ai_floating_mascot_desc')}
+              </p>
+            </div>
+            <Switch
+              checked={showFloatingMascot}
+              onCheckedChange={setShowFloatingMascot}
             />
           </div>
         </CardContent>

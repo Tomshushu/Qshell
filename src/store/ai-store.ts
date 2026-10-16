@@ -14,6 +14,9 @@ import type {
   AIDiagnosisResult,
   AIPromptContext,
   CommandRiskAnalysis,
+  AIAssistantMode,
+  AIAssistantMessage,
+  AIMascotMood,
 } from '@/types/ai'
 import { AI_PROVIDER_PRESETS } from '@/types/ai'
 import {
@@ -21,11 +24,33 @@ import {
   fetchProviderModels,
   diagnoseTerminalError,
   generateCommand,
+  sendAssistantChat,
 } from '@/services/ai/ai-client'
 
 const AI_SETTINGS_STORAGE_KEY = 'qshell_ai_settings_v1'
 const AI_MODELS_CACHE_STORAGE_KEY = 'qshell_ai_models_cache_v1'
 const AI_CONFIGURED_PROVIDERS_KEY = 'qshell_ai_configured_providers_v1'
+const AI_SHOW_FLOATING_MASCOT_KEY = 'qshell_ai_show_floating_mascot_v1'
+
+function loadSavedShowFloatingMascot(): boolean {
+  try {
+    const raw = localStorage.getItem(AI_SHOW_FLOATING_MASCOT_KEY)
+    if (raw !== null) {
+      return raw === 'true'
+    }
+  } catch {
+    /* ignore */
+  }
+  return true
+}
+
+function saveShowFloatingMascot(val: boolean): void {
+  try {
+    localStorage.setItem(AI_SHOW_FLOATING_MASCOT_KEY, String(val))
+  } catch {
+    /* ignore */
+  }
+}
 
 const DEFAULT_SETTINGS: AISettings = {
   provider: 'deepseek',
@@ -200,6 +225,25 @@ export interface AIStoreState {
   openCommandPalette: (context?: AIPromptContext) => void
   closeCommandPalette: () => void
   runGenerateCommand: (userIntent: string) => Promise<void>
+
+  // 全局悬浮 AI 助手状态与操作
+  showFloatingMascot: boolean
+  isFloatingAssistantOpen: boolean
+  assistantMode: AIAssistantMode
+  assistantMessages: AIAssistantMessage[]
+  isAssistantResponding: boolean
+  assistantInput: string
+  assistantMascotMood: AIMascotMood
+
+  setShowFloatingMascot: (show: boolean) => void
+  openFloatingAssistant: () => void
+  closeFloatingAssistant: () => void
+  toggleFloatingAssistant: () => void
+  setAssistantMode: (mode: AIAssistantMode) => void
+  setAssistantInput: (text: string) => void
+  setAssistantMascotMood: (mood: AIMascotMood) => void
+  sendAssistantMessage: (text?: string, context?: AIPromptContext) => Promise<void>
+  clearAssistantMessages: () => void
 }
 
 const initialSettings = loadSavedSettings()
@@ -241,6 +285,14 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
   isGeneratingCommand: false,
   generatedCommandResult: null,
   commandGenerationError: null,
+
+  showFloatingMascot: loadSavedShowFloatingMascot(),
+  isFloatingAssistantOpen: false,
+  assistantMode: 'agent',
+  assistantMessages: [],
+  isAssistantResponding: false,
+  assistantInput: '',
+  assistantMascotMood: 'idle',
 
   updateSettings: (partial) => {
     const current = get().settings
@@ -585,6 +637,203 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
         isGeneratingCommand: false,
         commandGenerationError: (err as Error)?.message || '生成命令失败',
       })
+    }
+  },
+
+  setShowFloatingMascot: (show: boolean) => {
+    set({ showFloatingMascot: show })
+    saveShowFloatingMascot(show)
+  },
+
+  openFloatingAssistant: () => set({ isFloatingAssistantOpen: true }),
+  closeFloatingAssistant: () => set({ isFloatingAssistantOpen: false }),
+  toggleFloatingAssistant: () =>
+    set((state) => ({ isFloatingAssistantOpen: !state.isFloatingAssistantOpen })),
+  setAssistantMode: (mode) => set({ assistantMode: mode }),
+  setAssistantInput: (text) => set({ assistantInput: text }),
+  setAssistantMascotMood: (mood) => set({ assistantMascotMood: mood }),
+  clearAssistantMessages: () => set({ assistantMessages: [] }),
+
+  sendAssistantMessage: async (text?: string, context?: AIPromptContext) => {
+    const { assistantInput, assistantMessages, assistantMode, settings, configuredProviders } = get()
+    const content = (text !== undefined ? text : assistantInput).trim()
+    if (!content) return
+
+    const userMsg: AIAssistantMessage = {
+      id: `msg_u_${Date.now()}`,
+      role: 'user',
+      content,
+      createdAt: Date.now(),
+      mode: assistantMode,
+      status: 'done',
+    }
+
+    const nextMessages = [...assistantMessages, userMsg]
+    set({
+      assistantMessages: nextMessages,
+      assistantInput: '',
+      isAssistantResponding: true,
+      assistantMascotMood: 'thinking',
+    })
+
+    const activeProv = configuredProviders.find((p) => p.isEnabled)
+    const effectiveSettings: AISettings = activeProv
+      ? {
+          provider: activeProv.provider,
+          protocol: activeProv.protocol,
+          baseUrl: activeProv.baseUrl,
+          apiKey: activeProv.apiKey,
+          model: activeProv.model,
+          temperature: activeProv.temperature ?? settings.temperature ?? 0.3,
+          maxTokens: activeProv.maxTokens ?? settings.maxTokens ?? 2048,
+          enableDlp: settings.enableDlp,
+          maskPrivateIps: settings.maskPrivateIps,
+        }
+      : settings
+
+    const hasApiKeyOrOllama =
+      Boolean(effectiveSettings.apiKey?.trim()) ||
+      effectiveSettings.provider === 'ollama' ||
+      effectiveSettings.baseUrl.includes('11434')
+
+    if (hasApiKeyOrOllama) {
+      try {
+        const historyForApi = nextMessages.map((m) => ({
+          role: m.role,
+          content: m.content,
+        }))
+        const res = await sendAssistantChat(effectiveSettings, historyForApi, assistantMode, context)
+        const assistantMsg: AIAssistantMessage = {
+          id: `msg_a_${Date.now()}`,
+          role: 'assistant',
+          content: res.content,
+          createdAt: Date.now(),
+          mode: assistantMode,
+          status: 'done',
+          suggestedCommands: res.commands,
+        }
+        set({
+          assistantMessages: [...nextMessages, assistantMsg],
+          isAssistantResponding: false,
+          assistantMascotMood: 'happy',
+        })
+        setTimeout(() => {
+          if (get().assistantMascotMood === 'happy') {
+            set({ assistantMascotMood: 'idle' })
+          }
+        }, 4000)
+      } catch (err: unknown) {
+        const errorMsg: AIAssistantMessage = {
+          id: `msg_err_${Date.now()}`,
+          role: 'assistant',
+          content: `⚠️ **AI 响应异常**：${(err as Error)?.message || '未能连接到模型接口'}\n\n请检查「设置 -> AI 运维」中当前提供商的 API Key、Base URL 及网络连通性。`,
+          createdAt: Date.now(),
+          mode: assistantMode,
+          status: 'error',
+        }
+        set({
+          assistantMessages: [...nextMessages, errorMsg],
+          isAssistantResponding: false,
+          assistantMascotMood: 'idle',
+        })
+      }
+    } else {
+      // 模拟离线智能应答（具备极佳的运维演示体验）
+      await new Promise((r) => setTimeout(r, 600))
+      let replyContent = ''
+      let commands: Array<{ command: string; explanation?: string; risk: CommandRiskAnalysis }> = []
+
+      if (content.includes('连接') || content.includes('超时') || content.includes('timeout')) {
+        replyContent = `### 🔍 SSH 连接超时排查指南
+实例无法连接或 Connection timed out 通常由以下原因导致：
+1. **安全组 / 防火墙未放行**：请确认云控制台安全组入方向是否允许对应端口（默认 TCP 22）。
+2. **sshd 守护进程未运行**：可在物理机或 VNC 控制台检查服务状态。
+3. **网络路由不可达**：检查本地公网出口与服务器公网 IP 是否路由畅通。
+
+建议在终端执行以下排查命令：`
+        commands = [
+          {
+            command: 'ping -c 4 <目标IP>',
+            explanation: '探测网络层连通性与丢包率',
+            risk: { level: 'safe', command: 'ping -c 4 <目标IP>', reasons: [], isBlocked: false },
+          },
+          {
+            command: 'nc -zv -w 3 <目标IP> 22',
+            explanation: '探测远程 SSH 端口 22 是否开放并接受握手',
+            risk: { level: 'safe', command: 'nc -zv -w 3 <目标IP> 22', reasons: [], isBlocked: false },
+          },
+          {
+            command: 'sudo systemctl status sshd',
+            explanation: '在服务器控制台查看 SSH 服务运行状态',
+            risk: { level: 'safe', command: 'sudo systemctl status sshd', reasons: [], isBlocked: false },
+          },
+        ]
+      } else if (content.includes('磁盘') || content.includes('空间') || content.includes('清理')) {
+        replyContent = `### 💾 磁盘空间清理与大文件排查
+当 Linux 系统根目录或数据盘利用率达到 100% 时，会导致服务无法写入日志或崩溃：
+1. **查看磁盘分区占用**：使用 \`df -h\` 查看满载的分区。
+2. **快速定位前 10 大文件**：使用 \`du\` 或 \`find\` 检索体积最大的文件或日志。
+3. **安全清理**：优先截断正在写入的日志文件，避免直接删除导致句柄未释放。`
+        commands = [
+          {
+            command: 'df -hT',
+            explanation: '查看所有磁盘挂载点使用容量与文件系统类型',
+            risk: { level: 'safe', command: 'df -hT', reasons: [], isBlocked: false },
+          },
+          {
+            command: 'du -ahx / 2>/dev/null | sort -rh | head -n 10',
+            explanation: '找出根目录下体积最大的前 10 个文件或目录',
+            risk: { level: 'safe', command: 'du -ahx / 2>/dev/null | sort -rh | head -n 10', reasons: [], isBlocked: false },
+          },
+          {
+            command: 'sudo journalctl --vacuum-size=200M',
+            explanation: '清理 systemd 日志，只保留最近 200MB',
+            risk: { level: 'notice', command: 'sudo journalctl --vacuum-size=200M', reasons: ['修改系统日志保留大小'], isBlocked: false },
+          },
+        ]
+      } else if (content.includes('端口') || content.includes('占用')) {
+        replyContent = `### 🔌 端口占用排查与释放方案
+如果启动服务提示 \`Address already in use\`，请按如下流程排查并释放占用端口：`
+        commands = [
+          {
+            command: 'sudo lsof -i :8080',
+            explanation: '查看占用指定端口（如 8080）的进程 PID 及程序名称',
+            risk: { level: 'safe', command: 'sudo lsof -i :8080', reasons: [], isBlocked: false },
+          },
+          {
+            command: 'sudo ss -tulpn | grep :8080',
+            explanation: '使用 ss 高性能内核套接字工具查看端口监听详情',
+            risk: { level: 'safe', command: 'sudo ss -tulpn | grep :8080', reasons: [], isBlocked: false },
+          },
+        ]
+      } else {
+        replyContent = `您好！针对您的问题：「**${content}**」
+在 ${assistantMode === 'agent' ? '✦ Agent 智能运维' : '💬 运维问答'} 模式下，建议按如下步骤处理：
+1. 先确认目标服务器当前系统发行版与运行状态。
+2. 收集关键错误日志，通过上下文逐步定位根因。
+
+*(💡 贴心提示：检测到您当前尚未在「设置 -> AI 运维」中配置模型 API Key，当前为您展示的是本地内置规则库。接入 DeepSeek、通义千问或本地 Ollama 后即可获得全能大模型深度推理能力！)*`
+      }
+
+      const simAssistantMsg: AIAssistantMessage = {
+        id: `msg_sim_${Date.now()}`,
+        role: 'assistant',
+        content: replyContent,
+        createdAt: Date.now(),
+        mode: assistantMode,
+        status: 'done',
+        suggestedCommands: commands,
+      }
+      set({
+        assistantMessages: [...nextMessages, simAssistantMsg],
+        isAssistantResponding: false,
+        assistantMascotMood: 'happy',
+      })
+      setTimeout(() => {
+        if (get().assistantMascotMood === 'happy') {
+          set({ assistantMascotMood: 'idle' })
+        }
+      }, 4000)
     }
   },
 }))

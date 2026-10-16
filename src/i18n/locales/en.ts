@@ -4127,4 +4127,10 @@ export default {
   tm_ai_command_gen: "AI Generate Command",
   tm_ai_diagnosis_menu: "AI Diagnose Selection",
   ai_go_to_config_btn: "Configure AI Model & API Key",
+
+  // Global Floating AI Assistant & Mascot
+  ai_assistant_title: "Compute AI Assistant",
+  ai_floating_mascot_title: "Global Floating AI Assistant",
+  ai_floating_mascot_enable: "Show Global AI Mascot Widget",
+  ai_floating_mascot_desc: "Displays an interactive AI Copilot mascot at the bottom-right corner. Click or press Ctrl+Alt+A to summon the assistant for troubleshooting, command generation, and Ops advice.",
 };
