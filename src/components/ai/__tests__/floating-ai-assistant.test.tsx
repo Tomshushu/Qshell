@@ -172,4 +172,36 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
     expect(dialog.style.left).toBeDefined()
     expect(dialog.style.top).toBeDefined()
   })
+
+  it('does not render when enableAiGlobal is false', () => {
+    useAIStore.setState({ enableAiGlobal: false })
+    const { container } = renderWithProviders(<FloatingAIAssistant />)
+    expect(container.firstChild).toBeNull()
+  })
+
+  it('renders offline mode banner when no AI provider is configured and fires open-settings', () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
+    useAIStore.setState({
+      enableAiGlobal: true,
+      isFloatingAssistantOpen: true,
+      configuredProviders: [],
+      settings: { ...useAIStore.getState().settings, apiKey: '' },
+    })
+
+    renderWithProviders(<FloatingAIAssistant />)
+    expect(screen.getByText(/当前处于本地离线规则模式/)).toBeTruthy()
+
+    const configButton = screen.getByRole('button', { name: /去配置/i })
+    fireEvent.click(configButton)
+
+    expect(dispatchSpy).toHaveBeenCalled()
+    const matchingCall = dispatchSpy.mock.calls.find(
+      (c) => (c[0] as CustomEvent).type === 'open-settings'
+    )
+    expect(matchingCall).toBeTruthy()
+    expect((matchingCall![0] as CustomEvent).detail).toBe('ai')
+
+    dispatchSpy.mockRestore()
+  })
 })
+

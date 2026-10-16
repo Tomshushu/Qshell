@@ -17,6 +17,7 @@ import {
   Sparkles,
   MessageSquare,
   ArrowUp,
+  ArrowRight,
   Plus,
   History,
   X,
@@ -31,10 +32,12 @@ import {
   HardDrive,
   Lightbulb,
   GripHorizontal,
+  AlertCircle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { hasActiveAIProvider } from '@/store/ai-store'
 
 const MASCOT_SIZE = 44
 const STORAGE_MASCOT_OFFSET_KEY = 'qshell_ai_mascot_offset_v3'
@@ -176,6 +179,7 @@ function AssistantMessageRenderer({
 export function FloatingAIAssistant() {
   const { t } = useTranslation()
   const {
+    enableAiGlobal,
     showFloatingMascot,
     isFloatingAssistantOpen,
     openFloatingAssistant,
@@ -189,7 +193,14 @@ export function FloatingAIAssistant() {
     assistantMascotMood,
     sendAssistantMessage,
     clearAssistantMessages,
+    configuredProviders,
+    settings,
   } = useAIStore()
+
+  const isAiConfigured = useMemo(
+    () => hasActiveAIProvider(configuredProviders, settings),
+    [configuredProviders, settings],
+  )
 
   const [copiedCode, setCopiedCode] = useState<string | null>(null)
   const [insertedCode, setInsertedCode] = useState<string | null>(null)
@@ -243,6 +254,7 @@ export function FloatingAIAssistant() {
   // 快捷键支持：Ctrl+Alt+A / Cmd+Alt+A 切换 AI 助手
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (!enableAiGlobal) return
       if ((e.ctrlKey || e.metaKey) && e.altKey && (e.key === 'a' || e.key === 'A')) {
         e.preventDefault()
         if (isFloatingAssistantOpen) {
@@ -256,7 +268,7 @@ export function FloatingAIAssistant() {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isFloatingAssistantOpen, openFloatingAssistant, closeFloatingAssistant])
+  }, [enableAiGlobal, isFloatingAssistantOpen, openFloatingAssistant, closeFloatingAssistant])
 
   // 自动滚动到最新消息
   useEffect(() => {
@@ -272,7 +284,7 @@ export function FloatingAIAssistant() {
     }
   }, [isFloatingAssistantOpen])
 
-  if (!showFloatingMascot) {
+  if (!enableAiGlobal || !showFloatingMascot) {
     return null
   }
 
@@ -673,6 +685,31 @@ export function FloatingAIAssistant() {
               </Tooltip>
             </div>
           </div>
+
+          {/* 未配置 AI 提示引导横幅 (方案 B) */}
+          {!isAiConfigured && (
+            <div className="mx-4 mt-3 px-3 py-2 rounded-xl border border-amber-500/30 bg-amber-500/10 dark:bg-amber-500/15 text-amber-700 dark:text-amber-300 flex items-center justify-between gap-2 shadow-2xs select-none shrink-0 animate-in fade-in slide-in-from-top-1">
+              <div className="flex items-center gap-2 min-w-0">
+                <AlertCircle className="h-4 w-4 shrink-0 text-amber-500" />
+                <span className="text-[11.5px] leading-tight truncate">
+                  {t('ai_offline_mode_banner')}
+                </span>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  playSound(SoundType.Click)
+                  window.dispatchEvent(new CustomEvent('open-settings', { detail: 'ai' }))
+                }}
+                className="h-6 px-2 text-[11px] font-semibold border-amber-500/40 bg-amber-500/15 hover:bg-amber-500/25 text-amber-800 dark:text-amber-200 gap-1 shrink-0 cursor-pointer shadow-none"
+              >
+                <span>{t('ai_go_to_config')}</span>
+                <ArrowRight className="h-3 w-3" />
+              </Button>
+            </div>
+          )}
 
           {/* Body 消息与空状态区域 */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4 select-text">

@@ -662,6 +662,8 @@ export function AISettingsPanel() {
     removeConfiguredProvider,
     toggleActiveProvider,
     testConfiguredProvider,
+    enableAiGlobal,
+    setEnableAiGlobal,
     showFloatingMascot,
     setShowFloatingMascot,
   } = useAIStore()
@@ -695,13 +697,62 @@ export function AISettingsPanel() {
         </h2>
       </div>
 
-      {/* 1. 已配置卡片区 (Configured Providers) */}
-      <div className="space-y-2">
-        <span className="text-xs font-semibold text-foreground">
-          {t('ai_configured_section_title')}
-        </span>
+      {/* 0. 全局 AI 功能总开关 (Master Switch) */}
+      <Card className="border border-border/80 bg-gradient-to-r from-primary/5 via-background to-background rounded-xl overflow-hidden shadow-2xs">
+        <CardContent className="p-4 flex items-center justify-between gap-4">
+          <div className="flex items-start gap-3 min-w-0">
+            <div className="p-2 rounded-lg bg-primary/10 text-primary shrink-0 mt-0.5">
+              <Sparkles className="h-4 w-4" />
+            </div>
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-foreground">
+                  {t('ai_master_switch_title')}
+                </span>
+                <span
+                  className={cn(
+                    'text-[10px] px-2 py-0.2 rounded-full font-medium',
+                    enableAiGlobal
+                      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                      : 'bg-muted text-muted-foreground border border-border',
+                  )}
+                >
+                  {enableAiGlobal ? t('ai_status_enabled') : t('lg_pause')}
+                </span>
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                {t('ai_master_switch_desc')}
+              </p>
+            </div>
+          </div>
 
-        <Card className="border border-border/60 bg-muted/15 dark:bg-card/40 rounded-xl overflow-hidden shadow-2xs">
+          <Switch
+            checked={enableAiGlobal}
+            onCheckedChange={setEnableAiGlobal}
+            className="shrink-0"
+          />
+        </CardContent>
+      </Card>
+
+      {!enableAiGlobal ? (
+        /* 全局禁用状态提示 */
+        <div className="p-8 rounded-xl border border-dashed border-border/80 bg-muted/20 text-center flex flex-col items-center justify-center space-y-2">
+          <div className="p-3 rounded-full bg-muted/60 text-muted-foreground">
+            <Bot className="h-5 w-5" />
+          </div>
+          <p className="text-xs text-muted-foreground max-w-md leading-relaxed">
+            {t('ai_master_disabled_notice')}
+          </p>
+        </div>
+      ) : (
+        <>
+          {/* 1. 已配置卡片区 (Configured Providers) */}
+          <div className="space-y-2">
+            <span className="text-xs font-semibold text-foreground">
+              {t('ai_configured_section_title')}
+            </span>
+
+            <Card className="border border-border/60 bg-muted/15 dark:bg-card/40 rounded-xl overflow-hidden shadow-2xs">
           {configuredProviders.length === 0 ? (
             <CardContent className="p-8 text-center flex flex-col items-center justify-center space-y-2">
               <div className="p-3 rounded-full bg-muted/60 text-muted-foreground">
@@ -967,6 +1018,8 @@ export function AISettingsPanel() {
           </div>
         </CardContent>
       </Card>
+        </>
+      )}
 
       {/* 配置模态弹窗 */}
       <ConfigureProviderModal

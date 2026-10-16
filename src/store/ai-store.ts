@@ -31,6 +31,49 @@ const AI_SETTINGS_STORAGE_KEY = 'qshell_ai_settings_v1'
 const AI_MODELS_CACHE_STORAGE_KEY = 'qshell_ai_models_cache_v1'
 const AI_CONFIGURED_PROVIDERS_KEY = 'qshell_ai_configured_providers_v1'
 const AI_SHOW_FLOATING_MASCOT_KEY = 'qshell_ai_show_floating_mascot_v1'
+const AI_MASTER_ENABLED_KEY = 'qshell_ai_master_enabled_v1'
+
+function loadSavedEnableAiGlobal(): boolean {
+  try {
+    const raw = localStorage.getItem(AI_MASTER_ENABLED_KEY)
+    if (raw !== null) {
+      return raw === 'true'
+    }
+  } catch {
+    /* ignore */
+  }
+  return true
+}
+
+function saveEnableAiGlobal(val: boolean): void {
+  try {
+    localStorage.setItem(AI_MASTER_ENABLED_KEY, String(val))
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * 判断当前是否有效配置并启用了可用的 AI 模型提供商
+ */
+export function hasActiveAIProvider(
+  configuredProviders: ConfiguredProvider[],
+  settings: AISettings,
+): boolean {
+  const activeProv = configuredProviders.find((p) => p.isEnabled)
+  if (activeProv) {
+    return Boolean(
+      activeProv.apiKey?.trim() ||
+      activeProv.provider === 'ollama' ||
+      activeProv.baseUrl.includes('11434')
+    )
+  }
+  return Boolean(
+    settings.apiKey?.trim() ||
+    settings.provider === 'ollama' ||
+    settings.baseUrl.includes('11434')
+  )
+}
 
 function loadSavedShowFloatingMascot(): boolean {
   try {
@@ -226,7 +269,10 @@ export interface AIStoreState {
   closeCommandPalette: () => void
   runGenerateCommand: (userIntent: string) => Promise<void>
 
-  // 全局悬浮 AI 助手状态与操作
+  // 全局 AI 总开关与悬浮助手状态
+  enableAiGlobal: boolean
+  setEnableAiGlobal: (enabled: boolean) => void
+
   showFloatingMascot: boolean
   isFloatingAssistantOpen: boolean
   assistantMode: AIAssistantMode
@@ -285,6 +331,12 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
   isGeneratingCommand: false,
   generatedCommandResult: null,
   commandGenerationError: null,
+
+  enableAiGlobal: loadSavedEnableAiGlobal(),
+  setEnableAiGlobal: (enabled: boolean) => {
+    set({ enableAiGlobal: enabled })
+    saveEnableAiGlobal(enabled)
+  },
 
   showFloatingMascot: loadSavedShowFloatingMascot(),
   isFloatingAssistantOpen: false,
@@ -565,6 +617,7 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
   },
 
   openDiagnosis: (snippet, context = {}) => {
+    if (!get().enableAiGlobal) return
     set({
       isDiagnosisModalOpen: true,
       diagnosisSnippet: snippet,
@@ -604,6 +657,7 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
   },
 
   openCommandPalette: (context = {}) => {
+    if (!get().enableAiGlobal) return
     set({
       isCommandPaletteOpen: true,
       commandPaletteContext: context,
@@ -645,10 +699,15 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
     saveShowFloatingMascot(show)
   },
 
-  openFloatingAssistant: () => set({ isFloatingAssistantOpen: true }),
+  openFloatingAssistant: () => {
+    if (!get().enableAiGlobal) return
+    set({ isFloatingAssistantOpen: true })
+  },
   closeFloatingAssistant: () => set({ isFloatingAssistantOpen: false }),
-  toggleFloatingAssistant: () =>
-    set((state) => ({ isFloatingAssistantOpen: !state.isFloatingAssistantOpen })),
+  toggleFloatingAssistant: () => {
+    if (!get().enableAiGlobal) return
+    set((state) => ({ isFloatingAssistantOpen: !state.isFloatingAssistantOpen }))
+  },
   setAssistantMode: (mode) => set({ assistantMode: mode }),
   setAssistantInput: (text) => set({ assistantInput: text }),
   setAssistantMascotMood: (mood) => set({ assistantMascotMood: mood }),

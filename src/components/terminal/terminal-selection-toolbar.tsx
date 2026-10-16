@@ -72,6 +72,7 @@ export function TerminalSelectionToolbar({
   onSearch,
 }: TerminalSelectionToolbarProps) {
   const { t } = useTranslation();
+  const enableAiGlobal = useAIStore((s) => s.enableAiGlobal);
   const [copied, setCopied] = useState(false);
   const copyTimerRef = useRef<number | null>(null);
 
@@ -188,22 +189,24 @@ export function TerminalSelectionToolbar({
       </button>
 
       {/* AI 智能诊断 / 解释 */}
-      <button
-        type="button"
-        onClick={handleAIDiagnosis}
-        className={cn(
-          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
-          isLightTerminal
-            ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
-            : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
-        )}
-        title={t("tm_ai_diagnosis_tooltip")}
-      >
-        <Sparkles className="h-3.5 w-3.5 text-primary shrink-0" />
-        <span className="truncate tracking-tight font-sans text-[11.5px] font-medium text-primary">
-          {t("tm_ai_diagnose")}
-        </span>
-      </button>
+      {enableAiGlobal && (
+        <button
+          type="button"
+          onClick={handleAIDiagnosis}
+          className={cn(
+            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+            isLightTerminal
+              ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+              : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+          )}
+          title={t("tm_ai_diagnosis_tooltip")}
+        >
+          <Sparkles className="h-3.5 w-3.5 text-primary shrink-0" />
+          <span className="truncate tracking-tight font-sans text-[11.5px] font-medium text-primary">
+            {t("tm_ai_diagnose")}
+          </span>
+        </button>
+      )}
 
       {/* 区分核心操作与辅助工具的分隔线，完全继承 HintPanel 风格 */}
       <div

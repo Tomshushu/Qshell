@@ -4133,4 +4133,9 @@ export default {
   ai_floating_mascot_title: "Global Floating AI Assistant",
   ai_floating_mascot_enable: "Show Global AI Mascot Widget",
   ai_floating_mascot_desc: "Displays an interactive AI Copilot mascot at the bottom-right corner. Click or press Ctrl+Alt+A to summon the assistant for troubleshooting, command generation, and Ops advice.",
+  ai_master_switch_title: "Enable AI Ops & Intelligent Copilot",
+  ai_master_switch_desc: "Master switch for all AI features. When turned off, all AI entry points including the floating mascot, terminal command generator, and one-click diagnostics will be completely disabled and hidden.",
+  ai_master_disabled_notice: "AI features are currently disabled globally. All model providers and automation configurations below are paused. Turn on the master switch above to re-activate immediately.",
+  ai_offline_mode_banner: "Currently in local offline mode. Connect an LLM to unlock deep reasoning capabilities",
+  ai_go_to_config: "Configure",
 };

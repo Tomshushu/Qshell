@@ -482,6 +482,8 @@ export function TerminalModule({
   const [pendingOutputCounts, setPendingOutputCounts] = useState<
     Map<string, number>
   >(new Map());
+  // 全局 AI 总开关
+  const enableAiGlobal = useAIStore((s) => s.enableAiGlobal);
   // E7：搜索正则模式开关
   const [searchRegex, setSearchRegex] = useState(false);
   const [searchCaseSensitive, setSearchCaseSensitive] = useState(false);
@@ -4527,10 +4529,12 @@ export function TerminalModule({
             !event.altKey &&
             (event.key === "i" || event.key === "I" || event.code === "KeyI")
           ) {
-            event.preventDefault();
-            event.stopPropagation();
-            useAIStore.getState().openCommandPalette();
-            return false;
+            if (enableAiGlobal) {
+              event.preventDefault();
+              event.stopPropagation();
+              useAIStore.getState().openCommandPalette();
+              return false;
+            }
           }
           // Tab: 指令提示补全（参考 Warp/Fig 等成熟终端）
           // - Tab：补全选中项，补全后关闭提示框（不自动进入下一阶段）
@@ -8466,8 +8470,8 @@ export function TerminalModule({
         recordingPausedIds={recordingPausedIds}
         isOpening={isOpening}
         onLockSession={handleTriggerAppLock}
-        onAIGenerateCommand={handleAIGenerateCommand}
-        onAIDiagnosis={handleAIDiagnosisFromContext}
+        onAIGenerateCommand={enableAiGlobal ? handleAIGenerateCommand : undefined}
+        onAIDiagnosis={enableAiGlobal ? handleAIDiagnosisFromContext : undefined}
       />
 
       <TerminalSelectionToolbar

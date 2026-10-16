@@ -44,6 +44,7 @@ interface AIDiagnosisModalProps {
 export function AIDiagnosisModal({ onInsertToTerminal }: AIDiagnosisModalProps) {
   const { t } = useTranslation()
   const {
+    enableAiGlobal,
     isDiagnosisModalOpen,
     closeDiagnosis,
     diagnosisSnippet,
@@ -54,6 +55,10 @@ export function AIDiagnosisModal({ onInsertToTerminal }: AIDiagnosisModalProps) 
   } = useAIStore()
 
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null)
+
+  if (!enableAiGlobal) {
+    return null
+  }
 
   const handleCopy = (cmd: string, idx: number) => {
     navigator.clipboard.writeText(cmd)

@@ -40,6 +40,7 @@ interface AICommandPaletteProps {
 export function AICommandPalette({ onInsertToTerminal }: AICommandPaletteProps) {
   const { t } = useTranslation()
   const {
+    enableAiGlobal,
     isCommandPaletteOpen,
     closeCommandPalette,
     isGeneratingCommand,
@@ -51,6 +52,10 @@ export function AICommandPalette({ onInsertToTerminal }: AICommandPaletteProps) 
   const [intentInput, setIntentInput] = useState('')
   const [copied, setCopied] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  if (!enableAiGlobal) {
+    return null
+  }
 
   useEffect(() => {
     if (isCommandPaletteOpen) {
