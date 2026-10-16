@@ -36,7 +36,7 @@ import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 
-const MASCOT_SIZE = 54
+const MASCOT_SIZE = 44
 const STORAGE_MASCOT_OFFSET_KEY = 'qshell_ai_mascot_offset_v3'
 
 interface MascotOffset {
@@ -563,9 +563,9 @@ export function FloatingAIAssistant() {
 
           {/* 待机小呼吸点 */}
           {!isFloatingAssistantOpen && (
-            <span className="absolute top-0 right-0 flex h-3 w-3 pointer-events-none">
+            <span className="absolute top-0 right-0 flex h-2.5 w-2.5 pointer-events-none">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-3 w-3 bg-cyan-500 ring-2 ring-background" />
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan-500 ring-2 ring-background" />
             </span>
           )}
         </div>
