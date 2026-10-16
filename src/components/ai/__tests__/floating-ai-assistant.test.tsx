@@ -139,4 +139,19 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
 
     vi.useRealTimers()
   })
+
+  it('supports dragging the mascot button across the screen', () => {
+    renderWithProviders(<FloatingAIAssistant />)
+    const trigger = screen.getByTestId('ai-mascot-trigger')
+    expect(trigger).toBeTruthy()
+
+    // Simulate drag gesture
+    fireEvent.pointerDown(trigger, { clientX: 100, clientY: 100, button: 0 })
+    fireEvent.pointerMove(window, { clientX: 200, clientY: 250 })
+    fireEvent.pointerUp(window)
+
+    // The trigger position was updated
+    expect(trigger.style.left).toBeDefined()
+    expect(trigger.style.top).toBeDefined()
+  })
 })

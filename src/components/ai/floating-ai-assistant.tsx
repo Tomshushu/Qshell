@@ -2,7 +2,7 @@
  * src/components/ai/floating-ai-assistant.tsx
  *
  * Qshell 全局悬浮 AI 助手组件 (Floating AI Assistant & Copilot Mascot)
- * 1. 悬浮吉祥物小人：蓝白科技感小机器人，支持待机眨眼、微光扫掠与 hover 笑眼动画
+ * 1. 悬浮吉祥物小人：纯圆蓝白科技感小机器人，无外层方卡片，支持全屏自由拖拽与记忆位置
  * 2. 对话弹出面板：严格参考阿里云计算 AI 助手设计，包含 6 大运维场景卡片、快捷 prompt pills、Agent/Chat 双模式与流式对话
  * 3. 终端无缝协同：支持一键将推荐命令填入当前活跃终端并执行
  */
@@ -40,6 +40,32 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { cn } from '@/lib/utils'
 import type { AIAssistantMode, AIAssistantMessage } from '@/types/ai'
 
+const MASCOT_SIZE = 54
+const STORAGE_POS_KEY = 'qshell_ai_mascot_pos_v2'
+
+function loadSavedPosition(): { x: number; y: number } | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_POS_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (typeof parsed.x === 'number' && typeof parsed.y === 'number') {
+        return parsed
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return null
+}
+
+function savePosition(pos: { x: number; y: number }) {
+  try {
+    localStorage.setItem(STORAGE_POS_KEY, JSON.stringify(pos))
+  } catch {
+    /* ignore */
+  }
+}
+
 export function FloatingAIAssistant() {
   const { t } = useTranslation()
   const {
@@ -65,6 +91,46 @@ export function FloatingAIAssistant() {
   const [isExpanded, setIsExpanded] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // 悬浮小人自由拖拽位置管理
+  const [position, setPosition] = useState<{ x: number; y: number }>(() => {
+    const saved = loadSavedPosition()
+    if (saved) return saved
+    if (typeof window !== 'undefined') {
+      return {
+        x: Math.max(16, window.innerWidth - MASCOT_SIZE - 28),
+        y: Math.max(16, window.innerHeight - MASCOT_SIZE - 48),
+      }
+    }
+    return { x: 500, y: 500 }
+  })
+
+  const [isDragging, setIsDragging] = useState(false)
+  const dragRef = useRef<{
+    startX: number
+    startY: number
+    mascotStartX: number
+    mascotStartY: number
+    hasMoved: boolean
+  }>({
+    startX: 0,
+    startY: 0,
+    mascotStartX: 0,
+    mascotStartY: 0,
+    hasMoved: false,
+  })
+
+  // 窗口 resize 时自动限制在屏幕边界内
+  useEffect(() => {
+    const handleResize = () => {
+      setPosition((prev) => ({
+        x: Math.min(Math.max(12, prev.x), Math.max(12, window.innerWidth - MASCOT_SIZE - 12)),
+        y: Math.min(Math.max(12, prev.y), Math.max(12, window.innerHeight - MASCOT_SIZE - 12)),
+      }))
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
 
   // 快捷键支持：Ctrl+Alt+A / Cmd+Alt+A 切换 AI 助手
   useEffect(() => {
@@ -112,6 +178,60 @@ export function FloatingAIAssistant() {
     }
   }
 
+  // 鼠标/触控拖拽小人事件
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return
+
+    dragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      mascotStartX: position.x,
+      mascotStartY: position.y,
+      hasMoved: false,
+    }
+
+    const onPointerMove = (moveEv: PointerEvent) => {
+      const dx = moveEv.clientX - dragRef.current.startX
+      const dy = moveEv.clientY - dragRef.current.startY
+
+      if (!dragRef.current.hasMoved && Math.hypot(dx, dy) > 4) {
+        dragRef.current.hasMoved = true
+        setIsDragging(true)
+      }
+
+      if (dragRef.current.hasMoved) {
+        const nextX = Math.min(
+          Math.max(12, dragRef.current.mascotStartX + dx),
+          Math.max(12, window.innerWidth - MASCOT_SIZE - 12),
+        )
+        const nextY = Math.min(
+          Math.max(12, dragRef.current.mascotStartY + dy),
+          Math.max(12, window.innerHeight - MASCOT_SIZE - 12),
+        )
+        setPosition({ x: nextX, y: nextY })
+      }
+    }
+
+    const onPointerUp = () => {
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', onPointerUp)
+
+      if (dragRef.current.hasMoved) {
+        setIsDragging(false)
+        setPosition((latest) => {
+          savePosition(latest)
+          return latest
+        })
+      } else {
+        // 未发生位移则响应点击
+        handleToggle()
+      }
+    }
+
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', onPointerUp)
+  }
+
   const handleSend = () => {
     if (!assistantInput.trim() || isAssistantResponding) return
     playSound(SoundType.Click)
@@ -141,6 +261,50 @@ export function FloatingAIAssistant() {
     setInsertedId(id)
     playSound(SoundType.Success)
     setTimeout(() => setInsertedId(null), 2000)
+  }
+
+  // 计算弹窗自适应位置：根据小人当前在屏幕上的象限智能贴合锚定
+  const getDialogStyle = (): React.CSSProperties => {
+    if (typeof window === 'undefined') {
+      return { bottom: '80px', right: '24px' }
+    }
+
+    const dialogW = isExpanded
+      ? Math.min(620, window.innerWidth - 32)
+      : Math.min(420, window.innerWidth - 32)
+    const dialogH = isExpanded
+      ? window.innerHeight - 48
+      : Math.min(620, window.innerHeight - 90)
+
+    let left = 0
+    let top = 0
+
+    if (isExpanded) {
+      left = Math.max(16, (window.innerWidth - dialogW) / 2)
+      top = Math.max(16, (window.innerHeight - dialogH) / 2)
+    } else {
+      // 水平方向：小人在右半边则窗口向左展开，小人在左半边则窗口向右展开
+      if (position.x > window.innerWidth / 2) {
+        left = Math.max(16, position.x + MASCOT_SIZE - dialogW)
+      } else {
+        left = Math.min(window.innerWidth - dialogW - 16, position.x)
+      }
+
+      // 垂直方向：小人在下半边则窗口向上展开，小人在上半边则窗口向下展开
+      if (position.y > window.innerHeight / 2) {
+        top = Math.max(16, position.y - dialogH - 12)
+      } else {
+        top = Math.min(window.innerHeight - dialogH - 16, position.y + MASCOT_SIZE + 12)
+      }
+    }
+
+    return {
+      position: 'fixed',
+      left: `${left}px`,
+      top: `${top}px`,
+      width: `${dialogW}px`,
+      height: `${dialogH}px`,
+    }
   }
 
   // 6 大核心场景卡片配置（严格对齐图片 4）
@@ -211,60 +375,54 @@ export function FloatingAIAssistant() {
 
   return (
     <>
-      {/* 1. 全局悬浮机器人吉祥物按钮 (Mascot Floating Button) */}
+      {/* 1. 全局悬浮机器人吉祥物按钮 (纯圆形无方卡，支持全屏自由拖拽) */}
       <div
+        data-testid="ai-mascot-trigger"
+        style={{
+          position: 'fixed',
+          left: `${position.x}px`,
+          top: `${position.y}px`,
+          zIndex: 40,
+        }}
+        onPointerDown={handlePointerDown}
         className={cn(
-          'fixed bottom-12 right-6 z-40 select-none transition-all duration-300 ease-out',
-          isFloatingAssistantOpen ? 'scale-90 opacity-40 hover:opacity-100' : 'scale-100 opacity-100',
+          'select-none touch-none rounded-full',
+          isDragging ? 'cursor-grabbing transition-none' : 'cursor-grab transition-transform duration-200',
+          isFloatingAssistantOpen
+            ? 'scale-90 opacity-40 hover:opacity-100'
+            : 'scale-100 opacity-100 hover:scale-105 active:scale-95',
         )}
       >
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div className="relative group">
-              {/* 外圈微光呼吸光晕 */}
-              <div className="absolute -inset-1 rounded-full bg-gradient-to-r from-blue-600 to-cyan-400 opacity-40 blur-md group-hover:opacity-75 transition duration-500 group-hover:duration-200 animate-pulse" />
+        <div className="relative rounded-full">
+          {/* 外圈微光呼吸光晕 (纯圆形柔光，无任何方形投影) */}
+          <div className="absolute inset-0 rounded-full bg-gradient-to-r from-blue-600 to-cyan-400 opacity-30 blur-md pointer-events-none animate-pulse" />
 
-              <AIMascotAvatar
-                size={54}
-                mood={assistantMascotMood}
-                showGlowRing={true}
-                interactive={true}
-                onClick={handleToggle}
-                className="relative shadow-xl hover:shadow-cyan-500/20"
-              />
+          {/* 纯圆形吉祥物主体 */}
+          <AIMascotAvatar
+            size={MASCOT_SIZE}
+            mood={assistantMascotMood}
+            showGlowRing={true}
+            interactive={!isDragging}
+            className="relative rounded-full drop-shadow-lg"
+          />
 
-              {/* 待机小呼吸点 */}
-              {!isFloatingAssistantOpen && (
-                <span className="absolute top-0 right-0 flex h-3 w-3">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-3 w-3 bg-cyan-500 ring-2 ring-background" />
-                </span>
-              )}
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="left" className="text-xs py-1.5 px-3">
-            <div className="font-semibold flex items-center gap-1.5">
-              <span>{t('ai_assistant_title') || '计算 AI 助手'}</span>
-              <span className="text-[10px] text-primary bg-primary/10 px-1 py-0.2 rounded">Ctrl+Alt+A</span>
-            </div>
-            <div className="text-[11px] text-muted-foreground mt-0.5">
-              点击唤起终端 Copilot 智能运维小人
-            </div>
-          </TooltipContent>
-        </Tooltip>
+          {/* 待机小呼吸点 */}
+          {!isFloatingAssistantOpen && (
+            <span className="absolute top-0 right-0 flex h-3 w-3 pointer-events-none">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-3 w-3 bg-cyan-500 ring-2 ring-background" />
+            </span>
+          )}
+        </div>
       </div>
 
-      {/* 2. 点击弹出的 AI 助手窗口面板 (Popup Assistant Dialog) */}
+      {/* 2. 点击弹出的 AI 助手窗口面板 (智能跟随小人象限自适应锚定) */}
       {isFloatingAssistantOpen && (
         <div
-          className={cn(
-            'fixed right-6 z-50 flex flex-col overflow-hidden bg-background/95 backdrop-blur-2xl border border-border/80 shadow-2xl rounded-2xl transition-all duration-200 animate-in fade-in zoom-in-95 slide-in-from-bottom-4',
-            isExpanded
-              ? 'bottom-6 top-6 w-[620px] max-w-[calc(100vw-48px)]'
-              : 'bottom-24 w-[420px] max-w-[calc(100vw-32px)] h-[620px] max-h-[calc(100vh-120px)]',
-          )}
+          style={getDialogStyle()}
+          className="z-50 flex flex-col overflow-hidden bg-background/95 backdrop-blur-2xl border border-border/80 shadow-2xl rounded-2xl transition-all duration-200 animate-in fade-in zoom-in-95"
         >
-          {/* Header 顶部栏 (严格匹配参考图：标题 + 新建 + 历史 + 反馈 + 最小化/关闭) */}
+          {/* Header 顶部栏 (严格匹配参考图：标题 + 新建 + 历史 + 宽屏 + 最小化/关闭) */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-border/60 bg-muted/20 select-none shrink-0">
             {/* 左侧：小人微标 + 标题 */}
             <div className="flex items-center gap-2">

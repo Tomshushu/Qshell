@@ -84,7 +84,7 @@ export function AIMascotAvatar({
   return (
     <div
       className={cn(
-        'relative select-none shrink-0 transition-transform duration-300 ease-out',
+        'relative select-none shrink-0 rounded-full transition-transform duration-300 ease-out',
         interactive && 'cursor-pointer hover:scale-105 active:scale-95',
         className,
       )}
