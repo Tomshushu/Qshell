@@ -10,6 +10,7 @@ import {
   Terminal as TerminalIcon,
   ChevronRight,
   SlidersHorizontal,
+  Zap,
 } from "lucide-react";
 import type { HintItem } from "@/lib/command-intelligence/completion-engine";
 import { FONT_PRESETS } from "@/lib/font-presets";
@@ -409,6 +410,9 @@ export function renderHintItemIcon(hint: HintItem) {
     ) : (
       <FileText className="h-3.5 w-3.5 text-slate-400 shrink-0" />
     );
+  }
+  if (hint.kind === "markov") {
+    return <Zap className="h-3.5 w-3.5 text-amber-400 shrink-0" />;
   }
   if (hint.kind === "history") {
     return <History className="h-3.5 w-3.5 text-slate-400 shrink-0" />;

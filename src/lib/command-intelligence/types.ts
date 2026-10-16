@@ -106,7 +106,7 @@ export interface CategoryMeta {
 }
 
 /** 提示项类型 */
-export type HintKind = 'command' | 'subcommand' | 'param' | 'positional' | 'path' | 'history' | 'example' | 'dynamic'
+export type HintKind = 'command' | 'subcommand' | 'param' | 'positional' | 'path' | 'history' | 'example' | 'dynamic' | 'markov'
 
 // ==================== 动态补全类型 ====================
 

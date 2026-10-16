@@ -80,6 +80,10 @@ import {
   suggestHistory,
 } from "@/lib/command-intelligence/command-history";
 import { detectPlatform } from "@/lib/command-intelligence/platform-detector";
+import {
+  recordMarkovTransition,
+  getMarkovHintItems,
+} from "@/lib/command-intelligence/markov-chain";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -594,6 +598,8 @@ export function TerminalModule({
     >
   >(new Map());
   const pendingCommandRef = useRef<Map<string, string>>(new Map());
+  // 记录每个终端上一次成功提交执行的指令，用于马尔可夫转移连招预测
+  const lastSubmittedCommandPerTermRef = useRef<Map<string, string>>(new Map());
   type CommandMarkerEntry = {
     marker: { line: number; isDisposed: boolean; dispose: () => void };
     command: string;
@@ -1055,6 +1061,22 @@ export function TerminalModule({
             return true;
           });
           if (dedupHist.length > 0) items = [...dedupHist, ...items];
+        }
+      }
+
+      // 马尔可夫转移连招预测：结合上一条提交指令与 OSC-7 提取的工作目录推测下一步高概率动作
+      if (input.trim()) {
+        const curTermId = activeTermIdRef.current;
+        const prevCmd = curTermId
+          ? lastSubmittedCommandPerTermRef.current.get(curTermId)
+          : undefined;
+        const curCwd = curTermId
+          ? terminalCwdRef.current.get(curTermId)
+          : undefined;
+        const markovHints = getMarkovHintItems(prevCmd, input.trim(), curCwd, 2);
+        if (markovHints.length > 0) {
+          const markovLabels = new Set(markovHints.map((m) => m.label));
+          items = [...markovHints, ...items.filter((item) => !markovLabels.has(item.label))];
         }
       }
 
@@ -2554,6 +2576,14 @@ export function TerminalModule({
       const clean = command.trim();
       if (!clean) return;
       pendingCommandRef.current.set(termId, clean);
+
+      // 本地马尔可夫模型自适应强化学习：记录相邻执行命令转移对
+      const prevCmd = lastSubmittedCommandPerTermRef.current.get(termId);
+      const currentCwd = terminalCwdRef.current.get(termId);
+      if (prevCmd && prevCmd !== clean) {
+        recordMarkovTransition(prevCmd, clean, currentCwd);
+      }
+      lastSubmittedCommandPerTermRef.current.set(termId, clean);
 
       // cd 指令智能追踪：当用户键入 cd /path 等命令时，及时推导并更新终端工作目录。
       // 仅对「纯路径」形式的 cd 做乐观推导：含变量($)、命令连接(&&/;)、管道(|)、

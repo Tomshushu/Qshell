@@ -677,6 +677,19 @@ export function applyHint(
     return { newInput, insertText: completion + ' ' }
   }
 
+  // 完整命令行补全（历史推荐或马尔可夫转移连招）
+  if (hint.kind === 'history' || hint.kind === 'markov') {
+    const trimmedInput = input.trimStart()
+    if (hint.insertText.toLowerCase().startsWith(trimmedInput.toLowerCase())) {
+      const completion = hint.insertText.slice(trimmedInput.length)
+      const trailing = hint.insertText.endsWith('""') || hint.insertText.endsWith("''") ? '' : ' '
+      return {
+        newInput: hint.insertText + trailing,
+        insertText: completion + trailing,
+      }
+    }
+  }
+
   // subcommand / param：替换最后一个 token
   const lastToken = tokens[tokens.length - 1] ?? ''
   const head = tokens.slice(0, -1).join(' ')
