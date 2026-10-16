@@ -76,6 +76,8 @@ import {
   KeyRound,
   RotateCw,
   Cloud,
+  CheckCircle2,
+  AlertCircle,
 } from "lucide-react";
 import { useUpdaterStore } from "@/store/updater-store";
 import { useAppVersion } from "@/utils/version";
@@ -875,6 +877,11 @@ function SettingsPanel({
   const checkForUpdates = useUpdaterStore((s) => s.checkForUpdates);
   const skippedVersion = useUpdaterStore((s) => s.skippedVersion);
   const resetSkippedVersion = useUpdaterStore((s) => s.resetSkippedVersion);
+  const updateAvailable = useUpdaterStore((s) => s.updateAvailable);
+  const updateInfo = useUpdaterStore((s) => s.updateInfo);
+  const lastCheckedTime = useUpdaterStore((s) => s.lastCheckedTime);
+  const updateErrorMessage = useUpdaterStore((s) => s.errorMessage);
+  const openUpdateDialog = useUpdaterStore((s) => s.openDialog);
   const appVersion = useAppVersion();
   // 主题下拉:点击外部关闭 + 动态定位(通过 createPortal 渲染到 body,
   // 避免 DialogContent 的 transform/overflow-hidden 创建包含块导致 fixed 失效并被裁切)
@@ -1347,11 +1354,11 @@ function SettingsPanel({
             {/* 软件在线更新 (OTA) */}
             <Card className="border/50 bg-background shadow-sm rounded-lg overflow-hidden">
               <CardContent className="p-6 flex flex-col gap-5 text-xs">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="space-y-0.5 min-w-0">
                     <span className="text-sm font-bold text-foreground flex items-center gap-2">
                       {t("ota_title")}
-                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 shrink-0">
                         v{appVersion}
                       </span>
                     </span>
@@ -1359,18 +1366,55 @@ function SettingsPanel({
                       {t("ota_desc")}
                     </p>
                   </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-8 text-xs gap-1.5 font-medium hover:bg-muted/80 shadow-xs"
-                    disabled={isCheckingUpdate}
-                    onClick={() => {
-                      void checkForUpdates(false);
-                    }}
-                  >
-                    <RotateCw className={`h-3.5 w-3.5 ${isCheckingUpdate ? 'animate-spin' : ''}`} />
-                    {isCheckingUpdate ? t("ota_checking") : t("ota_check_btn")}
-                  </Button>
+
+                  <div className="flex items-center gap-2.5 shrink-0">
+                    {!isCheckingUpdate && updateAvailable && (
+                      <button
+                        type="button"
+                        onClick={openUpdateDialog}
+                        className="flex items-center gap-1.5 text-xs text-primary bg-primary/10 hover:bg-primary/20 border border-primary/25 px-2.5 py-1 rounded-md transition-colors cursor-pointer"
+                        title={t("ota_found_desc")}
+                      >
+                        <Sparkles className="h-3.5 w-3.5 text-primary shrink-0" />
+                        <span className="font-medium">
+                          {t("ota_found_new_version", { version: updateInfo?.version ?? "" })}
+                        </span>
+                      </button>
+                    )}
+
+                    {!isCheckingUpdate && !updateAvailable && lastCheckedTime && !updateErrorMessage && (
+                      <div
+                        className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 dark:bg-emerald-500/15 border border-emerald-500/20 px-2.5 py-1 rounded-md transition-all select-none"
+                        title={`${t("ota_up_to_date_title")} - ${t("ota_up_to_date_desc")}`}
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                        <span className="font-medium">{t("ota_latest_title")}</span>
+                      </div>
+                    )}
+
+                    {!isCheckingUpdate && updateErrorMessage && (
+                      <div
+                        className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1 rounded-md select-none"
+                        title={updateErrorMessage}
+                      >
+                        <AlertCircle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                        <span className="font-medium">{t("ota_check_failed")}</span>
+                      </div>
+                    )}
+
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 text-xs gap-1.5 font-medium hover:bg-muted/80 shadow-xs shrink-0 cursor-pointer"
+                      disabled={isCheckingUpdate}
+                      onClick={() => {
+                        void checkForUpdates(false);
+                      }}
+                    >
+                      <RotateCw className={`h-3.5 w-3.5 ${isCheckingUpdate ? 'animate-spin' : ''}`} />
+                      {isCheckingUpdate ? t("ota_checking") : t("ota_check_btn")}
+                    </Button>
+                  </div>
                 </div>
 
                 <div className="flex items-center justify-between pt-3 border-t">
