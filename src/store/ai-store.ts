@@ -618,14 +618,19 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
 
   openDiagnosis: (snippet, context = {}) => {
     if (!get().enableAiGlobal) return
+    const text = snippet?.trim()
+    if (!text) {
+      set({ isFloatingAssistantOpen: true, assistantMode: 'agent' })
+      return
+    }
+
     set({
-      isDiagnosisModalOpen: true,
-      diagnosisSnippet: snippet,
-      diagnosisContext: context,
-      diagnosisResult: null,
-      diagnosisError: null,
+      isFloatingAssistantOpen: true,
+      assistantMode: 'agent',
     })
-    void get().runDiagnosis()
+
+    const prompt = `请帮我诊断分析以下终端报错日志，定位根因并给出排查解决建议：\n\`\`\`\n${text}\n\`\`\``
+    void get().sendAssistantMessage(prompt, { ...context, selectedText: text })
   },
 
   closeDiagnosis: () => {
@@ -659,10 +664,8 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
   openCommandPalette: (context = {}) => {
     if (!get().enableAiGlobal) return
     set({
-      isCommandPaletteOpen: true,
-      commandPaletteContext: context,
-      generatedCommandResult: null,
-      commandGenerationError: null,
+      isFloatingAssistantOpen: true,
+      assistantMode: 'agent',
     })
   },
 
@@ -863,6 +866,24 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
             command: 'sudo ss -tulpn | grep :8080',
             explanation: '使用 ss 高性能内核套接字工具查看端口监听详情',
             risk: { level: 'safe', command: 'sudo ss -tulpn | grep :8080', reasons: [], isBlocked: false },
+          },
+        ]
+      } else if (content.includes('诊断') || content.includes('报错') || content.includes('error') || content.includes('failed')) {
+        replyContent = `### 🔍 终端报错日志排障建议
+根据您选中的终端日志内容，建议按以下标准排查步骤进行定位：
+1. **确认服务进程与错误退出码**：检查最近崩溃或退出的核心守护进程。
+2. **检索完整上下文日志堆栈**：单一报错行往往由前序异常诱发，需结合 systemd 或 dmesg 查看前序堆栈。
+3. **安全排查命令推荐**：`
+        commands = [
+          {
+            command: 'journalctl -xe --no-pager | tail -n 40',
+            explanation: '查看 systemd 核心服务最近 40 行系统详细报错上下文',
+            risk: { level: 'safe', command: 'journalctl -xe --no-pager | tail -n 40', reasons: [], isBlocked: false },
+          },
+          {
+            command: 'dmesg -T --level=err,warn | tail -n 20',
+            explanation: '检索内核级告警与 OOM 内存溢出终止记录',
+            risk: { level: 'safe', command: 'dmesg -T --level=err,warn | tail -n 20', reasons: [], isBlocked: false },
           },
         ]
       } else {

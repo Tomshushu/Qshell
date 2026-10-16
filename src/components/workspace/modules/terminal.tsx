@@ -185,8 +185,6 @@ import {
   TerminalHintPanel,
   SerialQuickSendEditor,
 } from "@/components/terminal";
-import { AIDiagnosisModal } from "@/components/ai/ai-diagnosis-modal";
-import { AICommandPalette } from "@/components/ai/ai-command-palette";
 import { useAIStore } from "@/store/ai-store";
 import {
   extractPathFromShellTitle,
@@ -8494,22 +8492,6 @@ export function TerminalModule({
             writePasteText(pendingPaste.text, pendingPaste.sessionId);
           }
           setPendingPaste(null);
-        }}
-      />
-
-      <AIDiagnosisModal
-        onInsertToTerminal={(cmd) => {
-          if (activeTermIdRef.current && cmd) {
-            writePasteText(cmd, activeTermIdRef.current);
-          }
-        }}
-      />
-
-      <AICommandPalette
-        onInsertToTerminal={(cmd) => {
-          if (activeTermIdRef.current && cmd) {
-            writePasteText(cmd, activeTermIdRef.current);
-          }
         }}
       />
     </div>

@@ -284,7 +284,11 @@ export function FloatingAIAssistant() {
     }
   }, [isFloatingAssistantOpen])
 
-  if (!enableAiGlobal || !showFloatingMascot) {
+  if (!enableAiGlobal) {
+    return null
+  }
+
+  if (!showFloatingMascot && !isFloatingAssistantOpen) {
     return null
   }
 
@@ -543,46 +547,48 @@ export function FloatingAIAssistant() {
   return (
     <>
       {/* 1. 全局悬浮机器人吉祥物按钮 (相对窗口右下角弹性锚定，缩放全屏不漂移) */}
-      <div
-        data-testid="ai-mascot-trigger"
-        title={`${t('ai_assistant_title') || '运维小助手'} (Ctrl+Alt+A)`}
-        style={{
-          position: 'fixed',
-          right: `${mascotOffset.right}px`,
-          bottom: `${mascotOffset.bottom}px`,
-          zIndex: 40,
-        }}
-        onPointerDown={handleMascotPointerDown}
-        className={cn(
-          'select-none touch-none rounded-full',
-          isMascotDragging ? 'cursor-grabbing transition-none' : 'cursor-grab transition-transform duration-200',
-          isFloatingAssistantOpen
-            ? 'scale-90 opacity-40 hover:opacity-100'
-            : 'scale-100 opacity-100 hover:scale-105 active:scale-95',
-        )}
-      >
-        <div className="relative rounded-full">
-          {/* 外圈微光呼吸光晕 (纯圆形柔光，无任何方形投影) */}
-          <div className="absolute inset-0 rounded-full bg-gradient-to-r from-blue-600 to-cyan-400 opacity-30 blur-md pointer-events-none animate-pulse" />
-
-          {/* 纯圆形吉祥物主体 */}
-          <AIMascotAvatar
-            size={MASCOT_SIZE}
-            mood={assistantMascotMood}
-            showGlowRing={true}
-            interactive={!isMascotDragging}
-            className="relative rounded-full drop-shadow-lg"
-          />
-
-          {/* 待机小呼吸点 */}
-          {!isFloatingAssistantOpen && (
-            <span className="absolute top-0 right-0 flex h-2.5 w-2.5 pointer-events-none">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan-500 ring-2 ring-background" />
-            </span>
+      {showFloatingMascot && (
+        <div
+          data-testid="ai-mascot-trigger"
+          title={`${t('ai_assistant_title') || '运维小助手'} (Ctrl+Alt+A)`}
+          style={{
+            position: 'fixed',
+            right: `${mascotOffset.right}px`,
+            bottom: `${mascotOffset.bottom}px`,
+            zIndex: 40,
+          }}
+          onPointerDown={handleMascotPointerDown}
+          className={cn(
+            'select-none touch-none rounded-full',
+            isMascotDragging ? 'cursor-grabbing transition-none' : 'cursor-grab transition-transform duration-200',
+            isFloatingAssistantOpen
+              ? 'scale-90 opacity-40 hover:opacity-100'
+              : 'scale-100 opacity-100 hover:scale-105 active:scale-95',
           )}
+        >
+          <div className="relative rounded-full">
+            {/* 外圈微光呼吸光晕 (纯圆形柔光，无任何方形投影) */}
+            <div className="absolute inset-0 rounded-full bg-gradient-to-r from-blue-600 to-cyan-400 opacity-30 blur-md pointer-events-none animate-pulse" />
+
+            {/* 纯圆形吉祥物主体 */}
+            <AIMascotAvatar
+              size={MASCOT_SIZE}
+              mood={assistantMascotMood}
+              showGlowRing={true}
+              interactive={!isMascotDragging}
+              className="relative rounded-full drop-shadow-lg"
+            />
+
+            {/* 待机小呼吸点 */}
+            {!isFloatingAssistantOpen && (
+              <span className="absolute top-0 right-0 flex h-2.5 w-2.5 pointer-events-none">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan-500 ring-2 ring-background" />
+              </span>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* 2. 点击弹出的 AI 助手窗口面板 (支持任意拖拽，比例舒适宽屏) */}
       {isFloatingAssistantOpen && (

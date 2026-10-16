@@ -203,5 +203,26 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
 
     dispatchSpy.mockRestore()
   })
+
+  it('opens assistant and performs diagnosis in-chat when openDiagnosis is called', async () => {
+    vi.useFakeTimers()
+    useAIStore.setState({
+      enableAiGlobal: true,
+      isFloatingAssistantOpen: false,
+      assistantMessages: [],
+    })
+
+    await act(async () => {
+      useAIStore.getState().openDiagnosis('Error: Connection refused on port 22')
+      vi.runAllTimers()
+    })
+
+    expect(useAIStore.getState().isFloatingAssistantOpen).toBe(true)
+    const messages = useAIStore.getState().assistantMessages
+    expect(messages.length).toBeGreaterThanOrEqual(1)
+    expect(messages[0].content).toContain('Error: Connection refused on port 22')
+
+    vi.useRealTimers()
+  })
 })
 
