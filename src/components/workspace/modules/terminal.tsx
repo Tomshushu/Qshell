@@ -1779,11 +1779,7 @@ export function TerminalModule({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [getActiveTerm]);
 
-  // AI 智能指令生成与诊断触发
-  const handleAIGenerateCommand = useCallback(() => {
-    setCtxMenu(null);
-    useAIStore.getState().openCommandPalette();
-  }, []);
+  // AI 选中文本诊断触发
 
   const handleAIDiagnosisFromContext = useCallback(() => {
     const term = getActiveTerm();
@@ -4520,20 +4516,6 @@ export function TerminalModule({
             return false;
           }
 
-          // AI 智能指令生成（Ctrl+I 或 Cmd+I）
-          if (
-            (event.ctrlKey || event.metaKey) &&
-            !event.shiftKey &&
-            !event.altKey &&
-            (event.key === "i" || event.key === "I" || event.code === "KeyI")
-          ) {
-            if (enableAiGlobal) {
-              event.preventDefault();
-              event.stopPropagation();
-              useAIStore.getState().openCommandPalette();
-              return false;
-            }
-          }
           // Tab: 指令提示补全（参考 Warp/Fig 等成熟终端）
           // - Tab：补全选中项，补全后关闭提示框（不自动进入下一阶段）
           // - Enter：始终透传给 shell 执行命令，绝不补全
@@ -5752,6 +5734,17 @@ export function TerminalModule({
     }
     return lines.join("\n");
   }, [getActiveTerm]);
+
+  const handleAIDiagnoseRecentOutput = useCallback(() => {
+    setCtxMenu(null);
+    const fullOutput = getActiveOutput();
+    if (!fullOutput) return;
+    const lines = fullOutput.split(/\r?\n/).map((l) => l.trimEnd()).filter(Boolean);
+    const recentLines = lines.slice(-40).join("\n");
+    if (recentLines) {
+      useAIStore.getState().openDiagnosis(recentLines);
+    }
+  }, [getActiveOutput]);
 
   const clearActiveOutput = useCallback(() => {
     const term = getActiveTerm();
@@ -8468,8 +8461,8 @@ export function TerminalModule({
         recordingPausedIds={recordingPausedIds}
         isOpening={isOpening}
         onLockSession={handleTriggerAppLock}
-        onAIGenerateCommand={enableAiGlobal ? handleAIGenerateCommand : undefined}
         onAIDiagnosis={enableAiGlobal ? handleAIDiagnosisFromContext : undefined}
+        onAIDiagnoseRecent={enableAiGlobal ? handleAIDiagnoseRecentOutput : undefined}
       />
 
       <TerminalSelectionToolbar

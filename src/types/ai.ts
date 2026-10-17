@@ -54,6 +54,19 @@ export interface ConfiguredProvider {
   createdAt?: number
 }
 
+export type AIExecutionMode = 'ask' | 'auto_readonly' | 'disabled'
+
+export interface CommandGuardDecision {
+  allowed: boolean
+  isReadOnly: boolean
+  riskLevel: CommandRiskLevel
+  reason: string
+  safeToAutoExecute: boolean
+  isInteractive?: boolean
+  blockedReason?: string
+  suggestedSafeCommand?: string
+}
+
 export interface AISettings {
   provider: AIProvider
   protocol: AIProtocol
@@ -64,6 +77,12 @@ export interface AISettings {
   maxTokens: number
   enableDlp: boolean
   maskPrivateIps: boolean
+  executionMode?: AIExecutionMode
+  customBlacklist?: string[]
+  /** 最大保留历史会话数（默认 30，超限自动滚动淘汰最旧会话） */
+  maxAssistantSessions?: number
+  /** 单个会话最多保留历史消息记录数（默认 50，超限滑动窗口滚动淘汰最旧记录） */
+  maxMessagesPerSession?: number
 }
 
 export type CommandRiskLevel = 'safe' | 'notice' | 'dangerous' | 'blocked'
@@ -89,20 +108,40 @@ export interface AIDiagnosisResult {
 export interface AIPromptContext {
   osType?: string
   osDistro?: string
+  serverName?: string
+  serverHost?: string
   currentDir?: string
   currentCommand?: string
   recentOutput?: string
   selectedText?: string
+  serverInventory?: string
+  probeReport?: string
+  servers?: any[]
+  serverGroups?: any[]
+  activeServerId?: string | null
 }
 
 export type AIAssistantMode = 'agent' | 'chat'
 
 export type AIMascotMood = 'idle' | 'happy' | 'thinking' | 'blink'
 
+export interface AIAssistantExecutionCard {
+  id: string
+  command: string
+  explanation?: string
+  decision: CommandGuardDecision
+  status: 'pending' | 'executing' | 'executed' | 'rejected' | 'blocked'
+  output?: string
+  summary?: string
+  error?: string
+  executedAt?: number
+}
+
 export interface AIAssistantMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
+  thinking?: string
   createdAt: number
   mode?: AIAssistantMode
   status?: 'sending' | 'streaming' | 'done' | 'error'
@@ -111,6 +150,16 @@ export interface AIAssistantMessage {
     explanation?: string
     risk?: CommandRiskAnalysis
   }>
+  executionCard?: AIAssistantExecutionCard
+}
+
+export interface AIAssistantSession {
+  id: string
+  title: string
+  messages: AIAssistantMessage[]
+  createdAt: number
+  updatedAt: number
+  mode?: AIAssistantMode
 }
 
 export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {

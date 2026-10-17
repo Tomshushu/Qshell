@@ -9,6 +9,8 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react'
 import { useAIStore } from '@/store/ai-store'
+import { useAppStore } from '@/store'
+import { getTerminalTheme } from '@/utils/terminal-themes'
 import { AIMascotAvatar } from './ai-mascot-avatar'
 import { useTranslation } from '@/i18n'
 import { playSound, SoundType } from '@/lib/sound'
@@ -31,22 +33,51 @@ import {
   Rocket,
   HardDrive,
   Lightbulb,
+  Activity,
+  Cpu,
   GripHorizontal,
   AlertCircle,
-  Maximize2,
-  Minimize2,
+  Trash2,
+  Clock,
+  Square,
+  CircleStop,
+  Play,
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  Brain,
+  Bot,
+  CheckCircle2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { hasActiveAIProvider } from '@/store/ai-store'
+import type { AIAssistantExecutionCard } from '@/types/ai'
 
 const MASCOT_SIZE = 44
-const STORAGE_MASCOT_OFFSET_KEY = 'qshell_ai_mascot_offset_v3'
+const STORAGE_MASCOT_OFFSET_KEY = 'qshell_ai_mascot_offset_v5'
+const CONTENT_TOP_OFFSET = 88 // 上面到主内容区域 (TabBar + 模块工具栏下方，8px呼吸间距)
+const STATUSBAR_BOTTOM_OFFSET = 32 // 下面到页脚 (StatusBar上方，8px呼吸间距)
+
+type ResizeDirection = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'
 
 interface MascotOffset {
   right: number
   bottom: number
+}
+
+function clampMascotOffset(offset: MascotOffset): MascotOffset {
+  if (typeof window === 'undefined') return offset
+  const minBottom = STATUSBAR_BOTTOM_OFFSET + 8 // 40px，高出页脚 8px
+  const maxBottom = Math.max(minBottom, window.innerHeight - MASCOT_SIZE - (CONTENT_TOP_OFFSET + 8)) // 距离顶部主内容区至少 8px，严防遮挡标题栏与用户信息
+  const minRight = 16
+  const maxRight = Math.max(minRight, window.innerWidth - MASCOT_SIZE - 16)
+
+  return {
+    right: Math.min(Math.max(minRight, offset.right), maxRight),
+    bottom: Math.min(Math.max(minBottom, offset.bottom), maxBottom),
+  }
 }
 
 function loadSavedMascotOffset(): MascotOffset {
@@ -55,7 +86,7 @@ function loadSavedMascotOffset(): MascotOffset {
     if (raw) {
       const parsed = JSON.parse(raw)
       if (typeof parsed.right === 'number' && typeof parsed.bottom === 'number') {
-        return parsed
+        return clampMascotOffset(parsed)
       }
     }
   } catch {
@@ -66,39 +97,388 @@ function loadSavedMascotOffset(): MascotOffset {
 
 function saveMascotOffset(offset: MascotOffset) {
   try {
-    localStorage.setItem(STORAGE_MASCOT_OFFSET_KEY, JSON.stringify(offset))
+    localStorage.setItem(STORAGE_MASCOT_OFFSET_KEY, JSON.stringify(clampMascotOffset(offset)))
   } catch {
     /* ignore */
   }
 }
 
+function formatSessionTime(timestamp: number): string {
+  if (!timestamp) return ''
+  const now = Date.now()
+  const diffSec = Math.floor((now - timestamp) / 1000)
+  if (diffSec < 60) return '刚刚'
+  const diffMin = Math.floor(diffSec / 60)
+  if (diffMin < 60) return `${diffMin}分钟前`
+  const diffHour = Math.floor(diffMin / 60)
+  if (diffHour < 24) return `${diffHour}小时前`
+  const d = new Date(timestamp)
+  const month = (d.getMonth() + 1).toString().padStart(2, '0')
+  const date = d.getDate().toString().padStart(2, '0')
+  const hours = d.getHours().toString().padStart(2, '0')
+  const minutes = d.getMinutes().toString().padStart(2, '0')
+  return `${month}-${date} ${hours}:${minutes}`
+}
+
+export interface AgentDecisionItem {
+  step?: number
+  description: string
+  raw: string
+}
+
 /**
- * 助手消息 Markdown 与代码块分段渲染组件
+ * 助手消息思考过程、智能决策调用与 Markdown 正文分离解析
+ */
+export function parseThinkingAndContent(raw: string): {
+  thinking: string | null
+  agentDecisions: AgentDecisionItem[]
+  mainContent: string
+  isStreamingThinking: boolean
+} {
+  if (!raw) {
+    return {
+      thinking: null,
+      agentDecisions: [],
+      mainContent: '',
+      isStreamingThinking: false,
+    }
+  }
+
+  // 1. 提取 <think>...</think> 思考模块
+  const thinkRegex = /<think>([\s\S]*?)<\/think>/g
+  const thinkBlocks: string[] = []
+  let match: RegExpExecArray | null
+  while ((match = thinkRegex.exec(raw)) !== null) {
+    if (match[1].trim()) {
+      thinkBlocks.push(match[1].trim())
+    }
+  }
+
+  // 检查尾部是否存在未闭合的 <think> 流式输出
+  const lastOpen = raw.lastIndexOf('<think>')
+  const lastClose = raw.lastIndexOf('</think>')
+  const isStreamingThinking = lastOpen !== -1 && (lastClose === -1 || lastOpen > lastClose)
+
+  if (isStreamingThinking) {
+    const unclosed = raw.slice(lastOpen + 7).trim()
+    if (unclosed) {
+      thinkBlocks.push(unclosed)
+    }
+  }
+
+  const contentWithoutThink = raw
+    .replace(/<think>[\s\S]*?<\/think>/g, '')
+    .replace(/<think>[\s\S]*$/, '')
+    .trim()
+
+  // 2. 提取并收起 Agent 智能决策调用步骤 (避免多轮工具调用刷屏占用大量纵向高度)
+  const agentDecisions: AgentDecisionItem[] = []
+  const decisionRegex = /^[>\s]*(?:🤖|✨)?\s*\*?\*?Agent\s*智能决策调用(?:\s*\(第\s*(\d+)\s*步\))?[：:]\s*(.*?)(?:\.\.\.)?\*?\*?\s*$/gmu
+  let dMatch: RegExpExecArray | null
+  while ((dMatch = decisionRegex.exec(contentWithoutThink)) !== null) {
+    const stepNum = dMatch[1] ? parseInt(dMatch[1], 10) : undefined
+    const desc = dMatch[2] ? dMatch[2].replace(/\*+/g, '').trim() : ''
+    if (desc) {
+      agentDecisions.push({
+        step: stepNum,
+        description: desc,
+        raw: dMatch[0].trim(),
+      })
+    }
+  }
+
+  // 尾部流式未闭合行容错 (例如 "> 🤖 **Agent 智能决策调用 (第 1 步)：正在执行...")
+  const trailingIncomplete = /^[>\s]*(?:🤖|✨)?\s*\*?\*?Agent\s*智能决策调用(?:\s*\(第\s*(\d+)\s*步\))?[：:]?\s*([^\n]*)$/mu
+  const trailingMatch = trailingIncomplete.exec(contentWithoutThink)
+  if (trailingMatch && !agentDecisions.some((d) => d.raw.includes(trailingMatch[0].trim()))) {
+    const stepNum = trailingMatch[1] ? parseInt(trailingMatch[1], 10) : undefined
+    const desc = trailingMatch[2] ? trailingMatch[2].replace(/\*+/g, '').trim() : ''
+    if (desc || stepNum) {
+      agentDecisions.push({
+        step: stepNum,
+        description: desc || '正在进行智能决策与工具调用...',
+        raw: trailingMatch[0].trim(),
+      })
+    }
+  }
+
+  // 将所有提取出的 Agent 决策调用行从 mainContent 中完全移除并清洗多余引用符
+  let mainContent = contentWithoutThink
+    .replace(decisionRegex, '')
+    .replace(trailingIncomplete, '')
+    .replace(/^[>\s]+$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+
+  return {
+    thinking: thinkBlocks.length > 0 ? thinkBlocks.join('\n\n---\n\n') : null,
+    agentDecisions,
+    mainContent,
+    isStreamingThinking,
+  }
+}
+
+/**
+ * 可折叠思考过程组件 (具备生动的高科技脉冲与思维链跳动动画)
+ */
+function ThinkingAccordion({
+  thinking,
+  isStreaming,
+  themeStyles,
+}: {
+  thinking: string
+  isStreaming?: boolean
+  themeStyles?: any
+}) {
+  const { t } = useTranslation()
+  const [isExpanded, setIsExpanded] = useState(false)
+
+  if (!thinking) return null
+
+  const isTerminal = Boolean(themeStyles?.isTerminalMode)
+
+  return (
+    <div
+      data-testid="ai-thinking-accordion"
+      className={cn(
+        'mb-2.5 rounded-xl overflow-hidden text-xs transition-all shadow-2xs relative',
+        isStreaming
+          ? isTerminal
+            ? 'border border-purple-500/40 bg-purple-500/10 text-slate-200 shadow-[0_0_15px_rgba(168,85,247,0.18)]'
+            : 'border border-indigo-500/40 bg-indigo-50/80 dark:bg-indigo-950/30 text-foreground shadow-[0_0_15px_rgba(99,102,241,0.18)]'
+          : isTerminal
+            ? 'border border-purple-500/25 bg-purple-500/5 hover:bg-purple-500/10 text-slate-200'
+            : 'border border-indigo-500/25 bg-indigo-50/60 dark:bg-indigo-950/20 text-foreground',
+      )}
+    >
+      {/* 顶部流式呼吸光效指示条 */}
+      {isStreaming && (
+        <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-purple-400 to-transparent animate-pulse" />
+      )}
+      <button
+        type="button"
+        onClick={() => setIsExpanded((prev) => !prev)}
+        className={cn(
+          'w-full flex items-center justify-between px-3 py-1.5 text-xs font-medium transition-colors select-none cursor-pointer',
+          isTerminal
+            ? 'text-purple-300 hover:text-purple-200 hover:bg-purple-500/10'
+            : 'text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 hover:bg-indigo-500/10',
+        )}
+      >
+        <div className="flex items-center gap-1.5 min-w-0">
+          <div className="relative flex items-center justify-center shrink-0">
+            <Brain
+              className={cn(
+                'h-3.5 w-3.5 transition-transform duration-300',
+                isTerminal ? 'text-purple-400' : 'text-indigo-600 dark:text-indigo-400',
+                isStreaming && 'animate-pulse scale-110',
+              )}
+            />
+            {isStreaming && (
+              <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-purple-400 animate-ping" />
+            )}
+          </div>
+          <span className="font-semibold text-[11px] shrink-0">
+            {isStreaming
+              ? t('ai_thinking_in_progress') || '正在深度思考...'
+              : t('ai_thinking_process') || '深度思考过程'}
+          </span>
+          {isStreaming && (
+            <span className="inline-flex items-center gap-0.5 ml-1 py-0.5 shrink-0">
+              <span className="w-1 h-1 rounded-full bg-purple-400 animate-bounce [animation-delay:-0.3s]" />
+              <span className="w-1 h-1 rounded-full bg-purple-400 animate-bounce [animation-delay:-0.15s]" />
+              <span className="w-1 h-1 rounded-full bg-purple-400 animate-bounce" />
+            </span>
+          )}
+        </div>
+        <div
+          className={cn(
+            'flex items-center gap-1 text-[10.5px] shrink-0',
+            isTerminal
+              ? 'text-slate-400 hover:text-slate-200'
+              : 'text-zinc-500 dark:text-zinc-400 hover:text-foreground',
+          )}
+        >
+          <span>
+            {isExpanded
+              ? t('ai_thinking_collapse') || '收起思考'
+              : t('ai_thinking_expand') || '展开思考'}
+          </span>
+          {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        </div>
+      </button>
+
+      {isExpanded && (
+        <div
+          data-testid="ai-thinking-content"
+          className={cn(
+            'px-3.5 py-2.5 text-[11.5px] leading-relaxed border-t whitespace-pre-wrap font-sans select-text max-h-64 overflow-y-auto',
+            isTerminal
+              ? 'border-purple-500/20 bg-black/40 text-slate-200 selection:bg-purple-500/30'
+              : 'border-indigo-500/20 bg-indigo-50/40 dark:bg-black/40 text-zinc-800 dark:text-zinc-200 selection:bg-indigo-500/30',
+          )}
+        >
+          {thinking}
+          {isStreaming && (
+            <span
+              className={cn(
+                'inline-block w-1.5 h-3.5 ml-0.5 align-middle rounded-xs animate-pulse',
+                isTerminal ? 'bg-purple-400' : 'bg-indigo-500',
+              )}
+            />
+          )}
+          {isStreaming && (
+            <div className="mt-2.5 pt-2 border-t border-purple-500/15 flex items-center gap-1.5 text-[10.5px] text-purple-400/90 font-mono select-none">
+              <Sparkles className="w-3 h-3 text-purple-400 animate-spin shrink-0" />
+              <span>AI 正在深层次推导研判中，持续生成思维链...</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * 可折叠 Agent 智能决策调用组件 (默认收起，具备执行中旋转状态指示)
+ */
+function AgentDecisionsAccordion({
+  decisions,
+  isStreaming,
+  themeStyles,
+}: {
+  decisions: AgentDecisionItem[]
+  isStreaming?: boolean
+  themeStyles?: any
+}) {
+  const { t } = useTranslation()
+  const [isExpanded, setIsExpanded] = useState(false)
+
+  if (!decisions || decisions.length === 0) return null
+
+  const isTerminal = Boolean(themeStyles?.isTerminalMode)
+
+  return (
+    <div
+      data-testid="ai-decisions-accordion"
+      className={cn(
+        'mb-2.5 rounded-xl overflow-hidden text-xs transition-all shadow-2xs relative',
+        isStreaming
+          ? isTerminal
+            ? 'border border-sky-500/40 bg-sky-500/10 text-slate-200 shadow-[0_0_15px_rgba(56,189,248,0.18)]'
+            : 'border border-sky-500/40 bg-sky-50/80 dark:bg-sky-950/30 text-foreground shadow-[0_0_15px_rgba(56,189,248,0.18)]'
+          : isTerminal
+            ? 'border border-sky-500/25 bg-sky-500/5 hover:bg-sky-500/10 text-slate-200'
+            : 'border border-sky-500/25 bg-sky-50/60 dark:bg-sky-950/20 text-foreground',
+      )}
+    >
+      {isStreaming && (
+        <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-sky-400 to-transparent animate-pulse" />
+      )}
+      <button
+        type="button"
+        onClick={() => setIsExpanded((prev) => !prev)}
+        className={cn(
+          'w-full flex items-center justify-between px-3 py-1.5 text-xs font-medium transition-colors select-none cursor-pointer',
+          isTerminal
+            ? 'text-sky-400 hover:text-sky-300 hover:bg-sky-500/10'
+            : 'text-sky-600 dark:text-sky-400 hover:text-sky-700 dark:hover:text-sky-300 hover:bg-sky-500/10',
+        )}
+      >
+        <div className="flex items-center gap-1.5 min-w-0">
+          <Bot className={cn('h-3.5 w-3.5 shrink-0 text-sky-400', isStreaming && 'animate-pulse')} />
+          <span className="font-semibold text-[11px] shrink-0">
+            {t('ai_agent_decisions_title') || 'Agent 智能决策调用'}
+          </span>
+          <span className="px-1.5 py-0.2 rounded-full text-[9.5px] bg-sky-500/15 text-sky-400 border border-sky-500/25 shrink-0 inline-flex items-center gap-1">
+            {isStreaming && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
+            共 {decisions.length} 步调用{isStreaming ? ' · 远程探针执行中' : ''}
+          </span>
+          {isStreaming && (
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping ml-0.5 shrink-0" />
+          )}
+        </div>
+        <div
+          className={cn(
+            'flex items-center gap-1 text-[10.5px]',
+            isTerminal ? 'text-slate-400 hover:text-slate-200' : 'text-zinc-500 dark:text-zinc-400 hover:text-foreground',
+          )}
+        >
+          <span>
+            {isExpanded
+              ? t('ai_decisions_collapse') || '收起调用'
+              : t('ai_decisions_expand') || '展开调用'}
+          </span>
+          {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        </div>
+      </button>
+
+      {isExpanded && (
+        <div
+          data-testid="ai-decisions-content"
+          className={cn(
+            'px-3 py-2 space-y-1.5 border-t text-[11px] max-h-60 overflow-y-auto select-text',
+            isTerminal
+              ? 'border-sky-500/20 bg-black/40 text-slate-200'
+              : 'border-sky-500/20 bg-sky-50/40 dark:bg-black/40 text-foreground',
+          )}
+        >
+          {decisions.map((item, idx) => (
+            <div
+              key={idx}
+              className={cn(
+                'flex items-center gap-2 p-1.5 px-2 rounded-lg border font-mono text-[11px] leading-relaxed',
+                isTerminal
+                  ? 'bg-white/[0.04] border-white/5 text-slate-200'
+                  : 'bg-background/60 border-border/40 text-foreground',
+              )}
+            >
+              <span className="shrink-0 px-1.5 py-0.2 rounded text-[9px] font-semibold bg-sky-500/20 text-sky-400 border border-sky-500/30">
+                第 {item.step ?? idx + 1} 步
+              </span>
+              <span className="truncate text-inherit font-sans">
+                {item.description}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * 助手消息 Markdown 与代码块分段渲染组件（集成思考过程与智能决策折叠）
  */
 function AssistantMessageRenderer({
   content,
   onCopy,
-  onInsert,
   copiedCode,
-  insertedCode,
+  isStreaming,
+  themeStyles,
 }: {
   content: string
   onCopy: (code: string) => void
-  onInsert: (code: string) => void
   copiedCode: string | null
-  insertedCode: string | null
+  isStreaming?: boolean
+  themeStyles?: any
 }) {
+  const { thinking, agentDecisions, mainContent, isStreamingThinking } = useMemo(
+    () => parseThinkingAndContent(content),
+    [content],
+  )
+
   const parts = useMemo(() => {
     const result: Array<{ type: 'markdown' | 'code'; text: string; lang?: string }> = []
-    const regex = /```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g
+    const regex = /```([a-zA-Z0-9_-]*)[^\n\r]*(?:\r?\n)([\s\S]*?)```/g
     let lastIndex = 0
     let match: RegExpExecArray | null
 
-    while ((match = regex.exec(content)) !== null) {
+    while ((match = regex.exec(mainContent)) !== null) {
       if (match.index > lastIndex) {
         result.push({
           type: 'markdown',
-          text: content.slice(lastIndex, match.index),
+          text: mainContent.slice(lastIndex, match.index),
         })
       }
       result.push({
@@ -109,56 +489,97 @@ function AssistantMessageRenderer({
       lastIndex = match.index + match[0].length
     }
 
-    if (lastIndex < content.length) {
+    if (lastIndex < mainContent.length) {
       result.push({
         type: 'markdown',
-        text: content.slice(lastIndex),
+        text: mainContent.slice(lastIndex),
       })
     }
     return result
-  }, [content])
+  }, [mainContent])
 
   return (
     <div className="space-y-2 text-xs leading-relaxed">
+      {thinking && (
+        <ThinkingAccordion
+          thinking={thinking}
+          isStreaming={isStreaming && (isStreamingThinking || !mainContent)}
+          themeStyles={themeStyles}
+        />
+      )}
+      {agentDecisions.length > 0 && (
+        <AgentDecisionsAccordion
+          decisions={agentDecisions}
+          isStreaming={isStreaming && !isStreamingThinking}
+          themeStyles={themeStyles}
+        />
+      )}
+      {/* 若处于流式生成中，且尚未输出任何正文（如正在思考或工具执行），呈现轻量级的脉冲加载提示，避免静止假死感 */}
+      {isStreaming && !mainContent && (
+        <div className="flex items-center gap-2 py-1.5 px-2 text-[11.5px] text-muted-foreground animate-pulse select-none">
+          <Sparkles className="w-3.5 h-3.5 text-sky-400 animate-spin shrink-0" />
+          <span>
+            {isStreamingThinking
+              ? 'Agent 正在深入分析系统状态与拓扑...'
+              : 'Agent 正在远程下发安全只读探针并汇总诊断...'}
+          </span>
+        </div>
+      )}
       {parts.map((part, idx) => {
         if (part.type === 'code') {
           const isCopied = copiedCode === part.text
-          const isInserted = insertedCode === part.text
 
           return (
             <div
               key={idx}
-              className="my-2 rounded-xl border border-border/70 bg-zinc-950/80 dark:bg-black/60 overflow-hidden shadow-xs"
+              className={cn(
+                'my-2.5 rounded-xl overflow-hidden shadow-xs font-mono border',
+                themeStyles?.isTerminalMode
+                  ? 'border-white/10 bg-[#0e0f17]/90'
+                  : 'border-zinc-700/60 bg-[#16161a]',
+              )}
             >
-              <div className="flex items-center justify-between px-3 py-1.5 bg-muted/30 border-b border-border/40 text-[10px] text-muted-foreground select-none">
-                <div className="flex items-center gap-1.5 font-mono font-medium">
-                  <Terminal className="h-3 w-3 text-primary" />
-                  <span>{part.lang}</span>
+              {/* 顶部终端栏：经典 Mac 红黄绿圆点 + 语言标签 + 高对比度复制按钮 */}
+              <div
+                className={cn(
+                  'flex items-center justify-between px-3 py-1.5 select-none border-b',
+                  themeStyles?.isTerminalMode
+                    ? 'bg-white/[0.04] border-white/10'
+                    : 'bg-[#202026] border-zinc-700/50',
+                )}
+              >
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-[#ff5f56]/90 border border-[#e0443e]/40" />
+                    <span className="w-2.5 h-2.5 rounded-full bg-[#ffbd2e]/90 border border-[#dea123]/40" />
+                    <span className="w-2.5 h-2.5 rounded-full bg-[#27c93f]/90 border border-[#1aab29]/40" />
+                  </div>
+                  <span className="text-[10.5px] font-medium text-zinc-300 tracking-wide">
+                    {part.lang || 'bash'}
+                  </span>
                 </div>
-                <div className="flex items-center gap-1">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => onCopy(part.text)}
-                    className="h-5 px-1.5 text-[10px] gap-1 text-muted-foreground hover:text-foreground cursor-pointer"
-                  >
-                    {isCopied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
-                    <span>{isCopied ? '已复制' : '复制'}</span>
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => onInsert(part.text)}
-                    className="h-5 px-2 text-[10px] gap-1 font-medium border-primary/40 bg-primary/10 text-primary hover:bg-primary hover:text-primary-foreground cursor-pointer"
-                  >
-                    <Terminal className="h-3 w-3" />
-                    <span>{isInserted ? '已填入' : '填入终端'}</span>
-                  </Button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => onCopy(part.text)}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10.5px] font-sans text-zinc-300 hover:text-white hover:bg-zinc-700/60 transition-all cursor-pointer"
+                  title="复制代码"
+                >
+                  {isCopied ? (
+                    <>
+                      <Check className="h-3 w-3 text-emerald-400" />
+                      <span className="text-emerald-400 font-medium">已复制</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3 w-3 text-zinc-400" />
+                      <span>复制</span>
+                    </>
+                  )}
+                </button>
               </div>
-              <pre className="p-3 text-[11px] font-mono text-zinc-100 overflow-x-auto leading-relaxed select-text">
+
+              {/* 代码展示区域 */}
+              <pre className="p-3.5 text-[12px] leading-relaxed text-zinc-100 overflow-x-auto select-text selection:bg-primary/30">
                 <code>{part.text}</code>
               </pre>
             </div>
@@ -178,6 +599,479 @@ function AssistantMessageRenderer({
   )
 }
 
+/**
+ * AI 提议指令交互式安全执行卡片 (Option C Command Guard Execution Card)
+ */
+function CommandExecutionCard({
+  card,
+  messageId,
+  onCopy,
+  copiedCode,
+  onExecute,
+  onReject,
+}: {
+  card: AIAssistantExecutionCard
+  messageId: string
+  onCopy: (code: string) => void
+  copiedCode: string | null
+  onExecute: (msgId: string) => void
+  onReject: (msgId: string) => void
+}) {
+  const { t } = useTranslation()
+  const isInteractive = Boolean(card.decision?.isInteractive)
+  const isBlocked = !isInteractive && (card.status === 'blocked' || !card.decision.allowed)
+  const isPending = !isInteractive && card.status === 'pending'
+  const isExecuting = card.status === 'executing'
+  const isExecuted = card.status === 'executed'
+  const isRejected = card.status === 'rejected'
+
+  // 已执行的只读探针默认完全收起为极简单行药丸，避免长回显与大卡片刷屏
+  const [isExpanded, setIsExpanded] = useState(!isExecuted)
+  const [showOutput, setShowOutput] = useState(false)
+  const isCopied = copiedCode === card.command
+
+  // 当已执行且处于收起状态时，渲染紧凑的一行极简药丸栏 (默认收起，极大提升长对话体验)
+  if (isExecuted && !isExpanded) {
+    return (
+      <div
+        data-testid={`execution-card-${messageId}`}
+        onClick={() => setIsExpanded(true)}
+        className="mt-2 rounded-xl border border-emerald-500/25 bg-emerald-500/5 hover:bg-emerald-500/10 dark:bg-emerald-950/20 transition-all px-3 py-1.5 flex items-center justify-between gap-2 text-xs cursor-pointer select-none group shadow-2xs"
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <ShieldCheck className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+          <span className="font-semibold text-[11px] text-emerald-600 dark:text-emerald-400 shrink-0">
+            {t('ai_card_status_executed') || '已安全执行'}
+          </span>
+          <span className="text-[10px] text-muted-foreground/80 truncate font-mono bg-black/20 dark:bg-black/40 px-2 py-0.5 rounded border border-border/40 max-w-[280px]">
+            {card.command}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-1.5 shrink-0 text-[10.5px]">
+          <span className="px-1.5 py-0.2 rounded-full text-[9px] bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 font-medium border border-emerald-500/20">
+            {t('ai_card_safe_readonly_badge') || '只读白名单'}
+          </span>
+          <span className="flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400 font-medium group-hover:underline">
+            <span>{t('ai_card_expand_details') || '展开详情'}</span>
+            <ChevronRight className="h-3 w-3" />
+          </span>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div
+      data-testid={`execution-card-${messageId}`}
+      className={cn(
+        'mt-2.5 rounded-xl border p-3 space-y-2 text-xs transition-all shadow-2xs',
+        isInteractive
+          ? 'bg-sky-500/10 border-sky-500/30 text-foreground'
+          : isBlocked
+            ? 'bg-destructive/10 border-destructive/30 text-destructive dark:text-red-400'
+            : isExecuting
+              ? 'bg-amber-500/10 border-amber-500/30 text-foreground'
+              : isExecuted
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-foreground'
+                : isRejected
+                  ? 'bg-muted/40 border-border/50 text-muted-foreground'
+                  : 'bg-primary/8 border-primary/25 text-foreground',
+      )}
+    >
+      {/* 头部标题与风险徽章 */}
+      <div className="flex items-center justify-between gap-2 border-b border-border/40 pb-1.5 select-none">
+        <div className="flex items-center gap-1.5">
+          {isInteractive ? (
+            <Terminal className="h-4 w-4 text-sky-500 shrink-0" />
+          ) : isBlocked ? (
+            <ShieldAlert className="h-4 w-4 text-destructive shrink-0" />
+          ) : isExecuted ? (
+            <ShieldCheck className="h-4 w-4 text-emerald-500 shrink-0" />
+          ) : isExecuting ? (
+            <Loader2 className="h-4 w-4 animate-spin text-amber-500 shrink-0" />
+          ) : isRejected ? (
+            <ShieldAlert className="h-4 w-4 text-muted-foreground shrink-0" />
+          ) : (
+            <ShieldCheck className="h-4 w-4 text-primary shrink-0" />
+          )}
+
+          <span className="font-semibold text-[11px] truncate">
+            {isInteractive
+              ? t('ai_card_status_interactive') || '交互式终端指令'
+              : isBlocked
+                ? t('ai_card_status_blocked') || '安全拦截阻断'
+                : isExecuting
+                  ? t('ai_card_status_executing') || '正在安全执行...'
+                  : isExecuted
+                    ? t('ai_card_status_executed') || '已安全执行'
+                    : isRejected
+                      ? t('ai_card_status_rejected') || '已拒绝执行'
+                      : t('ai_card_status_pending') || '等待执行授权'}
+          </span>
+        </div>
+
+        {/* 状态徽章 */}
+        <div className="flex items-center gap-1 shrink-0">
+          {isInteractive && (
+            <span className="px-1.5 py-0.2 rounded-full text-[9.5px] bg-sky-500/15 text-sky-600 dark:text-sky-400 font-medium border border-sky-500/20">
+              {t('ai_card_interactive_badge') || '需在终端交互运行'}
+            </span>
+          )}
+          {card.decision.isReadOnly && (
+            <span className="px-1.5 py-0.2 rounded-full text-[9.5px] bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 font-medium border border-emerald-500/20">
+              {t('ai_card_safe_readonly_badge') || '只读白名单'}
+            </span>
+          )}
+          {card.decision.reason.includes('深度') && (
+            <span className="px-1.5 py-0.2 rounded-full text-[9.5px] bg-blue-500/15 text-blue-600 dark:text-blue-400 font-medium border border-blue-500/20">
+              {t('ai_card_anti_hang_badge') || '防卡死限制'}
+            </span>
+          )}
+          {isExecuted && (
+            <button
+              type="button"
+              onClick={() => setIsExpanded(false)}
+              className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground ml-1.5 cursor-pointer transition-colors"
+            >
+              <span>{t('ai_card_collapse_details') || '收起详情'}</span>
+              <ChevronDown className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* 指令代码块 */}
+      <div className="rounded-lg bg-[#18181b] dark:bg-[#121214] border border-border/40 overflow-hidden font-mono text-[11.5px]">
+        <div className="flex items-center justify-between px-2.5 py-1 bg-zinc-800/60 border-b border-zinc-700/40 select-none">
+          <span className="text-[10px] text-zinc-400">Shell Command</span>
+          <button
+            type="button"
+            onClick={() => onCopy(card.command)}
+            className="inline-flex items-center gap-1 text-[10px] text-zinc-400 hover:text-white transition-colors cursor-pointer"
+          >
+            {isCopied ? (
+              <>
+                <Check className="h-2.5 w-2.5 text-emerald-400" />
+                <span className="text-emerald-400">已复制</span>
+              </>
+            ) : (
+              <>
+                <Copy className="h-2.5 w-2.5" />
+                <span>复制</span>
+              </>
+            )}
+          </button>
+        </div>
+        <pre className="p-2.5 text-zinc-100 overflow-x-auto selection:bg-primary/30">
+          <code>{card.command}</code>
+        </pre>
+      </div>
+
+      {/* 说明文本 */}
+      {card.explanation && (
+        <p className="text-[11px] text-muted-foreground leading-relaxed italic">
+          💡 {card.explanation}
+        </p>
+      )}
+
+      {/* 阻断原因 */}
+      {isBlocked && (
+        <div className="p-2 rounded-md bg-destructive/15 border border-destructive/25 text-[11px] text-destructive flex items-start gap-1.5 leading-snug">
+          <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          <span>{card.error || card.decision.reason || '该指令包含修改/删除/高危操作或无界递归，已由安全决策网关拦截阻断。'}</span>
+        </div>
+      )}
+
+      {/* 待授权操作按钮 */}
+      {isPending && (
+        <div className="flex items-center justify-between pt-1 gap-2">
+          <span className="text-[10px] text-muted-foreground truncate">
+            🔒 严格防深度遍历卡死与修改保护
+          </span>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              data-testid={`reject-cmd-${messageId}`}
+              onClick={() => onReject(messageId)}
+              className="h-6 px-2 text-[10.5px] text-muted-foreground hover:text-foreground cursor-pointer"
+            >
+              <X className="h-3 w-3 mr-1" />
+              <span>{t('ai_card_reject_btn') || '拒绝'}</span>
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              data-testid={`execute-cmd-${messageId}`}
+              onClick={() => onExecute(messageId)}
+              className="h-6 px-2.5 text-[10.5px] bg-primary text-primary-foreground hover:bg-primary/90 font-medium cursor-pointer shadow-2xs"
+            >
+              <Play className="h-3 w-3 mr-1 fill-current" />
+              <span>{t('ai_card_execute_btn') || '允许执行并由 AI 分析'}</span>
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* 交互式指令操作按钮 (直通终端) */}
+      {isInteractive && (
+        <div className="flex items-center justify-between pt-1 gap-2">
+          <span className="text-[10px] text-muted-foreground truncate">
+            {card.decision.blockedReason || 'ℹ️ 该指令属于常驻监控程序，适合在左侧主终端窗口中持续观察'}
+          </span>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              data-testid={`insert-cmd-${messageId}`}
+              onClick={() => {
+                window.dispatchEvent(
+                  new CustomEvent('insert-terminal-command', {
+                    detail: { command: card.command, execute: false },
+                  }),
+                )
+              }}
+              className="h-6 px-2 text-[10.5px] text-muted-foreground hover:text-foreground cursor-pointer"
+            >
+              <Terminal className="h-3 w-3 mr-1" />
+              <span>{t('ai_insert_to_terminal_btn') || '填入终端'}</span>
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              data-testid={`run-terminal-cmd-${messageId}`}
+              onClick={() => {
+                window.dispatchEvent(
+                  new CustomEvent('insert-terminal-command', {
+                    detail: { command: card.command, execute: true },
+                  }),
+                )
+              }}
+              className="h-6 px-2.5 text-[10.5px] bg-sky-600 hover:bg-sky-500 text-white font-medium cursor-pointer shadow-2xs"
+            >
+              <Play className="h-3 w-3 mr-1 fill-current" />
+              <span>{t('ai_run_in_terminal_btn') || '在终端运行'}</span>
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* 终端执行分析深度总结 */}
+      {isExecuted && card.summary && (
+        <div
+          data-testid="ai-card-summary"
+          className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-[11px] text-emerald-800 dark:text-emerald-300 flex items-start gap-2 select-text"
+        >
+          <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0 mt-0.5" />
+          <div className="space-y-0.5">
+            <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+              {t('ai_card_summary_title') || '终端执行分析结论'}：
+            </span>
+            <p className="leading-relaxed font-sans">{card.summary}</p>
+          </div>
+        </div>
+      )}
+
+      {/* 已执行输出折叠展示 与 深度诊断触发 */}
+      {isExecuted && card.output && (
+        <div className="pt-1 space-y-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => setShowOutput((prev) => !prev)}
+              className="flex items-center gap-1 text-[10.5px] font-medium text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer select-none"
+            >
+              {showOutput ? (
+                <ChevronDown className="h-3 w-3" />
+              ) : (
+                <ChevronRight className="h-3 w-3" />
+              )}
+              <span>{t('ai_card_output_title') || '终端输出结果'}</span>
+            </button>
+
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              data-testid={`deep-analyze-cmd-${messageId}`}
+              onClick={() => {
+                void useAIStore.getState().sendAssistantMessage(
+                  `指令「${card.command}」已在服务器执行完毕，实际采样输出如下：\n\`\`\`\n${card.output}\n\`\`\`\n请基于此输出做进一步深度诊断，指出根本原因、潜在隐患与优化建议。`,
+                )
+              }}
+              className="h-5 px-1.5 text-[10px] text-primary hover:bg-primary/10 font-medium cursor-pointer gap-1"
+            >
+              <Sparkles className="h-2.5 w-2.5 text-primary" />
+              <span>{t('ai_card_deep_analyze_btn') || '让 AI 深度诊断此输出'}</span>
+            </Button>
+          </div>
+          {showOutput && (
+            <div className="max-h-40 overflow-y-auto rounded-md bg-[#141416] p-2 font-mono text-[11px] text-zinc-300 border border-zinc-700/50 select-text leading-relaxed whitespace-pre-wrap break-all">
+              {card.output}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * 判断 AI 回复是否属于未连接终端或未找到对应目标服务器的拦截引导信息
+ */
+export function isServerPickerNeeded(content: string): boolean {
+  if (!content) return false
+  const patterns = [
+    // 1. 未连接终端提示 (各种常见句式)
+    /未连接任何(?:活动)?(?:服务器)?终端/i,
+    /未打开任何(?:活动)?(?:SSH)?终端/i,
+    /当前未(?:打开|连接)(?:任何)?(?:SSH)?(?:终端|主机|服务器)/i,
+    /当前处于首页.*未(?:打开|连接)/i,
+    /未指定目标服务器.*未连接/i,
+    // 2. 找不到指定服务器
+    /未找到(?:指定|对应|名为)?.*?的服务器/i,
+    /找不到(?:指定|对应|名为)?.*?的服务器/i,
+    /无法确定(?:您想要)?(?:探测|排查|检查|连接)哪台(?:主机|服务器)/i,
+    // 3. 引导选择服务器提示
+    /请明确(?:回复|选择)要(?:排查|检查|体检|探测)哪台服务器/i,
+    /请选择要(?:排查|检查|体检|探测)的服务器/i,
+    /已纳管服务器资产清单/i,
+    /无法直接执行服务器.*排查/i,
+  ]
+  return patterns.some((p) => p.test(content))
+}
+
+interface UnattachedServerPickerProps {
+  userPrompt?: string
+  onSelectSingle: (server: { id: string; name?: string; host: string }, userPrompt?: string) => void
+  onSelectBatch: (servers: Array<{ id: string; name?: string; host: string }>, userPrompt?: string) => void
+  onInspectAll: (userPrompt?: string) => void
+}
+
+function UnattachedServerPicker({
+  userPrompt,
+  onSelectSingle,
+  onSelectBatch,
+  onInspectAll,
+}: UnattachedServerPickerProps) {
+  const servers = useAppStore((s) => s.servers) || []
+  const validServers = useMemo(
+    () => servers.filter((s) => s.targetType !== 'bmc'),
+    [servers],
+  )
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+
+  if (validServers.length === 0) return null
+
+  const handleToggle = (id: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id],
+    )
+  }
+
+  const handleSelectAllToggle = () => {
+    if (selectedIds.length === validServers.length) {
+      setSelectedIds([])
+    } else {
+      setSelectedIds(validServers.map((s) => s.id))
+    }
+  }
+
+  const selectedServers = validServers.filter((s) => selectedIds.includes(s.id))
+
+  return (
+    <div
+      data-testid="unattached-server-picker"
+      className="mt-2.5 p-3 rounded-xl border border-primary/25 bg-background/90 dark:bg-zinc-900/80 shadow-2xs space-y-2.5 backdrop-blur-xs"
+    >
+      <div className="flex items-center justify-between gap-2 border-b border-border/40 pb-2">
+        <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+          <Terminal className="h-3.5 w-3.5 text-primary" />
+          <span>快捷选择目标主机：</span>
+        </div>
+        <button
+          type="button"
+          data-testid="btn-inspect-all-servers"
+          onClick={() => onInspectAll(userPrompt)}
+          className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 transition-all cursor-pointer"
+        >
+          <Activity className="h-3 w-3" />
+          <span>一键巡检全部 ({validServers.length}台)</span>
+        </button>
+      </div>
+
+      <div className="max-h-48 overflow-y-auto space-y-1.5 pr-0.5">
+        {validServers.map((s) => {
+          const isSelected = selectedIds.includes(s.id)
+          return (
+            <div
+              key={s.id}
+              className={cn(
+                'flex items-center justify-between p-2 rounded-lg border transition-all text-xs gap-2',
+                isSelected
+                  ? 'border-primary/50 bg-primary/10 dark:bg-primary/15'
+                  : 'border-border/40 hover:border-border hover:bg-muted/50',
+              )}
+            >
+              <label className="flex items-center gap-2 cursor-pointer select-none flex-1 min-w-0">
+                <input
+                  type="checkbox"
+                  data-testid={`checkbox-server-${s.id}`}
+                  checked={isSelected}
+                  onChange={() => handleToggle(s.id)}
+                  className="rounded border-border text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer"
+                />
+                <span className="font-medium text-foreground truncate max-w-[120px]" title={s.name || s.host}>
+                  {s.name || s.host}
+                </span>
+                <span className="text-[11px] font-mono text-muted-foreground truncate" title={s.host}>
+                  ({s.host})
+                </span>
+              </label>
+
+              <button
+                type="button"
+                data-testid={`btn-probe-server-${s.id}`}
+                onClick={() => onSelectSingle(s, userPrompt)}
+                className="shrink-0 inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded bg-secondary hover:bg-primary hover:text-primary-foreground text-secondary-foreground transition-all cursor-pointer font-medium"
+              >
+                <span>单击排查</span>
+                <ArrowRight className="h-3 w-3" />
+              </button>
+            </div>
+          )
+        })}
+      </div>
+
+      <div className="flex items-center justify-between pt-1 border-t border-border/40 text-[11px]">
+        <button
+          type="button"
+          data-testid="btn-toggle-select-all"
+          onClick={handleSelectAllToggle}
+          className="text-muted-foreground hover:text-foreground underline underline-offset-2 transition-colors cursor-pointer"
+        >
+          {selectedIds.length === validServers.length ? '取消全选' : '全选所有'}
+        </button>
+
+        {selectedIds.length > 0 && (
+          <button
+            type="button"
+            data-testid="btn-batch-probe-servers"
+            onClick={() => onSelectBatch(selectedServers, userPrompt)}
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-primary text-primary-foreground font-medium shadow-2xs hover:opacity-90 transition-all cursor-pointer"
+          >
+            <Rocket className="h-3 w-3" />
+            <span>批量排查已选 ({selectedIds.length}台)</span>
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function FloatingAIAssistant() {
   const { t } = useTranslation()
   const {
@@ -190,11 +1084,20 @@ export function FloatingAIAssistant() {
     setAssistantMode,
     assistantMessages,
     isAssistantResponding,
+    stopAssistantResponding,
     assistantInput,
     setAssistantInput,
     assistantMascotMood,
     sendAssistantMessage,
     clearAssistantMessages,
+    assistantSessions,
+    currentAssistantSessionId,
+    createNewAssistantSession,
+    loadAssistantSession,
+    deleteAssistantSession,
+    clearAllAssistantSessions,
+    executeMessageCommand,
+    rejectMessageCommand,
     configuredProviders,
     settings,
   } = useAIStore()
@@ -204,9 +1107,150 @@ export function FloatingAIAssistant() {
     [configuredProviders, settings],
   )
 
+  // 终端场景配色联动：处于终端模块时，小助手窗口配色无缝跟随终端右键菜单；处于其他界面时保持原有设计
+  const activeTabId = useAppStore((s) => s.activeTabId)
+  const tabs = useAppStore((s) => s.tabs)
+  const activeTab = useMemo(() => tabs?.find((t) => t.id === activeTabId), [tabs, activeTabId])
+  const isInTerminal = Boolean(activeTab && activeTab.module === 'terminal')
+  const terminalThemeId = useAppStore((s) => s.terminalThemeId)
+  const customTerminalThemes = useAppStore((s) => s.customTerminalThemes)
+  const terminalThemeOverrides = useAppStore((s) => s.terminalThemeOverrides)
+
+  const activeTerminalTheme = useMemo(() => {
+    if (!isInTerminal || !terminalThemeId) return null
+    try {
+      return getTerminalTheme(terminalThemeId, customTerminalThemes, terminalThemeOverrides)
+    } catch {
+      return null
+    }
+  }, [isInTerminal, terminalThemeId, customTerminalThemes, terminalThemeOverrides])
+
+  const isLightTerminal = activeTerminalTheme?.type === 'light'
+
+  // 依据当前所在界面（终端 vs 其他界面）及终端明暗主题计算弹框各区域的配色风格
+  const themeStyles = useMemo(() => {
+    if (!isInTerminal) {
+      return {
+        isTerminalMode: false,
+        dialogContainer: 'bg-background/95 backdrop-blur-2xl border border-border/80 shadow-2xl text-foreground',
+        header: 'border-b border-border/60 bg-muted/25 hover:bg-muted/40 text-foreground',
+        headerBtn: 'hover:bg-muted text-muted-foreground hover:text-foreground',
+        copilotBadge: 'bg-primary/10 text-primary',
+        welcomeBanner: 'bg-gradient-to-r from-primary/5 via-primary/10 to-transparent border-primary/15',
+        welcomeTitle: 'text-foreground',
+        welcomeSub: 'text-muted-foreground',
+        cardTitle: 'text-foreground',
+        cardDesc: 'text-muted-foreground',
+        iconBox: 'bg-background/80 border border-border/40',
+        pillText: 'text-inherit',
+        disclaimerText: 'text-muted-foreground/60',
+        body: 'bg-transparent text-foreground',
+        userBubble: 'bg-primary text-primary-foreground rounded-tr-xs font-normal',
+        userAvatar: 'bg-gradient-to-tr from-blue-600 to-indigo-600 text-white shadow-2xs',
+        aiBubble: 'bg-muted/40 border border-border/60 text-foreground',
+        aiBubbleHeader: 'border-b border-border/40 text-muted-foreground',
+        inputBar: 'border-t border-border/60 bg-muted/15',
+        inputCard: 'border border-border/80 bg-background focus-within:ring-primary/25 focus-within:border-primary text-foreground placeholder:text-muted-foreground/60',
+        historyPanel: 'bg-background/98 backdrop-blur-2xl border-border/60 text-foreground',
+        recommendPill: 'bg-muted/40 hover:bg-primary/10 hover:text-primary text-muted-foreground border-border/50 hover:border-primary/30',
+        modePillContainer: 'bg-muted/40 border-border/40',
+        modeBtnActive: 'bg-background text-primary shadow-2xs font-semibold',
+        modeBtnInactive: 'text-muted-foreground/80 hover:text-foreground',
+        sendBtnActive: 'bg-primary text-primary-foreground hover:bg-primary/90',
+        sendBtnDisabled: 'bg-muted text-muted-foreground/40 cursor-not-allowed',
+        copyActionBtn: 'hover:bg-muted text-muted-foreground/80 hover:text-foreground',
+      }
+    }
+
+    if (isLightTerminal) {
+      // 终端明亮主题模式：跟随亮色终端右键菜单风格 (bg-white/90 text-slate-800 border-slate-200/80)
+      return {
+        isTerminalMode: true,
+        dialogContainer: 'bg-white/92 backdrop-blur-xl border border-slate-200/80 shadow-[0_16px_36px_-6px_rgba(0,0,0,0.18),0_0_0_1px_rgba(0,0,0,0.04)] text-slate-800',
+        header: 'border-b border-slate-200/80 bg-slate-900/[0.03] hover:bg-slate-900/[0.06] text-slate-800',
+        headerBtn: 'hover:bg-slate-900/[0.06] text-slate-600 hover:text-slate-900',
+        copilotBadge: 'bg-sky-50 text-sky-600 border border-sky-200',
+        welcomeBanner: 'bg-slate-900/[0.03] border-slate-200/80',
+        welcomeTitle: 'text-slate-800',
+        welcomeSub: 'text-slate-500',
+        cardTitle: 'text-slate-800',
+        cardDesc: 'text-slate-500',
+        iconBox: 'bg-slate-900/[0.05] border border-slate-200/60',
+        pillText: 'text-slate-700 font-medium',
+        disclaimerText: 'text-slate-500',
+        body: 'bg-transparent text-slate-800',
+        userBubble: 'bg-sky-600 text-white rounded-tr-xs font-normal shadow-sm',
+        userAvatar: 'bg-sky-600 text-white shadow-2xs',
+        aiBubble: 'bg-slate-900/[0.04] border border-slate-200/80 text-slate-800',
+        aiBubbleHeader: 'border-b border-slate-200/80 text-slate-500',
+        inputBar: 'border-t border-slate-200/80 bg-slate-900/[0.02]',
+        inputCard: 'border border-slate-200/80 bg-white focus-within:ring-sky-500/25 focus-within:border-sky-500 text-slate-800 placeholder:text-slate-400',
+        historyPanel: 'bg-white/98 backdrop-blur-xl border-slate-200/80 text-slate-800',
+        recommendPill: 'bg-slate-900/[0.04] hover:bg-sky-500/10 hover:text-sky-600 text-slate-600 border-slate-200/80 hover:border-sky-500/30',
+        modePillContainer: 'bg-slate-900/[0.05] border-slate-200/60',
+        modeBtnActive: 'bg-white text-sky-600 shadow-2xs font-semibold border border-slate-200/60',
+        modeBtnInactive: 'text-slate-500 hover:text-slate-800',
+        sendBtnActive: 'bg-sky-600 text-white hover:bg-sky-500',
+        sendBtnDisabled: 'bg-slate-100 text-slate-400 cursor-not-allowed',
+        copyActionBtn: 'hover:bg-slate-100 text-slate-500 hover:text-slate-800',
+      }
+    }
+
+    // 终端暗色主题模式：背景明度适度提升至 #22263a，与较暗的终端背景 (#181824 / #1e1e1e) 形成鲜明悬浮层级区分
+    return {
+      isTerminalMode: true,
+      dialogContainer: 'dark bg-[#22263a]/96 backdrop-blur-2xl border border-white/[0.14] shadow-[0_24px_50px_-8px_rgba(0,0,0,0.85),0_0_0_1px_rgba(255,255,255,0.08)] text-slate-100',
+      header: 'border-b border-white/10 bg-white/[0.04] hover:bg-white/[0.06] text-slate-100',
+      headerBtn: 'hover:bg-white/[0.08] text-slate-300 hover:text-white',
+      copilotBadge: 'bg-sky-500/15 text-sky-400 border border-sky-500/25',
+      welcomeBanner: 'bg-white/[0.05] border-white/10 shadow-xs',
+      welcomeTitle: 'text-white font-bold',
+      welcomeSub: 'text-slate-300 font-semibold',
+      cardTitle: 'text-white font-bold',
+      cardDesc: 'text-slate-300 font-normal',
+      iconBox: 'bg-white/[0.08] border border-white/10',
+      pillText: 'text-slate-100 font-medium',
+      disclaimerText: 'text-slate-400/80',
+      body: 'bg-transparent text-slate-100',
+      userBubble: 'bg-gradient-to-r from-sky-600 to-blue-600 text-white shadow-sm border border-sky-400/20 rounded-tr-xs font-normal',
+      userAvatar: 'bg-gradient-to-tr from-sky-600 to-blue-600 text-white ring-1 ring-white/20 shadow-2xs',
+      aiBubble: 'bg-[#181b2b]/90 border border-white/10 text-slate-200 shadow-sm',
+      aiBubbleHeader: 'border-b border-white/10 text-slate-400',
+      inputBar: 'border-t border-white/10 bg-black/15',
+      inputCard: 'border border-white/12 bg-black/25 hover:border-white/20 focus-within:border-sky-400/60 focus-within:bg-black/35 focus-within:ring-1 focus-within:ring-sky-400/30 text-slate-100 placeholder:text-slate-400',
+      historyPanel: 'bg-[#22263a]/98 backdrop-blur-2xl border-white/12 text-slate-100',
+      recommendPill: 'bg-white/[0.06] hover:bg-white/[0.12] hover:text-sky-300 text-slate-100 border-white/10 hover:border-white/20',
+      modePillContainer: 'bg-white/[0.06] border-white/10',
+      modeBtnActive: 'bg-white/15 text-sky-400 shadow-2xs font-semibold ring-1 ring-white/15',
+      modeBtnInactive: 'text-slate-400 hover:text-slate-200',
+      sendBtnActive: 'bg-sky-500 text-white hover:bg-sky-400 shadow-sm',
+      sendBtnDisabled: 'bg-white/[0.06] text-slate-500 border border-white/5 cursor-not-allowed',
+      copyActionBtn: 'hover:bg-white/10 text-slate-400 hover:text-slate-200',
+    }
+  }, [isInTerminal, isLightTerminal])
+
   const [copiedCode, setCopiedCode] = useState<string | null>(null)
-  const [insertedCode, setInsertedCode] = useState<string | null>(null)
-  const [isMaximized, setIsMaximized] = useState(false)
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
+  const [dialogSize, setDialogSize] = useState<{ width: number; height: number } | null>(null)
+  const [isDialogResizing, setIsDialogResizing] = useState(false)
+  const dialogResizeRef = useRef<{
+    startX: number
+    startY: number
+    startW: number
+    startH: number
+    startPosX: number
+    startPosY: number
+    direction: ResizeDirection
+  }>({
+    startX: 0,
+    startY: 0,
+    startW: 420,
+    startH: 600,
+    startPosX: 0,
+    startPosY: 0,
+    direction: 'se',
+  })
+  const [showHistoryPanel, setShowHistoryPanel] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -242,52 +1286,97 @@ export function FloatingAIAssistant() {
     dialogStartY: 0,
   })
 
-  // 窗口 resize 时安全校验与响应式重绘
+  // 窗口 resize 时安全校验与响应式重绘 (确保小人永远不进入标题栏和页脚)
   const [, setResizeTick] = useState(0)
   useEffect(() => {
+    // 挂载时立即执行一次坐标校准，防止旧 localStorage 缓存异常坐标停留在顶栏
+    setMascotOffset((prev) => clampMascotOffset(prev))
+
     const handleResize = () => {
       setResizeTick((t) => t + 1)
-      setMascotOffset((prev) => ({
-        right: Math.min(Math.max(12, prev.right), Math.max(12, window.innerWidth - MASCOT_SIZE - 12)),
-        bottom: Math.min(Math.max(12, prev.bottom), Math.max(12, window.innerHeight - MASCOT_SIZE - 12)),
-      }))
+      setMascotOffset((prev) => clampMascotOffset(prev))
     }
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
-  // 快捷键支持：Ctrl+Alt+A / Cmd+Alt+A 切换 AI 助手
+  // 重置弹窗卡片位置与尺寸（回到贴合小人的默认初始状态）
+  const resetDialogCardPosition = () => {
+    setDialogPosition(null)
+    setDialogSize(null)
+  }
+
+  // 退出并关闭 AI 助手弹窗（统一重置卡片位置与尺寸、关闭历史抽屉、播放关闭音效）
+  const handleExitAssistant = () => {
+    playSound(SoundType.Close)
+    resetDialogCardPosition()
+    setShowHistoryPanel(false)
+    closeFloatingAssistant()
+  }
+
+  // 快捷键支持：Ctrl+Alt+A / Cmd+Alt+A 切换 AI 助手，Esc 退出或收起历史
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!enableAiGlobal) return
       if ((e.ctrlKey || e.metaKey) && e.altKey && (e.key === 'a' || e.key === 'A')) {
         e.preventDefault()
         if (isFloatingAssistantOpen) {
-          playSound(SoundType.Close)
-          closeFloatingAssistant()
+          handleExitAssistant()
         } else {
+          resetDialogCardPosition()
           playSound(SoundType.Open)
           openFloatingAssistant()
         }
+      } else if (e.key === 'Escape' && isFloatingAssistantOpen) {
+        if (isAssistantResponding) {
+          stopAssistantResponding()
+          playSound(SoundType.Click)
+          return
+        }
+        if (showHistoryPanel) {
+          setShowHistoryPanel(false)
+          return
+        }
+        handleExitAssistant()
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [enableAiGlobal, isFloatingAssistantOpen, openFloatingAssistant, closeFloatingAssistant])
+  }, [
+    enableAiGlobal,
+    isFloatingAssistantOpen,
+    isAssistantResponding,
+    stopAssistantResponding,
+    showHistoryPanel,
+    openFloatingAssistant,
+    closeFloatingAssistant,
+  ])
 
   // 自动滚动到最新消息
   useEffect(() => {
     if (isFloatingAssistantOpen && assistantMessages.length > 0) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+      if (typeof messagesEndRef.current?.scrollIntoView === 'function') {
+        messagesEndRef.current.scrollIntoView({ behavior: 'smooth' })
+      }
     }
   }, [assistantMessages, isFloatingAssistantOpen])
 
-  // 弹窗打开时聚焦输入框
+  // 弹窗显隐状态变更时：重置卡片位置与尺寸、关闭历史抽屉（打开时聚焦输入框）
   useEffect(() => {
+    resetDialogCardPosition()
+    setShowHistoryPanel(false)
     if (isFloatingAssistantOpen) {
       setTimeout(() => textareaRef.current?.focus(), 150)
     }
   }, [isFloatingAssistantOpen])
+
+  // 输入框自适应高度调整 (最小 28px，最大 120px，自适应内容多行)
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
+      textareaRef.current.style.height = `${Math.min(Math.max(textareaRef.current.scrollHeight, 28), 120)}px`
+    }
+  }, [assistantInput])
 
   if (!enableAiGlobal) {
     return null
@@ -297,11 +1386,12 @@ export function FloatingAIAssistant() {
     return null
   }
 
+  // 点击助手小人图标切换显隐状态（退出时重置卡片位置）
   const handleToggle = () => {
     if (isFloatingAssistantOpen) {
-      playSound(SoundType.Close)
-      closeFloatingAssistant()
+      handleExitAssistant()
     } else {
+      resetDialogCardPosition()
       playSound(SoundType.Open)
       openFloatingAssistant()
     }
@@ -329,17 +1419,11 @@ export function FloatingAIAssistant() {
       }
 
       if (mascotDragRef.current.hasMoved) {
-        // 向右拖动减小 right 偏移，向左拖动增大 right 偏移
-        const nextRight = Math.min(
-          Math.max(12, mascotDragRef.current.startRight - dx),
-          Math.max(12, window.innerWidth - MASCOT_SIZE - 12),
-        )
-        // 向下拖动减小 bottom 偏移，向上拖动增大 bottom 偏移
-        const nextBottom = Math.min(
-          Math.max(12, mascotDragRef.current.startBottom - dy),
-          Math.max(12, window.innerHeight - MASCOT_SIZE - 12),
-        )
-        setMascotOffset({ right: nextRight, bottom: nextBottom })
+        const next = clampMascotOffset({
+          right: mascotDragRef.current.startRight - dx,
+          bottom: mascotDragRef.current.startBottom - dy,
+        })
+        setMascotOffset(next)
       }
     }
 
@@ -362,34 +1446,44 @@ export function FloatingAIAssistant() {
     window.addEventListener('pointerup', onPointerUp)
   }
 
-  // 计算弹窗当前尺寸 (支持最大化：宽度占应用窗口 1/3，高度在应用窗口内铺满)
+  // 双击吉祥物小人：重置小人停靠至右下角默认初始位置，并重置卡片位置
+  const handleMascotDoubleClick = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    const def = { right: 28, bottom: 48 }
+    setMascotOffset(def)
+    saveMascotOffset(def)
+    resetDialogCardPosition()
+    playSound(SoundType.Click)
+  }
+
+  // 计算弹窗当前尺寸 (上下严格限制在主内容区到页脚之间，宽度由用户自由拉伸，不再受 1/3 比例限制)
   const getDialogDimensions = () => {
     if (typeof window === 'undefined') {
       return { width: 420, height: 600 }
     }
 
-    if (isMaximized) {
-      // 宽度占应用窗口右侧 1/3 (下限保底 380px，不超过屏幕可用宽度 - 32)
-      const targetWidth = Math.min(
-        Math.max(380, Math.floor(window.innerWidth / 3)),
-        window.innerWidth - 32,
-      )
-      // 高度不限制，在应用窗口内部占满 (上下各留 16px 呼吸边距)
-      const targetHeight = Math.max(360, window.innerHeight - 32)
+    // 主内容区域可用高度（上面到主内容区 44px，下面到页脚 32px）
+    const availableHeight = Math.max(300, window.innerHeight - CONTENT_TOP_OFFSET - STATUSBAR_BOTTOM_OFFSET)
+    const maxAllowedWidth = Math.max(320, window.innerWidth - 24)
 
-      return {
-        width: targetWidth,
-        height: targetHeight,
-      }
+    if (dialogSize !== null) {
+      // 用户自定义拉伸尺寸，上下仍受主内容区与页脚严格限制
+      const clampedWidth = Math.min(Math.max(320, dialogSize.width), maxAllowedWidth)
+      const clampedHeight = Math.min(Math.max(300, dialogSize.height), availableHeight)
+      return { width: clampedWidth, height: clampedHeight }
     }
 
+    // 默认初始尺寸 (最高 600px，但不超过可用高度；默认宽 420px)
+    const defaultH = Math.min(600, availableHeight)
+    const defaultW = Math.min(420, maxAllowedWidth)
+
     return {
-      width: Math.min(420, window.innerWidth - 32),
-      height: Math.min(600, window.innerHeight - 80),
+      width: defaultW,
+      height: defaultH,
     }
   }
 
-  // 计算弹窗生效坐标（支持拖拽定位、最大化右侧 1/3 停靠与初始自适应锚定）
+  // 计算弹窗生效坐标（支持拖拽定位、上下严格限制在主内容区到页脚之间）
   const getEffectiveDialogPosition = () => {
     const { width: dialogW, height: dialogH } = getDialogDimensions()
 
@@ -397,21 +1491,17 @@ export function FloatingAIAssistant() {
       return { x: 100, y: 100, width: dialogW, height: dialogH }
     }
 
-    if (isMaximized) {
-      // 最大化时严格停靠在屏幕右侧 (占右边 1/3 区域，留 16px 呼吸间距，垂直居中)
-      const x = Math.max(16, window.innerWidth - dialogW - 16)
-      const y = Math.max(16, Math.floor((window.innerHeight - dialogH) / 2))
-      return { x, y, width: dialogW, height: dialogH }
-    }
+    // 上下边界约束（上面到主内容区 44px，下面到页脚 32px）
+    const minY = CONTENT_TOP_OFFSET
+    const maxY = Math.max(minY, window.innerHeight - STATUSBAR_BOTTOM_OFFSET - dialogH)
 
     if (dialogPosition !== null) {
-      // 保证在屏幕内
       const clampedX = Math.min(Math.max(12, dialogPosition.x), Math.max(12, window.innerWidth - dialogW - 12))
-      const clampedY = Math.min(Math.max(12, dialogPosition.y), Math.max(12, window.innerHeight - dialogH - 12))
+      const clampedY = Math.min(Math.max(minY, dialogPosition.y), maxY)
       return { x: clampedX, y: clampedY, width: dialogW, height: dialogH }
     }
 
-    // 默认初始位置：紧密贴合小人
+    // 默认初始小窗口位置：紧密贴合小人，上下限制在主内容区到页脚之间
     const mascotLeft = window.innerWidth - mascotOffset.right - MASCOT_SIZE
     const mascotTop = window.innerHeight - mascotOffset.bottom - MASCOT_SIZE
 
@@ -425,23 +1515,17 @@ export function FloatingAIAssistant() {
     }
 
     if (mascotTop > window.innerHeight / 2) {
-      defaultY = Math.max(16, mascotTop - dialogH - 14)
+      defaultY = Math.min(maxY, Math.max(minY, mascotTop - dialogH - 14))
     } else {
-      defaultY = Math.min(window.innerHeight - dialogH - 16, mascotTop + MASCOT_SIZE + 14)
+      defaultY = Math.min(maxY, Math.max(minY, mascotTop + MASCOT_SIZE + 14))
     }
 
     return { x: defaultX, y: defaultY, width: dialogW, height: dialogH }
   }
 
-  // 双击顶部标题栏切换最大化 / 还原
-  const handleDialogHeaderDoubleClick = () => {
-    setIsMaximized((prev) => !prev)
-    playSound(SoundType.Click)
-  }
-
-  // 弹窗顶部栏拖拽事件
+  // 弹窗顶部栏拖拽移动事件 (上下坐标严格限制在主内容区到页脚之间)
   const handleDialogHeaderPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0 || isMaximized) return
+    if (e.button !== 0) return
 
     const cur = getEffectiveDialogPosition()
     dialogDragRef.current = {
@@ -457,13 +1541,16 @@ export function FloatingAIAssistant() {
       const dy = moveEv.clientY - dialogDragRef.current.startY
 
       const { width: curW, height: curH } = getDialogDimensions()
+      const minY = CONTENT_TOP_OFFSET
+      const maxY = Math.max(minY, window.innerHeight - STATUSBAR_BOTTOM_OFFSET - curH)
+
       const nextX = Math.min(
         Math.max(12, dialogDragRef.current.dialogStartX + dx),
         Math.max(12, window.innerWidth - curW - 12),
       )
       const nextY = Math.min(
-        Math.max(12, dialogDragRef.current.dialogStartY + dy),
-        Math.max(12, window.innerHeight - curH - 12),
+        Math.max(minY, dialogDragRef.current.dialogStartY + dy),
+        maxY,
       )
 
       setDialogPosition({ x: nextX, y: nextY })
@@ -479,6 +1566,80 @@ export function FloatingAIAssistant() {
     window.addEventListener('pointerup', onPointerUp)
   }
 
+  // 弹窗边缘与角落拉伸调整宽高 (上下严格限制在主内容区到页脚之间，宽度无 1/3 限制)
+  const handleResizePointerDown = (dir: ResizeDirection, e: React.PointerEvent) => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    e.stopPropagation()
+
+    const cur = getEffectiveDialogPosition()
+    dialogResizeRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      startW: cur.width,
+      startH: cur.height,
+      startPosX: cur.x,
+      startPosY: cur.y,
+      direction: dir,
+    }
+    setIsDialogResizing(true)
+
+    const onPointerMove = (moveEv: PointerEvent) => {
+      const { startX, startY, startW, startH, startPosX, startPosY, direction } = dialogResizeRef.current
+      const dx = moveEv.clientX - startX
+      const dy = moveEv.clientY - startY
+      const vw = window.innerWidth
+      const vh = window.innerHeight
+
+      const availableHeight = Math.max(300, vh - CONTENT_TOP_OFFSET - STATUSBAR_BOTTOM_OFFSET)
+      const maxAllowedWidth = Math.max(320, vw - 24)
+
+      let newW = startW
+      let newH = startH
+      let newX = startPosX
+      let newY = startPosY
+
+      // 1. 宽度计算 (无 1/3 屏幕限制)
+      if (direction.includes('e')) {
+        // 向右拉伸：如果碰到屏幕右边缘，向左平移释放扩展空间
+        newW = Math.min(Math.max(320, startW + dx), maxAllowedWidth)
+        if (newX + newW > vw - 12) {
+          newX = Math.max(12, vw - 12 - newW)
+        }
+      } else if (direction.includes('w')) {
+        // 向左拉伸：向左展开
+        newW = Math.min(Math.max(320, startW - dx), maxAllowedWidth)
+        newX = Math.max(12, startPosX + (startW - newW))
+      }
+
+      // 2. 高度计算 (上下严格受限于 CONTENT_TOP_OFFSET 与 STATUSBAR_BOTTOM_OFFSET)
+      if (direction.includes('s')) {
+        // 向下拉伸：如果碰到页脚，向上平移释放空间（但顶部不穿透 CONTENT_TOP_OFFSET）
+        newH = Math.min(Math.max(300, startH + dy), availableHeight)
+        const maxBottom = vh - STATUSBAR_BOTTOM_OFFSET
+        if (newY + newH > maxBottom) {
+          newY = Math.max(CONTENT_TOP_OFFSET, maxBottom - newH)
+        }
+      } else if (direction.includes('n')) {
+        // 向上拉伸：向上展开，顶部严格受限于 CONTENT_TOP_OFFSET
+        newH = Math.min(Math.max(300, startH - dy), availableHeight)
+        newY = Math.max(CONTENT_TOP_OFFSET, startPosY + (startH - newH))
+      }
+
+      setDialogSize({ width: newW, height: newH })
+      setDialogPosition({ x: newX, y: newY })
+    }
+
+    const onPointerUp = () => {
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', onPointerUp)
+      setIsDialogResizing(false)
+    }
+
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', onPointerUp)
+  }
+
   const handleSend = () => {
     if (!assistantInput.trim() || isAssistantResponding) return
     playSound(SoundType.Click)
@@ -486,7 +1647,7 @@ export function FloatingAIAssistant() {
   }
 
   const handleKeyDownInInput = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
       handleSend()
     }
@@ -499,79 +1660,79 @@ export function FloatingAIAssistant() {
     setTimeout(() => setCopiedCode(null), 2000)
   }
 
-  const handleInsertCommand = (cmd: string) => {
-    window.dispatchEvent(
-      new CustomEvent('insert-terminal-command', {
-        detail: { command: cmd, execute: false },
-      }),
-    )
-    setInsertedCode(cmd)
-    playSound(SoundType.Success)
-    setTimeout(() => setInsertedCode(null), 2000)
+  const handleCopyMessage = (msgId: string, content: string) => {
+    navigator.clipboard.writeText(content)
+    setCopiedMessageId(msgId)
+    playSound(SoundType.Click)
+    setTimeout(() => {
+      setCopiedMessageId((cur) => (cur === msgId ? null : cur))
+    }, 2000)
   }
 
   const CAPABILITY_CARDS = [
     {
-      id: 'diagnosis',
-      title: '异常诊断',
-      desc: '实例无法连接、服务崩溃根因分析',
-      prompt: '请帮我诊断服务器无法连接且 SSH 超时的排查步骤与解决方案',
-      icon: ShieldAlert,
-      color: 'text-blue-500',
-      bgColor: 'bg-blue-500/10 hover:bg-blue-500/15 border-blue-500/20',
-    },
-    {
-      id: 'ops',
-      title: '操作运维',
-      desc: '端口管理、进程杀死、权限修复',
-      prompt: '如何查找并杀死占用特定端口的进程，并修复文件执行权限？',
-      icon: Layers,
-      color: 'text-indigo-500',
-      bgColor: 'bg-indigo-500/10 hover:bg-indigo-500/15 border-indigo-500/20',
+      id: 'cluster_inspect',
+      title: '巡检所有服务器',
+      desc: '全量纳管服务器健康体检与大盘指标',
+      prompt: '帮我全面巡检已纳管的所有服务器，排查是否有高负载、磁盘爆满或异常节点。',
+      icon: Activity,
+      color: 'text-emerald-400',
+      bgColor: 'bg-emerald-500/10 hover:bg-emerald-500/15 border-emerald-500/20',
     },
     {
       id: 'monitor',
-      title: '监控分析',
-      desc: 'CPU/内存高负载排查、网络分析',
-      prompt: '如何排查 Linux 服务器 CPU 负载 100% 的进程与内存泄漏？',
-      icon: BarChart3,
-      color: 'text-cyan-500',
-      bgColor: 'bg-cyan-500/10 hover:bg-cyan-500/15 border-cyan-500/20',
-    },
-    {
-      id: 'deploy',
-      title: '服务部署',
-      desc: 'Docker 容器、Nginx 反代脚本',
-      prompt: '请写一份通用的 Docker 容器与 Nginx 反向代理配置及快速启动脚本',
-      icon: Rocket,
-      color: 'text-sky-500',
-      bgColor: 'bg-sky-500/10 hover:bg-sky-500/15 border-sky-500/20',
+      title: '高占用排查',
+      desc: '谁在吃内存/CPU？现场定位真凶进程',
+      prompt: '请帮我排查当前服务器内存和 CPU 占用最高的是哪些进程？是否存在异常内存泄漏或僵尸进程？',
+      icon: Cpu,
+      color: 'text-indigo-400',
+      bgColor: 'bg-indigo-500/10 hover:bg-indigo-500/15 border-indigo-500/20',
     },
     {
       id: 'resource',
-      title: '资源查询',
-      desc: '磁盘空间清理、大文件定位',
-      prompt: '服务器磁盘空间满了，如何快速检索大于 100MB 的大文件并安全清理？',
+      title: '大文件排查',
+      desc: '磁盘空间预警、深层大文件安全清理',
+      prompt: '系统磁盘空间告警，请帮我排查占用最大的前 5 大目录与大文件，并提供安全清理建议。',
       icon: HardDrive,
-      color: 'text-blue-600',
-      bgColor: 'bg-blue-600/10 hover:bg-blue-600/15 border-blue-600/20',
+      color: 'text-sky-400',
+      bgColor: 'bg-sky-500/10 hover:bg-sky-500/15 border-sky-500/20',
     },
     {
-      id: 'recommend',
-      title: '方案建议',
-      desc: 'Linux 生产安全基线加固与性能调优',
-      prompt: '如何为新的 Linux 服务器配置安全基线加固（SSH 密钥登录、防火墙、非 root 用户）？',
-      icon: Lightbulb,
-      color: 'text-violet-500',
+      id: 'ops',
+      title: '端口与网络',
+      desc: '端口监听冲突定位、进程优雅终止',
+      prompt: '请帮我排查当前服务器正在监听的网络端口与对应进程，如果端口冲突如何优雅结束进程？',
+      icon: Layers,
+      color: 'text-amber-400',
+      bgColor: 'bg-amber-500/10 hover:bg-amber-500/15 border-amber-500/20',
+    },
+    {
+      id: 'deploy',
+      title: '容器与服务',
+      desc: 'Docker 运行状态、崩溃重启与日志定位',
+      prompt: '请帮我检查当前运行的 Docker 容器和核心 Systemd 服务状态，排查是否有异常退出或崩溃报错。',
+      icon: Rocket,
+      color: 'text-cyan-400',
+      bgColor: 'bg-cyan-500/10 hover:bg-cyan-500/15 border-cyan-500/20',
+    },
+    {
+      id: 'script',
+      title: '脚本与调优',
+      desc: 'Shell 自动化、日志轮转与性能基线',
+      prompt: '请帮我写一个高效安全的 Linux 运维自动化 Shell 脚本（带错误检查、超时保护与日志自动轮转清理）。',
+      icon: Terminal,
+      color: 'text-violet-400',
       bgColor: 'bg-violet-500/10 hover:bg-violet-500/15 border-violet-500/20',
     },
   ]
 
   const RECOMMEND_PILLS = [
-    { text: '实例无法连接怎么办？', prompt: '实例无法连接，SSH 报 Connection timed out，如何一步步排查？' },
-    { text: '实例状态卡在“停止中”，如何解决？', prompt: '云服务器实例或守护进程卡在“停止中 (Stopping)”，如何排查强制释放？' },
-    { text: '云盘/磁盘空间满了怎么清理？', prompt: 'Linux 根分区磁盘空间利用率 100%，怎么查找大文件并安全释放空间？' },
-    { text: '端口被占用如何快速排查？', prompt: '如何使用 ss 和 lsof 命令排查指定端口被哪个进程占用并优雅重启？' },
+    { text: '诊断当前终端报错/输出', prompt: '请帮我分析当前活动终端里的最新报错信息与异常日志，给出排查解决办法。' },
+    { text: '内存占用最高的是哪个应用？', prompt: '帮我排查当前服务器内存占用最高的是哪个应用，占用比例是多少？' },
+    { text: '8080 端口被谁占用了？', prompt: '帮我查查 8080 端口当前被哪个进程监听或占用了？给出进程 PID 与处理方法。' },
+    { text: '根分区快满了怎么安全清理？', prompt: '根分区磁盘空间利用率偏高，帮我查找大于 100MB 的日志或临时文件，并给出安全的清理命令。' },
+    { text: '排查系统崩溃与 OOM-killer 记录', prompt: '帮我检查 dmesg 和内核日志中最近是否有 OOM-killer 杀死进程或系统严重报警记录？' },
+    { text: 'Linux 生产环境安全基线加固', prompt: '请为这台 Linux 服务器提供一份基础安全加固方案（禁止 root 直连、SSH 密钥登录、开启防火墙）。' },
   ]
 
   const dialogLayout = getEffectiveDialogPosition()
@@ -590,6 +1751,7 @@ export function FloatingAIAssistant() {
             zIndex: 40,
           }}
           onPointerDown={handleMascotPointerDown}
+          onDoubleClick={handleMascotDoubleClick}
           className={cn(
             'select-none touch-none rounded-full',
             isMascotDragging ? 'cursor-grabbing transition-none' : 'cursor-grab transition-transform duration-200',
@@ -635,38 +1797,36 @@ export function FloatingAIAssistant() {
             zIndex: 50,
           }}
           className={cn(
-            'flex flex-col overflow-hidden bg-background/95 backdrop-blur-2xl border border-border/80 shadow-2xl rounded-2xl select-text animate-in fade-in zoom-in-95',
-            isDialogDragging ? 'transition-none shadow-cyan-500/10' : 'transition-all duration-200',
+            'flex flex-col overflow-hidden rounded-2xl select-text animate-in fade-in zoom-in-95',
+            themeStyles.dialogContainer,
+            isDialogDragging || isDialogResizing ? 'transition-none select-none shadow-cyan-500/10' : 'transition-all duration-150',
           )}
         >
           {/* Header 顶部拖拽栏 */}
           <div
             onPointerDown={handleDialogHeaderPointerDown}
-            onDoubleClick={handleDialogHeaderDoubleClick}
             className={cn(
-              'flex items-center justify-between px-4 py-3 border-b border-border/60 bg-muted/25 select-none shrink-0',
-              isMaximized ? 'cursor-default' : 'cursor-move hover:bg-muted/40 transition-colors',
+              'flex items-center justify-between px-4 py-3 select-none shrink-0 cursor-move transition-colors',
+              themeStyles.header,
             )}
           >
             {/* 左侧：小人微标 + 标题 + 拖拽手柄指示器 */}
             <div className="flex items-center gap-2">
               <AIMascotAvatar size={24} mood={assistantMascotMood} showGlowRing={false} interactive={false} />
-              <span className="text-xs font-bold text-foreground">
+              <span className="text-xs font-bold text-inherit">
                 {t('ai_assistant_title') || '运维小助手'}
               </span>
-              <span className="text-[10px] px-1.5 py-0.2 rounded font-normal bg-primary/10 text-primary">
+              <span className={cn('text-[10px] px-1.5 py-0.2 rounded font-normal', themeStyles.copilotBadge)}>
                 AIOps Copilot
               </span>
-              {!isMaximized && (
-                <div className="hidden sm:flex items-center text-muted-foreground/40 ml-1">
-                  <GripHorizontal className="h-3.5 w-3.5" />
-                </div>
-              )}
+              <div className="hidden sm:flex items-center opacity-40 ml-1">
+                <GripHorizontal className="h-3.5 w-3.5" />
+              </div>
             </div>
 
             {/* 右侧：功能控制按钮 (阻止向上传递拖拽) */}
             <div
-              className="flex items-center gap-1 text-muted-foreground"
+              className="flex items-center gap-1 opacity-80"
               onPointerDown={(e) => e.stopPropagation()}
             >
               {/* 新建对话按钮 (+) */}
@@ -675,17 +1835,20 @@ export function FloatingAIAssistant() {
                   <Button
                     size="icon"
                     variant="ghost"
+                    data-testid="ai-new-session-btn"
                     onClick={() => {
-                      clearAssistantMessages()
+                      createNewAssistantSession()
+                      setShowHistoryPanel(false)
                       playSound(SoundType.Click)
+                      setTimeout(() => textareaRef.current?.focus(), 50)
                     }}
-                    className="h-7 w-7 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground cursor-pointer"
+                    className={cn('h-7 w-7 rounded-lg cursor-pointer transition-colors', themeStyles.headerBtn)}
                   >
                     <Plus className="h-4 w-4" />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="text-xs">
-                  新建对话
+                  {t('ai_new_chat') || '新建对话'}
                 </TooltipContent>
               </Tooltip>
 
@@ -695,60 +1858,34 @@ export function FloatingAIAssistant() {
                   <Button
                     size="icon"
                     variant="ghost"
-                    onClick={() => playSound(SoundType.Click)}
-                    className="h-7 w-7 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground cursor-pointer"
+                    data-testid="ai-history-toggle-btn"
+                    onClick={() => {
+                      setShowHistoryPanel((prev) => !prev)
+                      playSound(SoundType.Click)
+                    }}
+                    className={cn(
+                      'h-7 w-7 rounded-lg cursor-pointer transition-colors',
+                      themeStyles.headerBtn,
+                      showHistoryPanel && 'bg-primary/15 text-primary font-medium hover:bg-primary/20',
+                    )}
                   >
                     <History className="h-3.5 w-3.5" />
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="text-xs">
-                  会话记录
+                  {t('ai_history_title') || '会话记录'}
                 </TooltipContent>
               </Tooltip>
 
-              {/* 最大化 / 还原切换 (占右边 1/3，比例不变) */}
+              {/* 关闭/最小化按钮 (退出时重置卡片位置) */}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
                     size="icon"
                     variant="ghost"
-                    data-testid="ai-maximize-toggle-btn"
-                    aria-label={
-                      isMaximized
-                        ? t('ai_restore_btn') || '还原窗口'
-                        : t('ai_maximize_btn') || '最大化 (右侧 1/3 屏幕)'
-                    }
-                    onClick={() => {
-                      setIsMaximized(!isMaximized)
-                      playSound(SoundType.Click)
-                    }}
-                    className="h-7 w-7 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground cursor-pointer"
-                  >
-                    {isMaximized ? (
-                      <Minimize2 className="h-3.5 w-3.5" />
-                    ) : (
-                      <Maximize2 className="h-3.5 w-3.5" />
-                    )}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" className="text-xs">
-                  {isMaximized
-                    ? t('ai_restore_btn') || '还原窗口'
-                    : t('ai_maximize_btn') || '最大化 (右侧 1/3 屏幕)'}
-                </TooltipContent>
-              </Tooltip>
-
-              {/* 关闭/最小化按钮 */}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    onClick={() => {
-                      playSound(SoundType.Close)
-                      closeFloatingAssistant()
-                    }}
-                    className="h-7 w-7 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground cursor-pointer"
+                    data-testid="ai-dialog-close-btn"
+                    onClick={handleExitAssistant}
+                    className={cn('h-7 w-7 rounded-lg cursor-pointer transition-colors', themeStyles.headerBtn)}
                   >
                     <X className="h-4 w-4" />
                   </Button>
@@ -759,6 +1896,173 @@ export function FloatingAIAssistant() {
               </Tooltip>
             </div>
           </div>
+
+          {/* 会话历史抽屉覆盖层 */}
+          {showHistoryPanel && (
+            <div
+              data-testid="ai-history-panel"
+              className={cn(
+                'absolute inset-x-0 top-[49px] bottom-0 z-30 flex flex-col animate-in fade-in slide-in-from-right-4 duration-150 select-none',
+                themeStyles.historyPanel,
+              )}
+            >
+              {/* 抽屉头部 */}
+              <div className={cn('flex items-center justify-between px-4 py-2.5 border-b shrink-0', themeStyles.header)}>
+                <div className="flex items-center gap-2">
+                  <History className="h-3.5 w-3.5 text-primary" />
+                  <span className={cn('text-xs font-semibold', themeStyles.welcomeTitle)}>
+                    {t('ai_history_title') || '会话记录'}
+                  </span>
+                  <span
+                    className="text-[10px] px-1.5 py-0.2 rounded-full bg-muted text-muted-foreground font-mono"
+                    title={`最多保留 ${settings.maxAssistantSessions || 30} 场会话，超出自动滚动淘汰旧会话`}
+                  >
+                    {assistantSessions.length} / {settings.maxAssistantSessions || 30}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  {assistantSessions.length > 0 && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      data-testid="ai-clear-all-sessions-btn"
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            t('ai_clear_history_confirm') || '确定要清空全部 AI 会话历史记录吗？',
+                          )
+                        ) {
+                          clearAllAssistantSessions()
+                          setShowHistoryPanel(false)
+                          playSound(SoundType.Click)
+                        }
+                      }}
+                      className="h-6 px-2 text-[11px] text-muted-foreground hover:text-destructive hover:bg-destructive/10 gap-1 rounded-md cursor-pointer"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                      <span>{t('ai_clear_history') || '清空'}</span>
+                    </Button>
+                  )}
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={() => setShowHistoryPanel(false)}
+                    className="h-6 w-6 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground cursor-pointer"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
+
+              {/* 会话列表 */}
+              <div className="flex-1 overflow-y-auto p-3 space-y-2 select-text">
+                {assistantSessions.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center p-6 text-center text-muted-foreground select-none">
+                    <div className="h-10 w-10 rounded-full bg-muted/50 flex items-center justify-center mb-2.5 text-muted-foreground/60">
+                      <Clock className="h-5 w-5" />
+                    </div>
+                    <p className={cn('text-xs font-medium mb-1', themeStyles.welcomeTitle)}>
+                      {t('ai_no_history') || '暂无历史会话'}
+                    </p>
+                    <p className={cn('text-[11px] max-w-[220px] leading-relaxed', themeStyles.welcomeSub)}>
+                      {t('ai_no_history_desc') || '开启一段对话后，将自动在此记录提问历史'}
+                    </p>
+                  </div>
+                ) : (
+                  assistantSessions.map((session) => {
+                    const isActive = session.id === currentAssistantSessionId
+                    return (
+                      <div
+                        key={session.id}
+                        data-testid={`session-item-${session.id}`}
+                        onClick={() => {
+                          loadAssistantSession(session.id)
+                          setShowHistoryPanel(false)
+                          playSound(SoundType.Click)
+                          setTimeout(() => textareaRef.current?.focus(), 50)
+                        }}
+                        className={cn(
+                          'group relative flex items-start justify-between gap-2.5 p-2.5 rounded-xl border text-left transition-all cursor-pointer',
+                          isActive
+                            ? 'bg-primary/8 border-primary/40 shadow-2xs ring-1 ring-primary/20'
+                            : 'bg-card/70 hover:bg-muted/50 border-border/50 hover:border-border',
+                        )}
+                      >
+                        <div className="flex-1 min-w-0 pr-1">
+                          <div className="flex items-center gap-1.5 mb-1">
+                            {isActive && (
+                              <span className="inline-block h-1.5 w-1.5 rounded-full bg-primary shrink-0" />
+                            )}
+                            <span
+                              className={cn(
+                                'text-xs truncate block',
+                                isActive
+                                  ? 'text-primary font-semibold'
+                                  : cn('font-medium', themeStyles.welcomeTitle),
+                              )}
+                            >
+                              {session.title || '新会话'}
+                            </span>
+                          </div>
+                          <div className={cn('flex items-center gap-2 text-[10.5px]', themeStyles.welcomeSub)}>
+                            <span className="font-mono opacity-80">
+                              {formatSessionTime(session.updatedAt || session.createdAt)}
+                            </span>
+                            <span>·</span>
+                            <span>{session.messages.length} 条对话</span>
+                            {session.mode === 'chat' ? (
+                              <span className="text-[9.5px] px-1 py-0.2 rounded bg-muted text-muted-foreground">
+                                问答
+                              </span>
+                            ) : (
+                              <span className="text-[9.5px] px-1 py-0.2 rounded bg-primary/10 text-primary">
+                                Agent
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* 单条删除 */}
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          data-testid={`delete-session-${session.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            deleteAssistantSession(session.id)
+                            if (assistantSessions.length <= 1) {
+                              setShowHistoryPanel(false)
+                            }
+                            playSound(SoundType.Click)
+                          }}
+                          className="h-6 w-6 opacity-0 group-hover:opacity-100 focus:opacity-100 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive shrink-0 transition-opacity cursor-pointer"
+                          title={t('ai_delete_session') || '删除会话'}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+
+              {/* 抽屉底部快捷按钮 */}
+              <div className="p-3 border-t border-border/60 bg-muted/15 shrink-0 select-none">
+                <Button
+                  onClick={() => {
+                    createNewAssistantSession()
+                    setShowHistoryPanel(false)
+                    playSound(SoundType.Click)
+                    setTimeout(() => textareaRef.current?.focus(), 50)
+                  }}
+                  className="w-full h-8 text-xs font-medium gap-1.5 rounded-lg cursor-pointer shadow-xs"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>{t('ai_new_chat') || '新建对话'}</span>
+                </Button>
+              </div>
+            </div>
+          )}
 
           {/* 未配置 AI 提示引导横幅 (方案 B) */}
           {!isAiConfigured && (
@@ -791,19 +2095,26 @@ export function FloatingAIAssistant() {
               /* 空状态：2列横向功能卡片 + 热门推荐问答 Pills */
               <div className="flex flex-col space-y-4 pt-1 pb-2">
                 {/* 顶部欢迎区：机器人插图 + 醒目标题 */}
-                <div className="flex items-center gap-3.5 p-3.5 rounded-xl bg-gradient-to-r from-primary/5 via-primary/10 to-transparent border border-primary/15">
+                <div className={cn('flex items-center gap-3.5 p-3.5 rounded-xl border', themeStyles.welcomeBanner)}>
                   <AIMascotAvatar size={60} mood={assistantMascotMood} showGlowRing={false} />
                   <div>
-                    <h2 className="text-sm font-bold text-foreground tracking-tight">
+                    <h2 className={cn('text-sm font-bold tracking-tight', themeStyles.welcomeTitle)}>
                       您好，欢迎使用
                     </h2>
-                    <h1 className="text-lg font-extrabold bg-gradient-to-r from-blue-600 via-indigo-600 to-cyan-500 bg-clip-text text-transparent">
+                    <h1
+                      className={cn(
+                        'text-lg font-extrabold bg-clip-text text-transparent',
+                        themeStyles.isTerminalMode && !isLightTerminal
+                          ? 'bg-gradient-to-r from-sky-400 via-cyan-300 to-blue-400'
+                          : 'bg-gradient-to-r from-blue-600 via-indigo-600 to-cyan-500',
+                      )}
+                    >
                       {t('ai_assistant_title') || '运维小助手'}
                     </h1>
                   </div>
                 </div>
 
-                <div className="text-xs font-semibold text-muted-foreground px-0.5">
+                <div className={cn('text-xs font-semibold px-0.5', themeStyles.welcomeSub)}>
                   我可以帮您
                 </div>
 
@@ -824,14 +2135,14 @@ export function FloatingAIAssistant() {
                         )}
                       >
                         <div className="flex items-center gap-2 mb-1">
-                          <div className={cn('p-1 rounded-md bg-background/80 shadow-2xs', card.color)}>
+                          <div className={cn('p-1 rounded-md shadow-2xs', themeStyles.iconBox, card.color)}>
                             <IconComponent className="h-3.5 w-3.5" />
                           </div>
-                          <span className="text-xs font-bold text-foreground">
+                          <span className={cn('text-xs font-bold transition-colors', themeStyles.cardTitle)}>
                             {card.title}
                           </span>
                         </div>
-                        <p className="text-[11px] text-muted-foreground leading-snug">
+                        <p className={cn('text-[11px] leading-snug transition-colors', themeStyles.cardDesc)}>
                           {card.desc}
                         </p>
                       </div>
@@ -849,10 +2160,13 @@ export function FloatingAIAssistant() {
                         playSound(SoundType.Click)
                         void sendAssistantMessage(pill.prompt)
                       }}
-                      className="inline-flex items-center text-[11px] px-2.5 py-1 rounded-lg bg-muted/40 hover:bg-primary/10 hover:text-primary text-muted-foreground border border-border/50 hover:border-primary/30 transition-all cursor-pointer text-left"
+                      className={cn(
+                        'inline-flex items-center text-[11px] px-2.5 py-1 rounded-lg transition-all cursor-pointer text-left',
+                        themeStyles.recommendPill,
+                      )}
                     >
-                      <span className="text-primary font-semibold mr-1">#</span>
-                      <span>{pill.text}</span>
+                      <span className={cn('font-semibold mr-1', themeStyles.isTerminalMode ? 'text-sky-400' : 'text-primary')}>#</span>
+                      <span className={themeStyles.pillText}>{pill.text}</span>
                     </button>
                   ))}
                 </div>
@@ -862,12 +2176,18 @@ export function FloatingAIAssistant() {
               <div className="space-y-4">
                 {assistantMessages.map((msg) => {
                   const isUser = msg.role === 'user'
+                  const parsedAi = !isUser ? parseThinkingAndContent(msg.content) : null
+                  const hasAgentAction = Boolean(
+                    msg.executionCard ||
+                    (msg.suggestedCommands && msg.suggestedCommands.length > 0) ||
+                    (parsedAi && parsedAi.agentDecisions && parsedAi.agentDecisions.length > 0),
+                  )
 
                   return (
                     <div
                       key={msg.id}
                       className={cn(
-                        'flex gap-2.5 items-start',
+                        'group relative flex gap-2 items-start',
                         isUser ? 'flex-row-reverse justify-start' : 'justify-start',
                       )}
                     >
@@ -882,80 +2202,193 @@ export function FloatingAIAssistant() {
                           />
                         </div>
                       ) : (
-                        <div className="w-7 h-7 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center text-xs font-bold shrink-0 mt-0.5 shadow-2xs">
+                        <div className={cn('w-7 h-7 rounded-full text-white flex items-center justify-center text-xs font-bold shrink-0 mt-0.5 shadow-2xs', themeStyles.userAvatar)}>
                           我
                         </div>
                       )}
 
-                      {/* 气泡正文 */}
-                      <div
-                        className={cn(
-                          'rounded-2xl text-xs leading-relaxed max-w-[88%] px-4 py-3 shadow-2xs',
-                          isUser
-                            ? 'bg-primary text-primary-foreground rounded-tr-xs font-normal'
-                            : 'bg-muted/40 border border-border/60 text-foreground rounded-tl-xs space-y-2',
-                        )}
-                      >
-                        {/* Agent/Chat 模式标签 */}
-                        {!isUser && msg.mode && (
-                          <div className="flex items-center gap-1.5 pb-1 border-b border-border/40 text-[10px] text-muted-foreground font-medium">
-                            {msg.mode === 'agent' ? (
+                      {/* 消息主体容器 (垂直排列气泡与下方操作栏) */}
+                      <div className={cn('flex flex-col max-w-[85%]', isUser ? 'items-end' : 'items-start')}>
+                        {/* 气泡正文 */}
+                        <div
+                          className={cn(
+                            'rounded-2xl text-xs leading-relaxed px-3.5 py-2.5 shadow-2xs',
+                            isUser
+                              ? themeStyles.userBubble
+                              : cn('rounded-tl-xs space-y-2 w-full', themeStyles.aiBubble),
+                          )}
+                        >
+                          {/* Agent/Chat 模式与执行能力解耦标签 */}
+                          {!isUser && msg.mode && (
+                            <div
+                              data-testid="ai-bubble-badge"
+                              className={cn('flex items-center gap-1.5 pb-1 text-[10px] font-medium', themeStyles.aiBubbleHeader)}
+                            >
+                              {msg.mode === 'agent' ? (
+                                hasAgentAction ? (
+                                  <>
+                                    <Sparkles className="h-3 w-3 text-cyan-400" />
+                                    <span>{t('ai_badge_agent_execution') || 'Agent 运维执行'}</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Bot className="h-3 w-3 text-emerald-400" />
+                                    <span>{t('ai_badge_agent_qa') || 'AIOps 智能解答'}</span>
+                                  </>
+                                )
+                              ) : (
+                                <>
+                                  <MessageSquare className="h-3 w-3 text-blue-400" />
+                                  <span>{t('ai_badge_chat_qa') || 'Chat 咨询解答'}</span>
+                                </>
+                              )}
+                            </div>
+                          )}
+
+                          {/* 文本内容与交互式代码块 */}
+                          {isUser ? (
+                            <div className="whitespace-pre-wrap break-words">{msg.content}</div>
+                          ) : (
+                            <>
+                              <AssistantMessageRenderer
+                                content={msg.content}
+                                onCopy={handleCopyCommand}
+                                copiedCode={copiedCode}
+                                isStreaming={msg.status === 'streaming'}
+                                themeStyles={themeStyles}
+                              />
+                              {msg.status === 'streaming' && (
+                                <span
+                                  data-testid="streaming-cursor"
+                                  className="inline-block w-1.5 h-3.5 bg-primary align-middle animate-pulse ml-0.5 rounded-2xs"
+                                />
+                              )}
+                              {msg.executionCard && (
+                                <CommandExecutionCard
+                                  card={msg.executionCard}
+                                  messageId={msg.id}
+                                  onCopy={handleCopyCommand}
+                                  copiedCode={copiedCode}
+                                  onExecute={executeMessageCommand}
+                                  onReject={rejectMessageCommand}
+                                />
+                              )}
+                              {!isUser && isServerPickerNeeded(msg.content) && (
+                                <UnattachedServerPicker
+                                  userPrompt={
+                                    assistantMessages
+                                      .slice(0, assistantMessages.findIndex((m) => m.id === msg.id))
+                                      .reverse()
+                                      .find((m) => m.role === 'user')?.content
+                                  }
+                                  onSelectSingle={(server, originalPrompt) => {
+                                    playSound(SoundType.Click)
+                                    const query = originalPrompt
+                                      ? `针对【${server.name || server.host}】(${server.host}) 服务器：${originalPrompt}`
+                                      : `请帮我全面体检【${server.name || server.host}】服务器 (${server.host})`
+                                    void sendAssistantMessage(query)
+                                  }}
+                                  onSelectBatch={(servers, originalPrompt) => {
+                                    playSound(SoundType.Click)
+                                    const listStr = servers
+                                      .map((s) => `【${s.name || s.host}】(${s.host})`)
+                                      .join('、')
+                                    const query = originalPrompt
+                                      ? `针对以下服务器批量执行排查（${listStr}）：${originalPrompt}`
+                                      : `请帮我巡检以下服务器：${listStr}`
+                                    void sendAssistantMessage(query)
+                                  }}
+                                  onInspectAll={(originalPrompt) => {
+                                    playSound(SoundType.Click)
+                                    const query = originalPrompt
+                                      ? `帮我全面巡检已纳管的所有服务器，重点排查：${originalPrompt}`
+                                      : '帮我全面巡检已纳管的所有服务器，排查是否有高负载、磁盘爆满或异常节点。'
+                                    void sendAssistantMessage(query)
+                                  }}
+                                />
+                              )}
+                            </>
+                          )}
+                        </div>
+
+                        {/* 底部操作栏：一键复制 (提问与回答风格、位置完全一致，放置在气泡正下方) */}
+                        <div
+                          className={cn(
+                            'flex items-center pt-1 text-muted-foreground opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity',
+                            isUser ? 'justify-end pr-1' : 'justify-start pl-1',
+                          )}
+                        >
+                          <button
+                            type="button"
+                            data-testid={isUser ? `copy-user-msg-${msg.id}` : `copy-ai-msg-${msg.id}`}
+                            onClick={() => handleCopyMessage(msg.id, msg.content)}
+                            className={cn('inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10.5px] transition-all cursor-pointer', themeStyles.copyActionBtn)}
+                            title={isUser ? '复制提问' : '复制全文'}
+                          >
+                            {copiedMessageId === msg.id ? (
                               <>
-                                <Sparkles className="h-3 w-3 text-cyan-500" />
-                                <span>Agent 运维执行</span>
+                                <Check className="h-3 w-3 text-emerald-500" />
+                                <span className="text-emerald-500 font-medium">已复制</span>
                               </>
                             ) : (
                               <>
-                                <MessageSquare className="h-3 w-3 text-blue-500" />
-                                <span>Chat 咨询解答</span>
+                                <Copy className="h-3 w-3" />
+                                <span>复制</span>
                               </>
                             )}
-                          </div>
-                        )}
-
-                        {/* 文本内容与交互式代码块 */}
-                        {isUser ? (
-                          <div className="whitespace-pre-wrap break-words">{msg.content}</div>
-                        ) : (
-                          <AssistantMessageRenderer
-                            content={msg.content}
-                            onCopy={handleCopyCommand}
-                            onInsert={handleInsertCommand}
-                            copiedCode={copiedCode}
-                            insertedCode={insertedCode}
-                          />
-                        )}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   )
                 })}
 
-                {/* 思考中/生成中状态 */}
-                {isAssistantResponding && (
-                  <div className="flex gap-2.5 items-start">
-                    <div className="shrink-0 mt-0.5">
-                      <AIMascotAvatar size={28} mood="thinking" showGlowRing={false} interactive={false} />
-                    </div>
-                    <div className="p-3 rounded-2xl rounded-tl-xs bg-muted/40 border border-border/60 text-xs text-muted-foreground flex items-center gap-2">
-                      <div className="flex space-x-1">
-                        <div className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-bounce" />
-                        <div className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-bounce delay-100" />
-                        <div className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-bounce delay-200" />
+                {/* 思考中/首字前推导等待状态 */}
+                {isAssistantResponding &&
+                  !assistantMessages.some(
+                    (m) => m.role === 'assistant' && m.status === 'streaming' && m.content.length > 0,
+                  ) && (
+                    <div className="flex gap-2.5 items-start">
+                      <div className="shrink-0 mt-0.5">
+                        <AIMascotAvatar size={28} mood="thinking" showGlowRing={false} interactive={false} />
                       </div>
-                      <span>AI 助手正在深度推导中...</span>
+                      <div className={cn('p-2 px-3 rounded-2xl rounded-tl-xs text-xs flex items-center justify-between gap-2.5', themeStyles.aiBubble)}>
+                        <div className="flex items-center gap-2">
+                          <div className="flex space-x-1">
+                            <div className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-bounce" />
+                            <div className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-bounce delay-100" />
+                            <div className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-bounce delay-200" />
+                          </div>
+                          <span>AI 助手正在深度推导中...</span>
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          data-testid="ai-stop-thinking-btn"
+                          onClick={() => {
+                            stopAssistantResponding()
+                            playSound(SoundType.Click)
+                          }}
+                          className="h-5 px-1.5 text-[10.5px] text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded gap-1 cursor-pointer transition-colors"
+                          title={t('ai_stop_generating') || '停止生成'}
+                        >
+                          <CircleStop className="h-3 w-3" />
+                          <span>{t('ai_stop_generating') || '停止'}</span>
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
                 <div ref={messagesEndRef} />
               </div>
             )}
           </div>
 
-          {/* Bottom 输入区域 */}
-          <div className="p-3 border-t border-border/60 bg-muted/15 shrink-0 space-y-2">
-            {/* 输入框主卡片 */}
-            <div className="relative rounded-xl border border-border/80 bg-background shadow-xs focus-within:ring-2 focus-within:ring-primary/30 focus-within:border-primary transition-all p-2.5 flex flex-col justify-between min-h-[96px]">
+          {/* Bottom 输入区域 (Antigravity 紧凑卡片风格，减少垂直占用) */}
+          <div className={cn('p-2.5 pb-2 shrink-0 space-y-1.5 transition-colors', themeStyles.inputBar)}>
+            {/* 输入框主卡片 (Antigravity 风格：圆角卡片、模式与操作内嵌于底栏) */}
+            <div className={cn('relative rounded-2xl transition-all p-2 flex flex-col justify-between min-h-[58px]', themeStyles.inputCard)}>
               {/* Textarea 多行自适应输入 */}
               <textarea
                 ref={textareaRef}
@@ -963,14 +2396,14 @@ export function FloatingAIAssistant() {
                 onChange={(e) => setAssistantInput(e.target.value)}
                 onKeyDown={handleKeyDownInInput}
                 placeholder="你可以输入任何运维排障、命令生成或脚本问题..."
-                rows={2}
-                className="w-full bg-transparent resize-none outline-none text-xs text-foreground placeholder:text-muted-foreground/60 leading-relaxed max-h-[120px]"
+                rows={1}
+                className="w-full bg-transparent resize-none outline-none text-xs text-inherit placeholder:opacity-70 leading-relaxed min-h-[30px] max-h-[100px] px-1 pt-0.5"
               />
 
-              {/* 输入框底部动作条：左侧 Agent/Chat 切换，右侧向上箭头发送按钮 */}
-              <div className="flex items-center justify-between pt-2">
-                {/* 模式切换胶囊 */}
-                <div className="flex items-center p-0.5 rounded-lg bg-muted/60 border border-border/50 text-xs">
+              {/* 输入框底部动作条：左侧 Agent/Chat 切换，右侧紧凑微型停止/发送按钮 */}
+              <div className="flex items-center justify-between pt-1">
+                {/* 模式切换胶囊 (更小巧精致的药丸设计) */}
+                <div className={cn('flex items-center p-[2px] rounded-md border text-[10px] transition-colors', themeStyles.modePillContainer)}>
                   <button
                     type="button"
                     onClick={() => {
@@ -978,13 +2411,13 @@ export function FloatingAIAssistant() {
                       playSound(SoundType.Click)
                     }}
                     className={cn(
-                      'flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-all cursor-pointer',
+                      'flex items-center gap-1 px-1.5 py-0.5 rounded text-[9.5px] font-medium leading-none transition-all cursor-pointer',
                       assistantMode === 'agent'
-                        ? 'bg-background text-primary shadow-2xs font-semibold'
-                        : 'text-muted-foreground hover:text-foreground',
+                        ? themeStyles.modeBtnActive
+                        : themeStyles.modeBtnInactive,
                     )}
                   >
-                    <Sparkles className="h-3 w-3 text-cyan-500" />
+                    <Sparkles className="h-2.5 w-2.5 text-cyan-500" />
                     <span>Agent</span>
                   </button>
 
@@ -995,39 +2428,117 @@ export function FloatingAIAssistant() {
                       playSound(SoundType.Click)
                     }}
                     className={cn(
-                      'flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-all cursor-pointer',
+                      'flex items-center gap-1 px-1.5 py-0.5 rounded text-[9.5px] font-medium leading-none transition-all cursor-pointer',
                       assistantMode === 'chat'
-                        ? 'bg-background text-primary shadow-2xs font-semibold'
-                        : 'text-muted-foreground hover:text-foreground',
+                        ? themeStyles.modeBtnActive
+                        : themeStyles.modeBtnInactive,
                     )}
                   >
-                    <MessageSquare className="h-3 w-3 text-blue-500" />
+                    <MessageSquare className="h-2.5 w-2.5 text-blue-500" />
                     <span>Chat</span>
                   </button>
                 </div>
 
-                {/* 发送按钮 */}
-                <Button
-                  type="button"
-                  size="icon"
-                  disabled={!assistantInput.trim() || isAssistantResponding}
-                  onClick={handleSend}
-                  className={cn(
-                    'h-7 w-7 rounded-lg transition-all duration-200 cursor-pointer',
-                    assistantInput.trim() && !isAssistantResponding
-                      ? 'bg-primary text-primary-foreground shadow-md hover:bg-primary/90 hover:scale-105 active:scale-95'
-                      : 'bg-muted text-muted-foreground opacity-50 cursor-not-allowed',
-                  )}
-                >
-                  <ArrowUp className="h-4 w-4" />
-                </Button>
+                {/* 发送 / 停止生成按钮 (微型尺寸 h-5 w-5，更小巧轻盈) */}
+                {isAssistantResponding ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        data-testid="ai-stop-responding-btn"
+                        onClick={() => {
+                          stopAssistantResponding()
+                          playSound(SoundType.Click)
+                        }}
+                        className="h-5 w-5 rounded-[5px] border border-border/80 hover:border-destructive/60 bg-background hover:bg-destructive/10 text-muted-foreground hover:text-destructive flex items-center justify-center cursor-pointer transition-all shadow-2xs"
+                        title={t('ai_stop_generating') || '停止生成'}
+                      >
+                        <CircleStop className="h-3 w-3 transition-colors" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="text-xs">
+                      {t('ai_stop_generating') || '停止生成'}
+                    </TooltipContent>
+                  </Tooltip>
+                ) : (
+                  <button
+                    type="button"
+                    data-testid="ai-send-btn"
+                    disabled={!assistantInput.trim()}
+                    onClick={handleSend}
+                    className={cn(
+                      'h-5 w-5 rounded-[5px] flex items-center justify-center transition-all duration-150 cursor-pointer',
+                      assistantInput.trim()
+                        ? themeStyles.sendBtnActive
+                        : themeStyles.sendBtnDisabled,
+                    )}
+                    title={t('ai_send_message') || '发送 (Enter)'}
+                  >
+                    <ArrowUp className="h-3 w-3" />
+                  </button>
+                )}
               </div>
             </div>
 
             {/* 底部免责声明小字 */}
-            <div className="text-[10px] text-muted-foreground/60 text-center select-none">
-              内容由 AI 生成，仅供参考，您据此所作判断及操作均由您自行承担责任。
+            <div className={cn('text-[9.5px] text-center select-none truncate px-1', themeStyles.disclaimerText)}>
+              内容由 AI 生成，仅供参考，操作前请仔细确认
             </div>
+          </div>
+
+          {/* 8 方向边缘与角落拉伸热区 (支持自由拖拽调整宽高，上下受限) */}
+          {/* 四边 */}
+          <div
+            data-testid="ai-resize-n"
+            className="absolute top-0 left-3 right-3 h-2 cursor-ns-resize z-20"
+            onPointerDown={(e) => handleResizePointerDown('n', e)}
+          />
+          <div
+            data-testid="ai-resize-s"
+            className="absolute bottom-0 left-3 right-3 h-2 cursor-ns-resize z-20"
+            onPointerDown={(e) => handleResizePointerDown('s', e)}
+          />
+          <div
+            data-testid="ai-resize-w"
+            className="absolute top-3 bottom-3 left-0 w-2 cursor-ew-resize z-20"
+            onPointerDown={(e) => handleResizePointerDown('w', e)}
+          />
+          <div
+            data-testid="ai-resize-e"
+            className="absolute top-3 bottom-3 right-0 w-2 cursor-ew-resize z-20"
+            onPointerDown={(e) => handleResizePointerDown('e', e)}
+          />
+
+          {/* 四角 */}
+          <div
+            data-testid="ai-resize-nw"
+            className="absolute top-0 left-0 w-3.5 h-3.5 cursor-nwse-resize z-30"
+            onPointerDown={(e) => handleResizePointerDown('nw', e)}
+          />
+          <div
+            data-testid="ai-resize-ne"
+            className="absolute top-0 right-0 w-3.5 h-3.5 cursor-nesw-resize z-30"
+            onPointerDown={(e) => handleResizePointerDown('ne', e)}
+          />
+          <div
+            data-testid="ai-resize-sw"
+            className="absolute bottom-0 left-0 w-3.5 h-3.5 cursor-nesw-resize z-30"
+            onPointerDown={(e) => handleResizePointerDown('sw', e)}
+          />
+          <div
+            data-testid="ai-resize-se"
+            className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize z-30 flex items-end justify-end p-0.5 group/grip cursor-pointer"
+            onPointerDown={(e) => handleResizePointerDown('se', e)}
+            title="拖拽调整大小"
+          >
+            {/* 右下角精致拉伸把手微标 */}
+            <svg
+              viewBox="0 0 10 10"
+              className="w-2.5 h-2.5 text-muted-foreground/30 group-hover/grip:text-primary transition-colors pointer-events-none"
+              fill="currentColor"
+            >
+              <path d="M8 2 L2 8 M8 5 L5 8 M8 8 L8 8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+            </svg>
           </div>
         </div>
       )}

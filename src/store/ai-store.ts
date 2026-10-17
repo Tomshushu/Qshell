@@ -16,7 +16,10 @@ import type {
   CommandRiskAnalysis,
   AIAssistantMode,
   AIAssistantMessage,
+  AIAssistantSession,
   AIMascotMood,
+  AIExecutionMode,
+  AIAssistantExecutionCard,
 } from '@/types/ai'
 import { AI_PROVIDER_PRESETS } from '@/types/ai'
 import {
@@ -25,13 +28,227 @@ import {
   diagnoseTerminalError,
   generateCommand,
   sendAssistantChat,
+  extractCommandsFromContent,
+  isLikelyShellCommand,
 } from '@/services/ai/ai-client'
+import { useAppStore } from '@/store'
+import { backend } from '@/services/api'
+import {
+  resolveProbePlan,
+  executeSafeProbe,
+  formatProbeReportForAI,
+  buildServerInventory,
+  findActiveConnectionId,
+} from '@/services/ai/server-probe-service'
+import {
+  evaluateCommandForExecution,
+  wrapSafeInspectionCommand,
+  generateExecutionSummary,
+} from '@/services/ai/command-guard'
 
 const AI_SETTINGS_STORAGE_KEY = 'qshell_ai_settings_v1'
 const AI_MODELS_CACHE_STORAGE_KEY = 'qshell_ai_models_cache_v1'
 const AI_CONFIGURED_PROVIDERS_KEY = 'qshell_ai_configured_providers_v1'
 const AI_SHOW_FLOATING_MASCOT_KEY = 'qshell_ai_show_floating_mascot_v1'
 const AI_MASTER_ENABLED_KEY = 'qshell_ai_master_enabled_v1'
+const AI_ASSISTANT_SESSIONS_KEY = 'qshell_ai_assistant_sessions_v1'
+
+export const DEFAULT_MAX_ASSISTANT_SESSIONS = 30
+export const DEFAULT_MAX_MESSAGES_PER_SESSION = 50
+export const MAX_EXECUTION_CARD_OUTPUT_LENGTH = 8192 // 8KB: 单次命令采样输出上限，超长截断防撑爆本地存储
+
+/**
+ * 裁剪单个消息，防止过大的回显/输出撑爆本地存储空间 (如几万行的日志输出)
+ */
+export function sanitizeMessageForStorage(msg: AIAssistantMessage): AIAssistantMessage {
+  if (!msg.executionCard || !msg.executionCard.output) return msg
+  if (msg.executionCard.output.length > MAX_EXECUTION_CARD_OUTPUT_LENGTH) {
+    return {
+      ...msg,
+      executionCard: {
+        ...msg.executionCard,
+        output:
+          msg.executionCard.output.slice(0, MAX_EXECUTION_CARD_OUTPUT_LENGTH) +
+          '\n\n... [输出超出 8KB，已自动截断以节省本地存储空间] ...',
+      },
+    }
+  }
+  return msg
+}
+
+/**
+ * 滚动修剪会话与问答记录：
+ * 1. 确保每个会话内部的消息数不超过 maxMessagesPerSession（FIFO 滚动淘汰最旧的消息，保留最近的问答）
+ * 2. 裁剪超大命令输出，避免单条庞大回显直接把 localStorage 填满
+ * 3. 确保总会话数不超过 maxSessions（按 updatedAt 降序排序，超出上限时淘汰最久未活跃的旧会话）
+ */
+export function pruneAssistantSessions(
+  sessions: AIAssistantSession[],
+  maxSessions: number = DEFAULT_MAX_ASSISTANT_SESSIONS,
+  maxMessagesPerSession: number = DEFAULT_MAX_MESSAGES_PER_SESSION,
+): AIAssistantSession[] {
+  if (!Array.isArray(sessions)) return []
+
+  const safeMaxSessions = Math.max(1, maxSessions)
+  const safeMaxMessages = Math.max(1, maxMessagesPerSession)
+
+  // 1. 修剪每个会话内部的消息数量与超大输出
+  const prunedPerSession = sessions.map((s) => {
+    let msgs = s.messages || []
+    if (msgs.length > safeMaxMessages) {
+      // 保留最新的 safeMaxMessages 条记录 (滑动窗口滚动淘汰最旧消息)
+      msgs = msgs.slice(-safeMaxMessages)
+    }
+    msgs = msgs.map(sanitizeMessageForStorage)
+    return {
+      ...s,
+      messages: msgs,
+    }
+  })
+
+  // 2. 按最近更新时间 (updatedAt || createdAt) 从新到旧排序
+  const sorted = [...prunedPerSession].sort(
+    (a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0),
+  )
+
+  // 3. 截取最大保留数量 (滚动淘汰超出上限的最旧会话)
+  if (sorted.length > safeMaxSessions) {
+    return sorted.slice(0, safeMaxSessions)
+  }
+  return sorted
+}
+
+/**
+ * 计算当前 AI 问答历史记录占用的会话数、消息总数与近似存储体积
+ */
+export function getAssistantStorageStats(sessions: AIAssistantSession[]): {
+  sessionCount: number
+  messageCount: number
+  approxBytes: number
+  approxFormatted: string
+} {
+  const sessionCount = sessions.length
+  let messageCount = 0
+  for (const s of sessions) {
+    messageCount += s.messages ? s.messages.length : 0
+  }
+  let approxBytes = 0
+  try {
+    const raw = localStorage.getItem(AI_ASSISTANT_SESSIONS_KEY)
+    if (raw) {
+      approxBytes = new Blob([raw]).size
+    } else if (sessions.length > 0) {
+      approxBytes = JSON.stringify(sessions).length
+    }
+  } catch {
+    approxBytes = JSON.stringify(sessions).length
+  }
+
+  let approxFormatted = `${approxBytes} B`
+  if (approxBytes > 1024 * 1024) {
+    approxFormatted = `${(approxBytes / (1024 * 1024)).toFixed(2)} MB`
+  } else if (approxBytes > 1024) {
+    approxFormatted = `${(approxBytes / 1024).toFixed(1)} KB`
+  }
+
+  return { sessionCount, messageCount, approxBytes, approxFormatted }
+}
+
+export function loadSavedAssistantSessions(
+  maxSessions: number = DEFAULT_MAX_ASSISTANT_SESSIONS,
+  maxMessagesPerSession: number = DEFAULT_MAX_MESSAGES_PER_SESSION,
+): AIAssistantSession[] {
+  try {
+    const raw = localStorage.getItem(AI_ASSISTANT_SESSIONS_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) {
+        return pruneAssistantSessions(parsed, maxSessions, maxMessagesPerSession)
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return []
+}
+
+export function saveAssistantSessions(
+  sessions: AIAssistantSession[],
+  maxSessions: number = DEFAULT_MAX_ASSISTANT_SESSIONS,
+  maxMessagesPerSession: number = DEFAULT_MAX_MESSAGES_PER_SESSION,
+): void {
+  try {
+    const pruned = pruneAssistantSessions(sessions, maxSessions, maxMessagesPerSession)
+    localStorage.setItem(AI_ASSISTANT_SESSIONS_KEY, JSON.stringify(pruned))
+  } catch (err) {
+    console.warn('[AIStore] LocalStorage quota warning when saving assistant sessions:', err)
+    try {
+      const emergencyPruned = pruneAssistantSessions(
+        sessions,
+        Math.max(5, Math.floor(maxSessions / 2)),
+        Math.max(10, Math.floor(maxMessagesPerSession / 2)),
+      )
+      localStorage.setItem(AI_ASSISTANT_SESSIONS_KEY, JSON.stringify(emergencyPruned))
+    } catch {
+      /* ignore fatal quota exceeded */
+    }
+  }
+}
+
+export function autoSyncCurrentSession(
+  sessions: AIAssistantSession[],
+  currentId: string | null,
+  messages: AIAssistantMessage[],
+  mode: AIAssistantMode,
+  maxSessions: number = DEFAULT_MAX_ASSISTANT_SESSIONS,
+  maxMessagesPerSession: number = DEFAULT_MAX_MESSAGES_PER_SESSION,
+): { updatedSessions: AIAssistantSession[]; activeId: string } {
+  if (messages.length === 0) {
+    return { updatedSessions: sessions, activeId: currentId || '' }
+  }
+  const firstUserMsg = messages.find((m) => m.role === 'user')
+  const title = (firstUserMsg?.content.trim().slice(0, 36) || '新会话').replace(/\n+/g, ' ')
+  const now = Date.now()
+
+  let activeId = currentId
+  let updatedSessions = [...sessions]
+
+  let safeMessages = messages
+  if (safeMessages.length > maxMessagesPerSession) {
+    safeMessages = safeMessages.slice(-maxMessagesPerSession)
+  }
+  safeMessages = safeMessages.map(sanitizeMessageForStorage)
+
+  if (activeId && updatedSessions.some((s) => s.id === activeId)) {
+    updatedSessions = updatedSessions.map((s) => {
+      if (s.id === activeId) {
+        return {
+          ...s,
+          title: s.title || title,
+          messages: safeMessages,
+          updatedAt: now,
+          mode,
+        }
+      }
+      return s
+    })
+  } else {
+    activeId = `session_${now}_${Math.random().toString(36).slice(2, 7)}`
+    const newSession: AIAssistantSession = {
+      id: activeId,
+      title,
+      messages: safeMessages,
+      createdAt: now,
+      updatedAt: now,
+      mode,
+    }
+    updatedSessions = [newSession, ...updatedSessions]
+  }
+
+  const prunedSessions = pruneAssistantSessions(updatedSessions, maxSessions, maxMessagesPerSession)
+  saveAssistantSessions(prunedSessions, maxSessions, maxMessagesPerSession)
+  return { updatedSessions: prunedSessions, activeId }
+}
 
 function loadSavedEnableAiGlobal(): boolean {
   try {
@@ -102,9 +319,13 @@ const DEFAULT_SETTINGS: AISettings = {
   apiKey: '',
   model: AI_PROVIDER_PRESETS.deepseek.defaultModel,
   temperature: 0.3,
-  maxTokens: 2048,
+  maxTokens: 8192,
   enableDlp: true,
   maskPrivateIps: false,
+  executionMode: 'auto_readonly',
+  customBlacklist: [],
+  maxAssistantSessions: DEFAULT_MAX_ASSISTANT_SESSIONS,
+  maxMessagesPerSession: DEFAULT_MAX_MESSAGES_PER_SESSION,
 }
 
 function loadSavedSettings(): AISettings {
@@ -277,6 +498,8 @@ export interface AIStoreState {
   isFloatingAssistantOpen: boolean
   assistantMode: AIAssistantMode
   assistantMessages: AIAssistantMessage[]
+  assistantSessions: AIAssistantSession[]
+  currentAssistantSessionId: string | null
   isAssistantResponding: boolean
   assistantInput: string
   assistantMascotMood: AIMascotMood
@@ -289,8 +512,17 @@ export interface AIStoreState {
   setAssistantInput: (text: string) => void
   setAssistantMascotMood: (mood: AIMascotMood) => void
   sendAssistantMessage: (text?: string, context?: AIPromptContext) => Promise<void>
+  stopAssistantResponding: () => void
   clearAssistantMessages: () => void
+  createNewAssistantSession: () => void
+  loadAssistantSession: (sessionId: string) => void
+  deleteAssistantSession: (sessionId: string) => void
+  clearAllAssistantSessions: () => void
+  executeMessageCommand: (messageId: string) => Promise<void>
+  rejectMessageCommand: (messageId: string) => void
 }
+
+let activeAssistantAbortController: AbortController | null = null
 
 const initialSettings = loadSavedSettings()
 const initialConfigured = loadSavedConfiguredProviders(initialSettings)
@@ -305,6 +537,104 @@ if (activeProv) {
   if (activeProv.maxTokens !== undefined) initialSettings.maxTokens = activeProv.maxTokens
 } else if (initialConfigured.length > 0) {
   initialSettings.apiKey = ''
+}
+
+async function buildExecutionCard(
+  commands: Array<{ command: string; explanation?: string }> | undefined,
+  content: string,
+  executionMode: AIExecutionMode,
+  customBlacklist: string[],
+  activeServerId: string | null,
+): Promise<AIAssistantExecutionCard | undefined> {
+  if (executionMode === 'disabled') return undefined
+
+  const rawCmds = (commands && commands.length > 0 ? commands : extractCommandsFromContent(content))
+    .filter((c) => c && c.command && isLikelyShellCommand(c.command))
+  if (!rawCmds || rawCmds.length === 0) return undefined
+
+  // 在 auto_readonly 模式下，若存在多个候选命令，优先挑选可自动执行的只读安全命令
+  let primaryCmd = rawCmds[0]
+  if (executionMode === 'auto_readonly' && rawCmds.length > 1) {
+    const safeCmd = rawCmds.find((c) => {
+      const d = evaluateCommandForExecution(c.command, { customBlacklist, executionMode })
+      return d.safeToAutoExecute
+    })
+    if (safeCmd) {
+      primaryCmd = safeCmd
+    }
+  }
+
+  const decision = evaluateCommandForExecution(primaryCmd.command, {
+    customBlacklist,
+    executionMode,
+  })
+
+  if (executionMode === 'auto_readonly' && decision.safeToAutoExecute) {
+    const safeCmd = wrapSafeInspectionCommand(decision.suggestedSafeCommand || primaryCmd.command)
+    let autoOutput = ''
+    const appState = useAppStore.getState()
+    const tabs = (appState.tabs || []).map((t) => ({ id: t.id, serverId: t.serverId }))
+    const connectedServers = appState.connectedServers || {}
+    let activeConnId = activeServerId ? findActiveConnectionId(activeServerId, tabs, connectedServers) : null
+
+    if (!activeConnId) {
+      for (const s of appState.servers || []) {
+        const cId = findActiveConnectionId(s.id, tabs, connectedServers)
+        if (cId) {
+          activeConnId = cId
+          break
+        }
+      }
+    }
+
+    if (backend?.ssh?.execute && activeConnId) {
+      try {
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('执行超时 (10s)')), 10000),
+        )
+        const autoExecRes = await Promise.race([
+          backend.ssh.execute(activeConnId, safeCmd),
+          timeoutPromise,
+        ])
+        autoOutput = (autoExecRes.stdout || autoExecRes.stderr || '').trim()
+      } catch (e) {
+        autoOutput = (e as Error)?.message || '自动只读探测执行异常'
+      }
+    } else {
+      autoOutput = '（已通过严格只读白名单校验，就绪待执行）'
+    }
+
+    const autoSummary = generateExecutionSummary(safeCmd, autoOutput)
+    return {
+      id: `exec_${Date.now()}`,
+      command: safeCmd,
+      explanation: primaryCmd.explanation,
+      decision,
+      status: 'executed',
+      output: autoOutput || '⚡ 安全只读指令已完成内核执行采样',
+      summary: autoSummary,
+      executedAt: Date.now(),
+    }
+  }
+
+  if (decision.riskLevel === 'blocked' || !decision.allowed) {
+    return {
+      id: `exec_${Date.now()}`,
+      command: primaryCmd.command,
+      explanation: primaryCmd.explanation,
+      decision,
+      status: 'blocked',
+      error: decision.blockedReason || decision.reason,
+    }
+  }
+
+  return {
+    id: `exec_${Date.now()}`,
+    command: decision.suggestedSafeCommand || primaryCmd.command,
+    explanation: primaryCmd.explanation,
+    decision,
+    status: 'pending',
+  }
 }
 
 export const useAIStore = create<AIStoreState>((set, get) => ({
@@ -342,6 +672,11 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
   isFloatingAssistantOpen: false,
   assistantMode: 'agent',
   assistantMessages: [],
+  assistantSessions: loadSavedAssistantSessions(
+    initialSettings.maxAssistantSessions,
+    initialSettings.maxMessagesPerSession,
+  ),
+  currentAssistantSessionId: null,
   isAssistantResponding: false,
   assistantInput: '',
   assistantMascotMood: 'idle',
@@ -349,7 +684,23 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
   updateSettings: (partial) => {
     const current = get().settings
     const updated = { ...current, ...partial }
-    set({ settings: updated, testResult: null })
+    let nextSessions = get().assistantSessions
+    if (
+      (partial.maxAssistantSessions !== undefined && partial.maxAssistantSessions !== current.maxAssistantSessions) ||
+      (partial.maxMessagesPerSession !== undefined && partial.maxMessagesPerSession !== current.maxMessagesPerSession)
+    ) {
+      nextSessions = pruneAssistantSessions(
+        nextSessions,
+        updated.maxAssistantSessions || DEFAULT_MAX_ASSISTANT_SESSIONS,
+        updated.maxMessagesPerSession || DEFAULT_MAX_MESSAGES_PER_SESSION,
+      )
+      saveAssistantSessions(
+        nextSessions,
+        updated.maxAssistantSessions || DEFAULT_MAX_ASSISTANT_SESSIONS,
+        updated.maxMessagesPerSession || DEFAULT_MAX_MESSAGES_PER_SESSION,
+      )
+    }
+    set({ settings: updated, assistantSessions: nextSessions, testResult: null })
     saveSettings(updated)
   },
 
@@ -714,12 +1065,153 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
   setAssistantMode: (mode) => set({ assistantMode: mode }),
   setAssistantInput: (text) => set({ assistantInput: text }),
   setAssistantMascotMood: (mood) => set({ assistantMascotMood: mood }),
-  clearAssistantMessages: () => set({ assistantMessages: [] }),
+  clearAssistantMessages: () => set({ assistantMessages: [], currentAssistantSessionId: null }),
+
+  stopAssistantResponding: () => {
+    if (activeAssistantAbortController) {
+      activeAssistantAbortController.abort()
+      activeAssistantAbortController = null
+    }
+    const { assistantMessages, assistantSessions, currentAssistantSessionId, assistantMode, settings } = get()
+    const lastMsg = assistantMessages[assistantMessages.length - 1]
+    if (lastMsg && lastMsg.role === 'assistant' && lastMsg.status === 'streaming') {
+      const finalMsg: AIAssistantMessage = {
+        ...lastMsg,
+        status: 'done',
+        suggestedCommands: extractCommandsFromContent(lastMsg.content),
+      }
+      const finalMsgs = assistantMessages.map((m) => (m.id === finalMsg.id ? finalMsg : m))
+      const { updatedSessions, activeId } = autoSyncCurrentSession(
+        assistantSessions,
+        currentAssistantSessionId,
+        finalMsgs,
+        assistantMode,
+        settings.maxAssistantSessions,
+        settings.maxMessagesPerSession,
+      )
+      set({
+        assistantMessages: finalMsgs,
+        assistantSessions: updatedSessions,
+        currentAssistantSessionId: activeId,
+        isAssistantResponding: false,
+        assistantMascotMood: 'idle',
+      })
+      return
+    }
+
+    set({
+      isAssistantResponding: false,
+      assistantMascotMood: 'idle',
+    })
+  },
+
+  createNewAssistantSession: () => {
+    if (activeAssistantAbortController) {
+      activeAssistantAbortController.abort()
+      activeAssistantAbortController = null
+    }
+    const { assistantMessages, currentAssistantSessionId, assistantSessions, assistantMode, settings } = get()
+    let updatedSessions = assistantSessions
+    if (assistantMessages.length > 0) {
+      const res = autoSyncCurrentSession(
+        assistantSessions,
+        currentAssistantSessionId,
+        assistantMessages,
+        assistantMode,
+        settings.maxAssistantSessions,
+        settings.maxMessagesPerSession,
+      )
+      updatedSessions = res.updatedSessions
+    }
+    set({
+      assistantSessions: updatedSessions,
+      currentAssistantSessionId: null,
+      assistantMessages: [],
+      assistantInput: '',
+      assistantMascotMood: 'idle',
+      isAssistantResponding: false,
+    })
+  },
+
+  loadAssistantSession: (sessionId: string) => {
+    if (activeAssistantAbortController) {
+      activeAssistantAbortController.abort()
+      activeAssistantAbortController = null
+    }
+    const { assistantMessages, currentAssistantSessionId, assistantSessions, assistantMode, settings } = get()
+    let currentSessions = assistantSessions
+    if (assistantMessages.length > 0) {
+      const res = autoSyncCurrentSession(
+        assistantSessions,
+        currentAssistantSessionId,
+        assistantMessages,
+        assistantMode,
+        settings.maxAssistantSessions,
+        settings.maxMessagesPerSession,
+      )
+      currentSessions = res.updatedSessions
+    }
+    const target = currentSessions.find((s) => s.id === sessionId)
+    if (target) {
+      set({
+        assistantSessions: currentSessions,
+        currentAssistantSessionId: target.id,
+        assistantMessages: target.messages,
+        assistantMode: target.mode || 'agent',
+        assistantInput: '',
+        assistantMascotMood: 'idle',
+        isAssistantResponding: false,
+      })
+    }
+  },
+
+  deleteAssistantSession: (sessionId: string) => {
+    const { assistantSessions, currentAssistantSessionId, settings } = get()
+    const updated = assistantSessions.filter((s) => s.id !== sessionId)
+    saveAssistantSessions(updated, settings.maxAssistantSessions, settings.maxMessagesPerSession)
+    if (currentAssistantSessionId === sessionId || updated.length === 0) {
+      if (activeAssistantAbortController) {
+        activeAssistantAbortController.abort()
+        activeAssistantAbortController = null
+      }
+      set({
+        assistantSessions: updated,
+        currentAssistantSessionId: null,
+        assistantMessages: [],
+        isAssistantResponding: false,
+        assistantMascotMood: 'idle',
+      })
+    } else {
+      set({ assistantSessions: updated })
+    }
+  },
+
+  clearAllAssistantSessions: () => {
+    if (activeAssistantAbortController) {
+      activeAssistantAbortController.abort()
+      activeAssistantAbortController = null
+    }
+    saveAssistantSessions([])
+    set({
+      assistantSessions: [],
+      currentAssistantSessionId: null,
+      assistantMessages: [],
+      isAssistantResponding: false,
+      assistantMascotMood: 'idle',
+    })
+  },
 
   sendAssistantMessage: async (text?: string, context?: AIPromptContext) => {
     const { assistantInput, assistantMessages, assistantMode, settings, configuredProviders } = get()
     const content = (text !== undefined ? text : assistantInput).trim()
     if (!content) return
+
+    if (activeAssistantAbortController) {
+      activeAssistantAbortController.abort()
+      activeAssistantAbortController = null
+    }
+    const abortController = new AbortController()
+    activeAssistantAbortController = abortController
 
     const userMsg: AIAssistantMessage = {
       id: `msg_u_${Date.now()}`,
@@ -738,6 +1230,85 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
       assistantMascotMood: 'thinking',
     })
 
+    const finalizeMessages = (finalMsgs: AIAssistantMessage[], mood: AIMascotMood = 'happy') => {
+      const { assistantSessions, currentAssistantSessionId, assistantMode: curMode, settings: curSettings } = get()
+      const { updatedSessions, activeId } = autoSyncCurrentSession(
+        assistantSessions,
+        currentAssistantSessionId,
+        finalMsgs,
+        curMode,
+        curSettings.maxAssistantSessions,
+        curSettings.maxMessagesPerSession,
+      )
+      let safeFinalMsgs = finalMsgs
+      const maxMsgs = curSettings.maxMessagesPerSession || DEFAULT_MAX_MESSAGES_PER_SESSION
+      if (safeFinalMsgs.length > maxMsgs) {
+        safeFinalMsgs = safeFinalMsgs.slice(-maxMsgs)
+      }
+      set({
+        assistantMessages: safeFinalMsgs,
+        assistantSessions: updatedSessions,
+        currentAssistantSessionId: activeId,
+        isAssistantResponding: false,
+        assistantMascotMood: mood,
+      })
+      setTimeout(() => {
+        if (get().assistantMascotMood === 'happy') {
+          set({ assistantMascotMood: 'idle' })
+        }
+      }, 4000)
+    }
+
+    const assistantMsgId = `msg_a_${Date.now()}`
+    let accumulatedText = ''
+
+    const onChunk = (chunk: string, accumulated: string) => {
+      accumulatedText = accumulated
+      set((state) => {
+        const exists = state.assistantMessages.some((m) => m.id === assistantMsgId)
+        const curMsgs = exists
+          ? state.assistantMessages.map((m) =>
+              m.id === assistantMsgId ? { ...m, content: accumulated, status: 'streaming' as const } : m,
+            )
+          : [
+              ...state.assistantMessages,
+              {
+                id: assistantMsgId,
+                role: 'assistant' as const,
+                content: accumulated,
+                createdAt: Date.now(),
+                mode: assistantMode,
+                status: 'streaming' as const,
+              },
+            ]
+        return {
+          assistantMessages: curMsgs,
+        }
+      })
+    }
+
+    // 1. 获取已存服务器资产与当前活跃会话
+    const appState = useAppStore.getState()
+    const servers = appState.servers || []
+    const serverGroups = appState.serverGroups || []
+    const activeTab = appState.tabs?.find((t) => t.id === appState.activeTabId)
+    const activeServerId = activeTab?.serverId || null
+    const activeServer = activeServerId ? servers.find((s) => s.id === activeServerId) : null
+
+    // 2. 构造紧凑资产拓扑，注入 System Prompt
+    const serverInventory = buildServerInventory(servers, serverGroups)
+    const enrichedContext: AIPromptContext = {
+      ...context,
+      serverInventory,
+      servers,
+      serverGroups,
+      activeServerId,
+      osType: context?.osType || activeServer?.osType || activeServer?.targetType || undefined,
+      osDistro: context?.osDistro || activeServer?.osInfo || undefined,
+      serverName: context?.serverName || activeServer?.name || undefined,
+      serverHost: context?.serverHost || activeServer?.host || undefined,
+    }
+
     const activeProv = configuredProviders.find((p) => p.isEnabled)
     const effectiveSettings: AISettings = activeProv
       ? {
@@ -747,9 +1318,11 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
           apiKey: activeProv.apiKey,
           model: activeProv.model,
           temperature: activeProv.temperature ?? settings.temperature ?? 0.3,
-          maxTokens: activeProv.maxTokens ?? settings.maxTokens ?? 2048,
+          maxTokens: activeProv.maxTokens ?? settings.maxTokens ?? 8192,
           enableDlp: settings.enableDlp,
           maskPrivateIps: settings.maskPrivateIps,
+          executionMode: settings.executionMode ?? 'auto_readonly',
+          customBlacklist: settings.customBlacklist ?? [],
         }
       : settings
 
@@ -764,27 +1337,97 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
           role: m.role,
           content: m.content,
         }))
-        const res = await sendAssistantChat(effectiveSettings, historyForApi, assistantMode, context)
+        const res = await sendAssistantChat(
+          effectiveSettings,
+          historyForApi,
+          assistantMode,
+          enrichedContext,
+          abortController.signal,
+          onChunk,
+        )
+        if (abortController.signal.aborted) return
+        activeAssistantAbortController = null
+
+        const currentExecMode = effectiveSettings.executionMode || settings.executionMode || 'auto_readonly'
+        const currentBlacklist = effectiveSettings.customBlacklist || settings.customBlacklist || []
+
+        let executionCard: AIAssistantExecutionCard | undefined
+
+        // 若 Agent 在 ReAct 循环阶段已执行只读工具探针/排障指令，直接将真实执行记录装配为执行卡片
+        const toolsList =
+          res.executedTools && res.executedTools.length > 0
+            ? res.executedTools
+            : res.executedTool
+              ? [res.executedTool]
+              : []
+
+        if (toolsList.length > 0) {
+          const combinedCommand = toolsList.map((t) => t.command).join(' && ')
+          const combinedOutput =
+            toolsList.length === 1
+              ? toolsList[0].output
+              : toolsList
+                  .map(
+                    (t, idx) =>
+                      `=== [第 ${idx + 1} 步排查采样] ${t.command} ===\n${t.output}`,
+                  )
+                  .join('\n\n')
+
+          const primaryTool = toolsList[toolsList.length - 1]
+          const decision = evaluateCommandForExecution(combinedCommand, {
+            customBlacklist: currentBlacklist,
+            executionMode: currentExecMode,
+          })
+          const autoSummary = generateExecutionSummary(combinedCommand, combinedOutput)
+          executionCard = {
+            id: `exec_${Date.now()}`,
+            command: combinedCommand,
+            explanation:
+              primaryTool.explanation ||
+              `Agent 自主执行了 ${toolsList.length} 轮只读排查指令`,
+            decision,
+            status: 'executed',
+            output: combinedOutput || '⚡ 安全只读指令已完成内核执行采样',
+            summary: autoSummary,
+            executedAt: Date.now(),
+          }
+        } else {
+          executionCard = await buildExecutionCard(
+            res.commands,
+            res.content,
+            currentExecMode,
+            currentBlacklist,
+            activeServerId,
+          )
+        }
+
         const assistantMsg: AIAssistantMessage = {
-          id: `msg_a_${Date.now()}`,
+          id: assistantMsgId,
           role: 'assistant',
           content: res.content,
           createdAt: Date.now(),
           mode: assistantMode,
           status: 'done',
           suggestedCommands: res.commands,
+          executionCard,
         }
-        set({
-          assistantMessages: [...nextMessages, assistantMsg],
-          isAssistantResponding: false,
-          assistantMascotMood: 'happy',
-        })
-        setTimeout(() => {
-          if (get().assistantMascotMood === 'happy') {
-            set({ assistantMascotMood: 'idle' })
-          }
-        }, 4000)
+        finalizeMessages(
+          [
+            ...nextMessages.filter((m) => m.id !== assistantMsgId),
+            assistantMsg,
+          ],
+          'happy',
+        )
       } catch (err: unknown) {
+        if (abortController.signal.aborted || (err as Error)?.name === 'AbortError') {
+          activeAssistantAbortController = null
+          set({
+            isAssistantResponding: false,
+            assistantMascotMood: 'idle',
+          })
+          return
+        }
+        activeAssistantAbortController = null
         const errorMsg: AIAssistantMessage = {
           id: `msg_err_${Date.now()}`,
           role: 'assistant',
@@ -793,19 +1436,48 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
           mode: assistantMode,
           status: 'error',
         }
-        set({
-          assistantMessages: [...nextMessages, errorMsg],
-          isAssistantResponding: false,
-          assistantMascotMood: 'idle',
-        })
+        finalizeMessages([...nextMessages, errorMsg], 'idle')
       }
     } else {
-      // 模拟离线智能应答（具备极佳的运维演示体验）
-      await new Promise((r) => setTimeout(r, 600))
+      // 模拟离线智能应答（具备极佳的运维演示体验与流式输出体验）
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(() => resolve(), 250)
+          abortController.signal.addEventListener('abort', () => {
+            clearTimeout(timer)
+            reject(new DOMException('Aborted', 'AbortError'))
+          })
+        })
+      } catch {
+        if (abortController.signal.aborted) {
+          activeAssistantAbortController = null
+          set({
+            isAssistantResponding: false,
+            assistantMascotMood: 'idle',
+          })
+          return
+        }
+      }
+      if (abortController.signal.aborted) return
+
+      const probePlan = resolveProbePlan(content, servers, serverGroups, activeServerId)
+
       let replyContent = ''
       let commands: Array<{ command: string; explanation?: string; risk: CommandRiskAnalysis }> = []
 
-      if (content.includes('连接') || content.includes('超时') || content.includes('timeout')) {
+      if (probePlan.shouldProbe && probePlan.targetServers.length > 0) {
+        if (backend?.ssh?.batchExecute) {
+          try {
+            const probeRes = await executeSafeProbe(probePlan.targetServers, probePlan.metric, abortController.signal)
+            replyContent = formatProbeReportForAI(probeRes, probePlan.targetExplanation)
+          } catch (e) {
+            replyContent = `### 🩺 服务器状态排查\n\n执行只读探针异常: ${(e as Error)?.message || '未知错误'}`
+          }
+        } else {
+          replyContent = `### 🩺 服务器状态排查提示\n\n已识别排查目标：${probePlan.targetExplanation || '指定服务器'}。\n当前处于**本地离线规则模式**且未检测到本地 SSH 终端通道支持。如需执行服务器真实指标巡检，请先建立 SSH 连接或在「设置 -> AI 运维」中配置大模型。`
+        }
+        commands = []
+      } else if (content.includes('连接') || content.includes('超时') || content.includes('timeout')) {
         replyContent = `### 🔍 SSH 连接超时排查指南
 实例无法连接或 Connection timed out 通常由以下原因导致：
 1. **安全组 / 防火墙未放行**：请确认云控制台安全组入方向是否允许对应端口（默认 TCP 22）。
@@ -834,7 +1506,7 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
         replyContent = `### 💾 磁盘空间清理与大文件排查
 当 Linux 系统根目录或数据盘利用率达到 100% 时，会导致服务无法写入日志或崩溃：
 1. **查看磁盘分区占用**：使用 \`df -h\` 查看满载的分区。
-2. **快速定位前 10 大文件**：使用 \`du\` 或 \`find\` 检索体积最大的文件或日志。
+2. **安全定位大目录**：使用有深度限制的 \`du\` 检索体积最大的目录，严禁全盘无界递归。
 3. **安全清理**：优先截断正在写入的日志文件，避免直接删除导致句柄未释放。`
         commands = [
           {
@@ -843,9 +1515,9 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
             risk: { level: 'safe', command: 'df -hT', reasons: [], isBlocked: false },
           },
           {
-            command: 'du -ahx / 2>/dev/null | sort -rh | head -n 10',
-            explanation: '找出根目录下体积最大的前 10 个文件或目录',
-            risk: { level: 'safe', command: 'du -ahx / 2>/dev/null | sort -rh | head -n 10', reasons: [], isBlocked: false },
+            command: 'du -h --max-depth=1 /var/log 2>/dev/null | sort -rh | head -n 10',
+            explanation: '找出 /var/log 目录下体积最大的前 10 个子目录（限制深度=1，避免 I/O 卡死）',
+            risk: { level: 'safe', command: 'du -h --max-depth=1 /var/log 2>/dev/null | sort -rh | head -n 10', reasons: [], isBlocked: false },
           },
           {
             command: 'sudo journalctl --vacuum-size=200M',
@@ -888,32 +1560,199 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
         ]
       } else {
         replyContent = `您好！针对您的问题：「**${content}**」
-在 ${assistantMode === 'agent' ? '✦ Agent 智能运维' : '💬 运维问答'} 模式下，建议按如下步骤处理：
-1. 先确认目标服务器当前系统发行版与运行状态。
-2. 收集关键错误日志，通过上下文逐步定位根因。
 
-*(💡 贴心提示：检测到您当前尚未在「设置 -> AI 运维」中配置模型 API Key，当前为您展示的是本地内置规则库。接入 DeepSeek、通义千问或本地 Ollama 后即可获得全能大模型深度推理能力！)*`
+当前处于 **本地离线规则模式**（未接入大模型），本地规则仅收录了基础的服务器连接与常见高频排障指南。
+
+作为 **Qshell 运维小助手**，我主要专注于 Linux 服务器运维、终端排障分析与 Shell 命令编写。
+
+💡 若需进行自由开放式问答、解决复杂故障或体验全能 Agent 深度推理，可在「设置 -> AI 运维」中配置模型 API Key（支持 DeepSeek、通义千问、Kimi 或 100% 离线的本地 Ollama）。`
+        commands = []
       }
 
+      // 离线模拟流式逐字输出
+      const chunks = replyContent.match(/[\s\S]{1,4}/g) || [replyContent]
+      let simAccumulated = ''
+      for (const piece of chunks) {
+        if (abortController.signal.aborted) break
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 20)
+          abortController.signal.addEventListener('abort', () => {
+            clearTimeout(timer)
+            reject(new DOMException('Aborted', 'AbortError'))
+          })
+        }).catch(() => {})
+        if (abortController.signal.aborted) break
+        simAccumulated += piece
+        onChunk(piece, simAccumulated)
+      }
+
+      if (abortController.signal.aborted) {
+        activeAssistantAbortController = null
+        return
+      }
+      activeAssistantAbortController = null
+
+      const currentExecMode = effectiveSettings.executionMode || settings.executionMode || 'auto_readonly'
+      const currentBlacklist = effectiveSettings.customBlacklist || settings.customBlacklist || []
+
+      const executionCard = await buildExecutionCard(
+        commands,
+        replyContent,
+        currentExecMode,
+        currentBlacklist,
+        activeServerId,
+      )
+
       const simAssistantMsg: AIAssistantMessage = {
-        id: `msg_sim_${Date.now()}`,
+        id: assistantMsgId,
         role: 'assistant',
         content: replyContent,
         createdAt: Date.now(),
         mode: assistantMode,
         status: 'done',
         suggestedCommands: commands,
+        executionCard,
       }
-      set({
-        assistantMessages: [...nextMessages, simAssistantMsg],
-        isAssistantResponding: false,
-        assistantMascotMood: 'happy',
-      })
-      setTimeout(() => {
-        if (get().assistantMascotMood === 'happy') {
-          set({ assistantMascotMood: 'idle' })
-        }
-      }, 4000)
+      finalizeMessages(
+        [
+          ...nextMessages.filter((m) => m.id !== assistantMsgId),
+          simAssistantMsg,
+        ],
+        'happy',
+      )
     }
+  },
+
+  executeMessageCommand: async (messageId: string) => {
+    const { assistantMessages, assistantSessions, currentAssistantSessionId, assistantMode } = get()
+    const targetMsg = assistantMessages.find((m) => m.id === messageId)
+    if (!targetMsg || !targetMsg.executionCard) return
+
+    const card = targetMsg.executionCard
+    if (card.status !== 'pending') return
+
+    // 1. 设置执行中状态
+    const executingCard: AIAssistantExecutionCard = {
+      ...card,
+      status: 'executing',
+    }
+    const updatedMessages = assistantMessages.map((m) =>
+      m.id === messageId ? { ...m, executionCard: executingCard } : m,
+    )
+    set({ assistantMessages: updatedMessages, assistantMascotMood: 'thinking' })
+
+    const rawCmd = card.command
+    const safeCmd = wrapSafeInspectionCommand(rawCmd)
+
+    // 2. 查找当前活跃工作区连接
+    const appState = useAppStore.getState()
+    const tabs = (appState.tabs || []).map((t) => ({ id: t.id, serverId: t.serverId }))
+    const connectedServers = appState.connectedServers || {}
+    const activeTab = appState.tabs?.find((t) => t.id === appState.activeTabId)
+    const activeServerId = activeTab?.serverId || null
+
+    let activeConnId: string | null = null
+    if (activeServerId) {
+      activeConnId = findActiveConnectionId(activeServerId, tabs, connectedServers)
+    }
+    if (!activeConnId) {
+      for (const s of appState.servers || []) {
+        const connId = findActiveConnectionId(s.id, tabs, connectedServers)
+        if (connId) {
+          activeConnId = connId
+          break
+        }
+      }
+    }
+
+    let stdout = ''
+    let stderr = ''
+    let isError = false
+
+    if (backend?.ssh?.execute && activeConnId) {
+      try {
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('执行超时 (10s)')), 10000),
+        )
+        const cmdRes = await Promise.race([
+          backend.ssh.execute(activeConnId, safeCmd),
+          timeoutPromise,
+        ])
+        stdout = cmdRes.stdout || ''
+        stderr = cmdRes.stderr || ''
+        if (cmdRes.exitCode !== 0 && !stdout && stderr) {
+          isError = true
+        }
+      } catch (err: unknown) {
+        stderr = (err as Error)?.message || '执行异常'
+        isError = true
+      }
+    } else if (!activeConnId) {
+      stderr = '未检测到目标服务器的活跃 SSH 终端连接，无法下发命令执行。请先在工作区连接目标服务器。'
+      isError = true
+    } else {
+      await new Promise((r) => setTimeout(r, 50))
+      stdout = `[只读执行]\n$ ${safeCmd}\n(执行完成)`
+    }
+
+    const outputText = (stdout || stderr || '(执行完成，标准输出为空)').trim()
+    const summary = generateExecutionSummary(safeCmd, outputText)
+    const executedCard: AIAssistantExecutionCard = {
+      ...card,
+      command: safeCmd,
+      status: 'executed',
+      output: outputText,
+      summary,
+      error: isError ? stderr : undefined,
+      executedAt: Date.now(),
+    }
+
+    const finalMessages = get().assistantMessages.map((m) =>
+      m.id === messageId ? { ...m, executionCard: executedCard } : m,
+    )
+    const { settings } = get()
+    const { updatedSessions, activeId } = autoSyncCurrentSession(
+      assistantSessions,
+      currentAssistantSessionId,
+      finalMessages,
+      assistantMode,
+      settings.maxAssistantSessions,
+      settings.maxMessagesPerSession,
+    )
+
+    set({
+      assistantMessages: finalMessages,
+      assistantSessions: updatedSessions,
+      currentAssistantSessionId: activeId,
+      assistantMascotMood: isError ? 'blink' : 'happy',
+    })
+  },
+
+  rejectMessageCommand: (messageId: string) => {
+    const { assistantMessages, assistantSessions, currentAssistantSessionId, assistantMode, settings } = get()
+    const targetMsg = assistantMessages.find((m) => m.id === messageId)
+    if (!targetMsg || !targetMsg.executionCard) return
+
+    const rejectedCard: AIAssistantExecutionCard = {
+      ...targetMsg.executionCard,
+      status: 'rejected',
+    }
+    const finalMessages = assistantMessages.map((m) =>
+      m.id === messageId ? { ...m, executionCard: rejectedCard } : m,
+    )
+    const { updatedSessions, activeId } = autoSyncCurrentSession(
+      assistantSessions,
+      currentAssistantSessionId,
+      finalMessages,
+      assistantMode,
+      settings.maxAssistantSessions,
+      settings.maxMessagesPerSession,
+    )
+    set({
+      assistantMessages: finalMessages,
+      assistantSessions: updatedSessions,
+      currentAssistantSessionId: activeId,
+      assistantMascotMood: 'idle',
+    })
   },
 }))
