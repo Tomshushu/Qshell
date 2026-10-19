@@ -9,6 +9,7 @@ import {
   FileText,
   Lock,
   Sparkles,
+  Layers,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { clampMenuToViewport } from "@/lib/menu-position";
@@ -36,6 +37,7 @@ export interface TerminalContextMenuProps {
   onChooseLogDirectory: () => void;
   onAIDiagnosis?: () => void;
   onAIDiagnoseRecent?: () => void;
+  onAIExplainShell?: () => void;
   activeTermId: string | null;
   recordingTermIds: Set<string>;
   recordingPausedIds: Set<string>;
@@ -63,6 +65,7 @@ export function TerminalContextMenu({
   onChooseLogDirectory,
   onAIDiagnosis,
   onAIDiagnoseRecent,
+  onAIExplainShell,
   activeTermId,
   recordingTermIds,
   recordingPausedIds,
@@ -178,6 +181,26 @@ export function TerminalContextMenu({
             </span>
           </button>
         </>
+      )}
+
+      {/* AI 拆解选中文本指令 (Explain Shell) */}
+      {onAIExplainShell && ctxMenu.hasSelection && (
+        <button
+          type="button"
+          data-testid="terminal-menu-ai-explain-shell"
+          className={cn(
+            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+            isLightTerminal
+              ? "text-sky-700 hover:bg-sky-50 hover:text-sky-900"
+              : "text-sky-300 hover:bg-sky-500/15 hover:text-sky-200",
+          )}
+          onClick={onAIExplainShell}
+        >
+          <Layers className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+          <span className="truncate tracking-tight font-sans text-[11.5px] font-medium">
+            {t("tm_ai_explain_shell") || "拆解并解释指令 (Explain)"}
+          </span>
+        </button>
       )}
 
       {/* AI 诊断终端最新报错/输出 */}

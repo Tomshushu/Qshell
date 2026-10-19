@@ -12,6 +12,7 @@ import {
   MAX_EXECUTION_CARD_OUTPUT_LENGTH,
 } from '@/store/ai-store'
 import type { AIAssistantSession, AIAssistantMessage } from '@/types/ai'
+import { AI_PROVIDER_PRESETS } from '@/types/ai'
 
 describe('AI Store - Storage Limit & Rolling Retention (滚动存储与数量限制)', () => {
   beforeEach(() => {
@@ -326,6 +327,101 @@ describe('AI Store - Storage Limit & Rolling Retention (滚动存储与数量限
       const assistantMsg = msgs[1]
       expect(assistantMsg.executionCard).toBeUndefined()
       expect(assistantMsg.suggestedCommands).toEqual([])
+    })
+
+    it('processes explain shell intent and generates pipelineExplain lego blocks', async () => {
+      useAIStore.setState({
+        enableAiGlobal: true,
+        configuredProviders: [],
+        settings: {
+          ...useAIStore.getState().settings,
+          apiKey: '',
+          provider: 'deepseek',
+        },
+        assistantMessages: [],
+        assistantMode: 'agent',
+      })
+
+      useAIStore.getState().openExplainShell("cat access.log | awk '{print $1}' | sort | uniq -c")
+
+      expect(useAIStore.getState().isFloatingAssistantOpen).toBe(true)
+      expect(useAIStore.getState().assistantMode).toBe('agent')
+
+      // Wait for asynchronous processing
+      await vi.waitFor(() => {
+        const msgs = useAIStore.getState().assistantMessages
+        expect(msgs.length).toBe(2)
+        const assistantMsg = msgs[1]
+        expect(assistantMsg.pipelineExplain).toBeDefined()
+        expect(assistantMsg.pipelineExplain?.steps.length).toBe(4)
+        expect(assistantMsg.pipelineExplain?.steps[0].program).toBe('cat')
+        expect(assistantMsg.pipelineExplain?.steps[1].program).toBe('awk')
+        expect(assistantMsg.pipelineExplain?.steps[3].program).toBe('uniq')
+      })
+    })
+
+    it('processes docker diagnosis intent and outputs instant OOM attribution report', async () => {
+      useAIStore.setState({
+        enableAiGlobal: true,
+        configuredProviders: [],
+        settings: {
+          ...useAIStore.getState().settings,
+          apiKey: '',
+          provider: 'deepseek',
+        },
+        assistantMessages: [],
+        assistantMode: 'agent',
+      })
+
+      useAIStore.getState().openDockerDiagnosis({
+        serverId: 'srv-1',
+        containerId: 'c1234567890abcdef',
+        containerName: 'payment-service',
+        image: 'openjdk:17-alpine',
+        status: 'Exited (137) 2 minutes ago',
+        exitCode: 137,
+        oomKilled: true,
+        memoryLimit: 536870912,
+        logsSnippet: 'java.lang.OutOfMemoryError: Java heap space',
+      })
+
+      expect(useAIStore.getState().isFloatingAssistantOpen).toBe(true)
+      expect(useAIStore.getState().assistantMode).toBe('agent')
+
+      await vi.waitFor(() => {
+        const msgs = useAIStore.getState().assistantMessages
+        expect(msgs.length).toBe(2)
+        const assistantMsg = msgs[1]
+        expect(assistantMsg.content).toContain('payment-service')
+        expect(assistantMsg.content).toContain('超出 **512MB** 内存限额被 Linux 内核 **SIGKILL (137)** 强制杀掉')
+        expect(assistantMsg.content).toContain('建议调大 limits.memory')
+        expect(assistantMsg.content).toContain('docker update -m 1G --memory-swap 2G payment-service')
+      })
+    })
+  })
+
+  describe('ModelScope (魔搭社区) Preset & Configuration', () => {
+    it('provides standard OpenAI-compatible preset for ModelScope', () => {
+      const preset = AI_PROVIDER_PRESETS.modelscope
+      expect(preset).toBeDefined()
+      expect(preset.id).toBe('modelscope')
+      expect(preset.protocol).toBe('openai')
+      expect(preset.defaultBaseUrl).toBe('https://api-inference.modelscope.cn/v1')
+      expect(preset.defaultModel).toBe('deepseek-ai/DeepSeek-V3')
+      expect(preset.recommendedModels).toContain('deepseek-ai/DeepSeek-V3')
+      expect(preset.recommendedModels).toContain('deepseek-ai/DeepSeek-R1')
+      expect(preset.recommendedModels).toContain('Qwen/Qwen2.5-Coder-32B-Instruct')
+      expect(preset.isDomestic).toBe(true)
+      expect(preset.websiteUrl).toContain('modelscope.cn')
+    })
+
+    it('allows selecting modelscope provider and updates settings with defaults', () => {
+      useAIStore.getState().selectProvider('modelscope')
+      const settings = useAIStore.getState().settings
+      expect(settings.provider).toBe('modelscope')
+      expect(settings.protocol).toBe('openai')
+      expect(settings.baseUrl).toBe('https://api-inference.modelscope.cn/v1')
+      expect(settings.model).toBe('deepseek-ai/DeepSeek-V3')
     })
   })
 })

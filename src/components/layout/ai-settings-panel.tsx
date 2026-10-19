@@ -59,7 +59,6 @@ import {
   Layers,
   Activity,
   X,
-  Terminal,
   Database,
   HardDrive,
   Cpu,
@@ -116,6 +115,23 @@ function ProviderBrandIcon({
             d="M22.956 6.521H12.522c-.577 0-1.044.468-1.044 1.044v3.13c0 .577-.466 1.044-1.043 1.044H1.044c-.577 0-1.044.467-1.044 1.044v4.174C0 17.533.467 18 1.044 18h10.434c.577 0 1.044-.467 1.044-1.043v-3.13c0-.578.466-1.044 1.043-1.044h9.391c.577 0 1.044-.467 1.044-1.044V7.565c0-.576-.467-1.044-1.044-1.044z"
             fill="#6E29F6"
           />
+        </svg>
+      )
+    case 'modelscope':
+      // 阿里开源魔搭社区 ModelScope 官方徽标
+      return (
+        <svg viewBox="0 0 24 24" fill="none" className={iconClass}>
+          <path
+            d="M2.667 5.3H8v2.667H5.333v2.666H2.667V8.467H.5v2.166h2.167V13.3H0V7.967h2.667V5.3zM2.667 13.3h2.666v2.667H8v2.666H2.667V13.3zM8 10.633h2.667V13.3H8v-2.667zM13.333 13.3v2.667h-2.666V13.3h2.666zM13.333 13.3v-2.667H16V13.3h-2.667z"
+            fill="#624AFF"
+          />
+          <path
+            clipRule="evenodd"
+            fillRule="evenodd"
+            d="M21.333 13.3v-2.667h-2.666V7.967H16V5.3h5.333v2.667H24V13.3h-2.667zm0-2.667H23.5V8.467h-2.167v2.166z"
+            fill="#624AFF"
+          />
+          <path d="M21.333 13.3v5.333H16v-2.666h2.667V13.3h2.666z" fill="#624AFF" />
         </svg>
       )
     case 'glm':
@@ -267,6 +283,27 @@ interface ConfigureModalProps {
   ) => void
 }
 
+function getApiKeyPlaceholder(provider: AIProvider): string {
+  switch (provider) {
+    case 'ollama':
+      return 'Ollama 本地无需 API Key'
+    case 'modelscope':
+      return 'ms-... (魔搭 SDK Token)'
+    case 'gemini':
+      return 'AIzaSy... (Google API Key)'
+    case 'groq':
+      return 'gsk_... (Groq API Key)'
+    case 'anthropic':
+      return 'sk-ant-api03-... (Anthropic Key)'
+    case 'glm':
+      return '智谱 API Key (API Key 或 id.secret)'
+    case 'custom':
+      return 'API Key / Token (留空则不附加鉴权头)'
+    default:
+      return 'sk-...'
+  }
+}
+
 function ConfigureProviderModal({
   open,
   onOpenChange,
@@ -306,12 +343,26 @@ function ConfigureProviderModal({
   // 模型拉取状态
   const [isFetchingModels, setIsFetchingModels] = useState(false)
   const [fetchedModels, setFetchedModels] = useState<string[]>([])
+  const [isModelsFromCache, setIsModelsFromCache] = useState(false)
   const [fetchError, setFetchError] = useState<string | null>(null)
   const [maxTokens, setMaxTokens] = useState<number>(8192)
 
-  // 当弹窗打开时回填表单
+  // 记录当前弹窗编辑的目标唯一键，避免外部 store 更新（如拉取模型缓存）重置用户填写的表单
+  const lastModalTargetRef = React.useRef<string | null>(null)
+  const currentTargetKey = open ? (editingProvider ? `edit:${editingProvider.id}` : `new:${providerKey}`) : null
+
+  // 当弹窗打开或切换目标时回填表单
   React.useEffect(() => {
-    if (!open) return
+    if (!open || !currentTargetKey) {
+      lastModalTargetRef.current = null
+      return
+    }
+
+    // 若已经为当前目标初始化过，避免因 customModelsMap 等变更重置用户输入
+    if (lastModalTargetRef.current === currentTargetKey) {
+      return
+    }
+    lastModalTargetRef.current = currentTargetKey
 
     setTestResult(null)
     setFetchError(null)
@@ -335,8 +386,9 @@ function ConfigureProviderModal({
     // 载入已有缓存模型
     const cached = customModelsMap[providerKey] || []
     setFetchedModels(cached)
+    setIsModelsFromCache(cached.length > 0)
     setIsManualInput(cached.length === 0)
-  }, [open, editingProvider, preset, providerKey, customModelsMap])
+  }, [open, currentTargetKey, editingProvider, preset, providerKey, customModelsMap])
 
   // 执行连通性测试
   const handleTestConnection = async () => {
@@ -358,6 +410,12 @@ function ConfigureProviderModal({
 
   // 动态拉取模型列表
   const handleFetchModels = async () => {
+    // 针对非本地 Ollama 的云端厂商，强校验 API Key 是否已填写，杜绝空密钥发起无谓请求
+    if (providerKey !== 'ollama' && !apiKey.trim()) {
+      setFetchError(t('ai_fetch_models_need_key'))
+      return
+    }
+
     setIsFetchingModels(true)
     setFetchError(null)
     try {
@@ -368,9 +426,11 @@ function ConfigureProviderModal({
         apiKey,
       })
       setFetchedModels(models)
+      setIsModelsFromCache(false)
       if (models.length > 0) {
         setIsManualInput(false)
-        if (!model || !models.includes(model)) {
+        // 若当前未选择或为空，则默认填入首个模型；若用户已填写或已选则予以保留
+        if (!model) {
           setModel(models[0])
         }
       }
@@ -441,6 +501,77 @@ function ConfigureProviderModal({
             />
           </div>
 
+          {/* 接口通信协议 (针对魔搭 ModelScope 与自定义 Custom，支持 OpenAI / Anthropic 协议双模自由切换) */}
+          {(providerKey === 'modelscope' || providerKey === 'custom') && (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="font-medium text-foreground flex items-center gap-1.5">
+                  <Sliders className="h-3.5 w-3.5 text-muted-foreground" />
+                  接口协议规范 (API Protocol)
+                </label>
+                <span className="text-[10px] text-muted-foreground">
+                  {providerKey === 'modelscope' ? '魔搭官方双协议支持' : '选择底层通信协议'}
+                </span>
+              </div>
+              <div className={cn('grid gap-2', providerKey === 'custom' ? 'grid-cols-3' : 'grid-cols-2')}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProtocol('openai')
+                    if (providerKey === 'modelscope' && !baseUrl) {
+                      setBaseUrl('https://api-inference.modelscope.cn/v1')
+                    }
+                  }}
+                  className={cn(
+                    'flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg border text-xs font-medium transition-all cursor-pointer',
+                    protocol === 'openai'
+                      ? 'border-primary bg-primary/10 text-primary font-semibold shadow-2xs'
+                      : 'border-border/60 text-muted-foreground hover:bg-muted/40 hover:text-foreground',
+                  )}
+                >
+                  <span>OpenAI 兼容</span>
+                  <span className="text-[10px] px-1 py-0.2 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-mono">
+                    推荐
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProtocol('anthropic')
+                    if (providerKey === 'modelscope' && !baseUrl) {
+                      setBaseUrl('https://api-inference.modelscope.cn')
+                    }
+                  }}
+                  className={cn(
+                    'flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg border text-xs font-medium transition-all cursor-pointer',
+                    protocol === 'anthropic'
+                      ? 'border-primary bg-primary/10 text-primary font-semibold shadow-2xs'
+                      : 'border-border/60 text-muted-foreground hover:bg-muted/40 hover:text-foreground',
+                  )}
+                >
+                  <span>Anthropic (Claude)</span>
+                  <span className="text-[10px] px-1 py-0.2 rounded bg-purple-500/10 text-purple-600 dark:text-purple-400 font-mono">
+                    beta
+                  </span>
+                </button>
+                {providerKey === 'custom' && (
+                  <button
+                    type="button"
+                    onClick={() => setProtocol('gemini')}
+                    className={cn(
+                      'flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-lg border text-xs font-medium transition-all cursor-pointer',
+                      protocol === 'gemini'
+                        ? 'border-primary bg-primary/10 text-primary font-semibold shadow-2xs'
+                        : 'border-border/60 text-muted-foreground hover:bg-muted/40 hover:text-foreground',
+                    )}
+                  >
+                    <span>Gemini</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Base URL */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
@@ -490,7 +621,7 @@ function ConfigureProviderModal({
                 type={showApiKey ? 'text' : 'password'}
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                placeholder={providerKey === 'ollama' ? 'Ollama 本地无需 API Key' : 'sk-...'}
+                placeholder={getApiKeyPlaceholder(providerKey)}
                 className="h-8 text-xs font-mono pr-9"
               />
               <button
@@ -514,8 +645,22 @@ function ConfigureProviderModal({
                   {t('ai_model_name_label')}
                 </label>
                 {fetchedModels.length > 0 && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-mono font-medium border border-emerald-500/20">
-                    {t('ai_models_count', { count: fetchedModels.length })}
+                  <span
+                    className={cn(
+                      'text-[10px] px-1.5 py-0.5 rounded font-mono font-medium border transition-colors',
+                      isModelsFromCache
+                        ? 'bg-muted/70 text-muted-foreground border-border/70'
+                        : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20',
+                    )}
+                    title={
+                      isModelsFromCache
+                        ? '来自本地历史持久化缓存；输入有效 API Key 点击「拉取可用模型」可同步最新'
+                        : '来自云端实时拉取最新列表'
+                    }
+                  >
+                    {isModelsFromCache
+                      ? t('ai_models_cached_count', { count: fetchedModels.length })
+                      : t('ai_models_count', { count: fetchedModels.length })}
                   </span>
                 )}
               </div>

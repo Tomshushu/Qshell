@@ -1790,6 +1790,16 @@ export function TerminalModule({
     }
   }, [getActiveTerm]);
 
+  // AI 拆解选中文本指令触发 (Explain Shell)
+  const handleAIExplainShellFromContext = useCallback(() => {
+    const term = getActiveTerm();
+    const selection = term?.getSelection();
+    setCtxMenu(null);
+    if (selection) {
+      useAIStore.getState().openExplainShell(selection);
+    }
+  }, [getActiveTerm]);
+
   // 粘贴安全确认阈值（字符数）。超过此值或包含换行时先确认。
   const PASTE_WARN_THRESHOLD = 10000;
 
@@ -5965,7 +5975,7 @@ export function TerminalModule({
     if (!registerGetCwd) return;
     const getCwd = () => {
       if (!activeTermId) return undefined;
-      let cwd = terminalCwdRef.current.get(activeTermId);
+      const cwd = terminalCwdRef.current.get(activeTermId);
       if (cwd && (cwd.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(cwd))) {
         return cwd;
       }
@@ -8463,6 +8473,7 @@ export function TerminalModule({
         onLockSession={handleTriggerAppLock}
         onAIDiagnosis={enableAiGlobal ? handleAIDiagnosisFromContext : undefined}
         onAIDiagnoseRecent={enableAiGlobal ? handleAIDiagnoseRecentOutput : undefined}
+        onAIExplainShell={enableAiGlobal ? handleAIExplainShellFromContext : undefined}
       />
 
       <TerminalSelectionToolbar

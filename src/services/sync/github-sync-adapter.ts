@@ -54,11 +54,11 @@ async function fetchGitHub(
     return res
   } catch (err: unknown) {
     if ((err as Error)?.name === 'AbortError') {
-      throw new Error('GitHub 连接超时。若您在国内网络环境，建议切换为 Gitee 享受 15ms 极速直连。')
+      throw new Error('GitHub 连接超时。若您在国内网络环境，建议切换为 Gitee 享受 15ms 极速直连。', { cause: err })
     }
     const msg = (err as Error)?.message || ''
     if (msg.includes('Failed to fetch') || msg.includes('NetworkError')) {
-      throw new Error('无法连接到 GitHub API。请检查代理设置，或切换使用 Gitee 国内极速同步。')
+      throw new Error('无法连接到 GitHub API。请检查代理设置，或切换使用 Gitee 国内极速同步。', { cause: err })
     }
     throw err
   } finally {

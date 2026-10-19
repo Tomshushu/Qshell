@@ -41,4 +41,22 @@ MIIEowIBAAKCAQEA0m4p5F32s3w...
     expect(withIpMask).toContain('[REDACTED_PRIVATE_IP]')
     expect(withIpMask).toContain('8.8.8.8')
   })
+
+  it('should redact AI API keys for ModelScope, Anthropic, Groq, and Gemini', () => {
+    const raw = `
+      OpenAI: sk-abcdef1234567890abcdef1234567890
+      ModelScope: ms-1234567890abcdef1234567890abcdef
+      Anthropic: sk-ant-api03-abcdef1234567890abcdef1234567890abcdef
+      Groq: gsk_abcdef1234567890abcdef1234567890abcdef
+      Gemini: AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q
+    `
+    const sanitized = sanitizeLogContent(raw)
+    expect(sanitized).not.toContain('sk-abcdef1234567890')
+    expect(sanitized).not.toContain('ms-1234567890abcdef')
+    expect(sanitized).not.toContain('sk-ant-api03-abcdef')
+    expect(sanitized).not.toContain('gsk_abcdef1234567890')
+    expect(sanitized).not.toContain('AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q')
+    const redactedMatches = sanitized.match(/\[REDACTED_API_KEY\]/g)
+    expect(redactedMatches).toHaveLength(5)
+  })
 })

@@ -1204,6 +1204,49 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
     )
   })
 
+  it('renders UnattachedServerPicker along with pipelineExplain when message suggests target server execution at the bottom', () => {
+    useAppStore.setState({
+      servers: [
+        { id: 'srv-1', name: 'Web Server', host: '192.168.1.100', port: 22, username: 'root' },
+      ],
+    } as any)
+
+    useAIStore.setState({
+      isFloatingAssistantOpen: true,
+      assistantMessages: [
+        {
+          id: 'msg-explain',
+          role: 'assistant',
+          content: 'awk 列提取 -> sort 排序 -> uniq 统计。\n\n💡 若需在真实服务器日志中采样验证上述命令，可在下方卡片中选择目标主机一键下发。',
+          createdAt: Date.now(),
+          pipelineExplain: {
+            fullCommand: "awk '{print $1}' access.log | sort | uniq -c",
+            summary: '日志 IP 提取',
+            isPipeline: true,
+            hasDestructiveRisk: false,
+            steps: [
+              {
+                stepIndex: 1,
+                rawCommand: "awk '{print $1}' access.log",
+                program: 'awk',
+                args: ["'{print $1}'", 'access.log'],
+                actionDescription: '提取第 1 列字段',
+                flagsExplanation: [],
+                riskLevel: 'safe',
+              },
+            ],
+          },
+        },
+      ],
+    })
+
+    renderWithProviders(<FloatingAIAssistant />)
+
+    expect(screen.getByTestId('pipeline-blocks-viewer')).toBeTruthy()
+    expect(screen.getByTestId('unattached-server-picker')).toBeTruthy()
+    expect(screen.getByText('（点选主机一键发起实机排查）')).toBeTruthy()
+  })
+
   it('forwards original user query when clicking server in UnattachedServerPicker', () => {
     useAppStore.setState({
       servers: [
@@ -1368,6 +1411,72 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
 
     // 气泡 3：Chat 模式 -> Chat 咨询解答
     expect(badges[2].textContent).toContain('Chat 咨询解答')
+
+    unmount()
+  })
+
+  it('renders detected-explain-pill when user inputs a piped shell command', () => {
+    useAIStore.setState({
+      enableAiGlobal: true,
+      isFloatingAssistantOpen: true,
+      assistantInput: "cat access.log | awk '{print $1}' | sort | uniq -c",
+      assistantMessages: [],
+    })
+
+    const { unmount } = renderWithProviders(<FloatingAIAssistant />)
+
+    const pill = screen.getByTestId('detected-explain-pill')
+    expect(pill).toBeTruthy()
+    expect(pill.textContent).toContain('检测到复合指令/管道')
+
+    unmount()
+  })
+
+  it('renders PipelineBlocksViewer when message has pipelineExplain', () => {
+    useAIStore.setState({
+      enableAiGlobal: true,
+      isFloatingAssistantOpen: true,
+      assistantMessages: [
+        {
+          id: 'msg_pipe_1',
+          role: 'assistant',
+          content: '已完成管道拆解',
+          createdAt: Date.now(),
+          status: 'done',
+          pipelineExplain: {
+            fullCommand: "cat access.log | awk '{print $1}'",
+            summary: '提取第一列客户端IP',
+            isPipeline: true,
+            hasDestructiveRisk: false,
+            steps: [
+              {
+                stepIndex: 1,
+                rawCommand: 'cat access.log',
+                program: 'cat',
+                args: ['access.log'],
+                actionDescription: '读取日志文件',
+                riskLevel: 'safe',
+              },
+              {
+                stepIndex: 2,
+                rawCommand: "awk '{print $1}'",
+                program: 'awk',
+                args: ["'{print $1}'"],
+                actionDescription: '提取第一列',
+                riskLevel: 'safe',
+              },
+            ],
+          },
+        },
+      ],
+    })
+
+    const { unmount } = renderWithProviders(<FloatingAIAssistant />)
+
+    expect(screen.getByTestId('pipeline-blocks-viewer')).toBeTruthy()
+    expect(screen.getByText('STEP 01')).toBeTruthy()
+    expect(screen.getByText('STEP 02')).toBeTruthy()
+    expect(screen.getByText('读取日志文件')).toBeTruthy()
 
     unmount()
   })

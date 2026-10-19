@@ -18,6 +18,7 @@ vi.mock("@/i18n", () => ({
         tm_paste_selected: "粘贴选中内容",
         tm_ai_diagnosis_menu: "AI 诊断选中文本",
         tm_ai_diagnosis_recent: "AI 诊断终端报错/输出",
+        tm_ai_explain_shell: "拆解并解释指令 (Explain)",
         tm_search: "搜索",
       };
       return map[key] || key;
@@ -101,5 +102,24 @@ describe("TerminalContextMenu", () => {
     fireEvent.click(diagnoseRecentBtn);
     expect(onAIDiagnoseRecent).toHaveBeenCalled();
     expect(onAIDiagnosis).not.toHaveBeenCalled();
+  });
+
+  it("renders 拆解并解释指令 (Explain) when hasSelection is true and calls onAIExplainShell", () => {
+    const onAIExplainShell = vi.fn();
+
+    render(
+      <TerminalContextMenu
+        {...baseProps}
+        ctxMenu={{ x: 100, y: 100, hasSelection: true }}
+        onAIExplainShell={onAIExplainShell}
+      />
+    );
+
+    const explainBtn = screen.getByTestId("terminal-menu-ai-explain-shell");
+    expect(explainBtn).toBeTruthy();
+    expect(screen.getByText("拆解并解释指令 (Explain)")).toBeTruthy();
+
+    fireEvent.click(explainBtn);
+    expect(onAIExplainShell).toHaveBeenCalledTimes(1);
   });
 });

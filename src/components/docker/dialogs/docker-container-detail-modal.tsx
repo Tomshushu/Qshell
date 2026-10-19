@@ -1,4 +1,4 @@
-import React, { useRef } from "react";
+import React from "react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,6 +23,7 @@ import {
   File as FileIcon,
   Download,
   Trash2,
+  Sparkles,
 } from "lucide-react";
 import {
   AreaChart,
@@ -39,6 +40,7 @@ import type { DockerContainer as DockerContainerType } from "@/types";
 import type { DockerFileEntry } from "@/services/api";
 import type { StatsData } from "../docker-types";
 import { renderAnsiLine, stripAnsi, StructuredInspect, formatSize } from "../docker-utils";
+import { parseContainerExitCode } from "@/services/ai/docker-diagnoser";
 
 export interface DockerContainerDetailModalProps {
   modal: {
@@ -47,6 +49,7 @@ export interface DockerContainerDetailModalProps {
   } | null;
   onClose: () => void;
   onSwitchTab: (tab: "logs" | "stats" | "inspect" | "files") => void;
+  onDiagnose?: (container: DockerContainerType) => void;
 
   // Logs
   logsLoading: boolean;
@@ -146,6 +149,7 @@ export function DockerContainerDetailModal({
   onOpenHostPicker,
   onFileDownload,
   onPromptFileDelete,
+  onDiagnose,
 }: DockerContainerDetailModalProps) {
   const { t } = useTranslation();
 
@@ -168,7 +172,7 @@ export function DockerContainerDetailModal({
           </button>
         </div>
 
-        {/* Tab 切换：日志 / 监控 / 详情 / 文件；右侧显示当前容器名 */}
+        {/* Tab 切换：日志 / 监控 / 详情 / 文件；右侧显示当前容器名与 AI 诊断按钮 */}
         <div className="flex items-center gap-1 px-4 pt-3 pr-12">
           {([
             { key: "logs" as const, label: t("dk_logs"), icon: <FileText className="h-3.5 w-3.5" /> },
@@ -190,15 +194,29 @@ export function DockerContainerDetailModal({
               {tab.label}
             </button>
           ))}
-          <span
-            className="ml-auto flex items-center gap-1.5 min-w-0 flex-shrink-0"
-            title={modal.container.name}
-          >
-            <Container className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-            <span className="text-[11px] text-muted-foreground truncate">
-              {modal.container.name}
+          <div className="ml-auto flex items-center gap-2 min-w-0 flex-shrink-0">
+            {onDiagnose && parseContainerExitCode(modal.container.status, modal.container.state).isAbnormal && (
+              <button
+                type="button"
+                data-testid="btn-diagnose-modal-container"
+                onClick={() => onDiagnose(modal.container)}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 dark:text-rose-400 border border-rose-500/25 transition-all cursor-pointer shadow-2xs hover:scale-105 active:scale-95 select-none"
+                title={t("dk_ai_diagnose_tooltip") || "AI 异常退出归因诊断"}
+              >
+                <Sparkles className="h-3 w-3 animate-pulse text-rose-500" />
+                <span>{t("dk_ai_diagnose") || "诊断"}</span>
+              </button>
+            )}
+            <span
+              className="flex items-center gap-1.5 min-w-0 flex-shrink-0"
+              title={modal.container.name}
+            >
+              <Container className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+              <span className="text-[11px] text-muted-foreground truncate">
+                {modal.container.name}
+              </span>
             </span>
-          </span>
+          </div>
         </div>
 
         {/* 1. Logs Tab */}

@@ -20,6 +20,7 @@ import type {
   AIMascotMood,
   AIExecutionMode,
   AIAssistantExecutionCard,
+  ShellPipelineExplainResult,
 } from '@/types/ai'
 import { AI_PROVIDER_PRESETS } from '@/types/ai'
 import {
@@ -45,6 +46,15 @@ import {
   wrapSafeInspectionCommand,
   generateExecutionSummary,
 } from '@/services/ai/command-guard'
+import {
+  explainShellCommand,
+  detectUserIntent,
+} from '@/services/ai/shell-explainer'
+import {
+  buildDockerDiagnosisPrompt,
+  generateOfflineDockerDiagnosis,
+  type DockerDiagnosisParams,
+} from '@/services/ai/docker-diagnoser'
 
 const AI_SETTINGS_STORAGE_KEY = 'qshell_ai_settings_v1'
 const AI_MODELS_CACHE_STORAGE_KEY = 'qshell_ai_models_cache_v1'
@@ -484,6 +494,8 @@ export interface AIStoreState {
   }) => Promise<string[]>
 
   openDiagnosis: (snippet: string, context?: AIPromptContext) => void
+  openExplainShell: (command: string, context?: AIPromptContext) => void
+  openDockerDiagnosis: (params: DockerDiagnosisParams) => void
   closeDiagnosis: () => void
   runDiagnosis: () => Promise<void>
   openCommandPalette: (context?: AIPromptContext) => void
@@ -984,6 +996,42 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
     void get().sendAssistantMessage(prompt, { ...context, selectedText: text })
   },
 
+  openExplainShell: (command, context = {}) => {
+    if (!get().enableAiGlobal) return
+    const text = command?.trim()
+    if (!text) {
+      set({ isFloatingAssistantOpen: true, assistantMode: 'agent' })
+      return
+    }
+
+    set({
+      isFloatingAssistantOpen: true,
+      assistantMode: 'agent',
+    })
+
+    const prompt = `请帮我拆解并解析以下 Shell 复合指令的执行流程与管道逻辑：\n\`\`\`bash\n${text}\n\`\`\``
+    void get().sendAssistantMessage(prompt, {
+      ...context,
+      selectedText: text,
+      isExplainShell: true,
+    })
+  },
+
+  openDockerDiagnosis: (params) => {
+    if (!get().enableAiGlobal) return
+    set({
+      isFloatingAssistantOpen: true,
+      assistantMode: 'agent',
+    })
+
+    const prompt = buildDockerDiagnosisPrompt(params)
+    void get().sendAssistantMessage(prompt, {
+      activeServerId: params.serverId,
+      isDockerDiagnosis: true,
+      dockerContext: params,
+    })
+  },
+
   closeDiagnosis: () => {
     set({ isDiagnosisModalOpen: false, isDiagnosing: false })
   },
@@ -1012,7 +1060,7 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
     }
   },
 
-  openCommandPalette: (context = {}) => {
+  openCommandPalette: (_context = {}) => {
     if (!get().enableAiGlobal) return
     set({
       isFloatingAssistantOpen: true,
@@ -1259,16 +1307,34 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
       }, 4000)
     }
 
-    const assistantMsgId = `msg_a_${Date.now()}`
-    let accumulatedText = ''
+    // 0. 智能意图嗅探与指令拆解准备 (Shell Explainer)
+    const intentRes = detectUserIntent(content)
+    const isExplainShellIntent = Boolean(context?.isExplainShell || intentRes.intent === 'explain_shell')
+    const commandCandidate = context?.selectedText || intentRes.commandCandidate || content
+    let pipelineExplainResult: ShellPipelineExplainResult | undefined
+    if (isExplainShellIntent && commandCandidate) {
+      try {
+        pipelineExplainResult = explainShellCommand(commandCandidate)
+      } catch {
+        // ignore
+      }
+    }
 
-    const onChunk = (chunk: string, accumulated: string) => {
-      accumulatedText = accumulated
+    const assistantMsgId = `msg_a_${Date.now()}`
+
+    const onChunk = (_chunk: string, accumulated: string) => {
       set((state) => {
         const exists = state.assistantMessages.some((m) => m.id === assistantMsgId)
         const curMsgs = exists
           ? state.assistantMessages.map((m) =>
-              m.id === assistantMsgId ? { ...m, content: accumulated, status: 'streaming' as const } : m,
+              m.id === assistantMsgId
+                ? {
+                    ...m,
+                    content: accumulated,
+                    status: 'streaming' as const,
+                    pipelineExplain: pipelineExplainResult,
+                  }
+                : m,
             )
           : [
               ...state.assistantMessages,
@@ -1279,6 +1345,7 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
                 createdAt: Date.now(),
                 mode: assistantMode,
                 status: 'streaming' as const,
+                pipelineExplain: pipelineExplainResult,
               },
             ]
         return {
@@ -1299,6 +1366,9 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
     const serverInventory = buildServerInventory(servers, serverGroups)
     const enrichedContext: AIPromptContext = {
       ...context,
+      isExplainShell: isExplainShellIntent,
+      isDockerDiagnosis: context?.isDockerDiagnosis,
+      dockerContext: context?.dockerContext,
       serverInventory,
       servers,
       serverGroups,
@@ -1410,6 +1480,9 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
           status: 'done',
           suggestedCommands: res.commands,
           executionCard,
+          pipelineExplain: pipelineExplainResult
+            ? { ...pipelineExplainResult, aiExplanation: res.content }
+            : undefined,
         }
         finalizeMessages(
           [
@@ -1459,6 +1532,54 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
         }
       }
       if (abortController.signal.aborted) return
+
+      // 若为指令拆解意图，直接装配离线乐高积木流转卡片
+      if (isExplainShellIntent && pipelineExplainResult) {
+        const replyContent =
+          `已为你完成 **${pipelineExplainResult.steps.length} 步** 复合指令与管道流转拆解：\n\n` +
+          `> 💡 **业务总结**：${pipelineExplainResult.summary}\n` +
+          `> 🛡️ **安全风险**：${pipelineExplainResult.hasDestructiveRisk ? '⚠️ 包含修改或删除操作' : '纯只读安全处理 (0 生产风险)'}\n\n` +
+          `详细步骤请见下方 **乐高积木流转卡片**。`
+
+        const assistantMsg: AIAssistantMessage = {
+          id: assistantMsgId,
+          role: 'assistant',
+          content: replyContent,
+          createdAt: Date.now(),
+          mode: assistantMode,
+          status: 'done',
+          pipelineExplain: pipelineExplainResult,
+        }
+        finalizeMessages(
+          [
+            ...nextMessages.filter((m) => m.id !== assistantMsgId),
+            assistantMsg,
+          ],
+          'happy',
+        )
+        return
+      }
+
+      // 若为 Docker 容器异常退出诊断意图，直接装配高水准离线即时归因报告
+      if (context?.isDockerDiagnosis && context?.dockerContext) {
+        const replyContent = generateOfflineDockerDiagnosis(context.dockerContext)
+        const assistantMsg: AIAssistantMessage = {
+          id: assistantMsgId,
+          role: 'assistant',
+          content: replyContent,
+          createdAt: Date.now(),
+          mode: assistantMode,
+          status: 'done',
+        }
+        finalizeMessages(
+          [
+            ...nextMessages.filter((m) => m.id !== assistantMsgId),
+            assistantMsg,
+          ],
+          'happy',
+        )
+        return
+      }
 
       const probePlan = resolveProbePlan(content, servers, serverGroups, activeServerId)
 

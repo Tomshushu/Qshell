@@ -9,6 +9,7 @@
 export type AIProvider =
   | 'deepseek'
   | 'qwen'
+  | 'modelscope'
   | 'glm'
   | 'moonshot'
   | 'siliconflow'
@@ -119,6 +120,19 @@ export interface AIPromptContext {
   servers?: any[]
   serverGroups?: any[]
   activeServerId?: string | null
+  isExplainShell?: boolean
+  isDockerDiagnosis?: boolean
+  dockerContext?: {
+    serverId: string
+    containerId: string
+    containerName: string
+    image: string
+    status: string
+    exitCode?: number | null
+    oomKilled?: boolean
+    memoryLimit?: number
+    logsSnippet?: string
+  }
 }
 
 export type AIAssistantMode = 'agent' | 'chat'
@@ -137,6 +151,27 @@ export interface AIAssistantExecutionCard {
   executedAt?: number
 }
 
+export interface ShellPipelineStep {
+  stepIndex: number
+  rawCommand: string
+  program: string
+  args: string[]
+  actionDescription: string
+  flagsExplanation?: Array<{ flag: string; meaning: string }>
+  dataFlowDescription?: string
+  riskLevel: CommandRiskLevel
+  riskReason?: string
+}
+
+export interface ShellPipelineExplainResult {
+  fullCommand: string
+  summary: string
+  isPipeline: boolean
+  hasDestructiveRisk: boolean
+  steps: ShellPipelineStep[]
+  aiExplanation?: string
+}
+
 export interface AIAssistantMessage {
   id: string
   role: 'user' | 'assistant'
@@ -151,6 +186,7 @@ export interface AIAssistantMessage {
     risk?: CommandRiskAnalysis
   }>
   executionCard?: AIAssistantExecutionCard
+  pipelineExplain?: ShellPipelineExplainResult
 }
 
 export interface AIAssistantSession {
@@ -195,6 +231,27 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
     subtitleKey: 'ai_provider_qwen_sub',
     isDomestic: true,
     tagText: '国内',
+    tagType: 'domestic',
+  },
+  modelscope: {
+    id: 'modelscope',
+    name: 'ModelScope 魔搭',
+    protocol: 'openai',
+    defaultBaseUrl: 'https://api-inference.modelscope.cn/v1',
+    defaultModel: 'deepseek-ai/DeepSeek-V3',
+    recommendedModels: [
+      'deepseek-ai/DeepSeek-V3',
+      'deepseek-ai/DeepSeek-R1',
+      'Qwen/Qwen2.5-Coder-32B-Instruct',
+      'Qwen/Qwen2.5-72B-Instruct',
+      'Qwen/Qwen2.5-Coder-7B-Instruct',
+      'deepseek-ai/DeepSeek-Coder-33B-instruct',
+    ],
+    websiteUrl: 'https://www.modelscope.cn/my/myaccesstoken',
+    descriptionKey: 'ai_provider_modelscope_desc',
+    subtitleKey: 'ai_provider_modelscope_sub',
+    isDomestic: true,
+    tagText: '免费/国内',
     tagType: 'domestic',
   },
   siliconflow: {

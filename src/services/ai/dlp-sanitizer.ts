@@ -42,8 +42,12 @@ export function sanitizeLogContent(
   result = result.replace(/\b(AKIA[0-9A-Z]{16})\b/g, '[REDACTED_AWS_KEY]')
   // 阿里云 AccessKey
   result = result.replace(/\b(LTAI[0-9A-Za-z]{16,24})\b/g, '[REDACTED_ALIYUN_KEY]')
-  // 常用 AI API Keys (sk-...)
-  result = result.replace(/\b(sk-[a-zA-Z0-9]{20,64})\b/g, '[REDACTED_API_KEY]')
+  // 常用 AI API Keys:
+  // OpenAI & 多数国内模型 (sk-...), Anthropic (sk-ant-...), ModelScope 魔搭 (ms-...), Groq (gsk_...), Gemini (AIzaSy...)
+  result = result.replace(
+    /\b(sk-(?:ant-)?[a-zA-Z0-9_-]{20,96}|ms-[a-zA-Z0-9_-]{20,64}|gsk_[a-zA-Z0-9]{20,64}|AIzaSy[a-zA-Z0-9_-]{33})\b/g,
+    '[REDACTED_API_KEY]',
+  )
 
   // 4. 键值对形式的密码与凭据脱敏 (形如 password=xxx, pwd: "xxx", secret: xxx, token: xxx)
   result = result.replace(

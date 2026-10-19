@@ -187,7 +187,7 @@ export function stripAllToolCallMarkup(text: string): string {
     .trim()
 
   // 若仅剩下孤立的 JSON 闭合括号或空白，直接置空
-  if (/^[\s\{\}\[\]\n\r,]+$/.test(cleaned)) {
+  if (/^[\s{}[\]\n\r,]+$/.test(cleaned)) {
     return ''
   }
   return cleaned

@@ -21,7 +21,6 @@ import {
   AGENT_TOOLS,
   executeAgentTool,
   normalizeToolName,
-  stripDsmlTags,
   stripAllToolCallMarkup,
   extractTextToolCalls,
   type ExtractedToolCall,
@@ -114,7 +113,8 @@ export function buildModelsEndpoint(baseUrl: string, protocol = 'openai'): strin
     trimmed === 'https://api.openai.com' ||
     trimmed === 'https://api.siliconflow.cn' ||
     trimmed === 'https://api.moonshot.cn' ||
-    trimmed === 'https://api.groq.com/openai'
+    trimmed === 'https://api.groq.com/openai' ||
+    trimmed === 'https://api-inference.modelscope.cn'
   ) {
     return `${trimmed}/v1/models`
   }
@@ -158,16 +158,20 @@ async function callModelApi(
         role: m.role,
         content: m.content,
       }))
-
+    const cleanKey = (settings.apiKey || '').trim().replace(/^["']|["']$/g, '')
     const endpoint = buildAnthropicEndpoint(baseUrl)
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'anthropic-version': '2023-06-01',
+    }
+    if (cleanKey) {
+      headers['x-api-key'] = cleanKey
+      headers['Authorization'] = `Bearer ${cleanKey}`
+    }
     const res = await fetch(endpoint, {
       method: 'POST',
       signal,
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': settings.apiKey || '',
-        'anthropic-version': '2023-06-01',
-      },
+      headers,
       body: JSON.stringify({
         model: settings.model,
         max_tokens: maxTokens,
@@ -293,15 +297,20 @@ async function callModelApiStream(
         content: m.content,
       }))
 
+    const cleanKey = (settings.apiKey || '').trim().replace(/^["']|["']$/g, '')
     const endpoint = buildAnthropicEndpoint(baseUrl)
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'anthropic-version': '2023-06-01',
+    }
+    if (cleanKey) {
+      headers['x-api-key'] = cleanKey
+      headers['Authorization'] = `Bearer ${cleanKey}`
+    }
     const res = await fetch(endpoint, {
       method: 'POST',
       signal,
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': settings.apiKey || '',
-        'anthropic-version': '2023-06-01',
-      },
+      headers,
       body: JSON.stringify({
         model: settings.model,
         max_tokens: maxTokens,
@@ -679,67 +688,126 @@ export async function fetchProviderModels(settings: AISettings): Promise<string[
     }
   }
 
-  // 2. Google Gemini 协议
+  // 2. Google Gemini 协议（支持 pageSize=100 与 nextPageToken 循环全量分页拉取）
   if (protocol === 'gemini') {
     const key = settings.apiKey?.trim() || ''
     if (!key) {
       throw new Error('获取 Gemini 模型列表需要填写 API Key')
     }
-    const endpoint = `${buildModelsEndpoint(baseUrl, 'gemini')}?key=${key}`
-    const res = await fetch(endpoint, {
-      method: 'GET',
-      headers: { 'Content-Type': 'application/json' },
-    })
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '')
-      throw new Error(`Gemini 模型拉取失败 (${res.status}): ${errText || res.statusText}`)
-    }
-    const data = await res.json()
-    if (Array.isArray(data.models)) {
-      return data.models
-        .filter((m: { name?: string; supportedGenerationMethods?: string[] }) => {
-          const methods = m.supportedGenerationMethods || []
-          return methods.includes('generateContent') || m.name?.includes('gemini')
-        })
-        .map((m: { name?: string }) => (m.name || '').replace(/^models\//, ''))
-        .filter(Boolean)
-    }
-    return []
+    const baseEndpoint = buildModelsEndpoint(baseUrl, 'gemini')
+    const allModels: string[] = []
+    let pageToken: string | undefined = undefined
+    let pageCount = 0
+    const MAX_PAGES = 10
+
+    do {
+      pageCount++
+      const url = new URL(baseEndpoint)
+      url.searchParams.set('key', key)
+      url.searchParams.set('pageSize', '100')
+      if (pageToken) {
+        url.searchParams.set('pageToken', pageToken)
+      }
+
+      const res = await fetch(url.toString(), {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '')
+        throw new Error(`Gemini 模型拉取失败 (${res.status}): ${errText || res.statusText}`)
+      }
+      const data = await res.json()
+      if (Array.isArray(data.models)) {
+        const names = data.models
+          .filter((m: { name?: string; supportedGenerationMethods?: string[] }) => {
+            const methods = m.supportedGenerationMethods || []
+            return methods.includes('generateContent') || m.name?.includes('gemini')
+          })
+          .map((m: { name?: string }) => (m.name || '').replace(/^models\//, ''))
+          .filter(Boolean) as string[]
+        allModels.push(...names)
+      }
+      pageToken = typeof data.nextPageToken === 'string' && data.nextPageToken ? data.nextPageToken : undefined
+    } while (pageToken && pageCount < MAX_PAGES)
+
+    return Array.from(new Set(allModels))
   }
 
-  // 3. Anthropic Claude 协议
+  // 3. Anthropic Claude 协议（支持 limit=100 与 after_id 循环全量分页拉取）
   if (protocol === 'anthropic') {
-    const key = settings.apiKey?.trim() || ''
-    if (!key) {
+    const cleanKey = settings.apiKey?.trim().replace(/^["']|["']$/g, '') || ''
+    if (!cleanKey) {
       throw new Error('获取 Claude 模型列表需要填写 API Key')
     }
-    const endpoint = buildModelsEndpoint(baseUrl, 'anthropic')
-    const res = await fetch(endpoint, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': key,
-        'anthropic-version': '2023-06-01',
-      },
-    })
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '')
-      throw new Error(`Claude 模型拉取失败 (${res.status}): ${errText || res.statusText}`)
+    const baseEndpoint = buildModelsEndpoint(baseUrl, 'anthropic')
+    const allModels: string[] = []
+    let afterId: string | undefined = undefined
+    let hasMore = true
+    let pageCount = 0
+    const MAX_PAGES = 10
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'anthropic-version': '2023-06-01',
+      'x-api-key': cleanKey,
+      'Authorization': `Bearer ${cleanKey}`,
     }
-    const data = await res.json()
-    if (Array.isArray(data.data)) {
-      return data.data.map((m: { id?: string; name?: string }) => m.id || m.name).filter(Boolean)
+
+    while (hasMore && pageCount < MAX_PAGES) {
+      pageCount++
+      const url = new URL(baseEndpoint)
+      url.searchParams.set('limit', '100')
+      if (afterId) {
+        url.searchParams.set('after_id', afterId)
+      }
+
+      let res = await fetch(url.toString(), {
+        method: 'GET',
+        headers,
+      })
+
+      // 若 Anthropic /v1/models 探测返回 404/405（常见于 Anthropic-兼容反代网关只暴露了 /v1/models），尝试回退探针
+      if (!res.ok && res.status >= 400 && res.status < 500) {
+        try {
+          const fallbackEndpoint = `${baseUrl.replace(/\/+$/, '')}/v1/models`
+          const fallbackRes = await fetch(fallbackEndpoint, { method: 'GET', headers })
+          if (fallbackRes.ok) res = fallbackRes
+        } catch {
+          // ignore fallback
+        }
+      }
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '')
+        throw new Error(`Claude 模型拉取失败 (${res.status}): ${errText || res.statusText}`)
+      }
+      const data = await res.json()
+      if (Array.isArray(data.data)) {
+        const names = data.data.map((m: { id?: string; name?: string }) => m.id || m.name).filter(Boolean) as string[]
+        allModels.push(...names)
+        afterId = typeof data.last_id === 'string' ? data.last_id : undefined
+        hasMore = Boolean(data.has_more && afterId)
+      } else if (Array.isArray(data.models)) {
+        const names = data.models.map((m: { id?: string; name?: string; model?: string }) => m.id || m.name || m.model).filter(Boolean) as string[]
+        allModels.push(...names)
+        hasMore = false
+      } else {
+        hasMore = false
+      }
     }
-    return []
+
+    return Array.from(new Set(allModels))
   }
 
-  // 4. OpenAI 兼容协议 (涵盖大部分平台)
+  // 4. OpenAI 兼容协议 (涵盖大部分平台、ModelScope、SiliconFlow 及各类聚合网关)
   const endpoint = buildModelsEndpoint(baseUrl, 'openai')
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   }
-  if (settings.apiKey?.trim()) {
-    headers.Authorization = `Bearer ${settings.apiKey.trim()}`
+  const cleanKey = settings.apiKey?.trim().replace(/^["']|["']$/g, '')
+  if (cleanKey) {
+    headers.Authorization = `Bearer ${cleanKey}`
   }
 
   let res = await fetch(endpoint, { method: 'GET', headers })
@@ -759,15 +827,74 @@ export async function fetchProviderModels(settings: AISettings): Promise<string[
     throw new Error(`模型列表拉取失败 (${res.status}): ${errText || res.statusText}`)
   }
 
-  const data = await res.json()
-  let rawList: unknown[] = []
-  if (Array.isArray(data.data)) {
-    rawList = data.data
-  } else if (Array.isArray(data.models)) {
-    rawList = data.models
-  } else if (Array.isArray(data)) {
-    rawList = data
+  const allRawList: unknown[] = []
+  let data = await res.json()
+
+  const extractItems = (payload: unknown): unknown[] => {
+    if (!payload || typeof payload !== 'object') return []
+    const obj = payload as Record<string, unknown>
+    if (Array.isArray(obj.data)) return obj.data
+    if (Array.isArray(obj.models)) return obj.models
+    if (Array.isArray(payload)) return payload
+    return []
   }
+
+  allRawList.push(...extractItems(data))
+
+  // 兼容标准 OpenAI 游标分页 (has_more / after) 以及 next_page URL / page_token
+  let pageCount = 1
+  const MAX_PAGES = 10
+  while (pageCount < MAX_PAGES) {
+    pageCount++
+    let nextUrl: string | null = null
+
+    if (data && typeof data === 'object') {
+      const obj = data as Record<string, unknown>
+      if (obj.has_more === true) {
+        const rawItems = extractItems(obj)
+        const lastItem = rawItems[rawItems.length - 1] as Record<string, unknown> | undefined
+        const lastId = (obj.last_id as string) || (lastItem?.id as string)
+        if (lastId) {
+          try {
+            const u = new URL(res.url)
+            u.searchParams.set('after', lastId)
+            nextUrl = u.toString()
+          } catch {
+            // ignore URL parse errors
+          }
+        }
+      } else if (typeof obj.next_page === 'string' && obj.next_page) {
+        try {
+          nextUrl = new URL(obj.next_page, res.url).toString()
+        } catch {
+          // ignore
+        }
+      } else if (typeof obj.next_page_token === 'string' && obj.next_page_token) {
+        try {
+          const u = new URL(res.url)
+          u.searchParams.set('page_token', obj.next_page_token)
+          nextUrl = u.toString()
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    if (!nextUrl) break
+
+    try {
+      const nextRes = await fetch(nextUrl, { method: 'GET', headers })
+      if (!nextRes.ok) break
+      data = await nextRes.json()
+      const newItems = extractItems(data)
+      if (newItems.length === 0) break
+      allRawList.push(...newItems)
+    } catch {
+      break
+    }
+  }
+
+  const rawList = allRawList
 
   const modelNames: string[] = rawList
     .map((m: unknown) => {
@@ -1024,7 +1151,7 @@ export function isLikelyShellCommand(cmd: string): boolean {
   if (/[\u4e00-\u9fa5]/.test(trimmed)) return false
 
   // 不得以 Markdown 符号、列表符号或括号起始
-  if (/^[*\-+>|~`!\[\]【】{}<]/.test(trimmed)) return false
+  if (/^[*\-+>|~`![\]【】{}<]/.test(trimmed)) return false
 
   // 不得是有序列表序号（如 "1. "）
   if (/^\d+\.\s/.test(trimmed)) return false
@@ -1184,10 +1311,12 @@ export async function sendAssistantChat(
      c. 【处置建议】：优先提供只读命令验证假设，如需写操作明确风险；
 5. 如果涉及命令行操作，请优先提供可直接执行的 Shell 命令，必须使用 \`\`\`bash 或 \`\`\`sh 独立代码块包裹；
 6. 语言简洁、直接、富有科技感与专家水准；
-7. 【未连接活动服务器与未指定目标规范】：
-   - 当 [当前活跃连接目标] 为未连接任何终端且用户在问题中未指明具体服务器名称时（如用户点击了通用快捷入口或使用代词“当前连接的服务器”、“这台机器”）：
-   - **绝对严禁**擅自猜测或随机挑选一台默认服务器发起探测！
-   - 你必须直接礼貌地向用户说明当前未连接任何活动终端，无法直接执行服务器排查。系统已为用户唤出下方快捷选择卡片，请明确提示用户可在下方卡片中点击或勾选目标服务器发起排查，也可以直接回复要排查哪台服务器；
+7. 【未连接活动服务器与目标选择引导规范（消除首尾割裂）】：
+   - 当 [当前活跃连接目标] 为未连接任何终端且用户在问题中未指明具体服务器名称时（如用户点击了通用快捷入口、在首页直接提问或使用代词“当前连接的服务器”）：
+   - a. 【首行首段绝对纯净，严禁前置免责阻断】：正文首行必须专注于直接给出结论、分析结果或命令核心作用，**绝对严禁**在首段或开头插入“当前未连接任何活动终端”、“因此我无法执行”、“请在下方卡片中选择服务器”等前置免责声明打断阅读体验；
+   - b. 【引导文案统一收敛至文末实操段，消除上下割裂】：若涉及命令实操、故障排查或真实环境采样验证，**所有关于“引导在下方卡片中选择目标主机”的提示文案，必须且只能放置在回答的正文最末尾（作为实操建议段落）**，例如使用：“💡 **线上实机采样建议**：当前未连接任何活动终端。若您想在真实服务器（如您的生产集群）上实时跑出该命令的线上结果，可在下方卡片中直接点选目标主机一键下发执行。”
+   - 这样用户的视线在读完全文后，正文末行与紧随其后的快捷选择主机卡片无缝衔接，视觉上浑然一体，绝不出现“提示在最顶、卡片在最底”的上下割裂感！
+   - c. **绝对严禁**擅自猜测或随机挑选一台默认服务器发起后台静默探测；
 8. 【非运维、生活闲聊与跨领域提问处理规范（优雅回归与工具阻断）】：
    - 当用户提出与服务器运维、终端操作、编程脚本或系统技术无关的跨领域生活闲聊/百科问题时（例如询问宠物猫狗品种、生活常识、天气、菜谱、娱乐八卦等）：
      a. 【严格阻断工具执行与 Shell 命令生成】：绝对严禁调用任何服务器探针工具（如 probe_server 或系统探针），绝对严禁生成无关的 Shell 伪命令或推荐执行块；
@@ -1209,13 +1338,35 @@ export async function sendAssistantChat(
     context.selectedText ||
     context.serverInventory ||
     context.probeReport ||
+    context.isExplainShell ||
+    context.isDockerDiagnosis ||
     !context.activeServerId
   ) {
     const contextItems: string[] = []
+    if (context.isDockerDiagnosis && context.dockerContext) {
+      const dc = context.dockerContext
+      contextItems.push(
+        `【Docker 容器异常退出即时归因任务】：\n` +
+        `- 目标容器: ${dc.containerName} (${dc.containerId.slice(0, 12)})\n` +
+        `- 镜像: ${dc.image}\n` +
+        `- 状态: ${dc.status}${dc.exitCode !== null && dc.exitCode !== undefined ? ` (退出码: ${dc.exitCode})` : ''}\n` +
+        `${dc.oomKilled ? '- 内核判定: OOMKilled: true (已被系统内核 OOM 强杀)\n' : ''}` +
+        `【核心诊断原则】：必须在正文第一行直接给出清晰明确的【退出根因归因结论】（例如明确点明：“因超出具体内存限额被 Linux 内核 SIGKILL (137) 强制杀掉，建议调大 limits.memory”），随后给出结合日志的根因溯源与具体调优命令。`
+      )
+    }
+    if (context.isExplainShell) {
+      contextItems.push(
+        `【指令拆解与管道流转分析】：当前用户正在咨询 Shell 指令的语法含义与管道原理。请优先给出专业拆解与各段坑点分析。\n` +
+        `【排版要求】：首段首句直奔主题给出核心作用与业务总结，严禁在开头放未连接声明！若当前未连接终端且需建议线上实操验证，请统一在正文最末尾简要提示“若需针对真实服务器日志采样验证，可在下方点选目标主机一键下发”，以便与下方卡片紧密承接。`
+      )
+    }
     if (context.serverName || context.serverHost) {
       contextItems.push(`当前活跃连接目标: ${context.serverName || ''} (${context.serverHost || ''})`)
     } else {
-      contextItems.push(`当前活跃连接目标: 【未连接任何终端】（当前处于首页或未打开任何 SSH 终端标签页。若用户未明确指名要查看哪台服务器，必须提示用户未连接终端并引导用户选择具体服务器，绝不可随意猜测连接哪台）`)
+      contextItems.push(
+        `当前活跃连接目标: 【未连接任何终端】（当前处于首页或未打开任何 SSH 终端标签页。\n` +
+        `【重要排版原则】：首段首句严禁插入“未连接终端、请在下方选择服务器”等免责声明打断阅读！必须在正文最末尾提供后续实操建议段，顺畅引导用户在下方卡片中点选目标服务器发起执行）`
+      )
     }
     if (context.osType || context.osDistro) {
       const osName = context.osDistro
@@ -1273,8 +1424,8 @@ export async function sendAssistantChat(
     if (signal?.aborted) break
 
     const isLastStep = currentStep === MAX_AGENT_STEPS - 1
-    // 最后一轮不传递工具，强制收敛模型给出终局诊断
-    const tools = isAgent && !isLastStep ? AGENT_TOOLS : undefined
+    // 最后一轮不传递工具，强制收敛模型给出终局诊断；若是纯指令拆解任务则不传递服务器探针工具
+    const tools = isAgent && !isLastStep && !context.isExplainShell ? AGENT_TOOLS : undefined
 
     if (isLastStep && executedTools.length > 0) {
       messages.push({

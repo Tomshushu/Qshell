@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Copy, ClipboardPaste, Search, Globe, Check, Sparkles } from "lucide-react";
+import { Copy, ClipboardPaste, Search, Globe, Check, Sparkles, Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "@/i18n";
 import { playSound, SoundType } from "@/lib/sound";
@@ -33,7 +33,7 @@ const openExternalUrl = async (url: string) => {
 /**
  * 边界吸附计算：弹框左上角与选中区域右边对齐，并向下展开
  */
-function clampToolbarPosition(x: number, y: number, width = 148, height = 172) {
+function clampToolbarPosition(x: number, y: number, width = 148, height = 205) {
   const padding = 10;
   const vw = typeof window !== "undefined" ? window.innerWidth : 1000;
   const vh = typeof window !== "undefined" ? window.innerHeight : 800;
@@ -128,6 +128,13 @@ export function TerminalSelectionToolbar({
     onClose();
   };
 
+  const handleExplainShell = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    playSound(SoundType.Click);
+    useAIStore.getState().openExplainShell(selectedText);
+    onClose();
+  };
+
   return (
     <div
       role="toolbar"
@@ -188,7 +195,7 @@ export function TerminalSelectionToolbar({
         </span>
       </button>
 
-      {/* AI 智能诊断 / 解释 */}
+      {/* AI 智能诊断 */}
       {enableAiGlobal && (
         <button
           type="button"
@@ -204,6 +211,27 @@ export function TerminalSelectionToolbar({
           <Sparkles className="h-3.5 w-3.5 text-primary shrink-0" />
           <span className="truncate tracking-tight font-sans text-[11.5px] font-medium text-primary">
             {t("tm_ai_diagnose")}
+          </span>
+        </button>
+      )}
+
+      {/* 拆解复合指令 (Explain Shell) */}
+      {enableAiGlobal && (
+        <button
+          type="button"
+          data-testid="selection-toolbar-explain-shell"
+          onClick={handleExplainShell}
+          className={cn(
+            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+            isLightTerminal
+              ? "text-sky-700 hover:bg-sky-50 hover:text-sky-900"
+              : "text-sky-300 hover:bg-sky-500/15 hover:text-sky-200",
+          )}
+          title={t("tm_ai_explain_shell_tooltip") || "将选中指令进行乐高积木式拆解与管道流转分析"}
+        >
+          <Layers className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+          <span className="truncate tracking-tight font-sans text-[11.5px] font-medium text-sky-600 dark:text-sky-400">
+            {t("tm_ai_explain_shell") || "拆解指令 (Explain)"}
           </span>
         </button>
       )}

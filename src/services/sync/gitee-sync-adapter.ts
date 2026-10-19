@@ -52,7 +52,7 @@ async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutM
     return res
   } catch (err: unknown) {
     if ((err as Error)?.name === 'AbortError') {
-      throw new Error('Gitee 请求超时，请检查国内网络连接')
+      throw new Error('Gitee 请求超时，请检查国内网络连接', { cause: err })
     }
     throw err
   } finally {

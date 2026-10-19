@@ -352,7 +352,7 @@ export function ShortcutSettingsPanel() {
     return SHORTCUT_DEFINITIONS.filter((def) => {
       // 作用域 / 已自定义过滤
       if (selectedScope === 'customized') {
-        if (!Boolean(customBindings[def.id])) return false
+        if (!customBindings[def.id]) return false
       } else if (selectedScope !== 'all' && def.scope !== selectedScope) {
         return false
       }

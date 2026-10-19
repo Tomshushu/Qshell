@@ -54,6 +54,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { cn } from '@/lib/utils'
 import { hasActiveAIProvider } from '@/store/ai-store'
 import type { AIAssistantExecutionCard } from '@/types/ai'
+import { PipelineBlocksViewer } from './pipeline-blocks-viewer'
+import { detectUserIntent } from '@/services/ai/shell-explainer'
 
 const MASCOT_SIZE = 44
 const STORAGE_MASCOT_OFFSET_KEY = 'qshell_ai_mascot_offset_v5'
@@ -203,7 +205,7 @@ export function parseThinkingAndContent(raw: string): {
   }
 
   // 将所有提取出的 Agent 决策调用行从 mainContent 中完全移除并清洗多余引用符
-  let mainContent = contentWithoutThink
+  const mainContent = contentWithoutThink
     .replace(decisionRegex, '')
     .replace(trailingIncomplete, '')
     .replace(/^[>\s]+$/gm, '')
@@ -745,23 +747,36 @@ function CommandExecutionCard({
       <div className="rounded-lg bg-[#18181b] dark:bg-[#121214] border border-border/40 overflow-hidden font-mono text-[11.5px]">
         <div className="flex items-center justify-between px-2.5 py-1 bg-zinc-800/60 border-b border-zinc-700/40 select-none">
           <span className="text-[10px] text-zinc-400">Shell Command</span>
-          <button
-            type="button"
-            onClick={() => onCopy(card.command)}
-            className="inline-flex items-center gap-1 text-[10px] text-zinc-400 hover:text-white transition-colors cursor-pointer"
-          >
-            {isCopied ? (
-              <>
-                <Check className="h-2.5 w-2.5 text-emerald-400" />
-                <span className="text-emerald-400">已复制</span>
-              </>
-            ) : (
-              <>
-                <Copy className="h-2.5 w-2.5" />
-                <span>复制</span>
-              </>
-            )}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                useAIStore.getState().openExplainShell(card.command)
+              }}
+              className="inline-flex items-center gap-0.5 text-[10px] text-sky-400 hover:text-sky-300 transition-colors cursor-pointer"
+              title="乐高可视化拆解此命令"
+            >
+              <Layers className="h-2.5 w-2.5" />
+              <span>拆解</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onCopy(card.command)}
+              className="inline-flex items-center gap-1 text-[10px] text-zinc-400 hover:text-white transition-colors cursor-pointer"
+            >
+              {isCopied ? (
+                <>
+                  <Check className="h-2.5 w-2.5 text-emerald-400" />
+                  <span className="text-emerald-400">已复制</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="h-2.5 w-2.5" />
+                  <span>复制</span>
+                </>
+              )}
+            </button>
+          </div>
         </div>
         <pre className="p-2.5 text-zinc-100 overflow-x-auto selection:bg-primary/30">
           <code>{card.command}</code>
@@ -940,6 +955,10 @@ export function isServerPickerNeeded(content: string): boolean {
     /请选择要(?:排查|检查|体检|探测)的服务器/i,
     /已纳管服务器资产清单/i,
     /无法直接执行服务器.*排查/i,
+    // 4. 实操执行引导提示 (如末尾的采样建议、点选服务器下发等)
+    /可在下方(?:卡片中)?(?:点击|点选|勾选|选择)(?:目标)?(?:主机|服务器)/i,
+    /请在下方(?:卡片中)?(?:点击|点选|勾选|选择)(?:目标)?(?:主机|服务器)/i,
+    /请告诉我目标服务器/i,
   ]
   return patterns.some((p) => p.test(content))
 }
@@ -991,6 +1010,9 @@ function UnattachedServerPicker({
         <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
           <Terminal className="h-3.5 w-3.5 text-primary" />
           <span>快捷选择目标主机：</span>
+          <span className="text-[11px] font-normal text-muted-foreground hidden sm:inline">
+            （点选主机一键发起实机排查）
+          </span>
         </div>
         <button
           type="button"
@@ -1376,6 +1398,12 @@ export function FloatingAIAssistant() {
       textareaRef.current.style.height = 'auto'
       textareaRef.current.style.height = `${Math.min(Math.max(textareaRef.current.scrollHeight, 28), 120)}px`
     }
+  }, [assistantInput])
+
+  // 智能指令拆解意图嗅探 (用户在输入框粘贴/输入复合管道命令时给予视觉提示)
+  const detectedInputIntent = useMemo(() => {
+    if (!assistantInput.trim()) return null
+    return detectUserIntent(assistantInput)
   }, [assistantInput])
 
   if (!enableAiGlobal) {
@@ -2273,6 +2301,18 @@ export function FloatingAIAssistant() {
                                   onReject={rejectMessageCommand}
                                 />
                               )}
+                              {msg.pipelineExplain && (
+                                <PipelineBlocksViewer
+                                  data={msg.pipelineExplain}
+                                  onCopyToTerminal={(cmd) => {
+                                    window.dispatchEvent(
+                                      new CustomEvent('insert-terminal-command', {
+                                        detail: { command: cmd, execute: false },
+                                      }),
+                                    )
+                                  }}
+                                />
+                              )}
                               {!isUser && isServerPickerNeeded(msg.content) && (
                                 <UnattachedServerPicker
                                   userPrompt={
@@ -2389,6 +2429,18 @@ export function FloatingAIAssistant() {
           <div className={cn('p-2.5 pb-2 shrink-0 space-y-1.5 transition-colors', themeStyles.inputBar)}>
             {/* 输入框主卡片 (Antigravity 风格：圆角卡片、模式与操作内嵌于底栏) */}
             <div className={cn('relative rounded-2xl transition-all p-2 flex flex-col justify-between min-h-[58px]', themeStyles.inputCard)}>
+              {/* 智能指令拆解意图提示胶囊 */}
+              {detectedInputIntent?.intent === 'explain_shell' && (
+                <div
+                  data-testid="detected-explain-pill"
+                  className="flex items-center gap-1.5 px-2 py-1 mb-1.5 rounded-lg bg-sky-500/10 border border-sky-500/25 text-[10.5px] text-sky-600 dark:text-sky-400 select-none animate-in fade-in slide-in-from-bottom-1"
+                >
+                  <Layers className="h-3 w-3 shrink-0 text-sky-500 animate-pulse" />
+                  <span className="truncate font-medium">
+                    🧩 检测到复合指令/管道，回车将自动触发乐高积木式拆解
+                  </span>
+                </div>
+              )}
               {/* Textarea 多行自适应输入 */}
               <textarea
                 ref={textareaRef}

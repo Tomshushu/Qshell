@@ -5,6 +5,7 @@ import {
   extractCommandsFromContent,
   isLikelyShellCommand,
   sendAssistantChat,
+  testConnection,
 } from '../ai-client'
 import type { AISettings } from '@/types/ai'
 
@@ -240,6 +241,85 @@ describe('sendAssistantChat with Option A Native Tool Calling', () => {
     expect(chatSysMsg).toContain('自然引导用户咨询服务器运维')
   })
 
+  it('enforces end-of-response placement for server selection prompts and omits tools in Explain Shell', async () => {
+    let capturedBody: any = null
+    globalThis.fetch = vi.fn().mockImplementation(async (_url: string, options: any) => {
+      capturedBody = JSON.parse(options.body)
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: 'awk 提取列，sort 排序，uniq -c 统计频次。',
+              },
+            },
+          ],
+        }),
+      }
+    })
+
+    await sendAssistantChat(
+      baseSettings,
+      [{ role: 'user', content: "awk '{print $1}' access.log | sort | uniq -c" }],
+      'agent',
+      { isExplainShell: true, activeServerId: null },
+    )
+
+    const sysMsg = capturedBody.messages.find((m: any) => m.role === 'system')?.content || ''
+    expect(sysMsg).toContain('【指令拆解与管道流转分析】')
+    expect(sysMsg).toContain('首行首段绝对纯净，严禁前置免责阻断')
+    expect(sysMsg).toContain('所有关于“引导在下方卡片中选择目标主机”的提示文案，必须且只能放置在回答的正文最末尾')
+    expect(capturedBody.tools).toBeUndefined()
+  })
+
+  it('injects Docker diagnosis mission and exit code attribution guidelines into system prompt', async () => {
+    let capturedBody: any = null
+    globalThis.fetch = vi.fn().mockImplementation(async (_url: string, options: any) => {
+      capturedBody = JSON.parse(options.body)
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                role: 'assistant',
+                content: '容器因超出 512MB 内存限额被 Linux 内核 SIGKILL (137) 强制杀掉。',
+              },
+            },
+          ],
+        }),
+      }
+    })
+
+    await sendAssistantChat(
+      baseSettings,
+      [{ role: 'user', content: '请帮我诊断 Docker 容器' }],
+      'agent',
+      {
+        isDockerDiagnosis: true,
+        dockerContext: {
+          serverId: 'srv-1',
+          containerId: 'c1234567890abcdef',
+          containerName: 'payment-service',
+          image: 'openjdk:17',
+          status: 'Exited (137) 2 minutes ago',
+          exitCode: 137,
+          oomKilled: true,
+          memoryLimit: 536870912,
+        },
+      },
+    )
+
+    const sysMsg = capturedBody.messages.find((m: any) => m.role === 'system')?.content || ''
+    expect(sysMsg).toContain('【Docker 容器异常退出即时归因任务】')
+    expect(sysMsg).toContain('payment-service')
+    expect(sysMsg).toContain('OOMKilled: true')
+    expect(sysMsg).toContain('退出码: 137')
+    expect(sysMsg).toContain('必须在正文第一行直接给出清晰明确的【退出根因归因结论】')
+  })
+
   it('executes tool calling and synthesizes final diagnostic report when model calls probe_server', async () => {
     let callCount = 0
 
@@ -430,6 +510,44 @@ rm -f /tmp/qshell_test_bloat.log
     expect(res.content).toContain('qshell_test_bloat.log')
     expect(res.commands).toHaveLength(1)
     expect(res.commands[0].command).toBe('rm -f /tmp/qshell_test_bloat.log')
+  })
+
+  it('supports Anthropic protocol with ModelScope ms- token and dual headers', async () => {
+    let capturedUrl = ''
+    let capturedHeaders: Record<string, string> = {}
+    let capturedBody: any = null
+
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
+      capturedUrl = url
+      capturedHeaders = (init?.headers as Record<string, string>) || {}
+      capturedBody = init?.body ? JSON.parse(init.body as string) : null
+      return {
+        ok: true,
+        json: async () => ({
+          content: [{ text: 'Hello from ModelScope Anthropic!' }],
+        }),
+      }
+    })
+
+    const modelscopeAnthropicSettings: AISettings = {
+      provider: 'modelscope',
+      protocol: 'anthropic',
+      baseUrl: 'https://api-inference.modelscope.cn',
+      apiKey: 'ms-0a8f9b1c2d3e4f5a6b7c8d9e0f',
+      model: 'Qwen/Qwen2.5-Coder-32B-Instruct',
+      temperature: 0.3,
+      maxTokens: 2048,
+      enableDlp: false,
+      maskPrivateIps: false,
+    }
+
+    const testRes = await testConnection(modelscopeAnthropicSettings)
+    expect(testRes.success).toBe(true)
+    expect(capturedUrl).toBe('https://api-inference.modelscope.cn/v1/messages')
+    expect(capturedHeaders['x-api-key']).toBe('ms-0a8f9b1c2d3e4f5a6b7c8d9e0f')
+    expect(capturedHeaders['Authorization']).toBe('Bearer ms-0a8f9b1c2d3e4f5a6b7c8d9e0f')
+    expect(capturedHeaders['anthropic-version']).toBe('2023-06-01')
+    expect(capturedBody.model).toBe('Qwen/Qwen2.5-Coder-32B-Instruct')
   })
 })
 

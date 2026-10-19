@@ -53,10 +53,6 @@ export function AICommandPalette({ onInsertToTerminal }: AICommandPaletteProps) 
   const [copied, setCopied] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  if (!enableAiGlobal) {
-    return null
-  }
-
   useEffect(() => {
     if (isCommandPaletteOpen) {
       setIntentInput('')
@@ -64,6 +60,10 @@ export function AICommandPalette({ onInsertToTerminal }: AICommandPaletteProps) 
       setTimeout(() => inputRef.current?.focus(), 100)
     }
   }, [isCommandPaletteOpen])
+
+  if (!enableAiGlobal) {
+    return null
+  }
 
   const handleGenerate = (e?: React.FormEvent) => {
     if (e) e.preventDefault()

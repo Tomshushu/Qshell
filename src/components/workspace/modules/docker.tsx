@@ -92,6 +92,8 @@ import {
   DockerSystemDfModal,
   DockerContainerDetailModal,
 } from "@/components/docker";
+import { useAIStore } from "@/store/ai-store";
+import { parseContainerExitCode } from "@/services/ai/docker-diagnoser";
 
 export function DockerModule({ serverId, initialView, initialSearchQuery }: DockerModuleProps) {
   const baseServerId = extractBaseServerId(serverId)
@@ -110,6 +112,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
   const [error, setError] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<'list' | 'card'>('list')
   const [actionLoading, setActionLoading] = useState<string | null>(null)
+  const [diagnosingContainerId, setDiagnosingContainerId] = useState<string | null>(null)
 
   // 菜单状态
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; container: DockerContainerType } | null>(null)
@@ -2276,10 +2279,83 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
     }
   }, [composeLogsModal])
 
+  // === AI 容器异常退出即时归因与诊断 ===
+  const handleDiagnoseContainer = useCallback(async (container: DockerContainerType) => {
+    const aiStore = useAIStore.getState()
+    if (!aiStore.enableAiGlobal) {
+      toast.error(t('ai_disabled_notice') || '请先在设置中启用 AI 助手')
+      return
+    }
+
+    setDiagnosingContainerId(container.id)
+    toast.info(t('dk_ai_diagnosing') || '正在提取容器状态与日志并唤醒 AI 诊断...')
+
+    let logs = ''
+    let oomKilled = false
+    let exactExitCode: number | null = null
+    let memoryLimit = 0
+
+    try {
+      const [logsRes, inspectRes] = await Promise.allSettled([
+        sshService.dockerLogs(serverId, container.id, 30),
+        sshService.dockerInspect(serverId, container.id),
+      ])
+
+      if (logsRes.status === 'fulfilled') {
+        logs = stripAnsi(logsRes.value.stdout || logsRes.value.stderr || '')
+      }
+
+      if (inspectRes.status === 'fulfilled' && inspectRes.value.exitCode === 0) {
+        try {
+          const parsed = JSON.parse(inspectRes.value.stdout)
+          const info = Array.isArray(parsed) ? parsed[0] : parsed
+          if (info) {
+            oomKilled = Boolean(info.State?.OOMKilled)
+            if (typeof info.State?.ExitCode === 'number') {
+              exactExitCode = info.State.ExitCode
+            }
+            if (typeof info.HostConfig?.Memory === 'number') {
+              memoryLimit = info.HostConfig.Memory
+            }
+          }
+        } catch {
+          // ignore inspect JSON parsing error
+        }
+      }
+    } catch {
+      // ignore
+    } finally {
+      setDiagnosingContainerId(null)
+    }
+
+    const { exitCode: parsedCode } = parseContainerExitCode(container.status, container.state)
+    const finalExitCode = exactExitCode ?? parsedCode
+
+    aiStore.openDockerDiagnosis({
+      serverId,
+      containerId: container.id,
+      containerName: container.name,
+      image: container.image,
+      status: container.status,
+      exitCode: finalExitCode,
+      oomKilled,
+      memoryLimit,
+      logsSnippet: logs,
+    })
+  }, [serverId, t, toast])
+
   // === 菜单项构建 ===
   const buildMenuItems = useCallback((container: DockerContainerType): MenuItem[] => {
     const isRunning = container.state === 'running'
+    const isAbnormal = parseContainerExitCode(container.status, container.state).isAbnormal
     return [
+      ...(isAbnormal
+        ? [{
+            icon: <Sparkles className="h-3.5 w-3.5 text-rose-500 animate-pulse" />,
+            label: t('dk_ai_diagnose_menu') || 'AI 异常退出归因诊断',
+            onClick: () => { void handleDiagnoseContainer(container) },
+          }]
+        : []),
       { icon: <FileText className="h-3.5 w-3.5" />, label: t('dk_logs'), onClick: () => openLogsModal(container) },
       { icon: <BarChart3 className="h-3.5 w-3.5" />, label: t('dk_status'), onClick: () => openStatsModal(container) },
       { icon: <Info className="h-3.5 w-3.5" />, label: t('dk_detail'), onClick: () => openInspectModal(container) },
@@ -2304,7 +2380,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
       { icon: <Trash2 className="h-3.5 w-3.5" />, label: t('docker_container_force_delete'), onClick: () => setPendingDeleteContainer({ container, force: true }), danger: true },
     ]
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [handleAction, handleLifecycle, openLogsModal, openStatsModal, openInspectModal, editContainerConfig, setPendingConfigEdit, t])
+  }, [handleAction, handleLifecycle, openLogsModal, openStatsModal, openInspectModal, editContainerConfig, setPendingConfigEdit, handleDiagnoseContainer, t])
 
   // === 右键菜单 ===
   const handleContextMenu = useCallback((e: React.MouseEvent, container: DockerContainerType) => {
@@ -3012,8 +3088,26 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
                       {c.image}
                     </span>
                   </td>
-                  <td className="px-3 py-2.5 w-[100px] whitespace-nowrap">
-                    <StatusBadge state={c.state} status={c.status} />
+                  <td className="px-3 py-2.5 min-w-[140px] whitespace-nowrap">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <StatusBadge state={c.state} status={c.status} />
+                      {parseContainerExitCode(c.status, c.state).isAbnormal && (
+                        <button
+                          type="button"
+                          data-testid={`btn-diagnose-container-${c.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            void handleDiagnoseContainer(c)
+                          }}
+                          disabled={diagnosingContainerId === c.id}
+                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10.5px] font-medium bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 dark:text-rose-400 border border-rose-500/25 transition-all cursor-pointer shadow-2xs hover:scale-105 active:scale-95 disabled:opacity-50 select-none"
+                          title={t('dk_ai_diagnose_tooltip') || 'AI 异常退出归因诊断'}
+                        >
+                          <Sparkles className="h-3 w-3 animate-pulse text-rose-500" />
+                          <span>{diagnosingContainerId === c.id ? '分析中...' : (t('dk_ai_diagnose') || '诊断')}</span>
+                        </button>
+                      )}
+                    </div>
                   </td>
                   <td className="px-3 py-2.5 min-w-[130px]">
                     {parseHostPorts(c.ports).length > 0 ? (
@@ -3113,7 +3207,25 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
 
                     {/* Mid Info: Status & Ports */}
                     <div className="flex items-center justify-between gap-2 mt-2">
-                      <StatusBadge state={c.state} status={c.status} />
+                      <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                        <StatusBadge state={c.state} status={c.status} />
+                        {parseContainerExitCode(c.status, c.state).isAbnormal && (
+                          <button
+                            type="button"
+                            data-testid={`btn-diagnose-grid-container-${c.id}`}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              void handleDiagnoseContainer(c)
+                            }}
+                            disabled={diagnosingContainerId === c.id}
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10.5px] font-medium bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 dark:text-rose-400 border border-rose-500/25 transition-all cursor-pointer shadow-2xs hover:scale-105 active:scale-95 disabled:opacity-50 select-none"
+                            title={t('dk_ai_diagnose_tooltip') || 'AI 异常退出归因诊断'}
+                          >
+                            <Sparkles className="h-3 w-3 animate-pulse text-rose-500" />
+                            <span>{diagnosingContainerId === c.id ? '分析中...' : (t('dk_ai_diagnose') || '诊断')}</span>
+                          </button>
+                        )}
+                      </div>
                       <span className="font-mono text-[11px] text-muted-foreground bg-accent/40 border border-border/40 px-1.5 py-0.5 rounded truncate max-w-[130px]" title={c.ports || t('dk_no_ports')}>
                         {c.ports || '-'}
                       </span>
@@ -3592,6 +3704,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
         modal={modal}
         onClose={closeModal}
         onSwitchTab={switchDetailTab}
+        onDiagnose={(c) => { void handleDiagnoseContainer(c); }}
         logsLoading={logsLoading}
         logsPollingFailed={logsPollingFailed}
         logSearchQuery={logSearchQuery}

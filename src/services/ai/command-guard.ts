@@ -667,7 +667,7 @@ export function evaluateCommandForExecution(
       blockedReason: '检测到反引号 `` 子 Shell 命令替换，严禁执行嵌套隐藏指令！',
     }
   }
-  if (/<\(|\>\(/.test(trimmed)) {
+  if (/<\(|>\(/.test(trimmed)) {
     return {
       allowed: false,
       isReadOnly: false,
