@@ -1844,12 +1844,12 @@ async fn download_dir_recursive(
         .await
         .map_err(|e| format!("Failed to create local directory: {}", e))?;
 
-    // 创建一次 SFTP 会话，复用给整个目录下载（避免逐文件创建会话的性能开销）
+    // 创建一次独立的 SFTP 会话，复用给整个目录下载（隔离目录浏览缓存，避免会话竞争与冲突）
     let conn = crate::ssh::manager::SshManager::global()
         .get_connection(server_id)
         .map_err(|e| e.to_string())?;
     let sftp = conn
-        .create_sftp_session()
+        .create_dedicated_sftp_session()
         .await
         .map_err(|e| format!("SFTP session failed: {}", e))?;
 
@@ -3155,7 +3155,7 @@ async fn upload_dir_recursive(
             .get_connection(server_id)
             .map_err(|e| e.to_string())?;
         owned_sftp = conn
-            .create_sftp_session()
+            .create_dedicated_sftp_session()
             .await
             .map_err(|e| format!("SFTP session failed: {}", e))?;
         &owned_sftp
@@ -3440,7 +3440,7 @@ pub async fn files_resume_upload(
             });
         }
     };
-    let sftp = match conn.create_sftp_session().await {
+    let sftp = match conn.create_dedicated_sftp_session().await {
         Ok(s) => s,
         Err(e) => {
             unregister_transfer(&transfer_id);
@@ -3819,16 +3819,20 @@ async fn server_to_server_single_file(
     src_path: &str,
     dest_path: &str,
     total_bytes: u64,
-    send_progress: impl Fn(u64, u64),
+    send_progress: impl Fn(u64, u64, Option<&str>),
     cancel: Option<&Arc<AtomicBool>>,
 ) -> Result<(), String> {
-    let mut src_file = src_sftp.open(src_path).await
+    let sftp_src_path = src_path.replace('\\', "/");
+    let sftp_dest_path = dest_path.replace('\\', "/");
+    let mut src_file = src_sftp.open(&sftp_src_path).await
         .map_err(|e| format!("Failed to open source file: {}", e))?;
         
-    let tmp_dest_path = format!("{}.sw-upload-tmp-{}", dest_path, uuid::Uuid::new_v4());
+    let tmp_dest_path = format!("{}.sw-upload-tmp-{}", sftp_dest_path, uuid::Uuid::new_v4());
     let mut dest_file = dest_sftp.create(&tmp_dest_path).await
         .map_err(|e| format!("Failed to create destination temp file: {}", e))?;
         
+    send_progress(0, total_bytes, Some(&tmp_dest_path));
+
     let mut buffer = vec![0u8; 256 * 1024]; // 256KB buffer
     let mut written = 0;
     // s2s 直传的 read/write 60s 超时与普通上传/下载对齐，结合 sleep_until_cancel 毫秒级响应取消
@@ -3870,10 +3874,19 @@ async fn server_to_server_single_file(
             };
 
             written += bytes_read as u64;
-            send_progress(written, total_bytes);
+            send_progress(written, total_bytes, Some(&tmp_dest_path));
+            crate::ssh::manager::apply_rate_limit(bytes_read as u64).await;
+
+            // 主动让出 CPU，确保底层 russh channel 和 TCP 读写 runner 得以高频处理网络报文
+            tokio::task::yield_now().await;
         }
         Ok(())
     }.await;
+
+    // 优雅收尾：等待写缓冲区全部刷盘并关闭句柄
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(60), dest_file.flush()).await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(60), dest_file.shutdown()).await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(30), src_file.shutdown()).await;
 
     drop(dest_file);
     drop(src_file);
@@ -3884,7 +3897,7 @@ async fn server_to_server_single_file(
     }
 
     // 原子覆盖：迁移到三步备份法 sftp_atomic_rename_overwrite（备份目标→rename tmp→失败回滚）。
-    let rename_result = crate::ssh::manager::sftp_atomic_rename_overwrite(dest_sftp, &tmp_dest_path, dest_path).await;
+    let rename_result = crate::ssh::manager::sftp_atomic_rename_overwrite(dest_sftp, &tmp_dest_path, &sftp_dest_path).await;
     if rename_result.is_err() {
         let _ = dest_sftp.remove_file(&tmp_dest_path).await;
     }
@@ -3938,10 +3951,10 @@ async fn server_to_server_dir_recursive(
             continue;
         }
         
-        let item_dest_path = if dest_path == "/" {
+        let item_dest_path = if remote_dest_dir == "/" {
             format!("/{}", entry.name)
         } else {
-            format!("{}/{}", dest_path, entry.name)
+            format!("{}/{}", remote_dest_dir, entry.name)
         };
         
         if entry.is_directory {
@@ -3969,7 +3982,7 @@ async fn server_to_server_dir_recursive(
                 &entry.path,
                 &item_dest_path,
                 size,
-                |_, _| {},
+                |_, _, _| {},
                 cancel,
             ).await?;
             
@@ -4037,7 +4050,7 @@ pub async fn files_server_to_server_transfer(
         }
     };
     
-    let send_progress_closure = |current: u64, total: u64, name: &str, total_type: &str, done: Option<bool>| {
+    let send_progress_closure = |current: u64, total: u64, name: &str, total_type: &str, done: Option<bool>, tmp_path: Option<&str>| {
         send_progress(
             &app,
             TransferProgress {
@@ -4049,7 +4062,7 @@ pub async fn files_server_to_server_transfer(
                 done,
                 phase: None,
                 total_type: Some(total_type.to_string()),
-                tmp_path: None,
+                tmp_path: tmp_path.map(|s| s.to_string()),
                 error: None,
             },
         );
@@ -4070,7 +4083,7 @@ pub async fn files_server_to_server_transfer(
     let result = if is_dir {
         // 文件夹传输：先发送一个携带顶层文件夹名的初始事件，让前端能绑定源/目标路径
         // 后续子文件进度事件的 file_name 是子文件名，但此时记录已存在，不会再查 pendingPathsRef
-        send_progress_closure(0, 0, &file_name, "count", None);
+        send_progress_closure(0, 0, &file_name, "count", None, None);
         let manifest_result = crate::files::remote::files_transfer_manifest(src_server_id.clone(), src_path.clone()).await;
         let (manifest, total_files) = match manifest_result {
             Ok(items) => {
@@ -4083,12 +4096,12 @@ pub async fn files_server_to_server_transfer(
             }
         };
         for item in &manifest {
-            send_progress_closure(0, item.size, &item.path, "manifest", None);
+            send_progress_closure(0, item.size, &item.path, "manifest", None, None);
         }
         let completed = Arc::new(AtomicU64::new(0));
 
         let send_closure = |done: u64, total: u64, name: &str, total_type: &str| {
-            send_progress_closure(done, total, name, total_type, None);
+            send_progress_closure(done, total, name, total_type, None, None);
         };
         
         server_to_server_dir_recursive(
@@ -4108,7 +4121,7 @@ pub async fn files_server_to_server_transfer(
         let meta = src_sftp.metadata(&src_path).await.map_err(|e| e.to_string())?;
         let size = meta.size.unwrap_or(0);
         
-        send_progress_closure(0, size, &file_name, "bytes", None);
+        send_progress_closure(0, size, &file_name, "bytes", None, None);
         
         server_to_server_single_file(
             &src_sftp,
@@ -4116,8 +4129,8 @@ pub async fn files_server_to_server_transfer(
             &src_path,
             &final_dest_path,
             size,
-            |current, total| {
-                send_progress_closure(current, total, &file_name, "bytes", None);
+            |current, total, tmp| {
+                send_progress_closure(current, total, &file_name, "bytes", None, tmp);
             },
             cancel_ref,
         ).await
@@ -4127,7 +4140,7 @@ pub async fn files_server_to_server_transfer(
     
     match result {
         Ok(()) => {
-            send_progress_closure(0, 0, &file_name, "bytes", Some(true));
+            send_progress_closure(0, 0, &file_name, "bytes", Some(true), None);
             Ok(CommandResult::ok("Server to Server transfer completed successfully"))
         }
         Err(e) => {

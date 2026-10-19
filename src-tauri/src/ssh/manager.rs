@@ -1836,7 +1836,7 @@ impl<F: Fn(u64, u64)> ProgressReporter<F> {
 /// 应用全局限速：若 RATE_LIMIT_KBPS > 0，按 chunk 字节数计算应 sleep 的时间
 /// sleep_ms = (bytes / (kbps * 1024)) * 1000
 /// 在 chunk 循环中每块写入后调用，避免传输占满带宽
-async fn apply_rate_limit(bytes: u64) {
+pub(crate) async fn apply_rate_limit(bytes: u64) {
     let kbps = crate::commands::files::RATE_LIMIT_KBPS.load(Ordering::Relaxed);
     if kbps == 0 || bytes == 0 {
         return;
@@ -1854,7 +1854,7 @@ async fn apply_rate_limit(bytes: u64) {
 #[allow(dead_code)]
 const _REMOVED_POWERSHELL_TRANSFER: () = ();
 
-/// 流式上传本地文件到远程路径（SFTP 子系统，自动获取并复用会话）。
+/// 流式上传本地文件到远程路径（SFTP 子系统，自动创建独立传输会话避免与目录浏览冲突）。
 pub async fn sftp_upload_file_stream(
     server_id: &str,
     local_path: &str,
@@ -1865,252 +1865,33 @@ pub async fn sftp_upload_file_stream(
     resume_offset: Option<u64>,
     keep_tmp_on_failure: bool,
 ) -> Result<(), String> {
-    use russh_sftp::protocol::OpenFlags;
-    use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
-    use tokio::time::timeout;
-    use std::time::Duration;
-
-    // 安全检查：禁止上传到系统根路径（与 delete/rename/chmod 对齐）
-    if is_dangerous_root_path(remote_path) {
-        return Err(format!("Refused to upload to dangerous root path: {}", remote_path));
-    }
-
-    let metadata = tokio::fs::metadata(local_path)
-        .await
-        .map_err(|e| format!("Failed to read local file metadata: {}", e))?;
-    let total_size = metadata.len();
-
-    let mut local_file = tokio::fs::File::open(local_path)
-        .await
-        .map_err(|e| format!("Failed to open local file: {}", e))?;
-
     let conn = SshManager::global()
         .get_connection(server_id)
         .map_err(|e| e.to_string())?;
     let sftp = conn
-        .create_sftp_session()
+        .create_dedicated_sftp_session()
         .await
         .map_err(|e| format!("SFTP session failed: {}", e))?;
 
-    // Windows 路径兼容：SFTP 协议要求正斜杠路径分隔符
-    let sftp_tmp_path = tmp_remote_path.replace('\\', "/");
-    let sftp_remote_path = remote_path.replace('\\', "/");
-
-    // 续传模式：从 resume_offset 继续，本地文件 seek 跳过已传字节
-    // 全新模式：TRUNCATE 临时文件从头写
-
-    let open_flags = if let Some(offset) = resume_offset {
-        if offset >= total_size {
-            // 已传完，直接 rename（三步法避免数据丢失）
-            sftp_atomic_rename_overwrite(&sftp, &sftp_tmp_path, &sftp_remote_path).await?;
-            return Ok(());
-        }
-        local_file
-            .seek(std::io::SeekFrom::Start(offset))
-            .await
-            .map_err(|e| format!("Local file seek failed: {}", e))?;
-        // APPEND 模式：不 TRUNCATE，在文件末尾追加
-        OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::APPEND
-    } else {
-        // 全新传输：OpenFlags::TRUNCATE 会自动清空已存在的文件，无需额外调用 sftp.remove_file
-        OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE
-    };
-    let initial_transferred: u64 = resume_offset.unwrap_or(0);
-
-    let mut remote_file = timeout(
-        Duration::from_secs(30),
-        sftp.open_with_flags(&sftp_tmp_path, open_flags),
+    let res = sftp_upload_file_with_session(
+        &sftp,
+        local_path,
+        remote_path,
+        on_progress,
+        cancel,
+        tmp_remote_path,
+        resume_offset,
+        keep_tmp_on_failure,
     )
-    .await
-    .map_err(|_| "SFTP open timed out".to_string())?
-    .map_err(|e| format!("SFTP open failed: {}", e))?;
-
-    // TOCTOU 防护：续传模式下，打开 tmp 文件后再次校验大小是否等于 offset
-    // 避免 check 与 open 之间 tmp 文件被截断或扩展导致数据损坏
-    // metadata 失败时必须中止（不能静默跳过），防止 tmp 文件不完整但 APPEND 继续写入
-    if let Some(expected_offset) = resume_offset {
-        match sftp.metadata(&sftp_tmp_path).await {
-            Ok(meta) => {
-                let actual_size = meta.len();
-                if actual_size != expected_offset {
-                    return Err(format!(
-                        "Resume tmp file size mismatch (TOCTOU detected): expected {} bytes, actual {} bytes. Aborting to prevent data corruption.",
-                        expected_offset, actual_size
-                    ));
-                }
-            }
-            Err(e) => {
-                return Err(format!(
-                    "Cannot verify tmp file size (metadata failed): {}. Aborting resume to prevent data corruption.",
-                    e
-                ));
-            }
-        }
-    }
-
-    // 减小 chunk 到 32KB：Windows OpenSSH sftp-server.exe 对大 chunk write 可能返回 SSH_FX_FAILURE
-    const CHUNK_SIZE: usize = 32 * 1024;
-    let mut buf = vec![0u8; CHUNK_SIZE];
-    let mut transferred: u64 = initial_transferred;
-    let mut reporter = ProgressReporter::new(total_size, on_progress);
-    // 续传时立即报告初始进度，让前端显示已传字节数
-    if initial_transferred > 0 {
-        reporter.report(initial_transferred);
-    }
-
-    let write_result: Result<(), String> = async {
-        loop {
-            // cancel 检查：用 select! 监听取消信号，避免 read/write 期间无法立即取消（最坏 120s 延迟）
-            if let Some(flag) = cancel {
-                if flag.load(std::sync::atomic::Ordering::Relaxed) {
-                    return Err("Transfer canceled by user".to_string());
-                }
-            }
-            let n = tokio::select! {
-                biased;
-                _ = sleep_until_cancel(cancel) => {
-                    return Err("Transfer canceled by user".to_string());
-                }
-                read_result = timeout(Duration::from_secs(60), local_file.read(&mut buf)) => {
-                    read_result
-                        .map_err(|_| "Local file read timed out".to_string())?
-                        .map_err(|e| format!("Local file read failed: {}", e))?
-                }
-            };
-
-            if n == 0 {
-                break;
-            }
-
-            // write 重试：Windows Defender 实时扫描可能短暂锁定文件
-            // 对齐防损坏：write_all 由多个 SFTP WRITE 请求循环组成，中途失败时前几段
-            // 可能已在服务端落盘。重试前必须用 metadata 查询 tmp 真实大小，算出本
-            // chunk 已写入字节数，APPEND 重开后只补写剩余部分——直接重写整个 chunk
-            // 会产生 [前缀][部分写入][完整 chunk] 的重复段，静默损坏文件且前端报成功。
-            let mut write_ok = false;
-            let mut chunk_written: usize = 0; // 本 chunk 中已确认在服务端落盘的字节数
-            for attempt in 0..3u32 {
-                tokio::select! {
-                    biased;
-                    _ = sleep_until_cancel(cancel) => {
-                        return Err("Transfer canceled by user".to_string());
-                    }
-                    write_result = timeout(Duration::from_secs(60), remote_file.write_all(&buf[chunk_written..n])) => {
-                        match write_result {
-                            Ok(Ok(())) => { write_ok = true; break; }
-                            Ok(Err(e)) => {
-                                if attempt < 2 {
-                                    eprintln!("[SFTP] write attempt {} failed (will retry): {}", attempt, e);
-                                    tokio::time::sleep(Duration::from_millis(500)).await;
-                                    // 正常关闭失效句柄后再打开，避免旧 handle 在服务端残留。
-                                    let _ = remote_file.shutdown().await;
-                                    // 查询 tmp 真实大小以对齐重试偏移；metadata 失败则无法
-                                    // 确定已写入量，中止比盲目重写更安全
-                                    let actual_size = match timeout(Duration::from_secs(30), sftp.metadata(&sftp_tmp_path)).await {
-                                        Ok(Ok(meta)) => meta.len(),
-                                        Ok(Err(e2)) => {
-                                            return Err(format!("SFTP metadata failed after write error: {} (original: {})", e2, e));
-                                        }
-                                        Err(_) => {
-                                            return Err(format!("SFTP metadata timed out after write error: {}", e));
-                                        }
-                                    };
-                                    if actual_size < transferred {
-                                        return Err(format!(
-                                            "SFTP tmp file size went backwards during retry ({} < {}); aborting to prevent corruption",
-                                            actual_size, transferred
-                                        ));
-                                    }
-                                    let written = (actual_size - transferred) as usize;
-                                    if written >= n {
-                                        // 报错但本 chunk 实际已完整落盘：视为成功，避免重复写入
-                                        write_ok = true;
-                                        break;
-                                    }
-                                    chunk_written = written;
-                                    let reopen_result = timeout(
-                                        Duration::from_secs(30),
-                                        sftp.open_with_flags(&sftp_tmp_path, OpenFlags::WRITE | OpenFlags::APPEND),
-                                    ).await;
-                                    match reopen_result {
-                                        Ok(Ok(f)) => { remote_file = f; }
-                                        Ok(Err(e2)) => {
-                                            return Err(format!("SFTP reopen failed after write error: {} (original: {})", e2, e));
-                                        }
-                                        Err(_) => {
-                                            return Err(format!("SFTP reopen timed out after write error: {}", e));
-                                        }
-                                    }
-                                } else {
-                                    return Err(format!("SFTP write failed after 3 retries: {}", e));
-                                }
-                            }
-                            Err(_) => {
-                                return Err("SFTP write timed out".to_string());
-                            }
-                        }
-                    }
-                }
-            }
-            if !write_ok {
-                return Err("SFTP write failed: unknown error".to_string());
-            }
-
-            transferred += n as u64;
-            reporter.report(transferred);
-            apply_rate_limit(n as u64).await;
-        }
-
-        reporter.final_report(transferred);
-
-        // 收尾阶段同样响应取消：chunk 全部写入后、flush/rename 最终化之前若已
-        // 取消，则不执行最终化（避免 UI 显示「已取消」但目标文件实际已被完整覆盖）
-        if let Some(flag) = cancel {
-            if flag.load(std::sync::atomic::Ordering::Relaxed) {
-                return Err("Transfer canceled by user".to_string());
-            }
-        }
-
-        // 收尾阶段的 flush/sync 此前是裸 .await：网络恰在此时断开会让任务永久挂起
-        // （取消 flag 仅在 chunk 循环内检查，无法中断这些 await）。60s 超时与 chunk
-        // 超时对齐，超时即报错让前端记录转 failed，避免永久卡在 transferring。
-        match tokio::time::timeout(std::time::Duration::from_secs(60), remote_file.flush()).await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(format!("SFTP flush failed: {}", e)),
-            Err(_) => return Err("SFTP flush timeout (60s)".to_string()),
-        }
-        // sync_all 调用 fsync 扩展，部分 SFTP 服务器（嵌入式 sshd）不支持
-        // 失败/超时仅记录日志，不中断传输（数据已通过 flush 写入）
-        match tokio::time::timeout(std::time::Duration::from_secs(60), remote_file.sync_all()).await {
-            Ok(Ok(_)) => {}
-            Ok(Err(e)) => eprintln!("[SFTP] sync_all warning (data already flushed): {}", e),
-            Err(_) => eprintln!("[SFTP] sync_all timeout (60s, data already flushed)"),
-        }
-        Ok(())
-    }
     .await;
 
-    if write_result.is_err() {
-        // keep_tmp_on_failure=true 时保留临时文件供断点续传；否则清理
-        if !keep_tmp_on_failure {
-            let _ = sftp.remove_file(&sftp_tmp_path).await;
-        }
-        if let Err(ref e) = write_result {
-            SshManager::handle_connection_loss(server_id, &conn, e).await;
-        }
-        return write_result;
+    if let Err(ref e) = res {
+        SshManager::handle_connection_loss(server_id, &conn, e).await;
     }
-
-    // 原子 rename 覆盖目标（三步法：备份 → rename → 删除备份，避免数据丢失）
-    sftp_atomic_rename_overwrite(&sftp, &sftp_tmp_path, &sftp_remote_path).await?;
-
-    Ok(())
+    res
 }
 
-/// 流式下载远程文件到本地路径（SFTP 子系统）。
-///
-/// 原子写入策略：先下载到临时文件 `<local_path>.sw-dl-tmp-<uuid>`，
-/// 完成后 rename 覆盖目标。避免下载中途失败导致原本地文件被 File::create 截断（数据丢失）。
+/// 流式下载远程文件到本地路径（SFTP 子系统，自动创建独立传输会话避免与目录浏览冲突）。
 pub async fn sftp_download_file_stream(
     server_id: &str,
     remote_path: &str,
@@ -2121,240 +1902,30 @@ pub async fn sftp_download_file_stream(
     resume_offset: Option<u64>,
     keep_tmp_on_failure: bool,
 ) -> Result<(), String> {
-    use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
-    use tokio::time::timeout;
-    use std::time::Duration;
-
-    // 确保目标目录存在（rename 需要同文件系统，临时文件必须与目标在同一目录）
-    if let Some(parent) = std::path::Path::new(local_path).parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
-    }
-
-    // 提前创建空的本地临时文件（全新传输模式），实现秒级生成临时文件
-    if resume_offset.is_none() {
-        if let Err(e) = tokio::fs::File::create(tmp_local_path).await {
-            return Err(format!("Failed to create local temp file immediately: {}", e));
-        }
-    }
-
     let conn = SshManager::global()
         .get_connection(server_id)
         .map_err(|e| e.to_string())?;
     let sftp = conn
-        .create_sftp_session()
+        .create_dedicated_sftp_session()
         .await
         .map_err(|e| format!("SFTP session failed: {}", e))?;
 
-    // Windows 路径兼容：SFTP 协议要求正斜杠路径分隔符
-    let sftp_remote_path = remote_path.replace('\\', "/");
-
-    let total_size = match sftp.metadata(&sftp_remote_path).await {
-        Ok(meta) => meta.size.unwrap_or(0),
-        Err(_) => 0,
-    };
-
-    let mut remote_file = timeout(Duration::from_secs(30), sftp.open(&sftp_remote_path))
-        .await
-        .map_err(|_| "SFTP open timed out".to_string())?
-        .map_err(|e| format!("SFTP open failed: {}", e))?;
-
-    // 续传模式：从 resume_offset 继续，远程文件 seek 跳过已传字节，本地临时文件 APPEND 追加
-    // 全新模式：本地临时文件 TRUNCATE 从头写
-
-    let mut local_file = if let Some(offset) = resume_offset {
-        if offset >= total_size && total_size > 0 {
-            if offset > total_size {
-                // 远程源文件在暂停期间变小：超长 tmp 直接 rename 会产出带陈旧尾部的
-                // 损坏文件（旧内容尾部 + 报成功），必须中止
-                return Err(format!(
-                    "Remote source file shrank since the transfer was paused ({} -> {} bytes). \
-                     Please start a fresh transfer.",
-                    offset, total_size
-                ));
-            }
-            // 已传完（offset == total_size），直接 rename
-            tokio::fs::rename(tmp_local_path, local_path)
-                .await
-                .map_err(|e| format!("Local rename failed: {}", e))?;
-            return Ok(());
-        }
-        remote_file
-            .seek(std::io::SeekFrom::Start(offset))
-            .await
-            .map_err(|e| format!("SFTP seek failed: {}", e))?;
-        // APPEND 模式打开本地临时文件（不 TRUNCATE）
-        let f = tokio::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(tmp_local_path)
-            .await
-            .map_err(|e| format!("Failed to open local temp file for append: {}", e))?;
-        // TOCTOU 防护：打开后再校验文件大小是否等于 offset
-        // metadata 失败时必须中止（不能静默跳过），防止 tmp 文件不完整但 APPEND 继续写入
-        match f.metadata().await {
-            Ok(meta) => {
-                let actual_size = meta.len();
-                if actual_size != offset {
-                    return Err(format!(
-                        "Resume tmp file size mismatch (TOCTOU detected): expected {} bytes, actual {} bytes. Aborting to prevent data corruption.",
-                        offset, actual_size
-                    ));
-                }
-            }
-            Err(e) => {
-                return Err(format!(
-                    "Cannot verify local tmp file size (metadata failed): {}. Aborting resume to prevent data corruption.",
-                    e
-                ));
-            }
-        }
-
-        // 内容采样校验：大小一致不足以证明 tmp 与远程源文件对应——远程源文件在暂停
-        // 期间被同尺寸修改仍会滑过所有大小检查，续传会产出「前半旧内容 + 后半新内容」
-        // 的静默损坏文件。读取远程源与本地 tmp 在 offset 前最后 4KB 的内容比对，
-        // 不匹配则中止续传（用户可重新发起全新传输）。
-        const TAIL_SAMPLE_MAX: usize = 4096;
-        let sample_len = (offset as usize).min(TAIL_SAMPLE_MAX);
-        if sample_len > 0 {
-            let sample_start = offset - sample_len as u64;
-            // 远程源文件尾部采样（remote_file 当前位于 offset，采样后需 seek 回）
-            let mut src_tail = vec![0u8; sample_len];
-            remote_file
-                .seek(std::io::SeekFrom::Start(sample_start))
-                .await
-                .map_err(|e| format!("SFTP seek failed for tail sample: {}", e))?;
-            timeout(Duration::from_secs(30), remote_file.read_exact(&mut src_tail))
-                .await
-                .map_err(|_| "SFTP read timed out (tail sample)".to_string())?
-                .map_err(|e| format!("SFTP read failed for tail sample: {}", e))?;
-            remote_file
-                .seek(std::io::SeekFrom::Start(offset))
-                .await
-                .map_err(|e| format!("SFTP seek failed after tail sample: {}", e))?;
-            // 本地 tmp 尾部采样：独立只读句柄（f 是 APPEND 写句柄，避免混用读写位置）
-            let mut tmp_read = tokio::fs::File::open(tmp_local_path)
-                .await
-                .map_err(|e| format!("Failed to open local tmp for tail sample: {}", e))?;
-            tmp_read
-                .seek(std::io::SeekFrom::Start(sample_start))
-                .await
-                .map_err(|e| format!("Local tmp seek failed for tail sample: {}", e))?;
-            let mut tmp_tail = vec![0u8; sample_len];
-            tmp_read
-                .read_exact(&mut tmp_tail)
-                .await
-                .map_err(|e| format!("Local tmp read failed for tail sample: {}", e))?;
-            if src_tail != tmp_tail {
-                return Err(format!(
-                    "Resume verification failed: local tmp file content does not match the remote source at offset {} \
-                     (remote file may have changed since the transfer was paused). \
-                     Please start a fresh transfer.",
-                    offset
-                ));
-            }
-        }
-        f
-    } else {
-        // 全新传输：TRUNCATE 创建
-        tokio::fs::File::create(tmp_local_path)
-            .await
-            .map_err(|e| format!("Failed to create local temp file: {}", e))?
-    };
-    let initial_transferred: u64 = resume_offset.unwrap_or(0);
-
-    const CHUNK_SIZE: usize = 256 * 1024;
-    let mut buf = vec![0u8; CHUNK_SIZE];
-    let mut transferred: u64 = initial_transferred;
-    let mut reporter = ProgressReporter::new(total_size, on_progress);
-    if initial_transferred > 0 {
-        reporter.report(initial_transferred);
-    }
-
-    let write_result: Result<(), String> = async {
-        loop {
-            if let Some(flag) = cancel {
-                if flag.load(std::sync::atomic::Ordering::Relaxed) {
-                    return Err("Transfer canceled by user".to_string());
-                }
-            }
-            let n = tokio::select! {
-                biased;
-                _ = sleep_until_cancel(cancel) => {
-                    return Err("Transfer canceled by user".to_string());
-                }
-                read_result = timeout(Duration::from_secs(60), remote_file.read(&mut buf)) => {
-                    read_result
-                        .map_err(|_| "SFTP read timed out".to_string())?
-                        .map_err(|e| format!("SFTP read failed: {}", e))?
-                }
-            };
-
-            if n == 0 {
-                break;
-            }
-
-            tokio::select! {
-                biased;
-                _ = sleep_until_cancel(cancel) => {
-                    return Err("Transfer canceled by user".to_string());
-                }
-                write_result = timeout(Duration::from_secs(60), local_file.write_all(&buf[..n])) => {
-                    write_result
-                        .map_err(|_| "Local file write timed out".to_string())?
-                        .map_err(|e| format!("Local file write failed: {}", e))?;
-                }
-            }
-
-            transferred += n as u64;
-            reporter.report(transferred);
-            apply_rate_limit(n as u64).await;
-        }
-
-        reporter.final_report(transferred);
-
-        // 收尾阶段同样响应取消：chunk 全部读取后、flush/rename 最终化之前若已
-        // 取消，则不执行最终化（避免 UI 显示「已取消」但目标文件实际已被完整覆盖）
-        if let Some(flag) = cancel {
-            if flag.load(std::sync::atomic::Ordering::Relaxed) {
-                return Err("Transfer canceled by user".to_string());
-            }
-        }
-
-        match tokio::time::timeout(std::time::Duration::from_secs(60), local_file.flush()).await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(format!("Local file flush failed: {}", e)),
-            Err(_) => return Err("Local file flush timeout (60s)".to_string()),
-        }
-        match tokio::time::timeout(std::time::Duration::from_secs(60), local_file.sync_all()).await {
-            Ok(Ok(_)) => {}
-            Ok(Err(e)) => return Err(format!("Local file sync failed: {}", e)),
-            Err(_) => return Err("Local file sync timeout (60s)".to_string()),
-        }
-        Ok(())
-    }
+    let res = sftp_download_file_with_session(
+        &sftp,
+        remote_path,
+        local_path,
+        on_progress,
+        cancel,
+        tmp_local_path,
+        resume_offset,
+        keep_tmp_on_failure,
+    )
     .await;
 
-    if write_result.is_err() {
-        // keep_tmp_on_failure=true 时保留临时文件供断点续传；否则清理
-        if !keep_tmp_on_failure {
-            let _ = tokio::fs::remove_file(tmp_local_path).await;
-        }
-        if let Err(ref e) = write_result {
-            SshManager::handle_connection_loss(server_id, &conn, e).await;
-        }
-        return write_result;
+    if let Err(ref e) = res {
+        SshManager::handle_connection_loss(server_id, &conn, e).await;
     }
-
-    // 原子 rename 覆盖目标（tokio::fs::rename 在同文件系统下是原子操作，覆盖目标）
-    if let Err(e) = tokio::fs::rename(tmp_local_path, local_path).await {
-        let _ = tokio::fs::remove_file(tmp_local_path).await;
-        return Err(format!(
-            "Local rename failed (download completed but atomic move failed): {}",
-            e
-        ));
-    }
-
-    Ok(())
+    res
 }
 
 /// 流式上传本地文件到远程路径（使用已有的 SFTP 会话）。
@@ -2612,6 +2183,7 @@ pub async fn sftp_upload_file_with_session(
             transferred += n as u64;
             reporter.report(transferred);
             apply_rate_limit(n as u64).await;
+            tokio::task::yield_now().await;
         }
 
         reporter.final_report(transferred);
@@ -2704,21 +2276,108 @@ pub async fn sftp_download_file_with_session(
 
     let mut local_file = if let Some(offset) = resume_offset {
         if offset >= total_size && total_size > 0 {
-            tokio::fs::rename(tmp_local_path, local_path)
-                .await
-                .map_err(|e| format!("Local rename failed: {}", e))?;
+            if offset > total_size {
+                // 远程源文件在暂停期间变小：超长 tmp 直接 rename 会产出带陈旧尾部的
+                // 损坏文件（旧内容尾部 + 报成功），必须中止
+                return Err(format!(
+                    "Remote source file shrank since the transfer was paused ({} -> {} bytes). \
+                     Please start a fresh transfer.",
+                    offset, total_size
+                ));
+            }
+            // 已传完（offset == total_size），直接 rename（带重试缓解 Windows 杀软短暂锁文件）
+            let mut rename_ok = false;
+            let mut last_rename_err = String::new();
+            for attempt in 0..3 {
+                match tokio::fs::rename(tmp_local_path, local_path).await {
+                    Ok(_) => {
+                        rename_ok = true;
+                        break;
+                    }
+                    Err(e) => {
+                        last_rename_err = e.to_string();
+                        if attempt < 2 {
+                            tokio::time::sleep(Duration::from_millis(150)).await;
+                        }
+                    }
+                }
+            }
+            if !rename_ok {
+                return Err(format!("Local rename failed: {}", last_rename_err));
+            }
             return Ok(());
         }
         remote_file
             .seek(std::io::SeekFrom::Start(offset))
             .await
             .map_err(|e| format!("SFTP seek failed: {}", e))?;
-        tokio::fs::OpenOptions::new()
+        let f = tokio::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(tmp_local_path)
             .await
-            .map_err(|e| format!("Failed to open local temp file for append: {}", e))?
+            .map_err(|e| format!("Failed to open local temp file for append: {}", e))?;
+
+        // TOCTOU 防护：打开后再校验文件大小是否等于 offset
+        match f.metadata().await {
+            Ok(meta) => {
+                let actual_size = meta.len();
+                if actual_size != offset {
+                    return Err(format!(
+                        "Resume tmp file size mismatch (TOCTOU detected): expected {} bytes, actual {} bytes. Aborting to prevent data corruption.",
+                        offset, actual_size
+                    ));
+                }
+            }
+            Err(e) => {
+                return Err(format!(
+                    "Cannot verify local tmp file size (metadata failed): {}. Aborting resume to prevent data corruption.",
+                    e
+                ));
+            }
+        }
+
+        // 内容采样校验：读取远程源与本地 tmp 在 offset 前最后 4KB 的内容比对，防静默篡改
+        const TAIL_SAMPLE_MAX: usize = 4096;
+        let sample_len = (offset as usize).min(TAIL_SAMPLE_MAX);
+        if sample_len > 0 {
+            let sample_start = offset - sample_len as u64;
+            let mut src_tail = vec![0u8; sample_len];
+            remote_file
+                .seek(std::io::SeekFrom::Start(sample_start))
+                .await
+                .map_err(|e| format!("SFTP seek failed for tail sample: {}", e))?;
+            timeout(Duration::from_secs(30), remote_file.read_exact(&mut src_tail))
+                .await
+                .map_err(|_| "SFTP read timed out (tail sample)".to_string())?
+                .map_err(|e| format!("SFTP read failed for tail sample: {}", e))?;
+            remote_file
+                .seek(std::io::SeekFrom::Start(offset))
+                .await
+                .map_err(|e| format!("SFTP seek failed after tail sample: {}", e))?;
+
+            let mut tmp_read = tokio::fs::File::open(tmp_local_path)
+                .await
+                .map_err(|e| format!("Failed to open local tmp for tail sample: {}", e))?;
+            tmp_read
+                .seek(std::io::SeekFrom::Start(sample_start))
+                .await
+                .map_err(|e| format!("Local tmp seek failed for tail sample: {}", e))?;
+            let mut tmp_tail = vec![0u8; sample_len];
+            tmp_read
+                .read_exact(&mut tmp_tail)
+                .await
+                .map_err(|e| format!("Local tmp read failed for tail sample: {}", e))?;
+            if src_tail != tmp_tail {
+                return Err(format!(
+                    "Resume verification failed: local tmp file content does not match the remote source at offset {} \
+                     (remote file may have changed since the transfer was paused). \
+                     Please start a fresh transfer.",
+                    offset
+                ));
+            }
+        }
+        f
     } else {
         tokio::fs::File::create(tmp_local_path)
             .await
@@ -2769,6 +2428,7 @@ pub async fn sftp_download_file_with_session(
             transferred += n as u64;
             reporter.report(transferred);
             apply_rate_limit(n as u64).await;
+            tokio::task::yield_now().await;
         }
 
         reporter.final_report(transferred);
@@ -2809,11 +2469,28 @@ pub async fn sftp_download_file_with_session(
         Err(_) => return Err("SFTP close timeout (60s)".to_string()),
     }
 
-    if let Err(e) = tokio::fs::rename(tmp_local_path, local_path).await {
+    // 原子 rename 覆盖目标（带 3 次重试缓解 Windows Defender / Search Indexer 短暂锁文件）
+    let mut rename_ok = false;
+    let mut last_rename_err = String::new();
+    for attempt in 0..3 {
+        match tokio::fs::rename(tmp_local_path, local_path).await {
+            Ok(_) => {
+                rename_ok = true;
+                break;
+            }
+            Err(e) => {
+                last_rename_err = e.to_string();
+                if attempt < 2 {
+                    tokio::time::sleep(Duration::from_millis(150)).await;
+                }
+            }
+        }
+    }
+    if !rename_ok {
         let _ = tokio::fs::remove_file(tmp_local_path).await;
         return Err(format!(
             "Local rename failed (download completed but atomic move failed): {}",
-            e
+            last_rename_err
         ));
     }
 

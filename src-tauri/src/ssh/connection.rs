@@ -450,6 +450,11 @@ pub async fn connect_via_chained_jump(
         keepalive_max: 4,
         window_size: 4 * 1024 * 1024,
         maximum_packet_size: 65535,
+        limits: russh::Limits {
+            rekey_write_limit: usize::MAX,
+            rekey_read_limit: usize::MAX,
+            rekey_time_limit: Duration::from_secs(86400 * 365),
+        },
         ..Default::default()
     });
 
@@ -815,12 +820,22 @@ impl SshTransport {
         let deadline = std::time::Instant::now() + Duration::from_secs(connection_timeout as u64);
 
         // SSH config
+        // 关键防护：russh 默认 limits.rekey_write_limit 为 1<<30（1GB），
+        // 当单次或持续传输达到 1023.8MB (1GB) 时，russh 会主动发起 SSH 密钥重协商（Rekey）。
+        // 由于 russh 0.45 存在 issue #761 漏洞（在数据流传输中插入 Rekey 包会导致协议时序错乱），
+        // 从而引发 `transport closed` 致命异常打断长连接。
+        // 此处将客户端主动 Rekey 阈值设为最大值，由远端服务端自行按需协商，避免客户端主动 Rekey 踩坑。
         let config = russh::client::Config {
             inactivity_timeout: None,
             keepalive_interval: Some(Duration::from_secs(15)),
             keepalive_max: 4,
             window_size: 4 * 1024 * 1024,
             maximum_packet_size: 65535,
+            limits: russh::Limits {
+                rekey_write_limit: usize::MAX,
+                rekey_read_limit: usize::MAX,
+                rekey_time_limit: Duration::from_secs(86400 * 365),
+            },
             ..Default::default()
         };
 
