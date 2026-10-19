@@ -5,31 +5,31 @@
   "platforms": {
     "linux-x86_64": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTWo3SmRaaTIzQm4rN2pudGp2cDNBYW1xYkZrdXNYVWdYOVZyREJ4MXB4Tll2OUt5djI1Y3pNamxXZUZTYS9JR2RHSHhyWjFIczljek9oUmw3dlhiZk4rcHVVL1NkY3dNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMzc4NDMxCWZpbGU6UXNoZWxsXzEuMC4xM19hbWQ2NC5BcHBJbWFnZQp3cTl1aHNLUjdEWXFVSmltdWJqajdBeDZUUzhKOVBZYmFzWlFzRmhDWlQrdzlQYWh4WkhWTHBqeFg5OEdjTGJPVEhRb2I0M0JzZjJyUkYxcUVJTjBBQT09Cg==",
-      "url": "https://gh-proxy.com/https://github.com/Tomshushu/Qshell/releases/download/v1.0.13/Qshell_1.0.13_amd64.AppImage"
+      "url": "https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.13/Qshell_1.0.13_amd64.AppImage"
     },
     "linux-x86_64-appimage": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTWo3SmRaaTIzQm4rN2pudGp2cDNBYW1xYkZrdXNYVWdYOVZyREJ4MXB4Tll2OUt5djI1Y3pNamxXZUZTYS9JR2RHSHhyWjFIczljek9oUmw3dlhiZk4rcHVVL1NkY3dNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMzc4NDMxCWZpbGU6UXNoZWxsXzEuMC4xM19hbWQ2NC5BcHBJbWFnZQp3cTl1aHNLUjdEWXFVSmltdWJqajdBeDZUUzhKOVBZYmFzWlFzRmhDWlQrdzlQYWh4WkhWTHBqeFg5OEdjTGJPVEhRb2I0M0JzZjJyUkYxcUVJTjBBQT09Cg==",
-      "url": "https://gh-proxy.com/https://github.com/Tomshushu/Qshell/releases/download/v1.0.13/Qshell_1.0.13_amd64.AppImage"
+      "url": "https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.13/Qshell_1.0.13_amd64.AppImage"
     },
     "linux-x86_64-deb": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTWo3SmRaaTIzQnVDWW5DWmxNcDBmd2dhcm1BeUtnYkVpR3NBQ2wyWkg1RXphRE1DSkZDTWJUbkV1bDB5OHVNRFFVQUFrSEY4eXU4R1BRdXU3TlhNY0NUS21wQUVPd0EwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMzc4NDMxCWZpbGU6UXNoZWxsXzEuMC4xM19hbWQ2NC5kZWIKcTUrMGoxU1IyejhDSnlWaUpITUg5K1VXTmpmdHZnamw5Q3hWVHd0eE9IeTJvT2dJdWZjc2FZZ3lFZUxzTDBDNFE4cUdwN1ViSjBDMUY2TTdkRGU0QXc9PQo=",
-      "url": "https://gh-proxy.com/https://github.com/Tomshushu/Qshell/releases/download/v1.0.13/Qshell_1.0.13_amd64.deb"
+      "url": "https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.13/Qshell_1.0.13_amd64.deb"
     },
     "darwin-aarch64": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTWo3SmRaaTIzQnFJeDQ5YnRZTjBjaTNFUVR0UkhmTExqSGU5SEVGbnBZSDRLdGhiYm8yRnZvdkhoNzdvZmMwckNaYWY0RUd2TzFBbFIwWTh6QzAxcTJBMFBrT2h6YWc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMzc4NjE3CWZpbGU6UXNoZWxsLmFwcC50YXIuZ3oKNW5KTVRWTFFrOU80T2J3QSszSStMOVJsVFg3cTZFeisxMWFKK2FNdWNQbG1WQUIyc3A3QkRKd2NZaFZnUVhzanY3encySkc4aVRXaUlVc3pxRk5CQXc9PQo=",
-      "url": "https://gh-proxy.com/https://github.com/Tomshushu/Qshell/releases/download/v1.0.13/Qshell_1.0.13_aarch64.app.tar.gz"
+      "url": "https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.13/Qshell_1.0.13_aarch64.app.tar.gz"
     },
     "darwin-aarch64-app": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTWo3SmRaaTIzQnFJeDQ5YnRZTjBjaTNFUVR0UkhmTExqSGU5SEVGbnBZSDRLdGhiYm8yRnZvdkhoNzdvZmMwckNaYWY0RUd2TzFBbFIwWTh6QzAxcTJBMFBrT2h6YWc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMzc4NjE3CWZpbGU6UXNoZWxsLmFwcC50YXIuZ3oKNW5KTVRWTFFrOU80T2J3QSszSStMOVJsVFg3cTZFeisxMWFKK2FNdWNQbG1WQUIyc3A3QkRKd2NZaFZnUVhzanY3encySkc4aVRXaUlVc3pxRk5CQXc9PQo=",
-      "url": "https://gh-proxy.com/https://github.com/Tomshushu/Qshell/releases/download/v1.0.13/Qshell_1.0.13_aarch64.app.tar.gz"
+      "url": "https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.13/Qshell_1.0.13_aarch64.app.tar.gz"
     },
     "windows-x86_64": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTWo3SmRaaTIzQnExSXpSNXJ0S1dOTlhXUGgyZU1SVEIwZ1dOdHo4Tk9tMG9iaEYzTXVUMVVVbStGQzUyajZyekxSV3RVZndKdG9pVmFWQnRaZVJydFNnWjBuM0ZpdHdjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMzc4ODUwCWZpbGU6UXNoZWxsXzEuMC4xM194NjQtc2V0dXAuZXhlClErV2tHb3NCZi9Wb0tadFQ3VUVqVjFaSllaMm0rSkNyMVk1MURyYm1MaEd3YzdFbGY1ekxndENra3dZeVBnMUpIeTJRTGtFVnRicWtBdXMwMUlueERBPT0K",
-      "url": "https://gh-proxy.com/https://github.com/Tomshushu/Qshell/releases/download/v1.0.13/Qshell_1.0.13_x64-setup.exe"
+      "url": "https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.13/Qshell_1.0.13_x64-setup.exe"
     },
     "windows-x86_64-nsis": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTWo3SmRaaTIzQnExSXpSNXJ0S1dOTlhXUGgyZU1SVEIwZ1dOdHo4Tk9tMG9iaEYzTXVUMVVVbStGQzUyajZyekxSV3RVZndKdG9pVmFWQnRaZVJydFNnWjBuM0ZpdHdjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyMzc4ODUwCWZpbGU6UXNoZWxsXzEuMC4xM194NjQtc2V0dXAuZXhlClErV2tHb3NCZi9Wb0tadFQ3VUVqVjFaSllaMm0rSkNyMVk1MURyYm1MaEd3YzdFbGY1ekxndENra3dZeVBnMUpIeTJRTGtFVnRicWtBdXMwMUlueERBPT0K",
-      "url": "https://gh-proxy.com/https://github.com/Tomshushu/Qshell/releases/download/v1.0.13/Qshell_1.0.13_x64-setup.exe"
+      "url": "https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.13/Qshell_1.0.13_x64-setup.exe"
     }
   }
 }
