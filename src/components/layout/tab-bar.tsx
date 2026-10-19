@@ -80,8 +80,20 @@ export function TabBar() {
 
   const [showSettings, setShowSettings] = useState(false)
   const [settingsTab, setSettingsTab] = useState<
-    "general" | "security" | "account" | "terminal" | "sftp" | "logs" | "shortcuts" | "known_hosts"
+    "general" | "security" | "account" | "ai" | "terminal" | "sftp" | "logs" | "shortcuts" | "known_hosts"
   >("general")
+
+  useEffect(() => {
+    const handleOpenSettings = (e: CustomEvent<string | { tab?: string }>) => {
+      const tab = typeof e.detail === 'string' ? e.detail : e.detail?.tab
+      if (tab) {
+        setSettingsTab(tab as any)
+      }
+      setShowSettings(true)
+    }
+    window.addEventListener('open-settings' as any, handleOpenSettings)
+    return () => window.removeEventListener('open-settings' as any, handleOpenSettings)
+  }, [])
 
   const handleQuickBackup = async () => {
     if (!masterPassword) {

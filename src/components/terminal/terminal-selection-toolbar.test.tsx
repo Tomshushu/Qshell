@@ -2,6 +2,7 @@ import { describe, expect, it, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import React from "react";
 import { TerminalSelectionToolbar } from "./terminal-selection-toolbar";
+import { useAIStore } from "@/store/ai-store";
 
 vi.mock("@/lib/sound", () => ({
   playSound: vi.fn(),
@@ -150,6 +151,31 @@ describe("TerminalSelectionToolbar", () => {
     fireEvent.click(searchBtn);
 
     expect(onSearch).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("handles explain shell action and opens assistant", () => {
+    const onClose = vi.fn();
+    const openExplainShellSpy = vi.fn();
+    useAIStore.setState({ openExplainShell: openExplainShellSpy, enableAiGlobal: true });
+
+    render(
+      <TerminalSelectionToolbar
+        visible={true}
+        x={150}
+        y={200}
+        selectedText="cat access.log | awk '{print $1}' | sort | uniq -c"
+        onClose={onClose}
+        onCopy={vi.fn()}
+        onPasteSelection={vi.fn()}
+        onSearch={vi.fn()}
+      />
+    );
+
+    const explainBtn = screen.getByTestId("selection-toolbar-explain-shell");
+    fireEvent.click(explainBtn);
+
+    expect(openExplainShellSpy).toHaveBeenCalledWith("cat access.log | awk '{print $1}' | sort | uniq -c");
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

@@ -8,6 +8,8 @@ import {
   ChevronRight,
   FileText,
   Lock,
+  Sparkles,
+  Layers,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { clampMenuToViewport } from "@/lib/menu-position";
@@ -33,6 +35,9 @@ export interface TerminalContextMenuProps {
   onOpenLogFile: () => void;
   onOpenLogFolder: () => void;
   onChooseLogDirectory: () => void;
+  onAIDiagnosis?: () => void;
+  onAIDiagnoseRecent?: () => void;
+  onAIExplainShell?: () => void;
   activeTermId: string | null;
   recordingTermIds: Set<string>;
   recordingPausedIds: Set<string>;
@@ -58,6 +63,9 @@ export function TerminalContextMenu({
   onOpenLogFile,
   onOpenLogFolder,
   onChooseLogDirectory,
+  onAIDiagnosis,
+  onAIDiagnoseRecent,
+  onAIExplainShell,
   activeTermId,
   recordingTermIds,
   recordingPausedIds,
@@ -67,8 +75,8 @@ export function TerminalContextMenu({
 
   if (!ctxMenu) return null;
 
-  // 边界检测：预估宽度 220（含右侧快捷键提示），高度 260（含清屏与录制子项）
-  const pos = clampMenuToViewport(ctxMenu.x, ctxMenu.y, 220, 260);
+  // 边界检测：预估宽度 220（含右侧快捷键提示），高度 320（含 AI 项、清屏与录制子项）
+  const pos = clampMenuToViewport(ctxMenu.x, ctxMenu.y, 220, 320);
   const isSubmenuLeft =
     typeof window !== "undefined" && pos.left + 220 + 210 > window.innerWidth;
 
@@ -152,6 +160,71 @@ export function TerminalContextMenu({
         <Clipboard className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
         <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_paste_selected")}</span>
       </button>
+
+      {/* AI 诊断选中文本 */}
+      {onAIDiagnosis && ctxMenu.hasSelection && (
+        <>
+          <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
+          <button
+            type="button"
+            className={cn(
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+              isLightTerminal
+                ? "text-purple-700 hover:bg-purple-50 hover:text-purple-900"
+                : "text-purple-300 hover:bg-purple-500/15 hover:text-purple-200",
+            )}
+            onClick={onAIDiagnosis}
+          >
+            <Sparkles className="h-3.5 w-3.5 text-purple-400 shrink-0" />
+            <span className="truncate tracking-tight font-sans text-[11.5px] font-medium">
+              {t("tm_ai_diagnosis_menu") || "AI 诊断选中文本"}
+            </span>
+          </button>
+        </>
+      )}
+
+      {/* AI 拆解选中文本指令 (Explain Shell) */}
+      {onAIExplainShell && ctxMenu.hasSelection && (
+        <button
+          type="button"
+          data-testid="terminal-menu-ai-explain-shell"
+          className={cn(
+            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+            isLightTerminal
+              ? "text-sky-700 hover:bg-sky-50 hover:text-sky-900"
+              : "text-sky-300 hover:bg-sky-500/15 hover:text-sky-200",
+          )}
+          onClick={onAIExplainShell}
+        >
+          <Layers className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+          <span className="truncate tracking-tight font-sans text-[11.5px] font-medium">
+            {t("tm_ai_explain_shell") || "拆解并解释指令 (Explain)"}
+          </span>
+        </button>
+      )}
+
+      {/* AI 诊断终端最新报错/输出 */}
+      {onAIDiagnoseRecent && !ctxMenu.hasSelection && (
+        <>
+          <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
+          <button
+            type="button"
+            data-testid="terminal-menu-ai-diagnose-recent"
+            className={cn(
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+              isLightTerminal
+                ? "text-purple-700 hover:bg-purple-50 hover:text-purple-900"
+                : "text-purple-300 hover:bg-purple-500/15 hover:text-purple-200",
+            )}
+            onClick={onAIDiagnoseRecent}
+          >
+            <Sparkles className="h-3.5 w-3.5 text-purple-400 shrink-0" />
+            <span className="truncate tracking-tight font-sans text-[11.5px] font-medium">
+              {t("tm_ai_diagnosis_recent") || "AI 诊断终端报错/输出"}
+            </span>
+          </button>
+        </>
+      )}
 
       <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
 

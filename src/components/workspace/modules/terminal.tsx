@@ -80,6 +80,10 @@ import {
   suggestHistory,
 } from "@/lib/command-intelligence/command-history";
 import { detectPlatform } from "@/lib/command-intelligence/platform-detector";
+import {
+  recordMarkovTransition,
+  getMarkovHintItems,
+} from "@/lib/command-intelligence/markov-chain";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -181,6 +185,7 @@ import {
   TerminalHintPanel,
   SerialQuickSendEditor,
 } from "@/components/terminal";
+import { useAIStore } from "@/store/ai-store";
 import {
   extractPathFromShellTitle,
   resolveRelativePath,
@@ -475,6 +480,8 @@ export function TerminalModule({
   const [pendingOutputCounts, setPendingOutputCounts] = useState<
     Map<string, number>
   >(new Map());
+  // 全局 AI 总开关
+  const enableAiGlobal = useAIStore((s) => s.enableAiGlobal);
   // E7：搜索正则模式开关
   const [searchRegex, setSearchRegex] = useState(false);
   const [searchCaseSensitive, setSearchCaseSensitive] = useState(false);
@@ -591,6 +598,8 @@ export function TerminalModule({
     >
   >(new Map());
   const pendingCommandRef = useRef<Map<string, string>>(new Map());
+  // 记录每个终端上一次成功提交执行的指令，用于马尔可夫转移连招预测
+  const lastSubmittedCommandPerTermRef = useRef<Map<string, string>>(new Map());
   type CommandMarkerEntry = {
     marker: { line: number; isDisposed: boolean; dispose: () => void };
     command: string;
@@ -1052,6 +1061,22 @@ export function TerminalModule({
             return true;
           });
           if (dedupHist.length > 0) items = [...dedupHist, ...items];
+        }
+      }
+
+      // 马尔可夫转移连招预测：结合上一条提交指令与 OSC-7 提取的工作目录推测下一步高概率动作
+      if (input.trim()) {
+        const curTermId = activeTermIdRef.current;
+        const prevCmd = curTermId
+          ? lastSubmittedCommandPerTermRef.current.get(curTermId)
+          : undefined;
+        const curCwd = curTermId
+          ? terminalCwdRef.current.get(curTermId)
+          : undefined;
+        const markovHints = getMarkovHintItems(prevCmd, input.trim(), curCwd, 2);
+        if (markovHints.length > 0) {
+          const markovLabels = new Set(markovHints.map((m) => m.label));
+          items = [...markovHints, ...items.filter((item) => !markovLabels.has(item.label))];
         }
       }
 
@@ -1752,6 +1777,27 @@ export function TerminalModule({
     setCtxMenu(null);
     term.focus();
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [getActiveTerm]);
+
+  // AI 选中文本诊断触发
+
+  const handleAIDiagnosisFromContext = useCallback(() => {
+    const term = getActiveTerm();
+    const selection = term?.getSelection();
+    setCtxMenu(null);
+    if (selection) {
+      useAIStore.getState().openDiagnosis(selection);
+    }
+  }, [getActiveTerm]);
+
+  // AI 拆解选中文本指令触发 (Explain Shell)
+  const handleAIExplainShellFromContext = useCallback(() => {
+    const term = getActiveTerm();
+    const selection = term?.getSelection();
+    setCtxMenu(null);
+    if (selection) {
+      useAIStore.getState().openExplainShell(selection);
+    }
   }, [getActiveTerm]);
 
   // 粘贴安全确认阈值（字符数）。超过此值或包含换行时先确认。
@@ -2537,6 +2583,14 @@ export function TerminalModule({
       if (!clean) return;
       pendingCommandRef.current.set(termId, clean);
 
+      // 本地马尔可夫模型自适应强化学习：记录相邻执行命令转移对
+      const prevCmd = lastSubmittedCommandPerTermRef.current.get(termId);
+      const currentCwd = terminalCwdRef.current.get(termId);
+      if (prevCmd && prevCmd !== clean) {
+        recordMarkovTransition(prevCmd, clean, currentCwd);
+      }
+      lastSubmittedCommandPerTermRef.current.set(termId, clean);
+
       // cd 指令智能追踪：当用户键入 cd /path 等命令时，及时推导并更新终端工作目录。
       // 仅对「纯路径」形式的 cd 做乐观推导：含变量($)、命令连接(&&/;)、管道(|)、
       // 重定向(>)、通配(*?)、反引号、多参数(空格)或 `cd -` 时跳过，避免记录错误
@@ -3152,8 +3206,6 @@ export function TerminalModule({
         }
         const cols = xtermInfo.term.cols > 0 ? xtermInfo.term.cols : 80;
         const rows = xtermInfo.term.rows > 0 ? xtermInfo.term.rows : 24;
-        // E2：进度反馈创建 Shell 会话前提示
-        xtermInfo.term.writeln(`\x1b[90m${t("term_creating_shell")}\x1b[0m`);
         const result = isSerial
           ? await sshService.createSerialShell(
               serverId,
@@ -3807,8 +3859,6 @@ export function TerminalModule({
     const isSerial = server?.targetType === "serial" || server?.protocol === "serial";
     if (isTelnet || isSerial) return;
 
-    let lastPrintedSec = -1;
-    let lastPrintedAttempt = -1;
     let lastStatus = "";
 
     const unsubscribe = reconnectManager.subscribe(serverId, (state) => {
@@ -3827,21 +3877,6 @@ export function TerminalModule({
           terminalsRef.current = next;
           return next;
         });
-
-        // 倒计时提示：每轮开始时以及临近重试时提示终端
-        if (state.attempt !== lastPrintedAttempt || state.remainingSec !== lastPrintedSec) {
-          if (state.remainingSec % 2 === 0 || state.remainingSec <= 2 || state.attempt !== lastPrintedAttempt) {
-            lastPrintedSec = state.remainingSec;
-            lastPrintedAttempt = state.attempt;
-            xtermInstances.current.forEach(({ term }) => {
-              const msg = t("term_auto_reconnect_attempt")
-                .replace("{sec}", String(state.remainingSec))
-                .replace("{n}", String(state.attempt))
-                .replace("{max}", String(state.maxAttempts));
-              term.writeln(`\r\n\x1b[33m[${msg}]\x1b[0m\r\n`);
-            });
-          }
-        }
       } else if (state.status === "reconnecting") {
         setTerminals((prev) => {
           const next = new Map(prev);
@@ -3879,8 +3914,6 @@ export function TerminalModule({
         });
         toastRef.current.error(t("term_auto_reconnect_failed"));
       } else if (state.status === "idle") {
-        lastPrintedSec = -1;
-        lastPrintedAttempt = -1;
         // 如果服务器连接重新 Ready 且终端尚未恢复 Session，自动重连 Shell
         const serverState = useAppStore.getState().serverStates[serverId];
         if (serverState?.state === ConnectionState.Ready) {
@@ -4492,6 +4525,7 @@ export function TerminalModule({
             handleSearch();
             return false;
           }
+
           // Tab: 指令提示补全（参考 Warp/Fig 等成熟终端）
           // - Tab：补全选中项，补全后关闭提示框（不自动进入下一阶段）
           // - Enter：始终透传给 shell 执行命令，绝不补全
@@ -5711,6 +5745,17 @@ export function TerminalModule({
     return lines.join("\n");
   }, [getActiveTerm]);
 
+  const handleAIDiagnoseRecentOutput = useCallback(() => {
+    setCtxMenu(null);
+    const fullOutput = getActiveOutput();
+    if (!fullOutput) return;
+    const lines = fullOutput.split(/\r?\n/).map((l) => l.trimEnd()).filter(Boolean);
+    const recentLines = lines.slice(-40).join("\n");
+    if (recentLines) {
+      useAIStore.getState().openDiagnosis(recentLines);
+    }
+  }, [getActiveOutput]);
+
   const clearActiveOutput = useCallback(() => {
     const term = getActiveTerm();
     if (!term) return;
@@ -5930,7 +5975,7 @@ export function TerminalModule({
     if (!registerGetCwd) return;
     const getCwd = () => {
       if (!activeTermId) return undefined;
-      let cwd = terminalCwdRef.current.get(activeTermId);
+      const cwd = terminalCwdRef.current.get(activeTermId);
       if (cwd && (cwd.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(cwd))) {
         return cwd;
       }
@@ -6443,14 +6488,25 @@ export function TerminalModule({
       }, 60);
     };
 
+    const handleInsertCommand = (e: Event) => {
+      const customEvent = e as CustomEvent<{ command?: string; execute?: boolean }>;
+      if (!isActiveRef.current || !isVisibleRef.current) return;
+      if (customEvent.detail?.command && activeTermIdRef.current) {
+        const text = customEvent.detail.command + (customEvent.detail.execute ? "\n" : "");
+        writePasteText(text, activeTermIdRef.current);
+      }
+    };
+
+    window.addEventListener("insert-terminal-command", handleInsertCommand);
     window.addEventListener("focus-active-terminal", handleFocusTrigger);
     window.addEventListener("focus", handleFocusTrigger);
 
     return () => {
+      window.removeEventListener("insert-terminal-command", handleInsertCommand);
       window.removeEventListener("focus-active-terminal", handleFocusTrigger);
       window.removeEventListener("focus", handleFocusTrigger);
     };
-  }, [focusActiveTerm]);
+  }, [focusActiveTerm, writePasteText]);
 
   // 鼠标交互焦点跟随：点击终端区域（且不在搜索栏内部）时，主动让搜索栏失焦，并将键盘焦点无缝转移给终端
   useEffect(() => {
@@ -8415,6 +8471,9 @@ export function TerminalModule({
         recordingPausedIds={recordingPausedIds}
         isOpening={isOpening}
         onLockSession={handleTriggerAppLock}
+        onAIDiagnosis={enableAiGlobal ? handleAIDiagnosisFromContext : undefined}
+        onAIDiagnoseRecent={enableAiGlobal ? handleAIDiagnoseRecentOutput : undefined}
+        onAIExplainShell={enableAiGlobal ? handleAIExplainShellFromContext : undefined}
       />
 
       <TerminalSelectionToolbar

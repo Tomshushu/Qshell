@@ -76,6 +76,8 @@ import {
   KeyRound,
   RotateCw,
   Cloud,
+  CheckCircle2,
+  AlertCircle,
 } from "lucide-react";
 import { useUpdaterStore } from "@/store/updater-store";
 import { useAppVersion } from "@/utils/version";
@@ -83,6 +85,22 @@ import { getAllFileIconThemes } from "@/components/file-icons";
 import { KnownHostsPanel } from "./known-hosts-panel";
 import { SyncSettingsPanel } from "./sync-settings-panel";
 import { ShortcutSettingsPanel } from "./shortcut-settings-panel";
+import { AISettingsPanel } from "./ai-settings-panel";
+
+const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+const openExternalUrl = async (url: string) => {
+  try {
+    if (isTauri) {
+      const { open } = await import("@tauri-apps/plugin-shell");
+      await open(url);
+    } else {
+      window.open(url, "_blank");
+    }
+  } catch {
+    window.open(url, "_blank");
+  }
+};
 
 interface EncodingOption {
   value: string;
@@ -439,6 +457,7 @@ interface SettingsDialogProps {
     | "general"
     | "security"
     | "account"
+    | "ai"
     | "terminal"
     | "sftp"
     | "logs"
@@ -468,7 +487,7 @@ export function SettingsDialog({ open, onOpenChange, defaultTab }: SettingsDialo
   return (
     <TooltipProvider delayDuration={200}>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-5xl h-[min(620px,calc(100vh-2rem))] flex flex-col p-0 overflow-hidden bg-background border rounded-xl gap-0">
+        <DialogContent className="max-w-5xl h-[min(680px,calc(100vh-2rem))] flex flex-col p-0 overflow-hidden bg-background border rounded-xl gap-0">
           <SettingsPanel defaultTab={defaultTab} onOpenThemeDialog={() => setShowThemeDialog(true)} />
         </DialogContent>
       {/* 主题弹框嵌套进设置 Dialog 内（而非兄弟节点），共享 DismissableLayer 作用域，
@@ -833,6 +852,7 @@ function SettingsPanel({
     | "general"
     | "security"
     | "account"
+    | "ai"
     | "terminal"
     | "sftp"
     | "logs"
@@ -841,7 +861,7 @@ function SettingsPanel({
   onOpenThemeDialog: () => void;
 }) {
   const [subTab, setSubTab] = useState<
-    "general" | "security" | "account" | "terminal" | "sftp" | "logs" | "shortcuts" | "known_hosts"
+    "general" | "security" | "account" | "ai" | "terminal" | "sftp" | "logs" | "shortcuts" | "known_hosts"
   >(defaultTab);
 
   useEffect(() => {
@@ -857,6 +877,11 @@ function SettingsPanel({
   const checkForUpdates = useUpdaterStore((s) => s.checkForUpdates);
   const skippedVersion = useUpdaterStore((s) => s.skippedVersion);
   const resetSkippedVersion = useUpdaterStore((s) => s.resetSkippedVersion);
+  const updateAvailable = useUpdaterStore((s) => s.updateAvailable);
+  const updateInfo = useUpdaterStore((s) => s.updateInfo);
+  const lastCheckedTime = useUpdaterStore((s) => s.lastCheckedTime);
+  const updateErrorMessage = useUpdaterStore((s) => s.errorMessage);
+  const openUpdateDialog = useUpdaterStore((s) => s.openDialog);
   const appVersion = useAppVersion();
   // 主题下拉:点击外部关闭 + 动态定位(通过 createPortal 渲染到 body,
   // 避免 DialogContent 的 transform/overflow-hidden 创建包含块导致 fixed 失效并被裁切)
@@ -1078,188 +1103,201 @@ function SettingsPanel({
 
   return (
     <div className="flex h-full w-full bg-background overflow-hidden">
-      {/* 1. 左侧设置侧边栏 */}
-      <div className="w-56 flex-shrink-0 border-r bg-slate-50 dark:bg-zinc-900 flex flex-col p-4 select-none">
-        <div className="flex items-center gap-2 mb-4 px-2">
-          <div className="h-5 w-5 rounded-md overflow-hidden flex items-center justify-center flex-shrink-0 bg-slate-900 ring-1 ring-border/50">
-            <img src="/favicon.svg?v=2" alt="Qshell" className="h-3.5 w-3.5 object-contain" />
+      {/* 1. 左侧设置侧边栏（增加纵向滚动与 min-h-full 弹性容器，解决小屏或内容过长时底部选项被裁切遮挡问题） */}
+      <div className="w-56 flex-shrink-0 border-r bg-slate-50 dark:bg-zinc-900 select-none overflow-y-auto overscroll-contain h-full min-h-0 p-3">
+        <div className="flex flex-col min-h-full">
+          <div className="flex items-center gap-2 mb-3 px-2 shrink-0">
+            <div className="h-5 w-5 rounded-md overflow-hidden flex items-center justify-center flex-shrink-0 bg-slate-900 ring-1 ring-border/50">
+              <img src="/favicon.svg?v=2" alt="Qshell" className="h-3.5 w-3.5 object-contain" />
+            </div>
+            <span className="text-xs font-bold text-foreground tracking-tight">
+              Qshell
+            </span>
           </div>
-          <span className="text-xs font-bold text-foreground tracking-tight">
-            Qshell
-          </span>
-        </div>
 
-        {/* 设置子菜单 */}
-        <div className="flex flex-col gap-2">
-          <button
-            onClick={() => setSubTab("general")}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-md text-xs transition-colors text-left ${
-              subTab === "general"
-                ? "bg-accent/80 text-foreground font-semibold"
-                : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
-            }`}
-          >
-            <Settings className="h-3.5 w-3.5 flex-shrink-0" />
-            <span className="flex-1 truncate">{t("sidebar_general")}</span>
-          </button>
-          <button
-            onClick={() => setSubTab("security")}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-md text-xs transition-colors text-left ${
-              subTab === "security"
-                ? "bg-accent/80 text-foreground font-semibold"
-                : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
-            }`}
-          >
-            <ShieldCheck className="h-3.5 w-3.5 flex-shrink-0" />
-            <span className="flex-1 truncate">{t("sidebar_security")}</span>
-          </button>
-          <button
-            onClick={() => setSubTab("account")}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-md text-xs transition-colors text-left ${
-              subTab === "account"
-                ? "bg-accent/80 text-foreground font-semibold"
-                : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
-            }`}
-          >
-            <Cloud className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
-            <span className="flex-1 truncate">{t("sync_tab_title")}</span>
-          </button>
-          <button
-            onClick={() => setSubTab("terminal")}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-md text-xs transition-colors text-left ${
-              subTab === "terminal"
-                ? "bg-accent/80 text-foreground font-semibold"
-                : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
-            }`}
-          >
-            <Terminal className="h-3.5 w-3.5 flex-shrink-0" />
-            <span className="flex-1 truncate">{t("sidebar_terminal")}</span>
-          </button>
-          <button
-            onClick={() => setSubTab("sftp")}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-md text-xs transition-colors text-left ${
-              subTab === "sftp"
-                ? "bg-accent/80 text-foreground font-semibold"
-                : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
-            }`}
-          >
-            <FileDown className="h-3.5 w-3.5 flex-shrink-0" />
-            <span className="flex-1 truncate">{t("sidebar_sftp")}</span>
-          </button>
-          <button
-            onClick={() => setSubTab("logs")}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-md text-xs transition-colors text-left ${
-              subTab === "logs"
-                ? "bg-accent/80 text-foreground font-semibold"
-                : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
-            }`}
-          >
-            <Clock className="h-3.5 w-3.5 flex-shrink-0" />
-            <span className="flex-1 truncate">{t("sidebar_logs")}</span>
-          </button>
-          <button
-            onClick={() => setSubTab("shortcuts")}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-md text-xs transition-colors text-left ${
-              subTab === "shortcuts"
-                ? "bg-accent/80 text-foreground font-semibold"
-                : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
-            }`}
-          >
-            <Keyboard className="h-3.5 w-3.5 flex-shrink-0" />
-            <span className="flex-1 truncate">{t("sidebar_shortcuts")}</span>
-          </button>
-          <button
-            onClick={() => setSubTab("known_hosts")}
-            className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-md text-xs transition-colors text-left ${
-              subTab === "known_hosts"
-                ? "bg-accent/80 text-foreground font-semibold"
-                : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
-            }`}
-          >
-            <ShieldCheck className="h-3.5 w-3.5 flex-shrink-0" />
-            <span className="flex-1 truncate">{t("sidebar_known_hosts")}</span>
-          </button>
-        </div>
+          {/* 设置子菜单 */}
+          <div className="flex flex-col gap-1.5 shrink-0">
+            <button
+              onClick={() => setSubTab("general")}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+                subTab === "general"
+                  ? "bg-accent/80 text-foreground font-semibold"
+                  : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+              }`}
+            >
+              <Settings className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="flex-1 truncate">{t("sidebar_general")}</span>
+            </button>
+            <button
+              onClick={() => setSubTab("security")}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+                subTab === "security"
+                  ? "bg-accent/80 text-foreground font-semibold"
+                  : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+              }`}
+            >
+              <ShieldCheck className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="flex-1 truncate">{t("sidebar_security")}</span>
+            </button>
+            <button
+              onClick={() => setSubTab("account")}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+                subTab === "account"
+                  ? "bg-accent/80 text-foreground font-semibold"
+                  : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+              }`}
+            >
+              <Cloud className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
+              <span className="flex-1 truncate">{t("sync_tab_title")}</span>
+            </button>
+            <button
+              onClick={() => setSubTab("ai")}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+                subTab === "ai"
+                  ? "bg-accent/80 text-foreground font-semibold"
+                  : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+              }`}
+            >
+              <Sparkles className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
+              <span className="flex-1 truncate">{t("sidebar_ai")}</span>
+            </button>
+            <button
+              onClick={() => setSubTab("terminal")}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+                subTab === "terminal"
+                  ? "bg-accent/80 text-foreground font-semibold"
+                  : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+              }`}
+            >
+              <Terminal className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="flex-1 truncate">{t("sidebar_terminal")}</span>
+            </button>
+            <button
+              onClick={() => setSubTab("sftp")}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+                subTab === "sftp"
+                  ? "bg-accent/80 text-foreground font-semibold"
+                  : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+              }`}
+            >
+              <FileDown className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="flex-1 truncate">{t("sidebar_sftp")}</span>
+            </button>
+            <button
+              onClick={() => setSubTab("logs")}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+                subTab === "logs"
+                  ? "bg-accent/80 text-foreground font-semibold"
+                  : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+              }`}
+            >
+              <Clock className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="flex-1 truncate">{t("sidebar_logs")}</span>
+            </button>
+            <button
+              onClick={() => setSubTab("shortcuts")}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+                subTab === "shortcuts"
+                  ? "bg-accent/80 text-foreground font-semibold"
+                  : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+              }`}
+            >
+              <Keyboard className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="flex-1 truncate">{t("sidebar_shortcuts")}</span>
+            </button>
+            <button
+              onClick={() => setSubTab("known_hosts")}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+                subTab === "known_hosts"
+                  ? "bg-accent/80 text-foreground font-semibold"
+                  : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+              }`}
+            >
+              <ShieldCheck className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="flex-1 truncate">{t("sidebar_known_hosts")}</span>
+            </button>
+          </div>
 
-        {/* 侧边栏底部选项 */}
-        <div className="mt-auto border-t pt-4 flex flex-col gap-2">
-          {/* 语言选择 (Language Settings) —— hover 右侧展开 */}
-          <SidebarQuickSelect
-            label={t("language_settings")}
-            icon={<Globe className="h-3.5 w-3.5" />}
-            items={LANGUAGES.map((lang) => ({
-              value: lang.code,
-              label: lang.name,
-            }))}
-            value={language}
-            onSelect={(code) => setLanguage(code)}
-            getDisplay={(code) =>
-              LANGUAGES.find((lang) => lang.code === code)?.name ?? code
-            }
-          />
+          {/* 侧边栏底部选项 */}
+          <div className="mt-auto border-t pt-3 flex flex-col gap-1.5 shrink-0">
+            {/* 语言选择 (Language Settings) —— hover 右侧展开 */}
+            <SidebarQuickSelect
+              label={t("language_settings")}
+              icon={<Globe className="h-3.5 w-3.5" />}
+              items={LANGUAGES.map((lang) => ({
+                value: lang.code,
+                label: lang.name,
+              }))}
+              value={language}
+              onSelect={(code) => setLanguage(code)}
+              getDisplay={(code) =>
+                LANGUAGES.find((lang) => lang.code === code)?.name ?? code
+              }
+            />
 
-          {/* 主题选择 (Light / Dark) —— hover 右侧展开 */}
-          <SidebarQuickSelect
-            label={t("sidebar_app_theme")}
-            icon={<Palette className="h-3.5 w-3.5" />}
-            items={[
-              { value: "system", label: t("theme_system") },
-              { value: "dark", label: t("theme_dark") },
-              { value: "light", label: t("theme_light") },
-            ]}
-            value={theme}
-            onSelect={(v) => {
-              setTheme(v as "dark" | "light" | "system");
-              playSound(SoundType.Toggle);
-            }}
-            getDisplay={(v) =>
-              v === "system"
-                ? t("theme_system")
-                : v === "dark"
-                  ? t("theme_dark")
-                  : t("theme_light")
-            }
-          />
+            {/* 主题选择 (Light / Dark) —— hover 右侧展开 */}
+            <SidebarQuickSelect
+              label={t("sidebar_app_theme")}
+              icon={<Palette className="h-3.5 w-3.5" />}
+              items={[
+                { value: "system", label: t("theme_system") },
+                { value: "dark", label: t("theme_dark") },
+                { value: "light", label: t("theme_light") },
+              ]}
+              value={theme}
+              onSelect={(v) => {
+                setTheme(v as "dark" | "light" | "system");
+                playSound(SoundType.Toggle);
+              }}
+              getDisplay={(v) =>
+                v === "system"
+                  ? t("theme_system")
+                  : v === "dark"
+                    ? t("theme_dark")
+                    : t("theme_light")
+              }
+            />
 
-          {/* 界面风格（设计语言）：从注册表动态读取（支持自由插件化扩展） */}
-          <SidebarQuickSelect
-            label={t("sidebar_ui_style")}
-            icon={<Sparkles className="h-3.5 w-3.5" />}
-            items={UI_STYLES.map((s) => ({ value: s.id, label: t(s.nameKey) }))}
-            value={uiStyle}
-            onSelect={(v) => {
-              setUiStyle(v);
-              playSound(SoundType.Toggle);
-            }}
-            getDisplay={(v) => {
-              const item = UI_STYLES.find((s) => s.id === v);
-              return item ? t(item.shortNameKey) : v;
-            }}
-          />
+            {/* 界面风格（设计语言）：从注册表动态读取（支持自由插件化扩展） */}
+            <SidebarQuickSelect
+              label={t("sidebar_ui_style")}
+              icon={<Sparkles className="h-3.5 w-3.5" />}
+              items={UI_STYLES.map((s) => ({ value: s.id, label: t(s.nameKey) }))}
+              value={uiStyle}
+              onSelect={(v) => {
+                setUiStyle(v);
+                playSound(SoundType.Toggle);
+              }}
+              getDisplay={(v) => {
+                const item = UI_STYLES.find((s) => s.id === v);
+                return item ? t(item.shortNameKey) : v;
+              }}
+            />
 
-          {/* 外部入口暂保留布局，待官网和反馈服务接入后再启用跳转 */}
-          <button
-            type="button"
-            disabled
-            className="flex items-center gap-2.5 px-3 py-2.5 rounded-md text-xs text-muted-foreground/60 text-left cursor-not-allowed"
-            title={t("placeholder_title")}
-          >
-            <ExternalLink className="h-3.5 w-3.5 flex-shrink-0" />
-            <span className="flex-1">{t("sidebar_doc")}</span>
-          </button>
-          <button
-            type="button"
-            disabled
-            className="flex items-center gap-2.5 px-3 py-2.5 rounded-md text-xs text-muted-foreground/60 text-left cursor-not-allowed"
-            title={t("placeholder_title")}
-          >
-            <ExternalLink className="h-3.5 w-3.5 flex-shrink-0" />
-            <span className="flex-1">{t("sidebar_bug")}</span>
-          </button>
+            {/* 外部入口：官方文档与 Bug 反馈 */}
+            <button
+              type="button"
+              onClick={() => void openExternalUrl("https://github.com/Tomshushu/Qshell#readme")}
+              className="flex items-center gap-2.5 px-3 py-2 rounded-md text-xs text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors text-left shrink-0 cursor-pointer"
+              title={t("sidebar_doc")}
+            >
+              <ExternalLink className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="flex-1">{t("sidebar_doc")}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => void openExternalUrl("https://github.com/Tomshushu/Qshell/issues")}
+              className="flex items-center gap-2.5 px-3 py-2 rounded-md text-xs text-muted-foreground hover:bg-accent/40 hover:text-foreground transition-colors text-left shrink-0 cursor-pointer"
+              title={t("sidebar_bug")}
+            >
+              <ExternalLink className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="flex-1">{t("sidebar_bug")}</span>
+            </button>
 
-          <div className="flex items-center gap-2.5 px-3 py-2 text-[10px] text-muted-foreground/60 border-t mt-1">
-            <span className="flex-1">{t("sidebar_version")}</span>
-            <span>v{appVersion}</span>
+            <div className="flex items-center gap-2.5 px-3 py-1.5 text-[10px] text-muted-foreground/60 border-t mt-0.5 shrink-0">
+              <span className="flex-1">{t("sidebar_version")}</span>
+              <span>v{appVersion}</span>
+            </div>
           </div>
         </div>
       </div>
@@ -1316,11 +1354,11 @@ function SettingsPanel({
             {/* 软件在线更新 (OTA) */}
             <Card className="border/50 bg-background shadow-sm rounded-lg overflow-hidden">
               <CardContent className="p-6 flex flex-col gap-5 text-xs">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="space-y-0.5 min-w-0">
                     <span className="text-sm font-bold text-foreground flex items-center gap-2">
                       {t("ota_title")}
-                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 shrink-0">
                         v{appVersion}
                       </span>
                     </span>
@@ -1328,18 +1366,55 @@ function SettingsPanel({
                       {t("ota_desc")}
                     </p>
                   </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-8 text-xs gap-1.5 font-medium hover:bg-muted/80 shadow-xs"
-                    disabled={isCheckingUpdate}
-                    onClick={() => {
-                      void checkForUpdates(false);
-                    }}
-                  >
-                    <RotateCw className={`h-3.5 w-3.5 ${isCheckingUpdate ? 'animate-spin' : ''}`} />
-                    {isCheckingUpdate ? t("ota_checking") : t("ota_check_btn")}
-                  </Button>
+
+                  <div className="flex items-center gap-2.5 shrink-0">
+                    {!isCheckingUpdate && updateAvailable && (
+                      <button
+                        type="button"
+                        onClick={openUpdateDialog}
+                        className="flex items-center gap-1.5 text-xs text-primary bg-primary/10 hover:bg-primary/20 border border-primary/25 px-2.5 py-1 rounded-md transition-colors cursor-pointer"
+                        title={t("ota_found_desc")}
+                      >
+                        <Sparkles className="h-3.5 w-3.5 text-primary shrink-0" />
+                        <span className="font-medium">
+                          {t("ota_found_new_version", { version: updateInfo?.version ?? "" })}
+                        </span>
+                      </button>
+                    )}
+
+                    {!isCheckingUpdate && !updateAvailable && lastCheckedTime && !updateErrorMessage && (
+                      <div
+                        className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 dark:bg-emerald-500/15 border border-emerald-500/20 px-2.5 py-1 rounded-md transition-all select-none"
+                        title={`${t("ota_up_to_date_title")} - ${t("ota_up_to_date_desc")}`}
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                        <span className="font-medium">{t("ota_latest_title")}</span>
+                      </div>
+                    )}
+
+                    {!isCheckingUpdate && updateErrorMessage && (
+                      <div
+                        className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1 rounded-md select-none"
+                        title={updateErrorMessage}
+                      >
+                        <AlertCircle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                        <span className="font-medium">{t("ota_check_failed")}</span>
+                      </div>
+                    )}
+
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 text-xs gap-1.5 font-medium hover:bg-muted/80 shadow-xs shrink-0 cursor-pointer"
+                      disabled={isCheckingUpdate}
+                      onClick={() => {
+                        void checkForUpdates(false);
+                      }}
+                    >
+                      <RotateCw className={`h-3.5 w-3.5 ${isCheckingUpdate ? 'animate-spin' : ''}`} />
+                      {isCheckingUpdate ? t("ota_checking") : t("ota_check_btn")}
+                    </Button>
+                  </div>
                 </div>
 
                 <div className="flex items-center justify-between pt-3 border-t">
@@ -2641,6 +2716,8 @@ function SettingsPanel({
           </div>
         ) : subTab === "account" ? (
           <SyncSettingsPanel />
+        ) : subTab === "ai" ? (
+          <AISettingsPanel />
         ) : (
           <div className="w-full max-w-4xl mx-auto space-y-6">
             {/* 其它分类占位符 */}

@@ -32,6 +32,7 @@ import { OAuthCallbackLanding } from '@/components/auth/oauth-callback-landing'
 import { useUpdaterStore } from '@/store/updater-store'
 import { UpdateDialog } from '@/components/layout/update-dialog'
 import { useToast } from '@/components/ui/toast'
+import { FloatingAIAssistant } from '@/components/ai/floating-ai-assistant'
 
 function AppContent() {
   const { t } = useTranslation()
@@ -642,6 +643,9 @@ function AppContent() {
 
       {/* 官方 OTA 软件自动更新弹窗 */}
       <UpdateDialog />
+
+      {/* 全局悬浮 AI 助手吉祥物与对话面板 */}
+      <FloatingAIAssistant />
     </div>
   )
 }

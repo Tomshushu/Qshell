@@ -268,9 +268,7 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => {
             updateInfo: null,
             lastCheckedTime: Date.now(),
           })
-          if (!silent) {
-            set({ isDialogOpen: true })
-          }
+          // 已是最新版本时不弹窗打扰用户，调用方将在当前页面内联提示“已是最新版本”
           return false
         }
       } catch (err: unknown) {

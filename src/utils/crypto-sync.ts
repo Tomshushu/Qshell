@@ -163,7 +163,7 @@ export async function decryptData(
     return decoder.decode(decryptedBuffer)
   } catch (err) {
     // AES-GCM 认证标签校验失败或解密失败
-    throw new Error('同步主密码错误或备份数据已被损坏/篡改')
+    throw new Error('同步主密码错误或备份数据已被损坏/篡改', { cause: err })
   }
 }
 

@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Copy, ClipboardPaste, Search, Globe, Check } from "lucide-react";
+import { Copy, ClipboardPaste, Search, Globe, Check, Sparkles, Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "@/i18n";
 import { playSound, SoundType } from "@/lib/sound";
+import { useAIStore } from "@/store/ai-store";
 
 export interface TerminalSelectionToolbarProps {
   visible: boolean;
@@ -32,7 +33,7 @@ const openExternalUrl = async (url: string) => {
 /**
  * 边界吸附计算：弹框左上角与选中区域右边对齐，并向下展开
  */
-function clampToolbarPosition(x: number, y: number, width = 140, height = 136) {
+function clampToolbarPosition(x: number, y: number, width = 148, height = 205) {
   const padding = 10;
   const vw = typeof window !== "undefined" ? window.innerWidth : 1000;
   const vh = typeof window !== "undefined" ? window.innerHeight : 800;
@@ -71,6 +72,7 @@ export function TerminalSelectionToolbar({
   onSearch,
 }: TerminalSelectionToolbarProps) {
   const { t } = useTranslation();
+  const enableAiGlobal = useAIStore((s) => s.enableAiGlobal);
   const [copied, setCopied] = useState(false);
   const copyTimerRef = useRef<number | null>(null);
 
@@ -116,6 +118,20 @@ export function TerminalSelectionToolbar({
     const query = selectedText.trim().slice(0, 300);
     const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
     void openExternalUrl(url);
+    onClose();
+  };
+
+  const handleAIDiagnosis = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    playSound(SoundType.Click);
+    useAIStore.getState().openDiagnosis(selectedText);
+    onClose();
+  };
+
+  const handleExplainShell = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    playSound(SoundType.Click);
+    useAIStore.getState().openExplainShell(selectedText);
     onClose();
   };
 
@@ -178,6 +194,47 @@ export function TerminalSelectionToolbar({
           {t("tm_paste_to_shell") || "粘贴至终端"}
         </span>
       </button>
+
+      {/* AI 智能诊断 */}
+      {enableAiGlobal && (
+        <button
+          type="button"
+          onClick={handleAIDiagnosis}
+          className={cn(
+            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+            isLightTerminal
+              ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+              : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+          )}
+          title={t("tm_ai_diagnosis_tooltip")}
+        >
+          <Sparkles className="h-3.5 w-3.5 text-primary shrink-0" />
+          <span className="truncate tracking-tight font-sans text-[11.5px] font-medium text-primary">
+            {t("tm_ai_diagnose")}
+          </span>
+        </button>
+      )}
+
+      {/* 拆解复合指令 (Explain Shell) */}
+      {enableAiGlobal && (
+        <button
+          type="button"
+          data-testid="selection-toolbar-explain-shell"
+          onClick={handleExplainShell}
+          className={cn(
+            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+            isLightTerminal
+              ? "text-sky-700 hover:bg-sky-50 hover:text-sky-900"
+              : "text-sky-300 hover:bg-sky-500/15 hover:text-sky-200",
+          )}
+          title={t("tm_ai_explain_shell_tooltip") || "将选中指令进行乐高积木式拆解与管道流转分析"}
+        >
+          <Layers className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+          <span className="truncate tracking-tight font-sans text-[11.5px] font-medium text-sky-600 dark:text-sky-400">
+            {t("tm_ai_explain_shell") || "拆解指令 (Explain)"}
+          </span>
+        </button>
+      )}
 
       {/* 区分核心操作与辅助工具的分隔线，完全继承 HintPanel 风格 */}
       <div

@@ -79,6 +79,43 @@ export function SelectPopover({
     )
   }, [options, filterText])
 
+  // 大数据量模型/选项按需分页渲染（批次大小 50）
+  const PAGE_BATCH_SIZE = 50
+
+  const selectedIndex = useMemo(() => {
+    if (!value) return -1
+    return filteredOptions.findIndex((o) => o.value === value)
+  }, [filteredOptions, value])
+
+  const initialRenderCount = useMemo(() => {
+    if (selectedIndex >= 0) {
+      return Math.max(
+        PAGE_BATCH_SIZE,
+        Math.min(filteredOptions.length, Math.ceil((selectedIndex + 1) / PAGE_BATCH_SIZE) * PAGE_BATCH_SIZE),
+      )
+    }
+    return Math.min(PAGE_BATCH_SIZE, filteredOptions.length)
+  }, [selectedIndex, filteredOptions.length])
+
+  const [renderedCount, setRenderedCount] = useState(PAGE_BATCH_SIZE)
+
+  useEffect(() => {
+    setRenderedCount(initialRenderCount)
+  }, [filterText, initialRenderCount])
+
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget
+    if (scrollTop + clientHeight >= scrollHeight - 32) {
+      if (renderedCount < filteredOptions.length) {
+        setRenderedCount((prev) => Math.min(prev + PAGE_BATCH_SIZE, filteredOptions.length))
+      }
+    }
+  }
+
+  const visibleOptions = useMemo(() => {
+    return filteredOptions.slice(0, renderedCount)
+  }, [filteredOptions, renderedCount])
+
   return (
     <Popover.Root open={open} onOpenChange={handleOpenChange}>
       <Popover.Trigger asChild>
@@ -135,6 +172,7 @@ export function SelectPopover({
           <div
             className="max-h-60 overflow-y-auto overscroll-contain p-0.5 space-y-0.5"
             style={{ scrollbarWidth: 'thin' }}
+            onScroll={handleScroll}
           >
             {clearable && (
               <button
@@ -157,29 +195,42 @@ export function SelectPopover({
                 无匹配项
               </div>
             ) : (
-              filteredOptions.map((opt) => {
-                const isSel = value === opt.value
-                return (
+              <>
+                {visibleOptions.map((opt) => {
+                  const isSel = value === opt.value
+                  return (
+                    <button
+                      key={opt.value}
+                      ref={isSel ? selectedRef : undefined}
+                      type="button"
+                      disabled={opt.disabled}
+                      onClick={() => {
+                        onChange(opt.value)
+                        setOpen(false)
+                      }}
+                      className={cn(
+                        'w-full flex items-center justify-between gap-1.5 rounded-md px-2 h-8 text-xs transition-colors',
+                        opt.disabled && 'opacity-40 cursor-not-allowed',
+                        isSel ? 'bg-primary/10 text-primary font-semibold' : 'text-foreground hover:bg-accent/40',
+                      )}
+                    >
+                      <span className="font-medium truncate">{opt.label}</span>
+                      {isSel && <Check className="h-3.5 w-3.5 text-primary flex-shrink-0" />}
+                    </button>
+                  )
+                })}
+                {renderedCount < filteredOptions.length && (
                   <button
-                    key={opt.value}
-                    ref={isSel ? selectedRef : undefined}
                     type="button"
-                    disabled={opt.disabled}
-                    onClick={() => {
-                      onChange(opt.value)
-                      setOpen(false)
-                    }}
-                    className={cn(
-                      'w-full flex items-center justify-between gap-1.5 rounded-md px-2 h-8 text-xs transition-colors',
-                      opt.disabled && 'opacity-40 cursor-not-allowed',
-                      isSel ? 'bg-primary/10 text-primary font-semibold' : 'text-foreground hover:bg-accent/40',
-                    )}
+                    onClick={() =>
+                      setRenderedCount((prev) => Math.min(prev + PAGE_BATCH_SIZE, filteredOptions.length))
+                    }
+                    className="w-full py-1.5 mt-1 text-[11px] text-muted-foreground hover:text-foreground text-center bg-muted/20 hover:bg-muted/40 rounded transition-colors"
                   >
-                    <span className="font-medium truncate">{opt.label}</span>
-                    {isSel && <Check className="h-3.5 w-3.5 text-primary flex-shrink-0" />}
+                    加载更多 (已显示 {renderedCount} / 共 {filteredOptions.length} 个)
                   </button>
-                )
-              })
+                )}
+              </>
             )}
           </div>
         </Popover.Content>

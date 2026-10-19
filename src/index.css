@@ -5689,5 +5689,97 @@ button.ofv-toolbar-icon-button[title*="下载"] {
   animation: app-lock-shake 0.4s ease-in-out;
 }
 
+/* AI Assistant Chat 气泡富文本排版样式 */
+.ai-chat-content h1 {
+  font-size: 0.95rem;
+  font-weight: 700;
+  margin: 0.5rem 0 0.35rem;
+  color: inherit;
+}
+.ai-chat-content h2 {
+  font-size: 0.875rem;
+  font-weight: 700;
+  margin: 0.5rem 0 0.3rem;
+  color: inherit;
+}
+.ai-chat-content h3 {
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin: 0.4rem 0 0.25rem;
+  color: inherit;
+}
+.ai-chat-content p {
+  margin-bottom: 0.45rem;
+  line-height: 1.6;
+}
+.ai-chat-content p:last-child {
+  margin-bottom: 0;
+}
+.ai-chat-content ul, .ai-chat-content ol {
+  padding-left: 1.25rem;
+  margin-bottom: 0.45rem;
+}
+.ai-chat-content li {
+  margin-bottom: 0.2rem;
+}
+.ai-chat-content strong {
+  font-weight: 600;
+  color: inherit;
+}
+.ai-chat-content hr {
+  margin: 0.6rem 0;
+  border-color: var(--border);
+  opacity: 0.6;
+}
+.ai-chat-content code:not(pre code) {
+  padding: 0.15rem 0.35rem;
+  border-radius: 0.25rem;
+  background-color: var(--muted);
+  font-family: monospace;
+  font-size: 0.82em;
+  color: var(--primary);
+}
+.ai-chat-content blockquote {
+  margin: 0.5rem 0;
+  padding: 0.4rem 0.75rem;
+  border-left: 3px solid rgb(56 189 248 / 0.7);
+  background-color: rgb(56 189 248 / 0.08);
+  border-radius: 0 0.5rem 0.5rem 0;
+  font-size: 0.85em;
+  color: inherit;
+}
+.ai-chat-content blockquote p {
+  margin-bottom: 0;
+}
+.ai-chat-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.6rem 0;
+  font-size: 0.78rem;
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+.ai-chat-content th {
+  background-color: var(--muted);
+  font-weight: 600;
+  text-align: left;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--border);
+  color: var(--foreground);
+}
+.ai-chat-content td {
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--border);
+}
+.ai-chat-content tr:nth-child(even) {
+  background-color: rgba(125, 125, 125, 0.05);
+}
+.ai-chat-content a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+
 
 
