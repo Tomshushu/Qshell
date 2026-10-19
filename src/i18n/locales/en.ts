@@ -3525,8 +3525,12 @@ export default {
   tm_search_word: "Word",
   tm_paste_confirm_title: "Confirm paste into terminal",
   tm_paste_confirm_description:
-    "This content contains multiple lines or many characters and may execute commands immediately. Confirm that the source is trusted.",
+    "Pasting over 10,000 characters was detected. Large blocks of text may temporarily slow down terminal rendering. Do you want to proceed?",
   tm_paste_confirm: "Confirm paste",
+  tm_paste_dont_ask_again: "Remember choice, don't ask again",
+  term_paste_warn_enabled: "Large text paste warning",
+  term_paste_warn_enabled_desc:
+    "Prompt for confirmation when pasting more than 10,000 characters to prevent terminal freezing",
   zmodem_select_files: "Select files to upload via ZMODEM",
   zmodem_save_file: "Save file downloaded via ZMODEM",
   zmodem_save_success: "ZMODEM download completed: {name}",
@@ -4216,4 +4220,13 @@ export default {
   ai_badge_agent_execution: "Agent Ops Execution",
   ai_badge_agent_qa: "AIOps Smart Q&A",
   ai_badge_chat_qa: "Chat Q&A",
+  ai_ctx_copy: "Copy",
+  ai_ctx_copy_code: "Copy Code",
+  ai_ctx_copy_message: "Copy Full Message",
+  ai_ctx_run_in_terminal: "Execute in Terminal",
+  ai_ctx_insert_to_terminal: "Insert into Terminal",
+  ai_ctx_copied: "Copied to clipboard",
+  ai_ctx_executed_in_terminal: "Sent to terminal for execution",
+  ai_ctx_inserted_to_terminal: "Inserted into current terminal",
+  ai_ctx_not_in_terminal: "Not currently in a terminal tab",
 };

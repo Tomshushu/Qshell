@@ -52,10 +52,8 @@ function clampToolbarPosition(x: number, y: number, width = 148, height = 205) {
   if (top + height > vh - padding) {
     top = Math.max(padding, y - height - 4);
   }
-  // 顶部溢出处理
-  if (top < padding) {
-    top = padding;
-  }
+  // 视口边界严格夹紧（防止超出版界或被完全隐藏）
+  top = Math.max(padding, Math.min(top, vh - height - padding));
 
   return { left, top };
 }

@@ -485,3 +485,69 @@ export function findSigintBoundary(text: string): number {
   return Math.min(...candidates);
 }
 
+/**
+ * 规范化准备发送给 Shell 的命令或粘贴文本：
+ * 1. 消除 Windows 换行符 CRLF (\r\n) 与独立 CR (\r)：
+ *    在 POSIX PTY 环境（默认开启 ICRNL）中，\r 会被 PTY 驱动自动映射为 \n。
+ *    若直接向 PTY 写入 \r\n，会导致 Bash 读到两个连续的 \n，从而在续行处吃掉第一个 \n 后，
+ *    紧随其后的第二个 \n 立即触发空提交，把续行后面的内容当作全新指令执行（报错类似 `-o: command not found`）。
+ *    因此统一将所有 \r\n 和孤立的 \r 规范化为单一的 \n。
+ * 2. 修复反斜杠续行后面的尾随空白字符（空格/制表符/全角空格）：
+ *    很多网页或文档在复制带 '\' 续行的多行命令时，'\' 后面常带有一个或多个空格。
+ *    在 Shell 中，'\' 后面跟空格会被当作转义空格而非续行，从而导致换行时提前提交命令。
+ *    将 `\` + 水平空白 + 换行 规范化为标准的 `\` + 换行。
+ */
+export function normalizeShellCommandText(text: string): string {
+  if (!text) return "";
+  // 1. 去除续行反斜杠后面紧跟的水平空白（半角空格、全角空格、水平制表符、Unicode不间断空格），并将其换行规范化为 \n
+  let normalized = text.replace(/\\([ \t\u00A0\u3000]+)(?:\r\n|\r|\n)/g, "\\\n");
+  // 2. 将所有剩余的 CRLF (\r\n) 和孤立的 CR (\r) 规范化为单 LF (\n)
+  normalized = normalized.replace(/\r\n|\r/g, "\n");
+  return normalized;
+}
+
+/**
+ * 将准备粘贴给终端的文本根据 Bracketed Paste 模式进行格式化：
+ *
+ * 若远端 Shell / 程序开启了 Bracketed Paste Mode (CSI ? 2004 h)，
+ * 将粘贴文本包裹在 `\x1b[200~` 与 `\x1b[201~` 之间。
+ * 这样远端 Readline / ZLE 会将整段多行文本完整呈现在当前行编辑缓冲区中，
+ * 绝不会中途提前提交命令，且允许用户在键盘上按回车确认后作为一个整体原子执行。
+ *
+ * @param text 待粘贴文本
+ * @param options.bracketedPaste 是否启用括号粘贴模式包裹（通常来自 term.modes?.bracketedPasteMode）
+ * @param options.execute 是否在粘贴后追加回车立即执行
+ */
+export function formatTerminalPasteData(
+  text: string,
+  options?: {
+    bracketedPaste?: boolean;
+    execute?: boolean;
+  }
+): string {
+  const normalized = normalizeShellCommandText(text);
+  if (!normalized) return "";
+
+  if (options?.bracketedPaste) {
+    // 括号粘贴模式：
+    // 若原文本末尾带有换行符，且未指定立即执行（execute: false），
+    // 剥离末尾换行符使其保留在行末而不是换到空行，光标停在命令末尾供用户核对或按回车执行。
+    let pasteBody = normalized;
+    const hasTrailingNewline = pasteBody.endsWith("\n") || pasteBody.endsWith("\r");
+    if (hasTrailingNewline && !options.execute) {
+      pasteBody = pasteBody.replace(/[\r\n]+$/, "");
+    }
+    const wrapped = `\x1b[200~${pasteBody}\x1b[201~`;
+    return options.execute ? `${wrapped}\r` : wrapped;
+  }
+
+  // 非括号粘贴模式：立即执行时以标准回车符 (\r, ASCII 13) 结尾提交命令，未立即执行时保留光标在行尾
+  return options?.execute
+    ? normalized.endsWith("\r")
+      ? normalized
+      : normalized.endsWith("\n")
+        ? `${normalized.slice(0, -1)}\r`
+        : `${normalized}\r`
+    : normalized;
+}
+

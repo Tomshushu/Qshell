@@ -3459,8 +3459,12 @@ export default {
   tm_search_word: "词",
   tm_paste_confirm_title: "确认粘贴到终端",
   tm_paste_confirm_description:
-    "内容包含多行或字符较多，粘贴后可能会立即执行多条命令。请确认内容来源可信。",
+    "检测到单次粘贴内容超过 10,000 字符。大量文本可能导致终端渲染缓慢，请确认是否继续粘贴。",
   tm_paste_confirm: "确认粘贴",
+  tm_paste_dont_ask_again: "记住选择，下次不再提示",
+  term_paste_warn_enabled: "超大文本粘贴确认",
+  term_paste_warn_enabled_desc:
+    "单次粘贴超过 10,000 字符时弹出二次确认提示，防止大文本意外卡死终端",
   zmodem_select_files: "选择要通过 ZMODEM 上传的文件",
   zmodem_save_file: "保存通过 ZMODEM 下载的文件",
   zmodem_save_success: "ZMODEM 下载完成：{name}",
@@ -4147,4 +4151,13 @@ export default {
   ai_badge_agent_execution: "Agent 运维执行",
   ai_badge_agent_qa: "AIOps 智能解答",
   ai_badge_chat_qa: "Chat 咨询解答",
+  ai_ctx_copy: "复制",
+  ai_ctx_copy_code: "复制代码",
+  ai_ctx_copy_message: "复制整条消息",
+  ai_ctx_run_in_terminal: "在当前终端执行",
+  ai_ctx_insert_to_terminal: "填入当前终端",
+  ai_ctx_copied: "已复制到剪贴板",
+  ai_ctx_executed_in_terminal: "已发送至终端执行",
+  ai_ctx_inserted_to_terminal: "已填入当前终端",
+  ai_ctx_not_in_terminal: "当前未处于终端窗口",
 };

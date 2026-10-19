@@ -242,6 +242,9 @@ export interface TerminalSlice {
   setTerminalAntiIdleCustomString: (str: string) => void;
   terminalCopyPaste: boolean;
   setTerminalCopyPaste: (enabled: boolean) => void;
+  /** 超大文本粘贴前是否二次确认（默认 true，大文本 > 10000 字符时提示，可在弹窗中勾选不再提示） */
+  terminalPasteWarnEnabled: boolean;
+  setTerminalPasteWarnEnabled: (enabled: boolean) => void;
   /** 终端划词快捷工具条开关（选中日志时弹出复制/粘贴/搜索浮动条） */
   terminalSelectionToolbar: boolean;
   setTerminalSelectionToolbar: (enabled: boolean) => void;

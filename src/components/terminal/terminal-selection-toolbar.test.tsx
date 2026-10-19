@@ -178,4 +178,48 @@ describe("TerminalSelectionToolbar", () => {
     expect(openExplainShellSpy).toHaveBeenCalledWith("cat access.log | awk '{print $1}' | sort | uniq -c");
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it("safely clamps toolbar within viewport when selection coordinates exceed window boundaries", () => {
+    const { container, rerender } = render(
+      <TerminalSelectionToolbar
+        visible={true}
+        x={3000}
+        y={4000}
+        selectedText="curl https://example.com"
+        onClose={vi.fn()}
+        onCopy={vi.fn()}
+        onPasteSelection={vi.fn()}
+        onSearch={vi.fn()}
+      />
+    );
+
+    const toolbar = container.querySelector('[role="toolbar"]') as HTMLElement;
+    expect(toolbar).toBeTruthy();
+    const left1 = parseFloat(toolbar.style.left);
+    const top1 = parseFloat(toolbar.style.top);
+    expect(left1).toBeLessThanOrEqual(window.innerWidth);
+    expect(left1).toBeGreaterThanOrEqual(0);
+    expect(top1).toBeLessThanOrEqual(window.innerHeight);
+    expect(top1).toBeGreaterThanOrEqual(0);
+
+    // Negative coordinates (dragged out to the left or top)
+    rerender(
+      <TerminalSelectionToolbar
+        visible={true}
+        x={-500}
+        y={-500}
+        selectedText="curl https://example.com"
+        onClose={vi.fn()}
+        onCopy={vi.fn()}
+        onPasteSelection={vi.fn()}
+        onSearch={vi.fn()}
+      />
+    );
+
+    const left2 = parseFloat(toolbar.style.left);
+    const top2 = parseFloat(toolbar.style.top);
+    expect(left2).toBeGreaterThanOrEqual(10);
+    expect(top2).toBeGreaterThanOrEqual(10);
+  });
 });
+

@@ -184,6 +184,8 @@ import {
   TerminalRecordingBadge,
   TerminalHintPanel,
   SerialQuickSendEditor,
+  normalizeShellCommandText,
+  formatTerminalPasteData,
 } from "@/components/terminal";
 import { useAIStore } from "@/store/ai-store";
 import {
@@ -204,7 +206,15 @@ function isInteractiveOrInputElement(el: Element | null): boolean {
   if (el.closest(".terminal-search-bar, [data-terminal-search]")) {
     return true;
   }
-  // 2. 处于任何弹窗、菜单、下拉框、Portal 内部
+  // 2. 处于 AI 助手悬浮窗、代码卡片或抽屉内部
+  if (
+    el.closest(
+      '[data-testid="ai-assistant-dialog"], .ai-assistant-card, [data-ai-assistant], .floating-ai-assistant'
+    )
+  ) {
+    return true;
+  }
+  // 3. 处于任何弹窗、菜单、下拉框、Portal 内部
   if (
     el.closest(
       '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [role="combobox"], [data-radix-portal], [data-radix-popper-content-wrapper], .modal, .dialog'
@@ -682,6 +692,12 @@ export function TerminalModule({
   );
   const terminalHighlightRules = useAppStore((s) => s.terminalHighlightRules);
   const terminalCopyPaste = useAppStore((s) => s.terminalCopyPaste);
+  const terminalPasteWarnEnabled = useAppStore(
+    (s) => s.terminalPasteWarnEnabled ?? true,
+  );
+  const setTerminalPasteWarnEnabled = useAppStore(
+    (s) => s.setTerminalPasteWarnEnabled,
+  );
   const terminalSelectionToolbar = useAppStore(
     (s) => s.terminalSelectionToolbar ?? true,
   );
@@ -1806,6 +1822,8 @@ export function TerminalModule({
   // 实际写入粘贴内容。确认流程和普通粘贴都最终走这里，避免绕过广播/输入状态同步。
   const writePasteToShells = (currentSid: string, data: string) => {
     if (!data) return;
+    // 保底防线：若数据含有 Windows CRLF，统一清洗为规范换行，消除 PTY ICRNL 双换行隐患
+    const cleanData = data.includes("\r\n") ? normalizeShellCommandText(data) : data;
     lastActivityTimesRef.current.set(currentSid, Date.now());
     if (sshService.isSessionAlive(currentSid)) {
       const isSerial = server?.targetType === "serial" || server?.protocol === "serial";
@@ -1815,18 +1833,18 @@ export function TerminalModule({
       const writePromise = isSerial
         ? writeSerialTextWithDelays(
             currentSid,
-            data,
+            cleanData,
             serialEncodingLabelRef.current,
             serialLineDelayRef.current,
             serialCharDelayRef.current,
           )
-        : sshService.writeToShell(currentSid, data);
+        : sshService.writeToShell(currentSid, cleanData);
       void writePromise.then(() => {
         if (isSerial && serialLocalEchoRef.current) {
           const terminal = Array.from(xtermInstances.current.values()).find(
             (instance) => instance.sessionId === currentSid,
           )?.term;
-          terminal?.write(data);
+          terminal?.write(cleanData);
         }
       }).catch((error) => {
         toastRef.current.error(error instanceof Error ? error.message : String(error));
@@ -1840,17 +1858,26 @@ export function TerminalModule({
       const sid = sshService.getTabActiveSessionId(otherTabId);
       if (sid && sshService.isSessionAlive(sid)) {
         lastActivityTimesRef.current.set(sid, Date.now());
-        void sshService.writeToShell(sid, data).catch(() => {});
+        void sshService.writeToShell(sid, cleanData).catch(() => {});
       }
     }
   };
 
   const writePasteText = useCallback(
-    (text: string, sessionId: string) => {
+    (text: string, sessionId: string, options?: { execute?: boolean }) => {
       if (!text) return;
       playSound(SoundType.Click);
+
+      // 文本经 normalizeShellCommandText 清洗后，CRLF 已转为规范单 \n，且反斜杠尾随空白已剥离。
+      // 保持 bracketedPaste: false 可避免触发 Bash 5.1+ Readline Active Region 灰底反显选中效果，
+      // 既保证多行续行指令 100% 作为单一指令执行，又呈现出最干净的原生命令行视觉。
+      const formatted = formatTerminalPasteData(text, {
+        bracketedPaste: false,
+        execute: options?.execute,
+      });
+
       // 粘贴和键盘输入必须使用同一广播路由，避免粘贴时绕过广播策略。
-      writePasteToShells(sessionId, text);
+      writePasteToShells(sessionId, formatted);
       // 问题 7 修复：快捷键/右键粘贴绕过 onData，currentInputRef 不会更新。
       // 粘贴后延迟从 buffer 重建 currentInputRef，确保后续补全/历史记录基于真实输入行。
       // 多行粘贴时 \n 会触发 shell 执行，buffer 只剩下一行的 prompt，重建结果为空——正确。
@@ -1864,20 +1891,23 @@ export function TerminalModule({
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [getActiveTerm, rebuildInputFromBuffer, tabId],
+    [getActiveTerm, rebuildInputFromBuffer, tabId, server],
   );
 
-  // 多行或大文本可能立即执行多条命令，先让用户确认，避免误操作。
+  // 方案 A（智能免打扰模式）：
+  // 日常多行命令（如 curl、docker run 等续行脚本）直接平滑粘贴进终端，不弹窗打扰；
+  // 仅在文本超大（超过 10,000 字符）且开启保护时提示确认，防止卡死终端。
   const pasteTextToShell = useCallback(
     (text: string, sessionId: string) => {
       if (!text) return;
-      if (text.length > PASTE_WARN_THRESHOLD || /[\r\n]/.test(text)) {
-        setPendingPaste({ text, sessionId });
+      const normalized = normalizeShellCommandText(text);
+      if (terminalPasteWarnEnabled && normalized.length > PASTE_WARN_THRESHOLD) {
+        setPendingPaste({ text: normalized, sessionId });
         return;
       }
-      writePasteText(text, sessionId);
+      writePasteText(normalized, sessionId);
     },
-    [writePasteText],
+    [writePasteText, terminalPasteWarnEnabled],
   );
 
   // 统一的广播入口：向当前 session 写入数据，并在当前 tab 开启广播时
@@ -1993,6 +2023,32 @@ export function TerminalModule({
       const isMac = navigator.userAgent.includes("Mac");
       if (isMac ? (!event.ctrlKey || event.metaKey) : !event.ctrlKey) return;
       if (event.key?.toLowerCase() !== "c") return;
+
+      // 关键防护 1：检查是否有非终端内部的文本选区（例如用户在 AI 助手、侧边栏、弹窗中划选了文字）
+      // 若存在外部选区，Ctrl+C 必须作为复制执行，严禁发送 SIGINT 杀死正在运行的命令！
+      const winSelection = window.getSelection();
+      const externalSelectedText = winSelection?.toString();
+      if (externalSelectedText && externalSelectedText.length > 0) {
+        const anchorNode = winSelection?.anchorNode;
+        const focusNode = winSelection?.focusNode;
+        const hasTermNode = Array.from(xtermInstances.current.values()).some((info) => {
+          const el = info.term.element;
+          return (anchorNode && el?.contains(anchorNode)) || (focusNode && el?.contains(focusNode));
+        });
+        if (!hasTermNode) {
+          try {
+            navigator.clipboard.writeText(externalSelectedText);
+          } catch {
+            /* ignore */
+          }
+          return;
+        }
+      }
+
+      // 关键防护 2：若当前焦点处于非终端交互控件（如 AI 助手、搜索栏、弹窗输入框）内部，直接放行
+      if (isInteractiveOrInputElement(document.activeElement)) {
+        return;
+      }
 
       const target = event.target as Node | null;
       let targetTermId: string | undefined;
@@ -4485,11 +4541,38 @@ export function TerminalModule({
           }
 
           // Windows/Linux 下 Ctrl+C，或者 Mac 下按 Control+C：立即发送中断 (SIGINT)。
-          // 即使当前有文本选区也必须中断；复制固定使用绑定快捷键。
           if (
             (!isMac && event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && isC) ||
             (isMac && event.ctrlKey && !event.metaKey && isC)
           ) {
+            // 关键保护 1：检查是否有非当前终端内部的文本选区（例如用户在 AI 助手、侧边栏、弹窗中选中了教程文本/内容）
+            // 如果用户选中的是外部内容，Ctrl+C 必须作为复制处理，严禁发送 SIGINT 杀死终端命令！
+            const winSelection = window.getSelection();
+            const externalSelectedText = winSelection?.toString();
+            if (externalSelectedText && externalSelectedText.length > 0) {
+              const anchorNode = winSelection?.anchorNode;
+              const focusNode = winSelection?.focusNode;
+              const termEl = term.element;
+              const isSelectionInThisTerm = Boolean(
+                (anchorNode && termEl?.contains(anchorNode)) ||
+                (focusNode && termEl?.contains(focusNode))
+              );
+              if (!isSelectionInThisTerm) {
+                // 选区位于外部（如 AI 助手、侧边栏、文档弹窗），优先复制外部选区文本并放行
+                try {
+                  navigator.clipboard.writeText(externalSelectedText);
+                } catch {
+                  /* ignore */
+                }
+                return true;
+              }
+            }
+
+            // 关键保护 2：若当前焦点处于非终端交互控件（如 AI 助手、搜索栏、弹窗输入框）内部，直接放行
+            if (isInteractiveOrInputElement(document.activeElement)) {
+              return true;
+            }
+
             event.preventDefault();
             event.stopPropagation();
             handleSigint(termId);
@@ -4646,31 +4729,116 @@ export function TerminalModule({
         container.removeEventListener("contextmenu", contextMenuHandler),
       );
 
-      // 鼠标按下时清除快捷工具条
-      const mouseDownHandler = () => {
-        if (selectionTimerRef.current !== null) {
-          clearTimeout(selectionTimerRef.current);
-          selectionTimerRef.current = null;
+      // 精准计算划词快捷工具条的锚定坐标：
+      // 1. 若鼠标在容器可视区内释放，直接以鼠标落下的坐标为准（顺应用户操作直觉）
+      // 2. 若鼠标拖拽超出应用窗口或容器边界：
+      //    - 从左向右拖拽（正向）：智能锚定在终端选区终点（右侧）或容器右边界
+      //    - 从右向左拖拽（反向）：智能锚定在终端选区起点（左侧）或容器左边界
+      const getSelectionAnchorCoordinates = (
+        fallbackX: number,
+        fallbackY: number,
+        isForward: boolean,
+      ): { x: number; y: number } => {
+        const containerRect = container.getBoundingClientRect();
+
+        // 检查鼠标释放点是否在终端容器内（留 5px 边缘宽容度）
+        const isWithinContainer =
+          fallbackX >= containerRect.left - 5 &&
+          fallbackX <= containerRect.right + 5 &&
+          fallbackY >= containerRect.top - 5 &&
+          fallbackY <= containerRect.bottom + 5;
+
+        // 如果鼠标在终端容器内部释放，严格以鼠标落下的位置为准！
+        if (isWithinContainer) {
+          return {
+            x: Math.max(
+              containerRect.left + 10,
+              Math.min(fallbackX, containerRect.right - 10),
+            ),
+            y: Math.max(
+              containerRect.top + 10,
+              Math.min(fallbackY, containerRect.bottom - 10),
+            ),
+          };
         }
-        setSelectionToolbar(null);
+
+        // 仅当鼠标滑出应用窗口或容器边界时，根据划选方向（正向/反向）智能锚定选区端点
+        try {
+          const selRange = term.getSelectionPosition();
+          if (selRange) {
+            const screenEl = container.querySelector(
+              ".xterm-screen",
+            ) as HTMLElement | null;
+            const screenRect =
+              screenEl?.getBoundingClientRect() ?? containerRect;
+            const cellWidth = screenRect.width / Math.max(1, term.cols);
+            const cellHeight = screenRect.height / Math.max(1, term.rows);
+            const viewportY = term.buffer.active.viewportY ?? 0;
+
+            // 正向划选（从前往后）取 end；反向划选（从后往前）取 start
+            const targetPos = isForward ? selRange.end : selRange.start;
+            const lineInViewport = targetPos.y - viewportY;
+
+            if (lineInViewport >= 0 && lineInViewport < term.rows) {
+              const x = screenRect.left + targetPos.x * cellWidth;
+              const y = screenRect.top + lineInViewport * cellHeight;
+              const clampedX = Math.max(
+                containerRect.left + 10,
+                Math.min(x, containerRect.right - 10),
+              );
+              const clampedY = Math.max(
+                containerRect.top + 10,
+                Math.min(y, containerRect.bottom - 10),
+              );
+              return { x: clampedX, y: clampedY };
+            }
+          }
+        } catch {
+          /* fallback */
+        }
+
+        // 兜底夹紧
+        const clampedX = Math.max(
+          containerRect.left + 10,
+          Math.min(fallbackX, containerRect.right - 10),
+        );
+        const clampedY = Math.max(
+          containerRect.top + 10,
+          Math.min(fallbackY, containerRect.bottom - 10),
+        );
+        return { x: clampedX, y: clampedY };
+      };
+
+      // 追踪当前终端是否处于鼠标左键划选状态及起始坐标
+      let isSelectingThisTerm = false;
+      const mouseDownPosRef = { x: 0, y: 0 };
+
+      // 鼠标按下时清除快捷工具条并标记划选开始
+      const mouseDownHandler = (e: MouseEvent) => {
+        if (e.button === 0) {
+          isSelectingThisTerm = true;
+          mouseDownPosRef.x = e.clientX;
+          mouseDownPosRef.y = e.clientY;
+          if (selectionTimerRef.current !== null) {
+            clearTimeout(selectionTimerRef.current);
+            selectionTimerRef.current = null;
+          }
+          setSelectionToolbar(null);
+        }
       };
       container.addEventListener("mousedown", mouseDownHandler);
       termCleanups.push(() =>
         container.removeEventListener("mousedown", mouseDownHandler),
       );
 
-      // 鼠标抬起时处理自动复制与划词快捷工具条
-      const mouseUpHandler = (e: MouseEvent) => {
-        // 关键防护 1：仅允许鼠标左键（button === 0）触发划词快捷条！
-        // 右键 (button === 2) 或中键 (button === 1) 抬起时严禁触发，防止右键时误弹造成双菜单重叠
-        if (e.button !== 0) {
-          if (selectionTimerRef.current !== null) {
-            clearTimeout(selectionTimerRef.current);
-            selectionTimerRef.current = null;
-          }
-          setSelectionToolbar(null);
-          return;
-        }
+      // 统一唤起划词工具条函数
+      const triggerSelectionToolbar = (
+        fallbackX: number,
+        fallbackY: number,
+        isForward: boolean = true,
+      ) => {
+        if (isUnmountedRef.current) return;
+        if (ctxMenuRef.current) return;
 
         if (useAppStore.getState().terminalCopyPaste ?? false) {
           const selection = term.getSelection();
@@ -4678,6 +4846,7 @@ export function TerminalModule({
             navigator.clipboard.writeText(selection);
           }
         }
+
         if (terminalSelectionToolbarRef.current) {
           if (selectionTimerRef.current !== null) {
             clearTimeout(selectionTimerRef.current);
@@ -4687,12 +4856,18 @@ export function TerminalModule({
             if (isUnmountedRef.current) return;
             // 关键防护 2：如果当前右键菜单已经打开，绝对不弹划词工具条
             if (ctxMenuRef.current) return;
+
             const sel = term.getSelection();
             if (sel && sel.trim().length > 0) {
+              const coords = getSelectionAnchorCoordinates(
+                fallbackX,
+                fallbackY,
+                isForward,
+              );
               setSelectionToolbar({
                 visible: true,
-                x: e.clientX,
-                y: e.clientY,
+                x: coords.x,
+                y: coords.y,
                 text: sel,
               });
             } else {
@@ -4701,9 +4876,70 @@ export function TerminalModule({
           }, 25);
         }
       };
-      container.addEventListener("mouseup", mouseUpHandler);
+
+      // 鼠标抬起时处理自动复制与划词快捷工具条（全局 window 监听，防止拖出容器或拖出窗口释放时漏判）
+      const globalMouseUpHandler = (e: MouseEvent) => {
+        if (!isSelectingThisTerm) return;
+        isSelectingThisTerm = false;
+
+        // 仅允许鼠标左键（button === 0）触发划词快捷条！右键或中键抬起时不触发
+        if (e.button !== 0) {
+          if (selectionTimerRef.current !== null) {
+            clearTimeout(selectionTimerRef.current);
+            selectionTimerRef.current = null;
+          }
+          setSelectionToolbar(null);
+          return;
+        }
+
+        const isForward =
+          e.clientX !== mouseDownPosRef.x
+            ? e.clientX > mouseDownPosRef.x
+            : e.clientY >= mouseDownPosRef.y;
+
+        triggerSelectionToolbar(e.clientX, e.clientY, isForward);
+      };
+      window.addEventListener("mouseup", globalMouseUpHandler);
       termCleanups.push(() =>
-        container.removeEventListener("mouseup", mouseUpHandler),
+        window.removeEventListener("mouseup", globalMouseUpHandler),
+      );
+
+      // 兜底监听 1：鼠标拖拽出应用并在外部松开后移动回窗口（buttons === 0 时意味着左键已释放）
+      const globalMouseMoveHandler = (e: MouseEvent) => {
+        if (isSelectingThisTerm && e.buttons === 0) {
+          isSelectingThisTerm = false;
+          const isForward =
+            e.clientX !== mouseDownPosRef.x
+              ? e.clientX > mouseDownPosRef.x
+              : e.clientY >= mouseDownPosRef.y;
+          triggerSelectionToolbar(e.clientX, e.clientY, isForward);
+        }
+      };
+      window.addEventListener("mousemove", globalMouseMoveHandler);
+      termCleanups.push(() =>
+        window.removeEventListener("mousemove", globalMouseMoveHandler),
+      );
+
+      // 兜底监听 2：鼠标一直向左/向右滑出整个应用窗口边界时，立即触发已划选文本的快捷弹框
+      const documentMouseLeaveHandler = (e: MouseEvent) => {
+        if (isSelectingThisTerm) {
+          isSelectingThisTerm = false;
+          const isForward =
+            e.clientX !== mouseDownPosRef.x
+              ? e.clientX > mouseDownPosRef.x
+              : e.clientY >= mouseDownPosRef.y;
+          triggerSelectionToolbar(e.clientX, e.clientY, isForward);
+        }
+      };
+      document.documentElement.addEventListener(
+        "mouseleave",
+        documentMouseLeaveHandler,
+      );
+      termCleanups.push(() =>
+        document.documentElement.removeEventListener(
+          "mouseleave",
+          documentMouseLeaveHandler,
+        ),
       );
 
       // Ctrl / Cmd + Mouse Wheel 动态缩放终端字号
@@ -6491,9 +6727,57 @@ export function TerminalModule({
     const handleInsertCommand = (e: Event) => {
       const customEvent = e as CustomEvent<{ command?: string; execute?: boolean }>;
       if (!isActiveRef.current || !isVisibleRef.current) return;
-      if (customEvent.detail?.command && activeTermIdRef.current) {
-        const text = customEvent.detail.command + (customEvent.detail.execute ? "\n" : "");
-        writePasteText(text, activeTermIdRef.current);
+      const cmd = customEvent.detail?.command;
+      if (!cmd) return;
+
+      const activeId = activeTermIdRef.current || activeTermId;
+      let targetSessionId: string | null = null;
+
+      if (activeId) {
+        targetSessionId =
+          terminalsRef.current.get(activeId)?.sessionId ||
+          xtermInstances.current.get(activeId)?.sessionId ||
+          null;
+      }
+
+      // 兜底：若 activeId 未能对应活跃 session，从当前终端实例列表中寻找第一个有效连接的 sessionId
+      if (!targetSessionId || !sshService.isSessionAlive(targetSessionId)) {
+        for (const [id, inst] of terminalsRef.current.entries()) {
+          if (inst.sessionId && sshService.isSessionAlive(inst.sessionId)) {
+            targetSessionId = inst.sessionId;
+            activeTermIdRef.current = id;
+            setActiveTermId(id);
+            break;
+          }
+        }
+      }
+
+      if (!targetSessionId || !sshService.isSessionAlive(targetSessionId)) {
+        for (const [id, inst] of xtermInstances.current.entries()) {
+          if (inst.sessionId && sshService.isSessionAlive(inst.sessionId)) {
+            targetSessionId = inst.sessionId;
+            activeTermIdRef.current = id;
+            setActiveTermId(id);
+            break;
+          }
+        }
+      }
+
+      if (targetSessionId) {
+        writePasteText(cmd, targetSessionId, {
+          execute: customEvent.detail.execute,
+        });
+
+        const termToFocus = activeId
+          ? xtermInstances.current.get(activeId)?.term
+          : Array.from(xtermInstances.current.values())[0]?.term;
+        if (termToFocus) {
+          try {
+            termToFocus.focus();
+          } catch {
+            /* ignore */
+          }
+        }
       }
     };
 
@@ -8491,7 +8775,10 @@ export function TerminalModule({
       <TerminalPasteConfirmDialog
         pendingPaste={pendingPaste}
         onClose={() => setPendingPaste(null)}
-        onConfirm={() => {
+        onConfirm={(dontAskAgain) => {
+          if (dontAskAgain) {
+            setTerminalPasteWarnEnabled(false);
+          }
           if (pendingPaste) {
             writePasteText(pendingPaste.text, pendingPaste.sessionId);
           }

@@ -1480,7 +1480,180 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
 
     unmount()
   })
+
+  it('opens context menu on right click with selected text and dispatches insert-terminal-command', () => {
+    useAppStore.setState({
+      tabs: [
+        {
+          id: 'tab-1',
+          title: 'Terminal 1',
+          module: 'terminal',
+          closable: true,
+        },
+      ],
+      activeTabId: 'tab-1',
+    })
+
+    useAIStore.setState({
+      enableAiGlobal: true,
+      isFloatingAssistantOpen: true,
+      assistantMessages: [
+        {
+          id: 'msg-tutorial-1',
+          role: 'assistant',
+          content: '请安装 curl: `sudo apt install -y curl`',
+          createdAt: Date.now(),
+          status: 'done',
+        },
+      ],
+    })
+
+    const dispatchedEvents: any[] = []
+    const handleInsert = (e: Event) => {
+      dispatchedEvents.push((e as CustomEvent).detail)
+    }
+    window.addEventListener('insert-terminal-command', handleInsert)
+
+    const originalGetSelection = window.getSelection
+    window.getSelection = () =>
+      ({
+        toString: () => 'sudo apt install -y curl',
+      }) as any
+
+    const { unmount } = renderWithProviders(<FloatingAIAssistant />)
+
+    const dialog = screen.getByTestId('ai-assistant-dialog')
+    fireEvent.contextMenu(dialog, { clientX: 200, clientY: 300 })
+
+    const menu = screen.getByTestId('ai-assistant-context-menu')
+    expect(menu).toBeTruthy()
+
+    const runBtn = screen.getByTestId('ai-ctx-run-btn')
+    expect(runBtn).toBeTruthy()
+    fireEvent.click(runBtn)
+
+    expect(dispatchedEvents).toEqual([
+      { command: 'sudo apt install -y curl', execute: true },
+    ])
+
+    window.getSelection = originalGetSelection
+    window.removeEventListener('insert-terminal-command', handleInsert)
+    unmount()
+  })
+
+  it('right clicks on code block without text selection and opens context menu with code content', () => {
+    useAppStore.setState({
+      tabs: [
+        {
+          id: 'tab-1',
+          title: 'Terminal 1',
+          module: 'terminal',
+          closable: true,
+        },
+      ],
+      activeTabId: 'tab-1',
+    })
+
+    useAIStore.setState({
+      enableAiGlobal: true,
+      isFloatingAssistantOpen: true,
+      assistantMessages: [
+        {
+          id: 'msg-code-1',
+          role: 'assistant',
+          content: '```bash\nufw allow 80/tcp\n```',
+          createdAt: Date.now(),
+          status: 'done',
+        },
+      ],
+    })
+
+    const originalGetSelection = window.getSelection
+    window.getSelection = () =>
+      ({
+        toString: () => '',
+      }) as any
+
+    const { unmount } = renderWithProviders(<FloatingAIAssistant />)
+
+    const codeEl = document.querySelector('pre code')
+    expect(codeEl).toBeTruthy()
+
+    fireEvent.contextMenu(codeEl!, { clientX: 250, clientY: 350 })
+
+    const menu = screen.getByTestId('ai-assistant-context-menu')
+    expect(menu).toBeTruthy()
+    expect(menu.textContent).toContain('ufw allow 80/tcp')
+
+    window.getSelection = originalGetSelection
+    unmount()
+  })
+
+  it('automatically opens context menu on mouseUp when text is selected (like terminal)', async () => {
+    vi.useFakeTimers()
+    useAppStore.setState({
+      tabs: [
+        {
+          id: 'tab-1',
+          title: 'Terminal 1',
+          module: 'terminal',
+          closable: true,
+        },
+      ],
+      activeTabId: 'tab-1',
+      terminalSelectionToolbar: true,
+      terminalCopyPaste: true,
+    })
+
+    const writeTextSpy = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, {
+      clipboard: {
+        writeText: writeTextSpy,
+      },
+    })
+
+    useAIStore.setState({
+      enableAiGlobal: true,
+      isFloatingAssistantOpen: true,
+      assistantMessages: [
+        {
+          id: 'msg-1',
+          role: 'assistant',
+          content: '请使用 curl -SL https://example.com/script.sh 下载',
+          createdAt: Date.now(),
+          status: 'done',
+        },
+      ],
+    })
+
+    const originalGetSelection = window.getSelection
+    window.getSelection = () =>
+      ({
+        toString: () => 'curl -SL https://example.com/script.sh',
+      }) as any
+
+    const { unmount } = renderWithProviders(<FloatingAIAssistant />)
+
+    const dialog = screen.getByTestId('ai-assistant-dialog')
+    fireEvent.mouseUp(dialog, { button: 0, clientX: 220, clientY: 280 })
+
+    // Advance 25ms timer for selection stabilization
+    act(() => {
+      vi.advanceTimersByTime(50)
+    })
+
+    const menu = screen.getByTestId('ai-assistant-context-menu')
+    expect(menu).toBeTruthy()
+    expect(menu.textContent).toContain('curl -SL https://example.c')
+    expect(menu.querySelector('[title]')?.getAttribute('title')).toBe('curl -SL https://example.com/script.sh')
+    expect(writeTextSpy).toHaveBeenCalledWith('curl -SL https://example.com/script.sh')
+
+    window.getSelection = originalGetSelection
+    vi.useRealTimers()
+    unmount()
+  })
 })
+
 
 
 

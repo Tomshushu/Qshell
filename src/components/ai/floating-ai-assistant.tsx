@@ -7,7 +7,7 @@
  * 3. 富文本与命令互通：内置 Markdown 语法解析与交互式代码块，支持一键填入终端并执行
  */
 
-import React, { useState, useRef, useEffect, useMemo } from 'react'
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { useAIStore } from '@/store/ai-store'
 import { useAppStore } from '@/store'
 import { getTerminalTheme } from '@/utils/terminal-themes'
@@ -51,11 +51,16 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { useToast } from '@/components/ui/toast'
 import { cn } from '@/lib/utils'
 import { hasActiveAIProvider } from '@/store/ai-store'
 import type { AIAssistantExecutionCard } from '@/types/ai'
 import { PipelineBlocksViewer } from './pipeline-blocks-viewer'
 import { detectUserIntent } from '@/services/ai/shell-explainer'
+import {
+  AIAssistantContextMenu,
+  type AIAssistantContextMenuState,
+} from './ai-assistant-context-menu'
 
 const MASCOT_SIZE = 44
 const STORAGE_MASCOT_OFFSET_KEY = 'qshell_ai_mascot_offset_v5'
@@ -1251,8 +1256,10 @@ export function FloatingAIAssistant() {
     }
   }, [isInTerminal, isLightTerminal])
 
+  const { toast } = useToast()
   const [copiedCode, setCopiedCode] = useState<string | null>(null)
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
+  const [contextMenu, setContextMenu] = useState<AIAssistantContextMenuState | null>(null)
   const [dialogSize, setDialogSize] = useState<{ width: number; height: number } | null>(null)
   const [isDialogResizing, setIsDialogResizing] = useState(false)
   const dialogResizeRef = useRef<{
@@ -1328,13 +1335,20 @@ export function FloatingAIAssistant() {
     setDialogSize(null)
   }
 
-  // 退出并关闭 AI 助手弹窗（统一重置卡片位置与尺寸、关闭历史抽屉、播放关闭音效）
+  // 退出并关闭 AI 助手弹窗（统一重置卡片位置与尺寸、关闭历史抽屉、关闭右键菜单、播放关闭音效）
   const handleExitAssistant = () => {
     playSound(SoundType.Close)
     resetDialogCardPosition()
     setShowHistoryPanel(false)
+    setContextMenu(null)
     closeFloatingAssistant()
   }
+
+  useEffect(() => {
+    if (!isFloatingAssistantOpen) {
+      setContextMenu(null)
+    }
+  }, [isFloatingAssistantOpen])
 
   // 快捷键支持：Ctrl+Alt+A / Cmd+Alt+A 切换 AI 助手，Esc 退出或收起历史
   useEffect(() => {
@@ -1697,6 +1711,225 @@ export function FloatingAIAssistant() {
     }, 2000)
   }
 
+  // 右键菜单交互兜底：支持划选教程文字、点击代码块或消息时快速唤起「复制」、「在当前终端执行」、「填入当前终端」
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+
+    // 1. 获取选中文本（兼容普通文本选区与 textarea/input 内部选区）
+    const target = e.target as HTMLElement | null
+    let rawSel = window.getSelection()?.toString() || ''
+    if (!rawSel.trim() && (target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement)) {
+      const start = target.selectionStart ?? 0
+      const end = target.selectionEnd ?? 0
+      if (end > start) {
+        rawSel = target.value.slice(start, end)
+      }
+    }
+    const selectedText = rawSel.trim()
+
+    let targetText = selectedText
+    let isCode = false
+    let isFullMessage = false
+    const hasSelection = Boolean(selectedText)
+
+    // 2. 若未划选，则检测是否右键点击在代码块或消息气泡上
+    if (!targetText && target) {
+      const codeEl = target.closest('pre, code')
+      if (codeEl?.textContent?.trim()) {
+        targetText = codeEl.textContent.trim()
+        isCode = true
+      } else {
+        const msgEl = target.closest('.ai-chat-content, [data-message-content]')
+        if (msgEl?.textContent?.trim()) {
+          targetText = msgEl.textContent.trim()
+          isFullMessage = true
+        }
+      }
+    }
+
+    if (!targetText) {
+      setContextMenu(null)
+      return
+    }
+
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      text: targetText,
+      isCode,
+      isFullMessage,
+      hasSelection,
+    })
+  }
+
+  const handleExecuteInTerminal = (cmd: string) => {
+    if (!isInTerminal) {
+      toast.warning(t('ai_ctx_not_in_terminal') || '当前未处于终端窗口')
+      return
+    }
+    window.dispatchEvent(
+      new CustomEvent('insert-terminal-command', {
+        detail: { command: cmd, execute: true },
+      }),
+    )
+    window.dispatchEvent(new CustomEvent('focus-active-terminal'))
+    toast.success(t('ai_ctx_executed_in_terminal') || '已发送至终端执行')
+    playSound(SoundType.Click)
+  }
+
+  const handleInsertToTerminal = (cmd: string) => {
+    if (!isInTerminal) {
+      toast.warning(t('ai_ctx_not_in_terminal') || '当前未处于终端窗口')
+      return
+    }
+    window.dispatchEvent(
+      new CustomEvent('insert-terminal-command', {
+        detail: { command: cmd, execute: false },
+      }),
+    )
+    window.dispatchEvent(new CustomEvent('focus-active-terminal'))
+    toast.info(t('ai_ctx_inserted_to_terminal') || '已填入当前终端')
+    playSound(SoundType.Click)
+  }
+
+  const handleCopyFromContextMenu = (textToCopy: string) => {
+    try {
+      navigator.clipboard.writeText(textToCopy)
+      setCopiedCode(textToCopy)
+      toast.success(t('ai_ctx_copied') || '已复制到剪贴板')
+      playSound(SoundType.Click)
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // 划选快捷弹框定时器与监听：像终端一样划选/复制完直接弹出「复制/在当前终端执行/填入当前终端」
+  const selectionTimerRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (selectionTimerRef.current !== null) {
+        window.clearTimeout(selectionTimerRef.current)
+      }
+    }
+  }, [])
+
+  const isSelectingInDialogRef = useRef(false)
+
+  const handleDialogMouseDown = (e: React.MouseEvent) => {
+    if (e.button === 0) {
+      isSelectingInDialogRef.current = true
+      if (selectionTimerRef.current !== null) {
+        window.clearTimeout(selectionTimerRef.current)
+        selectionTimerRef.current = null
+      }
+    }
+  }
+
+  const handleDialogMouseUp = useCallback((e: React.MouseEvent | MouseEvent) => {
+    // 关键：仅左键 (button === 0) 释放时触发划词浮动条；右键或中键由 handleContextMenu 或原生事件接管
+    if (e.button !== 0) {
+      return
+    }
+
+    // 拖拽窗口或缩放窗口中不触发划选浮条
+    if (isDialogDragging || isDialogResizing) {
+      return
+    }
+
+    const target = e.target as HTMLElement | null
+    // 若在输入框内部划选，避免遮挡用户打字输入与光标定位
+    if (target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement) {
+      return
+    }
+
+    // 如果全局终端划词工具条关闭了，不主动弹出
+    const toolbarEnabled = useAppStore.getState().terminalSelectionToolbar ?? true
+    if (!toolbarEnabled) {
+      return
+    }
+
+    if (selectionTimerRef.current !== null) {
+      window.clearTimeout(selectionTimerRef.current)
+    }
+
+    const clientX = e.clientX
+    const clientY = e.clientY
+
+    // 延时 25ms 确保 DOM 选区稳定
+    selectionTimerRef.current = window.setTimeout(() => {
+      selectionTimerRef.current = null
+
+      const rawSel = window.getSelection()?.toString() || ''
+      const selectedText = rawSel.trim()
+
+      if (selectedText.length > 0) {
+        // 若开启了「划选文本自动复制」(terminalCopyPaste)，同步复制至剪贴板
+        if (useAppStore.getState().terminalCopyPaste ?? false) {
+          try {
+            navigator.clipboard.writeText(selectedText)
+          } catch {
+            /* ignore */
+          }
+        }
+
+        let targetX = clientX
+        let targetY = clientY
+        try {
+          const selection = window.getSelection()
+          if (selection && selection.rangeCount > 0) {
+            const range = selection.getRangeAt(0)
+            const rect = range.getBoundingClientRect()
+            if (rect.width > 0 || rect.height > 0) {
+              targetX = rect.right
+              targetY = rect.bottom
+            }
+          }
+        } catch {
+          /* fallback to clientX, clientY */
+        }
+
+        const isCode = Boolean(target?.closest('pre, code'))
+        setContextMenu({
+          x: targetX,
+          y: targetY,
+          text: selectedText,
+          isCode,
+          hasSelection: true,
+        })
+      }
+    }, 25)
+  }, [isDialogDragging, isDialogResizing])
+
+  // 全局鼠标抬起监听：无论鼠标拖拽至何处（即使滑出助手面板甚至应用外），松手即触发
+  useEffect(() => {
+    if (!isFloatingAssistantOpen) return
+
+    const handleWindowMouseUp = (e: MouseEvent) => {
+      if (!isSelectingInDialogRef.current) return
+      isSelectingInDialogRef.current = false
+      if (e.button === 0) {
+        handleDialogMouseUp(e)
+      }
+    }
+
+    const handleWindowMouseMove = (e: MouseEvent) => {
+      if (isSelectingInDialogRef.current && e.buttons === 0) {
+        isSelectingInDialogRef.current = false
+        handleDialogMouseUp(e)
+      }
+    }
+
+    window.addEventListener('mouseup', handleWindowMouseUp)
+    window.addEventListener('mousemove', handleWindowMouseMove)
+
+    return () => {
+      window.removeEventListener('mouseup', handleWindowMouseUp)
+      window.removeEventListener('mousemove', handleWindowMouseMove)
+    }
+  }, [isFloatingAssistantOpen, handleDialogMouseUp])
+
   const CAPABILITY_CARDS = [
     {
       id: 'cluster_inspect',
@@ -1816,6 +2049,9 @@ export function FloatingAIAssistant() {
       {isFloatingAssistantOpen && (
         <div
           data-testid="ai-assistant-dialog"
+          role="dialog"
+          aria-modal="false"
+          tabIndex={-1}
           style={{
             position: 'fixed',
             left: `${dialogLayout.x}px`,
@@ -1823,6 +2059,45 @@ export function FloatingAIAssistant() {
             width: `${dialogLayout.width}px`,
             height: `${dialogLayout.height}px`,
             zIndex: 50,
+          }}
+          onContextMenu={handleContextMenu}
+          onMouseDown={handleDialogMouseDown}
+          onMouseUp={handleDialogMouseUp}
+          onKeyDown={(e) => {
+            // 当用户在 AI 助手窗口内按 Ctrl+C / Cmd+C 时：
+            // 阻止冒泡到终端层（防止终端拦截触发 SIGINT 中断终止），
+            // 并确保将选中文本正确复制到系统剪贴板。
+            if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
+              e.stopPropagation()
+              const sel = window.getSelection()?.toString()?.trim()
+              if (sel) {
+                try {
+                  navigator.clipboard.writeText(sel)
+                  playSound(SoundType.Click)
+                  toast.success(t('ai_ctx_copied') || '已复制到剪贴板')
+
+                  // 若快捷弹框尚未展示，直接根据选区位置唤起弹框兜底
+                  if (!contextMenu) {
+                    const selection = window.getSelection()
+                    if (selection && selection.rangeCount > 0) {
+                      const range = selection.getRangeAt(0)
+                      const rect = range.getBoundingClientRect()
+                      const target = e.target as HTMLElement | null
+                      const isCode = Boolean(target?.closest('pre, code'))
+                      setContextMenu({
+                        x: rect.right,
+                        y: rect.bottom,
+                        text: sel,
+                        isCode,
+                        hasSelection: true,
+                      })
+                    }
+                  }
+                } catch {
+                  /* ignore */
+                }
+              }
+            }
           }}
           className={cn(
             'flex flex-col overflow-hidden rounded-2xl select-text animate-in fade-in zoom-in-95',
@@ -2239,6 +2514,7 @@ export function FloatingAIAssistant() {
                       <div className={cn('flex flex-col max-w-[85%]', isUser ? 'items-end' : 'items-start')}>
                         {/* 气泡正文 */}
                         <div
+                          data-message-content="true"
                           className={cn(
                             'rounded-2xl text-xs leading-relaxed px-3.5 py-2.5 shadow-2xs',
                             isUser
@@ -2593,6 +2869,19 @@ export function FloatingAIAssistant() {
             </svg>
           </div>
         </div>
+      )}
+
+      {/* 3. AI 助手划选与快捷交互右键上下文菜单 */}
+      {isFloatingAssistantOpen && contextMenu && (
+        <AIAssistantContextMenu
+          ctxMenu={contextMenu}
+          isLightTerminal={isLightTerminal}
+          isInTerminal={isInTerminal}
+          onClose={() => setContextMenu(null)}
+          onCopy={handleCopyFromContextMenu}
+          onExecuteInTerminal={handleExecuteInTerminal}
+          onInsertToTerminal={handleInsertToTerminal}
+        />
       )}
     </>
   )

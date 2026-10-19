@@ -142,6 +142,9 @@ export const createTerminalSlice: StateCreator<
     set({ terminalAntiIdleCustomString: str }),
   terminalCopyPaste: false,
   setTerminalCopyPaste: (enabled) => set({ terminalCopyPaste: enabled }),
+  terminalPasteWarnEnabled: true,
+  setTerminalPasteWarnEnabled: (enabled) =>
+    set({ terminalPasteWarnEnabled: enabled }),
   terminalSelectionToolbar: true,
   setTerminalSelectionToolbar: (enabled) =>
     set({ terminalSelectionToolbar: enabled }),

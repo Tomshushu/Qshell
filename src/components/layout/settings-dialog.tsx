@@ -1041,6 +1041,8 @@ function SettingsPanel({
     setTerminalAntiIdleCustomString,
     terminalCopyPaste,
     setTerminalCopyPaste,
+    terminalPasteWarnEnabled,
+    setTerminalPasteWarnEnabled,
     terminalSelectionToolbar,
     setTerminalSelectionToolbar,
     uiSoundEnabled,
@@ -1728,6 +1730,18 @@ function SettingsPanel({
                   <Switch
                     checked={terminalCopyPaste ?? false}
                     onCheckedChange={setTerminalCopyPaste}
+                  />
+                </div>
+
+                {/* Large text paste warning */}
+                <div className="flex items-center justify-between">
+                  <SettingLabelWithHint
+                    label={t("term_paste_warn_enabled")}
+                    desc={t("term_paste_warn_enabled_desc")}
+                  />
+                  <Switch
+                    checked={terminalPasteWarnEnabled ?? true}
+                    onCheckedChange={setTerminalPasteWarnEnabled}
                   />
                 </div>
 
