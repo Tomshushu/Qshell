@@ -72,6 +72,14 @@ export const useAppStore = create<AppState>()(
         sftpRemoteViewMode: state.sftpRemoteViewMode,
         sftpLocalShowHidden: state.sftpLocalShowHidden,
         sftpRemoteShowHidden: state.sftpRemoteShowHidden,
+        sftpLocalSortField: state.sftpLocalSortField,
+        sftpLocalSortOrder: state.sftpLocalSortOrder,
+        sftpRemoteSortField: state.sftpRemoteSortField,
+        sftpRemoteSortOrder: state.sftpRemoteSortOrder,
+        pathBookmarks: state.pathBookmarks,
+        workspaceFileSortField: state.workspaceFileSortField,
+        workspaceFileSortDirection: state.workspaceFileSortDirection,
+        workspaceFileShowHidden: state.workspaceFileShowHidden,
         sftpFileIconTheme: state.sftpFileIconTheme,
         sftpTransferConcurrency: state.sftpTransferConcurrency,
         transferRateLimit: state.transferRateLimit,
@@ -198,6 +206,32 @@ export const useAppStore = create<AppState>()(
           }
           if (typeof state.sftpRemoteShowHidden !== "boolean") {
             state.sftpRemoteShowHidden = true;
+          }
+          const validSortFields: Array<"name" | "size" | "modified"> = ["name", "size", "modified"];
+          const validSortOrders: Array<"asc" | "desc"> = ["asc", "desc"];
+          if (!state.sftpLocalSortField || !validSortFields.includes(state.sftpLocalSortField)) {
+            state.sftpLocalSortField = "name";
+          }
+          if (!state.sftpLocalSortOrder || !validSortOrders.includes(state.sftpLocalSortOrder)) {
+            state.sftpLocalSortOrder = "asc";
+          }
+          if (!state.sftpRemoteSortField || !validSortFields.includes(state.sftpRemoteSortField)) {
+            state.sftpRemoteSortField = "name";
+          }
+          if (!state.sftpRemoteSortOrder || !validSortOrders.includes(state.sftpRemoteSortOrder)) {
+            state.sftpRemoteSortOrder = "asc";
+          }
+          if (!state.pathBookmarks || typeof state.pathBookmarks !== 'object') {
+            state.pathBookmarks = {};
+          }
+          if (!state.workspaceFileSortField || !['name', 'size', 'modifiedTime'].includes(state.workspaceFileSortField)) {
+            state.workspaceFileSortField = 'name';
+          }
+          if (!state.workspaceFileSortDirection || !['asc', 'desc'].includes(state.workspaceFileSortDirection)) {
+            state.workspaceFileSortDirection = 'asc';
+          }
+          if (typeof state.workspaceFileShowHidden !== 'boolean') {
+            state.workspaceFileShowHidden = true;
           }
           // 确保 sftpFileIconTheme 处于有效选项范围
           if (

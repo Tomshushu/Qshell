@@ -153,8 +153,16 @@ pub async fn files_list(server_id: String, dir_path: String) -> Result<Vec<FileE
                 size: e.size as i64,
                 modified_time: format_mtime(e.mtime),
                 permissions: format_permissions(e.permissions, is_windows),
-                owner: e.user.unwrap_or_default(),
-                group: e.group.unwrap_or_default(),
+                owner: match e.user {
+                    Some(u) if !u.is_empty() => u,
+                    _ if e.uid == Some(0) => "root".to_string(),
+                    _ => String::new(),
+                },
+                group: match e.group {
+                    Some(g) if !g.is_empty() => g,
+                    _ if e.gid == Some(0) => "root".to_string(),
+                    _ => String::new(),
+                },
                 uid: e.uid,
                 gid: e.gid,
             }

@@ -42,7 +42,8 @@ function formatBytes(bytes: number): string {
   const k = 1024
   const sizes = ['B', 'KB', 'MB', 'GB']
   const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`
+  const decimals = i >= 2 ? 2 : 1
+  return `${(bytes / Math.pow(k, i)).toFixed(decimals)} ${sizes[i]}`
 }
 
 function MirrorStatusCard({

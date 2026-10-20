@@ -58,7 +58,8 @@ function formatBytes(bytes: number): string {
   const k = 1024
   const sizes = ['B', 'KB', 'MB', 'GB']
   const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i] || 'MB'}`
+  const decimals = i >= 2 ? 2 : (i === 0 ? 0 : 1)
+  return `${(bytes / Math.pow(k, i)).toFixed(decimals)} ${sizes[i] || 'MB'}`
 }
 
 /** 获取文件扩展名 */

@@ -50,6 +50,7 @@ import { PackProgressDialog } from '@/components/ui/pack-progress-dialog'
 import type { FileEntry } from '@/types'
 import type { FileStatInfo } from '@/services/api'
 import { useTranslation } from '@/i18n'
+import { useFileExplorerPreferences } from '@/hooks/use-file-explorer-preferences'
 import { useToast } from '@/components/ui/toast'
 import { useAppStore } from '@/store'
 import { extractBaseServerId } from '@/services/ssh-connection-state'
@@ -291,16 +292,24 @@ export function FilesModule({
   // === 新增功能状态 ===
   // 拖拽上传
   const [dragOver, setDragOver] = useState(false)
-  // 列排序
-  const [sortField, setSortField] = useState<SortField>('name')
-  const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
-  // 路径书签
-  const [bookmarks, setBookmarks] = useState<string[]>(() => {
-    try {
-      const saved = localStorage.getItem(`file-bookmarks-${baseServerId}`)
-      return saved ? JSON.parse(saved) : []
-    } catch { return [] }
+  // 统一偏好与路径收藏（跨端漫游与集中管理）
+  const filePrefs = useFileExplorerPreferences({
+    scope: 'workspace',
+    serverId: baseServerId,
+    onToast: {
+      success: (msg) => toastRef.current.success(msg),
+      info: (msg) => toastRef.current.info(msg),
+      warning: (msg) => toastRef.current.warning(msg),
+    },
   })
+
+  const sortField = filePrefs.sortField as SortField
+  const sortDirection = filePrefs.sortOrder as SortDirection
+  const toggleSort = filePrefs.handleSort as (field: SortField) => void
+  const showHidden = filePrefs.showHidden
+  const toggleShowHidden = filePrefs.toggleShowHidden
+  const bookmarks = filePrefs.bookmarks
+
   // 文件属性对话框
   const [propertiesFile, setPropertiesFile] = useState<FileEntry | null>(null)
   const [statInfo, setStatInfo] = useState<FileStatInfo | null>(null)
@@ -334,10 +343,7 @@ export function FilesModule({
     }
   }, [])
 
-  // 书签持久化
-  useEffect(() => {
-    localStorage.setItem(`file-bookmarks-${baseServerId}`, JSON.stringify(bookmarks))
-  }, [bookmarks, baseServerId])
+
 
   // 点击其他地方关闭右键菜单
   // 注意两个坑（本项目其他浮层已踩过）：
@@ -899,9 +905,11 @@ export function FilesModule({
   // D5: 使用 useDeferredValue 对搜索输入做 debounce,避免大量文件时每次按键触发重排卡顿
   const deferredSearch = useDeferredValue(searchQuery)
   const sortedFiles = useMemo(() => {
-    const filtered = files.filter(f =>
-      !deferredSearch || f.name.toLowerCase().includes(deferredSearch.toLowerCase())
-    )
+    const filtered = files.filter(f => {
+      if (!showHidden && f.name.startsWith('.')) return false
+      if (deferredSearch && !f.name.toLowerCase().includes(deferredSearch.toLowerCase())) return false
+      return true
+    })
     return [...filtered].sort((a, b) => {
       // 目录始终排在前面
       if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
@@ -913,16 +921,9 @@ export function FilesModule({
       }
       return sortDirection === 'asc' ? cmp : -cmp
     })
-  }, [files, deferredSearch, sortField, sortDirection])
+  }, [files, deferredSearch, sortField, sortDirection, showHidden])
 
-  const toggleSort = (field: SortField) => {
-    if (sortField === field) {
-      setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc')
-    } else {
-      setSortField(field)
-      setSortDirection('asc')
-    }
-  }
+// toggleSort provided by useFileExplorerPreferences
 
   const rowVirtualizer = useVirtualizer({
     count: sortedFiles.length,
@@ -1011,10 +1012,10 @@ export function FilesModule({
 
   const formatSize = (bytes: number) => {
     if (bytes === 0) return '-'
-    if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(1)}G`
-    if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)}M`
-    if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)}K`
-    return `${bytes}B`
+    if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(2)} GB`
+    if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(2)} MB`
+    if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    return `${bytes} B`
   }
 
   const permissionBadge = (perm?: string) => <PermissionBadge perm={perm} />
@@ -1501,21 +1502,405 @@ export function FilesModule({
     }
   }
 
-  // 书签切换
-  const toggleBookmark = () => {
-    if (!currentPath) return
-    // E5: 书签最多 50 个,超过时提示用户并阻止添加
-    if (!bookmarks.includes(currentPath) && bookmarks.length >= 50) {
-      toastRef.current.warning('书签数量已达上限 50')
+  // 书签操作（委托给 useFileExplorerPreferences 统一处理）
+  const handleAddBookmark = useCallback((path: string) => {
+    filePrefs.addBookmark(path, {
+      maxLimitMsg: t('sftp_bookmarks_max_limit') || '书签数量已达上限 50',
+      successMsg: t('sftp_bookmark_added') || '已添加书签',
+    })
+  }, [filePrefs, t])
+
+  const handleRemoveBookmark = useCallback((path: string) => {
+    filePrefs.removeBookmark(path, {
+      infoMsg: t('sftp_bookmark_removed') || '已移除书签',
+    })
+  }, [filePrefs, t])
+
+  const toggleBookmark = useCallback((path?: string) => {
+    const target = path || currentPath
+    if (!target) return
+    filePrefs.toggleBookmark(target, {
+      maxLimitMsg: t('sftp_bookmarks_max_limit') || '书签数量已达上限 50',
+      successMsg: t('sftp_bookmark_added') || '已添加书签',
+      infoMsg: t('sftp_bookmark_removed') || '已移除书签',
+    })
+  }, [filePrefs, currentPath, t])
+
+  // 刷新文件所在父目录（而非 currentPath）：树状视图编辑深层文件时，
+        // currentPath 可能与编辑文件不在同一层级，备份文件需在父目录才能看到
+        const parentPath = previewFile.path.includes('/')
+          ? previewFile.path.substring(0, previewFile.path.lastIndexOf('/')) || '/'
+          : '/'
+        fetchFiles(parentPath)
+        if (expandedPaths.has(parentPath) && parentPath !== currentPath) {
+          loadNodeChildren(parentPath, true)
+        }
+      }
+    } catch (err) {
+      toastRef.current.error(err instanceof Error ? err.message : t('fs_err_save'), 1500)
+    } finally {
+      setEditLoading(false)
+    }
+  }
+
+  const handleBackup = async (path: string) => {
+    try {
+      const result = await sshService.backupFile(serverId, path)
+      if (result.exitCode !== 0) {
+        toastRef.current.error(`${t('fs_err_backup')}: ${result.stderr || t('common_unknown_error')}`, 1500)
+        return
+      }
+      // 成功：后端 stdout 返回备份文件完整路径，提示用户备份位置
+      toastRef.current.success(`${t('fs_backup_success')}: ${result.stdout}`, 1500)
+      // 刷新父目录列表，使备份文件立即可见（无需手动刷新）
+      const parentPath = path.includes('/')
+        ? path.substring(0, path.lastIndexOf('/')) || '/'
+        : '/'
+      if (parentPath === currentPath) {
+        fetchFiles(currentPath)
+      } else if (expandedPaths.has(parentPath)) {
+        loadNodeChildren(parentPath, true)
+      }
+    } catch (err) {
+      toastRef.current.error(err instanceof Error ? err.message : t('fs_err_backup'), 1500)
+    }
+  }
+
+  const handleNewItem = async () => {
+    if (!newItemName.trim()) return
+    // B1: 校验名称不能包含路径分隔符,也不能为 . 或 ..
+    if (newItemName.includes('/') || newItemName.includes('\\')) {
+      toastRef.current.error(t('common_name_too_long_separator'))
       return
     }
-    setBookmarks(prev => {
-      if (prev.includes(currentPath)) {
-        return prev.filter(p => p !== currentPath)
+    if (newItemName === '.' || newItemName === '..') {
+      toastRef.current.error(t('common_name_too_long_separator'))
+      return
+    }
+    const fullPath = currentPath === '/' ? `/${newItemName}` : `${currentPath}/${newItemName}`
+    try {
+      if (newItemType === 'dir') {
+        const result = await sshService.mkdir(serverId, fullPath)
+        if (result.exitCode !== 0) {
+          setError(`${t('fs_err_mkdir')}: ${result.stderr || t('common_unknown_error')}`)
+          return
+        }
+      } else {
+        const result = await sshService.writeFile(serverId, fullPath, '')
+        if (result.exitCode !== 0) {
+          // B2: 新建文件分支应使用保存失败的错误码,而非 mkdir
+          setError(`${t('common_save_failed')}: ${result.stderr || t('common_unknown_error')}`)
+          return
+        }
       }
-      return [...prev, currentPath]
+      setShowNewItem(false)
+      setNewItemName('')
+      fetchFiles(currentPath)
+      if (expandedPaths.has(currentPath)) {
+        loadNodeChildren(currentPath, true)
+      } else if (currentPath === '/') {
+        loadNodeChildren('/', true)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('fs_err_mkdir'))
+    }
+  }
+
+  const handleRename = async (oldPath: string, newName: string) => {
+    if (!newName.trim()) return
+    // B1: 校验名称不能包含路径分隔符,也不能为 . 或 ..
+    if (newName.includes('/') || newName.includes('\\')) {
+      toastRef.current.error(t('common_name_too_long_separator'))
+      return
+    }
+    if (newName === '.' || newName === '..') {
+      toastRef.current.error(t('common_name_too_long_separator'))
+      return
+    }
+    const parentPath = oldPath.substring(0, oldPath.lastIndexOf('/')) || '/'
+    const newPath = parentPath === '/' ? `/${newName}` : `${parentPath}/${newName}`
+    try {
+      const result = await sshService.renameFile(serverId, oldPath, newPath)
+      if (result.exitCode !== 0) {
+        setError(`${t('fs_err_rename')}: ${result.stderr || t('common_unknown_error')}`)
+      } else {
+        fetchFiles(currentPath)
+        if (expandedPaths.has(parentPath)) {
+          loadNodeChildren(parentPath, true)
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('fs_err_rename'))
+    }
+  }
+
+  // 进入内联重命名态（预填原文件名），供 F2 / 右键 / 再次点击共用
+  const startRename = useCallback((file: { path: string; name: string }) => {
+    setRenamingFile(file.path)
+    setRenameValue(file.name)
+  }, [])
+
+  const handleDelete = useCallback((paths: string[]) => {
+    if (paths.length === 0) return
+    // B4: 客户端预检危险根路径,弹 toast.warning 提示用户
+    const hasDangerous = paths.some(p => isDangerousPath(p))
+    if (hasDangerous) {
+      toastRef.current.warning(t('common_dangerous_path_warn'))
+    }
+    setPendingDelete(paths)
+  }, [t])
+
+  const confirmDelete = async () => {
+    console.log('[ConfirmDelete] Starting deletion...', pendingDelete)
+    const targets = pendingDelete
+    setPendingDelete(null)
+    if (!targets || targets.length === 0) {
+      console.log('[ConfirmDelete] No targets to delete')
+      return
+    }
+
+    // 检查当前所在路径（或其父级目录）是否被删除
+    const isCurrentPathDeleted = targets.some(targetPath => {
+      // B6: 删除根路径时,当前路径必然被影响,startsWith 检查会漏掉 '/' 情况,单独处理
+      if (targetPath === '/') return true
+      return currentPath === targetPath || currentPath.startsWith(targetPath + '/')
+    })
+    console.log('[ConfirmDelete] isCurrentPathDeleted:', isCurrentPathDeleted, 'currentPath:', currentPath)
+
+    // 立即清空当前选中项，避免删除过程中对 UI 产生竞态/二次删除
+    setSelectedFiles([])
+
+    const errors: string[] = []
+    try {
+      console.log('[ConfirmDelete] Invoking concurrent delete for targets:', targets)
+      // E7: 用并发数控制替代 Promise.all，避免批量删除时 SSH 通道拥堵
+      const deleteTasks = targets.map((path) => async () => {
+        try {
+          console.log('[ConfirmDelete] Deleting file:', path)
+          const result = await sshService.deleteFile(serverId, path)
+          console.log('[ConfirmDelete] Delete result for:', path, result)
+          if (result.exitCode !== 0) {
+            return { path, error: result.stderr || t('common_unknown_error') }
+          }
+        } catch (err) {
+          console.error('[ConfirmDelete] Delete failed for:', path, err)
+          return { path, error: err instanceof Error ? err.message : t('fs_err_delete') }
+        }
+        return null
+      })
+      const results = await runWithConcurrency(deleteTasks, FILE_TRANSFER_CONCURRENCY)
+
+      console.log('[ConfirmDelete] Concurrent delete completed. isUnmounted:', isUnmountedRef.current)
+      if (isUnmountedRef.current) return
+
+      results.forEach(res => {
+        if (res) {
+          errors.push(`${res.path}: ${res.error}`)
+        }
+      })
+    } catch (e) {
+      console.error('[ConfirmDelete] Exception inside Promise.all:', e)
+      if (isUnmountedRef.current) return
+      errors.push(`${t('fs_err_delete')}: ${e instanceof Error ? e.message : t('common_unknown_error')}`)
+    }
+
+    if (isUnmountedRef.current) return
+
+    if (errors.length > 0) {
+      console.warn('[ConfirmDelete] Deletion encountered errors:', errors)
+      setError(`${t('fs_err_delete')}\n${errors.join('\n')}`)
+    }
+
+    // 计算下一个需要跳转的路径（如果是当前目录被删，回退到其父级目录）
+    let nextPath = currentPath
+    if (isCurrentPathDeleted) {
+      const matchedTarget = targets.find(targetPath => currentPath === targetPath || currentPath.startsWith(targetPath + '/'))
+      if (matchedTarget) {
+        nextPath = matchedTarget.substring(0, matchedTarget.lastIndexOf('/')) || '/'
+      }
+      console.log('[ConfirmDelete] Redirecting to parent folder:', nextPath)
+      setCurrentPath(nextPath)
+    } else {
+      // 否则，直接刷新当前目录列表
+      console.log('[ConfirmDelete] Refreshing current folder:', currentPath)
+      fetchFiles(currentPath)
+    }
+
+    // 刷新涉及的父目录（去重）
+    const parentPaths = new Set<string>()
+    targets.forEach(path => {
+      const parentPath = path.substring(0, path.lastIndexOf('/')) || '/'
+      parentPaths.add(parentPath)
+    })
+    console.log('[ConfirmDelete] Refreshing directory tree parent nodes:', Array.from(parentPaths))
+    parentPaths.forEach(parentPath => {
+      if (expandedPaths.has(parentPath)) {
+        console.log('[ConfirmDelete] Reloading tree node children for:', parentPath)
+        loadNodeChildren(parentPath, true)
+      }
     })
   }
+
+  const handleDownload = async (file: FileEntry) => {
+    setTransferLoading(file.path)
+    // E6: 下载开始 toast 提示
+    toastRef.current.info(`开始下载 ${file.name}...`)
+    try {
+      const result = await sshService.downloadFile(serverId, file.path)
+      if (!result.success && result.error !== '用户取消') {
+        setError(`${t('fs_err_download')}: ${result.error || t('common_unknown_error')}`)
+      } else if (result.success) {
+        // E6: 下载完成 toast 提示
+        toastRef.current.success(`下载完成: ${file.name}`)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('fs_err_download'))
+    } finally {
+      setTransferLoading(null)
+    }
+  }
+
+  const handleDownloadMultiple = async (paths: string[]) => {
+    try {
+      const selected = await openDialog({
+        directory: true,
+        // B3: 批量下载对话框标题应使用"选择下载目录",该 i18n key 不存在故用内联中文
+        title: '选择下载目录',
+      })
+      if (!selected) return
+
+      const destFolder = Array.isArray(selected) ? selected[0] : selected
+      if (!destFolder) return
+
+      setTransferLoading('download')
+      // E6: 批量下载开始 toast 提示
+      toastRef.current.info(`开始下载 ${paths.length} 个文件...`)
+
+      const selectedFileEntries = files.filter(f => paths.includes(f.path))
+
+      // E7: 用并发数控制替代 Promise.all，避免批量下载时 SSH 通道拥堵
+      const downloadTasks = selectedFileEntries.map((file) => async () => {
+        try {
+          return await sshService.downloadFile(serverId, file.path, destFolder)
+        } catch (err) {
+          return { success: false, error: err instanceof Error ? err.message : String(err) }
+        }
+      })
+
+      const results = await runWithConcurrency(downloadTasks, FILE_TRANSFER_CONCURRENCY)
+      const failed = results.filter(r => !r.success)
+      if (failed.length > 0) {
+        setError(`${t('fs_err_download')}: ${failed.map(r => r.error || t('common_unknown_error')).join(', ')}`)
+      } else {
+        // E6: 批量下载完成 toast 提示
+        toastRef.current.success(`下载完成,共 ${paths.length} 个文件`)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('fs_err_download'))
+    } finally {
+      setTransferLoading(null)
+      setSelectedFiles([])
+    }
+  }
+
+  const handleDownloadArchive = async (file: FileEntry, format: string = 'tar.gz') => {
+    setTransferLoading(file.path)
+    // E6: 打包下载开始 toast 提示
+    toastRef.current.info(`开始打包下载 ${file.name} (${format})...`)
+    try {
+      const result = await sshService.downloadArchive(serverId, file.path, format)
+      if (!result.success && result.error !== '用户取消') {
+        setError(`${t('fs_err_pack')}: ${result.error || t('common_unknown_error')}`)
+      } else if (result.success) {
+        // E6: 打包下载完成 toast 提示
+        toastRef.current.success(`打包下载完成: ${file.name}`)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('fs_err_pack'))
+    } finally {
+      setTransferLoading(null)
+      setPackingTarget(null)
+    }
+  }
+
+  // 解压归档文件并自动刷新目录
+  const handleExtractArchive = async (file: FileEntry) => {
+    if (extractingFile) return
+    setExtractingFile(file.path)
+    toastRef.current.info(`${t('fs_extract_archive') || t('sftp_extract_archive') || '解压'}: ${file.name}...`)
+    try {
+      const result = await sshService.extractArchive(serverId, file.path)
+      if (result.success) {
+        toastRef.current.success(result.message || t('sftp_extract_success') || '解压完成')
+        handleRefresh()
+      } else {
+        const errMsg = result.error || result.message || t('sftp_extract_failed') || '解压失败'
+        toastRef.current.error(errMsg)
+        setError(errMsg)
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : t('sftp_extract_failed') || '解压失败'
+      toastRef.current.error(errMsg)
+      setError(errMsg)
+    } finally {
+      setExtractingFile(null)
+    }
+  }
+
+  // 打开文件属性对话框
+  const handleShowProperties = async (file: FileEntry) => {
+    setPropertiesFile(file)
+    setStatInfo(null)
+    setStatLoading(true)
+    try {
+      const info = await sshService.statInfo(serverId, file.path)
+      setStatInfo(info)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('fs_err_props'))
+    } finally {
+      setStatLoading(false)
+    }
+  }
+
+  // 书签操作（添加/移除/切换，按服务器隔离，带上限 50 控制与 toast 提示）
+  const handleAddBookmark = useCallback((path: string) => {
+    if (!baseServerId || !path) return
+    setBookmarks(prev => {
+      if (prev.includes(path)) return prev
+      if (prev.length >= 50) {
+        toastRef.current.warning(t('sftp_bookmarks_max_limit') || '书签数量已达上限 50')
+        return prev
+      }
+      const next = [...prev, path]
+      try {
+        localStorage.setItem(`file-bookmarks-${baseServerId}`, JSON.stringify(next))
+      } catch {}
+      toastRef.current.success(t('sftp_bookmark_added') || '已添加书签')
+      return next
+    })
+  }, [baseServerId, t])
+
+  const handleRemoveBookmark = useCallback((path: string) => {
+    if (!baseServerId || !path) return
+    setBookmarks(prev => {
+      const next = prev.filter(p => p !== path)
+      try {
+        localStorage.setItem(`file-bookmarks-${baseServerId}`, JSON.stringify(next))
+      } catch {}
+      toastRef.current.info(t('sftp_bookmark_removed') || '已移除书签')
+      return next
+    })
+  }, [baseServerId, t])
+
+  const toggleBookmark = useCallback((path?: string) => {
+    const target = path || currentPath
+    if (!target) return
+    if (bookmarks.includes(target)) {
+      handleRemoveBookmark(target)
+    } else {
+      handleAddBookmark(target)
+    }
+  }, [bookmarks, currentPath, handleAddBookmark, handleRemoveBookmark])
 
   // 刷新
   const handleRefresh = useCallback(() => {
@@ -1628,7 +2013,11 @@ export function FilesModule({
           currentPath={currentPath}
           onNavigateTo={navigateTo}
           bookmarks={bookmarks}
+          onAddBookmark={handleAddBookmark}
+          onRemoveBookmark={handleRemoveBookmark}
           onToggleBookmark={toggleBookmark}
+          showHidden={showHidden}
+          onToggleShowHidden={toggleShowHidden}
           onRefresh={handleRefresh}
           transferLoading={transferLoading}
           onNativeUpload={handleNativeUpload}
@@ -2179,6 +2568,11 @@ export function FilesModule({
         ctxMenuRef={ctxMenuRef}
         currentPath={currentPath}
         selectedFiles={selectedFiles}
+        bookmarks={bookmarks}
+        onAddBookmark={handleAddBookmark}
+        onRemoveBookmark={handleRemoveBookmark}
+        showHidden={showHidden}
+        onToggleShowHidden={toggleShowHidden}
         transferLoading={transferLoading}
         isWindows={isWindows}
         onClose={() => setCtxMenu(null)}

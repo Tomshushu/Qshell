@@ -19,6 +19,13 @@ static SSH_MANAGER: std::sync::OnceLock<Arc<SshManager>> = std::sync::OnceLock::
 /// (set once during app setup in lib.rs)
 static APP_HANDLE: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
 
+lazy_static::lazy_static! {
+    static ref UID_CACHE: tokio::sync::RwLock<HashMap<String, HashMap<u32, String>>> =
+        tokio::sync::RwLock::new(HashMap::new());
+    static ref GID_CACHE: tokio::sync::RwLock<HashMap<String, HashMap<u32, String>>> =
+        tokio::sync::RwLock::new(HashMap::new());
+}
+
 /// Set the global AppHandle (called once during app setup)
 pub fn set_app_handle(handle: AppHandle) {
     let _ = APP_HANDLE.set(handle);
@@ -917,6 +924,8 @@ impl SshManager {
         if !entries.is_empty() {
             for (id, entry) in entries {
                 let generation = entry.generation;
+                UID_CACHE.write().await.remove(&id);
+                GID_CACHE.write().await.remove(&id);
                 // 停止心跳
                 entry.heartbeat_cancel.store(true, Ordering::Relaxed);
                 // 清理该连接拥有的所有 shell session（避免 zombie shell）
@@ -2674,6 +2683,32 @@ pub async fn sftp_read_dir(server_id: &str, path: &str) -> Result<Vec<SftpDirEnt
                 gid: e.metadata().gid,
             })
             .collect();
+        // 检查并补全尚未解析的数字所有者/所属组
+        let needs_resolve = entries.iter().any(|e| {
+            e.user.as_deref().map_or(true, |u| u.is_empty() || u.chars().all(|c| c.is_ascii_digit()))
+        });
+        if needs_resolve {
+            ensure_uid_cache(server_id).await;
+            for e in &mut entries {
+                let is_unresolved_user = e.user.as_deref().map_or(true, |u| u.is_empty() || u.chars().all(|c| c.is_ascii_digit()));
+                if is_unresolved_user {
+                    if let Some(uid) = e.uid {
+                        if let Some(name) = resolve_uid(server_id, uid).await {
+                            e.user = Some(name);
+                        }
+                    }
+                }
+                let is_unresolved_group = e.group.as_deref().map_or(true, |g| g.is_empty() || g.chars().all(|c| c.is_ascii_digit()));
+                if is_unresolved_group {
+                    if let Some(gid) = e.gid {
+                        if let Some(name) = resolve_gid(server_id, gid).await {
+                            e.group = Some(name);
+                        }
+                    }
+                }
+            }
+        }
+
         // 排序：目录优先，然后按名称不区分大小写排序
         entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
             (true, false) => std::cmp::Ordering::Less,
@@ -2771,14 +2806,32 @@ pub async fn sftp_stat(
     let conn = SshManager::global()
         .get_connection(server_id)
         .map_err(|e| e.to_string())?;
-    let res = async {
+    let res: Result<russh_sftp::protocol::FileAttributes, String> = async {
         let sftp = conn
             .create_sftp_session()
             .await
             .map_err(|e| format!("SFTP session failed: {}", e))?;
-        sftp.metadata(path)
+        let mut attrs = sftp.metadata(path)
             .await
-            .map_err(|e| format!("SFTP metadata failed: {}", e))
+            .map_err(|e| format!("SFTP metadata failed: {}", e))?;
+        let is_unresolved_user = attrs.user.as_deref().map_or(true, |u| u.is_empty() || u.chars().all(|c| c.is_ascii_digit()));
+        if is_unresolved_user {
+            ensure_uid_cache(server_id).await;
+            if let Some(uid) = attrs.uid {
+                if let Some(name) = resolve_uid(server_id, uid).await {
+                    attrs.user = Some(name);
+                }
+            }
+        }
+        let is_unresolved_group = attrs.group.as_deref().map_or(true, |g| g.is_empty() || g.chars().all(|c| c.is_ascii_digit()));
+        if is_unresolved_group {
+            if let Some(gid) = attrs.gid {
+                if let Some(name) = resolve_gid(server_id, gid).await {
+                    attrs.group = Some(name);
+                }
+            }
+        }
+        Ok(attrs)
     }.await;
     if let Err(ref e) = res {
         SshManager::handle_connection_loss(server_id, &conn, e).await;
@@ -2854,4 +2907,103 @@ pub async fn sftp_read_file_bytes(server_id: &str, path: &str) -> Result<Vec<u8>
         .await
         .map_err(|e| format!("SFTP read failed: {}", e))?;
     Ok(buf)
+}
+
+
+/// 为指定服务器初始化/预热 UID 和 GID 缓存。
+/// 优先通过 SFTP 读取 /etc/passwd 和 /etc/group，避免执行 shell。
+pub async fn ensure_uid_cache(server_id: &str) {
+    {
+        let r = UID_CACHE.read().await;
+        if let Some(map) = r.get(server_id) {
+            if !map.is_empty() {
+                return;
+            }
+        }
+    }
+
+    let mut uid_map = HashMap::new();
+    uid_map.insert(0, "root".to_string());
+
+    let mut gid_map = HashMap::new();
+    gid_map.insert(0, "root".to_string());
+
+    // 尝试获取服务器配置中的用户名，作为普通用户 (1000) 的兜底
+    let base_id = if let Some(stripped) = server_id.strip_prefix("sftp:") {
+        stripped
+    } else if let Some(stripped) = server_id.strip_prefix("ws:") {
+        stripped.split(':').next().unwrap_or(stripped)
+    } else {
+        server_id
+    };
+
+    if let Ok(server) = crate::commands::ssh::load_server_config(base_id).await {
+        if !server.username.is_empty() {
+            uid_map.insert(1000, server.username.clone());
+            gid_map.insert(1000, server.username.clone());
+        }
+    }
+
+    // 通过 SFTP 读取 /etc/passwd
+    if let Ok(bytes) = sftp_read_file_bytes(server_id, "/etc/passwd").await {
+        if let Ok(content) = String::from_utf8(bytes) {
+            for line in content.lines() {
+                let parts: Vec<&str> = line.split(':').collect();
+                if parts.len() >= 3 {
+                    let name = parts[0].trim();
+                    if let Ok(uid) = parts[2].trim().parse::<u32>() {
+                        if !name.is_empty() {
+                            uid_map.insert(uid, name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 通过 SFTP 读取 /etc/group
+    if let Ok(bytes) = sftp_read_file_bytes(server_id, "/etc/group").await {
+        if let Ok(content) = String::from_utf8(bytes) {
+            for line in content.lines() {
+                let parts: Vec<&str> = line.split(':').collect();
+                if parts.len() >= 3 {
+                    let name = parts[0].trim();
+                    if let Ok(gid) = parts[2].trim().parse::<u32>() {
+                        if !name.is_empty() {
+                            gid_map.insert(gid, name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    UID_CACHE.write().await.insert(server_id.to_string(), uid_map);
+    GID_CACHE.write().await.insert(server_id.to_string(), gid_map);
+}
+
+pub async fn resolve_uid(server_id: &str, uid: u32) -> Option<String> {
+    if uid == 0 {
+        return Some("root".to_string());
+    }
+    let r = UID_CACHE.read().await;
+    if let Some(map) = r.get(server_id) {
+        if let Some(name) = map.get(&uid) {
+            return Some(name.clone());
+        }
+    }
+    None
+}
+
+pub async fn resolve_gid(server_id: &str, gid: u32) -> Option<String> {
+    if gid == 0 {
+        return Some("root".to_string());
+    }
+    let r = GID_CACHE.read().await;
+    if let Some(map) = r.get(server_id) {
+        if let Some(name) = map.get(&gid) {
+            return Some(name.clone());
+        }
+    }
+    None
 }

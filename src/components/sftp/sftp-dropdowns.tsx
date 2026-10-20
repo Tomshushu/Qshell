@@ -17,6 +17,8 @@ import {
   CheckSquare,
   ArrowRight,
   Trash2,
+  Link,
+  ArrowLeftRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -335,6 +337,10 @@ export interface SftpActionsDropdownProps {
   transferIcon?: ReactNode;
   loading?: boolean;
   t: (key: string) => string;
+  syncBrowsing?: boolean;
+  onToggleSyncBrowsing?: () => void;
+  compareActive?: boolean;
+  onToggleCompareActive?: () => void;
 }
 
 export function SftpActionsDropdown({
@@ -354,6 +360,10 @@ export function SftpActionsDropdown({
   transferIcon,
   loading = false,
   t,
+  syncBrowsing,
+  onToggleSyncBrowsing,
+  compareActive,
+  onToggleCompareActive,
 }: SftpActionsDropdownProps) {
   return (
     <DropdownMenu>
@@ -471,6 +481,52 @@ export function SftpActionsDropdown({
           {showHidden && <Check className="h-3.5 w-3.5 text-primary" />}
         </DropdownMenuItem>
 
+        {(onToggleSyncBrowsing || onToggleCompareActive) && (
+          <>
+            <DropdownMenuSeparator />
+            {onToggleSyncBrowsing && (
+              <DropdownMenuItem
+                onClick={onToggleSyncBrowsing}
+                title={
+                  syncBrowsing
+                    ? t("sftp_sync_browsing_on") || "Synchronized Browsing (Enabled)"
+                    : t("sftp_sync_browsing_off") || "Synchronized Browsing"
+                }
+                className="flex items-center justify-between text-xs cursor-pointer"
+              >
+                <div className="flex items-center gap-2">
+                  <Link
+                    className={cn(
+                      "h-3.5 w-3.5",
+                      syncBrowsing ? "text-primary" : "text-muted-foreground"
+                    )}
+                  />
+                  <span>{t("sftp_sync_browsing") || "Synchronized Browsing"}</span>
+                </div>
+                {syncBrowsing && <Check className="h-3.5 w-3.5 text-primary" />}
+              </DropdownMenuItem>
+            )}
+            {onToggleCompareActive && (
+              <DropdownMenuItem
+                onClick={onToggleCompareActive}
+                title={t("sftp_compare_directories") || "Compare Directories"}
+                className="flex items-center justify-between text-xs cursor-pointer"
+              >
+                <div className="flex items-center gap-2">
+                  <ArrowLeftRight
+                    className={cn(
+                      "h-3.5 w-3.5",
+                      compareActive ? "text-primary" : "text-muted-foreground"
+                    )}
+                  />
+                  <span>{t("sftp_compare_directories") || "Compare Directories"}</span>
+                </div>
+                {compareActive && <Check className="h-3.5 w-3.5 text-primary" />}
+              </DropdownMenuItem>
+            )}
+          </>
+        )}
+
         <DropdownMenuSeparator />
 
         {/* 全选 */}
@@ -510,3 +566,5 @@ export function SftpActionsDropdown({
     </DropdownMenu>
   );
 }
+
+export { SftpBookmarkDropdown, type SftpBookmarkDropdownProps } from "./sftp-bookmark-dropdown";

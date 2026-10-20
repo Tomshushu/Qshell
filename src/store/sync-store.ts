@@ -16,6 +16,7 @@ import * as giteeAdapter from '@/services/sync/gitee-sync-adapter'
 import * as githubAdapter from '@/services/sync/github-sync-adapter'
 import { sshService } from '@/services/ssh-service'
 import { useAppStore } from '@/store'
+import { loadLegacyBookmarks } from '@/store/slices/sftp-slice'
 import { translate } from '@/i18n'
 import type { Server, ServerGroup, LogBookmark } from '@/types'
 import type {
@@ -62,6 +63,7 @@ export interface RestoreStats {
   knownHosts?: number
   bookmarks?: number
   backgrounds?: number
+  pathBookmarks?: number
 }
 
 export interface SyncPayload {
@@ -80,6 +82,10 @@ export interface SyncPayload {
   backgrounds?: SyncBackgroundItem[]
   recentConnections?: Array<{ serverId: string; at: number }>
   commandHistory?: string[]
+  pathBookmarks?: Record<string, string[]>
+  aiSettings?: unknown
+  aiConfiguredProviders?: unknown[]
+  aiMasterEnabled?: boolean
 }
 
 export interface SyncState {
@@ -691,6 +697,13 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         sftpExclusionEnabled: appState.sftpExclusionEnabled,
         sftpExclusionPatterns: appState.sftpExclusionPatterns,
         sftpRespectGitignore: appState.sftpRespectGitignore,
+        sftpLocalSortField: appState.sftpLocalSortField,
+        sftpLocalSortOrder: appState.sftpLocalSortOrder,
+        sftpRemoteSortField: appState.sftpRemoteSortField,
+        sftpRemoteSortOrder: appState.sftpRemoteSortOrder,
+        workspaceFileSortField: appState.workspaceFileSortField,
+        workspaceFileSortDirection: appState.workspaceFileSortDirection,
+        workspaceFileShowHidden: appState.workspaceFileShowHidden,
         sidebarWidth: appState.sidebarWidth,
         language: appState.language,
         tabColors: appState.tabColors,
@@ -724,6 +737,25 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         /* ignore */
       }
 
+      const pathBookmarks: Record<string, string[]> = {
+        ...loadLegacyBookmarks(),
+        ...(appState.pathBookmarks || {}),
+      }
+
+      let aiSettings: unknown = undefined
+      let aiConfiguredProviders: unknown[] | undefined = undefined
+      let aiMasterEnabled: boolean | undefined = undefined
+      try {
+        const aiRaw = localStorage.getItem('qshell_ai_settings')
+        if (aiRaw) aiSettings = JSON.parse(aiRaw)
+        const provRaw = localStorage.getItem('qshell_ai_configured_providers')
+        if (provRaw) aiConfiguredProviders = JSON.parse(provRaw)
+        const masterRaw = localStorage.getItem('qshell_ai_master_enabled')
+        if (masterRaw !== null) aiMasterEnabled = masterRaw === 'true'
+      } catch {
+        /* ignore */
+      }
+
       const payload: SyncPayload = {
         format: 'qshell-backup-package',
         version: '2.0.0',
@@ -740,6 +772,10 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         favorites,
         recentConnections,
         commandHistory,
+        pathBookmarks,
+        aiSettings,
+        aiConfiguredProviders,
+        aiMasterEnabled,
       }
 
       // 2. 本地 AES-256-GCM 加密
@@ -1043,6 +1079,13 @@ export const useSyncStore = create<SyncState>((set, get) => ({
           sftpExclusionEnabled: (prefs.sftpExclusionEnabled as boolean) ?? prev.sftpExclusionEnabled,
           sftpExclusionPatterns: (prefs.sftpExclusionPatterns as string[]) ?? prev.sftpExclusionPatterns,
           sftpRespectGitignore: (prefs.sftpRespectGitignore as boolean) ?? prev.sftpRespectGitignore,
+          sftpLocalSortField: (prefs.sftpLocalSortField as typeof prev.sftpLocalSortField) ?? prev.sftpLocalSortField,
+          sftpLocalSortOrder: (prefs.sftpLocalSortOrder as typeof prev.sftpLocalSortOrder) ?? prev.sftpLocalSortOrder,
+          sftpRemoteSortField: (prefs.sftpRemoteSortField as typeof prev.sftpRemoteSortField) ?? prev.sftpRemoteSortField,
+          sftpRemoteSortOrder: (prefs.sftpRemoteSortOrder as typeof prev.sftpRemoteSortOrder) ?? prev.sftpRemoteSortOrder,
+          workspaceFileSortField: (prefs.workspaceFileSortField as typeof prev.workspaceFileSortField) ?? prev.workspaceFileSortField,
+          workspaceFileSortDirection: (prefs.workspaceFileSortDirection as typeof prev.workspaceFileSortDirection) ?? prev.workspaceFileSortDirection,
+          workspaceFileShowHidden: (prefs.workspaceFileShowHidden as boolean) ?? prev.workspaceFileShowHidden,
           sidebarWidth: (prefs.sidebarWidth as number) ?? prev.sidebarWidth,
           language: (prefs.language as typeof prev.language) ?? prev.language,
           tabColors: (prefs.tabColors as typeof prev.tabColors) ?? prev.tabColors,
@@ -1051,6 +1094,50 @@ export const useSyncStore = create<SyncState>((set, get) => ({
           appLockPasswordHash: (prefs.appLockPasswordHash as string) ?? prev.appLockPasswordHash,
           appLockIdleMinutes: (prefs.appLockIdleMinutes as number) ?? prev.appLockIdleMinutes,
         }))
+      }
+
+      // 5.5 还原全量路径收藏（SFTP 与工作台）
+      let restoredPathBookmarksCount = 0
+      if (payload.pathBookmarks && typeof payload.pathBookmarks === 'object') {
+        try {
+          useAppStore.getState().setAllPathBookmarks(payload.pathBookmarks)
+          for (const list of Object.values(payload.pathBookmarks)) {
+            if (Array.isArray(list)) {
+              restoredPathBookmarksCount += list.length
+            }
+          }
+        } catch (err) {
+          console.warn('[Sync] Failed to restore pathBookmarks:', err)
+        }
+      }
+
+      // 5.6 还原 AI 配置与偏好同步回写
+      if (payload.preferences) {
+        try {
+          const p = payload.preferences
+          if (p.sftpLocalSortField) localStorage.setItem('qshell.sftp.local.sortField', String(p.sftpLocalSortField))
+          if (p.sftpLocalSortOrder) localStorage.setItem('qshell.sftp.local.sortOrder', String(p.sftpLocalSortOrder))
+          if (p.sftpRemoteSortField) localStorage.setItem('qshell.sftp.remote.sortField', String(p.sftpRemoteSortField))
+          if (p.sftpRemoteSortOrder) localStorage.setItem('qshell.sftp.remote.sortOrder', String(p.sftpRemoteSortOrder))
+          if (p.workspaceFileSortField) localStorage.setItem('qshell.workspace.files.sortField', String(p.workspaceFileSortField))
+          if (p.workspaceFileSortDirection) localStorage.setItem('qshell.workspace.files.sortDirection', String(p.workspaceFileSortDirection))
+          if (typeof p.workspaceFileShowHidden === 'boolean') localStorage.setItem('qshell.workspace.files.showHidden', String(p.workspaceFileShowHidden))
+        } catch {}
+      }
+      if (payload.aiSettings) {
+        try {
+          localStorage.setItem('qshell_ai_settings', JSON.stringify(payload.aiSettings))
+        } catch {}
+      }
+      if (Array.isArray(payload.aiConfiguredProviders)) {
+        try {
+          localStorage.setItem('qshell_ai_configured_providers', JSON.stringify(payload.aiConfiguredProviders))
+        } catch {}
+      }
+      if (typeof payload.aiMasterEnabled === 'boolean') {
+        try {
+          localStorage.setItem('qshell_ai_master_enabled', String(payload.aiMasterEnabled))
+        } catch {}
       }
 
       // 6. 还原命令收藏、最近连接与历史记录到本地
@@ -1118,6 +1205,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         success: true,
         stats: {
           servers: importedCount,
+          pathBookmarks: restoredPathBookmarksCount,
           groups: restoredGroupsCount,
           sshKeys: restoredKeysCount,
           tags: restoredTagsCount,

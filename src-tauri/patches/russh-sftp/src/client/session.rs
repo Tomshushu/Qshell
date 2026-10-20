@@ -180,7 +180,18 @@ impl SftpSession {
                     files = name
                         .files
                         .into_iter()
-                        .map(|f| (f.filename, f.attrs))
+                        .map(|mut f| {
+                            if (f.attrs.user.is_none() || f.attrs.group.is_none()) && !f.longname.is_empty() {
+                                let (u, g) = parse_user_group_from_longname(&f.longname);
+                                if f.attrs.user.is_none() {
+                                    f.attrs.user = u;
+                                }
+                                if f.attrs.group.is_none() {
+                                    f.attrs.group = g;
+                                }
+                            }
+                            (f.filename, f.attrs)
+                        })
                         .chain(files)
                         .collect();
                 }
@@ -272,5 +283,38 @@ impl SftpSession {
         }
 
         self.session.statvfs(path).await.map(Some)
+    }
+}
+
+
+/// Parse user and group names from SFTP v3 `longname` (standard `ls -l` format).
+fn parse_user_group_from_longname(longname: &str) -> (Option<String>, Option<String>) {
+    let trimmed = longname.trim();
+    if trimmed.is_empty() {
+        return (None, None);
+    }
+    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+    if parts.len() < 4 {
+        return (None, None);
+    }
+
+    let mode = parts[0];
+    let first = mode.chars().next().unwrap_or(' ');
+    if !"-dlcbsp".contains(first) && mode.len() < 9 {
+        return (None, None);
+    }
+
+    if parts[1].chars().all(|c| c.is_ascii_digit()) {
+        let user = parts[2];
+        let group = parts[3];
+        let user_str = if !user.is_empty() { Some(user.to_string()) } else { None };
+        let group_str = if !group.is_empty() { Some(group.to_string()) } else { None };
+        (user_str, group_str)
+    } else {
+        let user = parts[1];
+        let group = parts[2];
+        let user_str = if !user.is_empty() { Some(user.to_string()) } else { None };
+        let group_str = if !group.is_empty() { Some(group.to_string()) } else { None };
+        (user_str, group_str)
     }
 }

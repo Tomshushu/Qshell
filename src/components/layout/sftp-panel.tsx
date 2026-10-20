@@ -68,6 +68,7 @@ import {
   X,
   Link,
   Trash2,
+  Bookmark,
   Edit2,
   FileText,
   FileImage,
@@ -108,6 +109,7 @@ import { sshService } from '@/services/ssh-service'
 import { ConnectionState } from '@/services/ssh-connection-state'
 import { reconnectManager, useReconnectState } from '@/services/reconnect-manager'
 import { useAppStore } from '@/store'
+import { useFileExplorerPreferences } from '@/hooks/use-file-explorer-preferences'
 import { useTranslation } from '@/i18n'
 import type { Server as ServerModel, ServerGroup } from '@/types'
 import type { LocalFileEntry, FileEntry, TransferProgressData, SftpDiagnostics } from '@/services/api/types'
@@ -219,6 +221,7 @@ import {
   useServerFilterList,
   ViewModeDropdown,
   SftpActionsDropdown,
+  SftpBookmarkDropdown,
 } from '@/components/sftp/sftp-dropdowns'
 
 export function SftpPanel() {
@@ -247,7 +250,9 @@ export function SftpPanel() {
   const sftpLocalViewMode = useAppStore((s) => s.sftpLocalViewMode) || 'list'
   const sftpRemoteViewMode = useAppStore((s) => s.sftpRemoteViewMode) || 'list'
   const sftpLocalShowHidden = useAppStore((s) => s.sftpLocalShowHidden)
+  const setSftpLocalShowHidden = useAppStore((s) => s.setSftpLocalShowHidden)
   const sftpRemoteShowHidden = useAppStore((s) => s.sftpRemoteShowHidden)
+  const setSftpRemoteShowHidden = useAppStore((s) => s.setSftpRemoteShowHidden)
   // SFTP 批量打开联动：待在 SFTP 传输面板中批量连接打开的服务器 ID 列表
   const sftpPendingOpenServerIds = useAppStore((s) => s.sftpPendingOpenServerIds)
   const clearSftpPendingOpenServers = useAppStore((s) => s.clearSftpPendingOpenServers)
@@ -724,6 +729,60 @@ export function SftpPanel() {
     catch { /* ignore */ }
   }, [selectedServerId, remotePath])
 
+  // === 路径书签/收藏管理（按服务器隔离，对齐工作台文件模块 file-bookmarks-${baseServerId}）===
+  // 1. 远程路径书签：跟随 active tab / selectedServerId 自动隔离切换
+  const baseSelectedServerId = toBaseServerId(selectedServerId)
+  const [remoteBookmarks, setRemoteBookmarks] = useState<string[]>([])
+
+  // 统一偏好与路径收藏管理（左右独立，云端双向漫游）
+  const leftPrefs = useFileExplorerPreferences({
+    scope: leftSideType === 'remote' ? 'sftp-remote' : 'sftp-local',
+    serverId: leftSideType === 'remote' ? leftServerId : undefined,
+    onToast: {
+      success: (msg) => toastRef.current.success(msg),
+      info: (msg) => toastRef.current.info(msg),
+      warning: (msg) => toastRef.current.warning(msg),
+    },
+  })
+
+  const rightPrefs = useFileExplorerPreferences({
+    scope: 'sftp-remote',
+    serverId: selectedServerId,
+    onToast: {
+      success: (msg) => toastRef.current.success(msg),
+      info: (msg) => toastRef.current.info(msg),
+      warning: (msg) => toastRef.current.warning(msg),
+    },
+  })
+
+  const remoteBookmarks = rightPrefs.bookmarks
+  const handleAddRemoteBookmark = useCallback((path: string) => {
+    rightPrefs.addBookmark(path, {
+      maxLimitMsg: tRef.current('sftp_bookmarks_max_limit') || 'Maximum 50 bookmarks allowed',
+      successMsg: tRef.current('sftp_bookmark_added') || 'Bookmark added',
+    })
+  }, [rightPrefs])
+
+  const handleRemoveRemoteBookmark = useCallback((path: string) => {
+    rightPrefs.removeBookmark(path, {
+      infoMsg: tRef.current('sftp_bookmark_removed') || 'Bookmark removed',
+    })
+  }, [rightPrefs])
+
+  const leftBookmarks = leftPrefs.bookmarks
+  const handleAddLeftBookmark = useCallback((path: string) => {
+    leftPrefs.addBookmark(path, {
+      maxLimitMsg: tRef.current('sftp_bookmarks_max_limit') || 'Maximum 50 bookmarks allowed',
+      successMsg: tRef.current('sftp_bookmark_added') || 'Bookmark added',
+    })
+  }, [leftPrefs])
+
+  const handleRemoveLeftBookmark = useCallback((path: string) => {
+    leftPrefs.removeBookmark(path, {
+      infoMsg: tRef.current('sftp_bookmark_removed') || 'Bookmark removed',
+    })
+  }, [leftPrefs])
+
   // === 显示隐藏文件开关：左右面板完全独立 ===
   // 1. 本地面板：默认继承 store.sftpLocalShowHidden（未设置时默认 false）
   const [leftShowHidden, setLeftShowHiddenRaw] = useState<boolean>(() => {
@@ -750,11 +809,15 @@ export function SftpPanel() {
   const setLeftShowHidden = useCallback((value: boolean | ((prev: boolean) => boolean)) => {
     setLeftShowHiddenRaw(prev => {
       const next = typeof value === 'function' ? value(prev) : value
+      setSftpLocalShowHidden(next)
+      try {
+        localStorage.setItem('qshell.sftp.local.showHidden', String(next))
+      } catch {}
       if (prev && !next) {
         setSelectedLocalPaths(s => {
           const filtered = new Set<string>()
           for (const p of s) {
-            const name = p.split(/[/\\]/).pop() || ''
+            const name = p.split(/[/\]/).pop() || ''
             if (!isHiddenName(name)) filtered.add(p)
           }
           return filtered
@@ -762,17 +825,21 @@ export function SftpPanel() {
       }
       return next
     })
-  }, [isHiddenName])
+  }, [isHiddenName, setSftpLocalShowHidden])
 
   // 切换右侧隐藏文件显示（工作副本）
   const setRightShowHidden = useCallback((value: boolean | ((prev: boolean) => boolean)) => {
     setRightShowHiddenRaw(prev => {
       const next = typeof value === 'function' ? value(prev) : value
+      setSftpRemoteShowHidden(next)
+      try {
+        localStorage.setItem('qshell.sftp.remote.showHidden', String(next))
+      } catch {}
       if (prev && !next) {
         setSelectedRemotePaths(s => {
           const filtered = new Set<string>()
           for (const p of s) {
-            const name = p.split(/[/\\]/).pop() || ''
+            const name = p.split(/[/\]/).pop() || ''
             if (!isHiddenName(name)) filtered.add(p)
           }
           return filtered
@@ -780,7 +847,7 @@ export function SftpPanel() {
       }
       return next
     })
-  }, [isHiddenName])
+  }, [isHiddenName, setSftpRemoteShowHidden])
 
   // === 文件剪贴板（跨面板复制/粘贴）===
   // Ctrl+C 把当前面板选中文件路径写入 fileClipboard；Ctrl+V 把剪贴板内容粘贴到对侧面板
@@ -1225,28 +1292,18 @@ export function SftpPanel() {
     }
   }, [])
 
-  const [localSortField, setLocalSortField] = useState<'name' | 'size' | 'modified'>('name')
-  const [localSortOrder, setLocalSortOrder] = useState<'asc' | 'desc'>('asc')
-  const [remoteSortField, setRemoteSortField] = useState<'name' | 'size' | 'modified'>('name')
-  const [remoteSortOrder, setRemoteSortOrder] = useState<'asc' | 'desc'>('asc')
+  // SFTP 排序持久化：从 useFileExplorerPreferences 统一获取
+  const localSortField = leftPrefs.sortField as 'name' | 'size' | 'modified'
+  const localSortOrder = leftPrefs.sortOrder
+  const setLocalSortField = leftPrefs.setSortField
+  const setLocalSortOrder = leftPrefs.setSortOrder
+  const handleLocalSort = leftPrefs.handleSort
 
-  const handleLocalSort = (field: 'name' | 'size' | 'modified') => {
-    if (localSortField === field) {
-      setLocalSortOrder(localSortOrder === 'asc' ? 'desc' : 'asc')
-    } else {
-      setLocalSortField(field)
-      setLocalSortOrder('asc')
-    }
-  }
-
-  const handleRemoteSort = (field: 'name' | 'size' | 'modified') => {
-    if (remoteSortField === field) {
-      setRemoteSortOrder(remoteSortOrder === 'asc' ? 'desc' : 'asc')
-    } else {
-      setRemoteSortField(field)
-      setRemoteSortOrder('asc')
-    }
-  }
+  const remoteSortField = rightPrefs.sortField as 'name' | 'size' | 'modified'
+  const remoteSortOrder = rightPrefs.sortOrder
+  const setRemoteSortField = rightPrefs.setSortField
+  const setRemoteSortOrder = rightPrefs.setSortOrder
+  const handleRemoteSort = rightPrefs.handleSort
 
   const loadLocalDirectory = async (pathString: string, overrideSideType?: 'local' | 'remote', overrideServerId?: string) => {
     if (!backend) return
@@ -1498,7 +1555,12 @@ export function SftpPanel() {
       console.warn('[RightTab] max tabs reached:', MAX_RIGHT_TABS)
       return ''
     }
-    const tab = createEmptyRightTab(sftpRemoteViewMode || 'list', sftpRemoteShowHidden ?? true)
+    const tab = createEmptyRightTab(
+      sftpRemoteViewMode || 'list',
+      sftpRemoteShowHidden ?? true,
+      remoteSortField,
+      remoteSortOrder
+    )
     setRightTabs(prev => [...prev, tab])
     setActiveRightTabId(tab.id)
     // 清空工作副本（新 tab 是空的）
@@ -1513,13 +1575,13 @@ export function SftpPanel() {
     setRemoteError(null)
     setIsRemoteDisconnected(false)
     setRemoteDisconnectedError(null)
-    setRemoteSortField('name')
-    setRemoteSortOrder('asc')
+    setRemoteSortField(remoteSortField)
+    setRemoteSortOrder(remoteSortOrder)
     setSyncBrowsing(false)
     setCompareActive(false)
     syncPairRootRef.current = null
     setRightViewMode(tab.viewMode ?? 'list')
-    setRightShowHidden(tab.showHidden ?? false)
+    setRightShowHidden(tab.showHidden ?? (sftpRemoteShowHidden ?? true))
     // 重置递归搜索状态
     setSearchMode('filter')
     setRecursiveSearchPattern('')
@@ -3896,8 +3958,8 @@ export function SftpPanel() {
     const parsed = parsePermissions(file.permissions)
     setPerms(parsed)
     // 服务器未返回用户名/组名（仅返回数字 uid/gid）时，回退显示数字 id，避免字段空白
-    setOwnerUser(file.owner || (file.uid != null ? String(file.uid) : ''))
-    setOwnerGroup(file.group || (file.gid != null ? String(file.gid) : ''))
+    setOwnerUser(file.owner || (file.uid === 0 ? 'root' : (file.uid != null ? String(file.uid) : '')))
+    setOwnerGroup(file.group || (file.gid === 0 ? 'root' : (file.gid != null ? String(file.gid) : '')))
     setPermissionsRecursive(false)
   }
 
@@ -5512,6 +5574,17 @@ export function SftpPanel() {
                 />
               )}
 
+              {/* 本地路径收藏 */}
+              <SftpBookmarkDropdown
+                currentPath={localPath}
+                bookmarks={leftBookmarks}
+                onAddBookmark={handleAddLeftBookmark}
+                onRemoveBookmark={handleRemoveLeftBookmark}
+                onNavigate={loadLocalDirectory}
+                disabled={!localPath || localLoading}
+                t={t}
+              />
+
               {/* 本地文件搜索（路径之后，刷新之前） */}
               <div className="relative w-40 flex-shrink-0">
                 <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground/60" />
@@ -5532,16 +5605,6 @@ export function SftpPanel() {
                 )}
               </div>
 
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => loadLocalDirectory(localPath)}
-                disabled={localLoading}
-                className="h-7 w-7 flex-shrink-0"
-                aria-label={t('sftp_refresh') || 'Refresh'}
-              >
-                <RefreshCw className={cn("h-4 w-4", localLoading && "animate-spin")} />
-              </Button>
               <SftpActionsDropdown
                 viewMode={leftViewMode}
                 onViewModeChange={handleSetLeftViewMode}
@@ -5584,6 +5647,16 @@ export function SftpPanel() {
                 loading={localLoading}
                 t={t}
               />
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => loadLocalDirectory(localPath)}
+                disabled={localLoading}
+                className="h-7 w-7 flex-shrink-0"
+                aria-label={t('sftp_refresh') || 'Refresh'}
+              >
+                <RefreshCw className={cn("h-4 w-4", localLoading && "animate-spin")} />
+              </Button>
              </div>
 
           </div>
@@ -5876,7 +5949,7 @@ export function SftpPanel() {
                                         {file.name === '..' ? '' : ((file as unknown as FileEntry).permissions || '-')}
                                       </span>
                                       <span className="text-left text-[11px] text-muted-foreground font-mono truncate pl-3">
-                                        {file.name === '..' ? '' : ((file as unknown as FileEntry).owner || ((file as unknown as FileEntry).uid != null ? String((file as unknown as FileEntry).uid) : '-'))}
+                                        {file.name === '..' ? '' : ((file as unknown as FileEntry).owner || ((file as unknown as FileEntry).uid === 0 ? 'root' : ((file as unknown as FileEntry).uid != null ? String((file as unknown as FileEntry).uid) : '-')))}
                                       </span>
                                     </>
                                   )}
@@ -6118,6 +6191,27 @@ export function SftpPanel() {
                                       ? <Check className="mr-2 h-4 w-4 text-green-500" />
                                       : <Copy className="mr-2 h-4 w-4 text-muted-foreground" />}
                                     <span>{copiedRemotePath ? t('sftp_copy_path_done') : t('sftp_copy_path')}</span>
+                                  </ContextMenuItem>
+                                )}
+                                {!isMulti && localContextMenuFile?.isDirectory && (
+                                  <ContextMenuItem onClick={() => {
+                                    if (leftBookmarks.includes(localContextMenuFile.path)) {
+                                      handleRemoveLeftBookmark(localContextMenuFile.path)
+                                    } else {
+                                      handleAddLeftBookmark(localContextMenuFile.path)
+                                    }
+                                  }}>
+                                    <Bookmark className={cn(
+                                      "mr-2 h-4 w-4",
+                                      leftBookmarks.includes(localContextMenuFile.path)
+                                        ? "fill-amber-500 text-amber-500"
+                                        : "text-muted-foreground"
+                                    )} />
+                                    <span>
+                                      {leftBookmarks.includes(localContextMenuFile.path)
+                                        ? t('sftp_remove_current_bookmark')
+                                        : t('sftp_add_bookmark')}
+                                    </span>
                                   </ContextMenuItem>
                                 )}
                               </>
@@ -6598,6 +6692,23 @@ export function SftpPanel() {
                     />
                   )}
 
+                  {/* 远程路径收藏 */}
+                  <SftpBookmarkDropdown
+                    currentPath={remotePath}
+                    bookmarks={remoteBookmarks}
+                    onAddBookmark={handleAddRemoteBookmark}
+                    onRemoveBookmark={handleRemoveRemoteBookmark}
+                    onNavigate={(path) => {
+                      if (isRemoteDisconnected) {
+                        toastRef.current.warning(tRef.current('sftp_offline_readonly_tip'))
+                        return
+                      }
+                      loadRemoteDirectory(selectedServerId, path)
+                    }}
+                    disabled={!selectedServerId || !remotePath || remoteLoading}
+                    t={t}
+                  />
+
                   {/* 文件搜索（路径之后，刷新之前） */}
                   <div className="relative w-40 flex-shrink-0">
                     <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground/60" />
@@ -6702,22 +6813,6 @@ export function SftpPanel() {
                     )}
                   </div>
 
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => {
-                      if (isRemoteDisconnected) {
-                        handleReconnectServer()
-                      } else {
-                        loadRemoteDirectory(selectedServerId, remotePath)
-                      }
-                    }}
-                    disabled={remoteLoading}
-                    className="h-7 w-7 flex-shrink-0"
-                    aria-label={t('sftp_refresh') || 'Refresh'}
-                  >
-                    <RefreshCw className={cn("h-4 w-4", remoteLoading && "animate-spin")} />
-                  </Button>
                   {connectedServer?.targetType === 'windows' && (
                     <Button
                       variant="ghost"
@@ -6765,36 +6860,29 @@ export function SftpPanel() {
                     }
                     transferIcon={<ArrowLeft className="mr-2 h-3.5 w-3.5 text-muted-foreground" />}
                     loading={remoteLoading}
+                    syncBrowsing={syncBrowsing}
+                    onToggleSyncBrowsing={toggleSyncBrowsing}
+                    compareActive={compareActive}
+                    onToggleCompareActive={() => setCompareActive(!compareActive)}
                     t={t}
                   />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => {
+                      if (isRemoteDisconnected) {
+                        handleReconnectServer()
+                      } else {
+                        loadRemoteDirectory(selectedServerId, remotePath)
+                      }
+                    }}
+                    disabled={remoteLoading}
+                    className="h-7 w-7 flex-shrink-0"
+                    aria-label={t('sftp_refresh') || 'Refresh'}
+                  >
+                    <RefreshCw className={cn("h-4 w-4", remoteLoading && "animate-spin")} />
+                  </Button>
 
-                  {/* 同步浏览 + 目录比较 */}
-                  <Button
-                    variant={syncBrowsing ? "secondary" : "ghost"}
-                    size="icon"
-                    onClick={toggleSyncBrowsing}
-                    title={syncBrowsing ? t("sftp_sync_browsing_on") : t("sftp_sync_browsing_off")}
-                    aria-label={t("sftp_sync_browsing")}
-                    className={cn(
-                      "h-7 w-7 rounded-md shrink-0 cursor-pointer transition-colors",
-                      syncBrowsing ? "text-primary bg-primary/10 border border-primary/20 hover:bg-primary/20" : "text-muted-foreground hover:text-foreground"
-                    )}
-                  >
-                    <Link className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant={compareActive ? "secondary" : "ghost"}
-                    size="icon"
-                    onClick={() => setCompareActive(!compareActive)}
-                    title={t("sftp_compare_directories") || "Compare Directories"}
-                    aria-label={t("sftp_compare_directories") || "Compare Directories"}
-                    className={cn(
-                      "h-7 w-7 rounded-md shrink-0 cursor-pointer transition-colors",
-                      compareActive ? "text-primary bg-primary/10 border border-primary/20 hover:bg-primary/20" : "text-muted-foreground hover:text-foreground"
-                    )}
-                  >
-                    <ArrowLeftRight className="h-4 w-4" />
-                  </Button>
                 </div>
 
               </div>
@@ -7165,7 +7253,7 @@ export function SftpPanel() {
                                     {file.name === '..' ? '' : (file.permissions || '-')}
                                   </span>
                                   <span className="text-left text-[11px] text-muted-foreground font-mono truncate pl-3">
-                                    {file.name === '..' ? '' : (file.owner || (file.uid != null ? String(file.uid) : '-'))}
+                                    {file.name === '..' ? '' : (file.owner || (file.uid === 0 ? 'root' : (file.uid != null ? String(file.uid) : '-')))}
                                   </span>
                                 </div>
                               )
@@ -7311,6 +7399,27 @@ export function SftpPanel() {
                                       ? <Check className="mr-2 h-4 w-4 text-green-500" />
                                       : <Copy className="mr-2 h-4 w-4 text-muted-foreground" />}
                                     <span>{copiedRemotePath ? t('sftp_copy_path_done') : t('sftp_copy_path')}</span>
+                                  </ContextMenuItem>
+                                )}
+                                {!isMulti && remoteContextMenuFile?.isDirectory && (
+                                  <ContextMenuItem onClick={() => {
+                                    if (remoteBookmarks.includes(remoteContextMenuFile.path)) {
+                                      handleRemoveRemoteBookmark(remoteContextMenuFile.path)
+                                    } else {
+                                      handleAddRemoteBookmark(remoteContextMenuFile.path)
+                                    }
+                                  }}>
+                                    <Bookmark className={cn(
+                                      "mr-2 h-4 w-4",
+                                      remoteBookmarks.includes(remoteContextMenuFile.path)
+                                        ? "fill-amber-500 text-amber-500"
+                                        : "text-muted-foreground"
+                                    )} />
+                                    <span>
+                                      {remoteBookmarks.includes(remoteContextMenuFile.path)
+                                        ? t('sftp_remove_current_bookmark')
+                                        : t('sftp_add_bookmark')}
+                                    </span>
                                   </ContextMenuItem>
                                 )}
                               </>

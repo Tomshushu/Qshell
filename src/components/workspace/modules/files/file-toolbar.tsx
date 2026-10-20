@@ -1,20 +1,25 @@
 import {
   HardDrive,
-  Star,
   RefreshCw,
   Upload,
   FolderInput,
   Search,
+  Eye,
+  EyeOff,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { cn } from '@/lib/utils'
+import { SftpBookmarkDropdown } from '@/components/sftp/sftp-dropdowns'
 
 interface FileToolbarProps {
   currentPath: string
   onNavigateTo: (path: string) => void
   bookmarks: string[]
-  onToggleBookmark: () => void
+  onAddBookmark: (path: string) => void
+  onRemoveBookmark: (path: string) => void
+  onToggleBookmark?: () => void
+  showHidden?: boolean
+  onToggleShowHidden?: () => void
   onRefresh: () => void
   transferLoading: string | null
   onNativeUpload: (isFolder: boolean) => void
@@ -33,7 +38,10 @@ export function FileToolbar({
   currentPath,
   onNavigateTo,
   bookmarks,
-  onToggleBookmark,
+  onAddBookmark,
+  onRemoveBookmark,
+  showHidden = true,
+  onToggleShowHidden,
   onRefresh,
   transferLoading,
   onNativeUpload,
@@ -81,16 +89,15 @@ export function FileToolbar({
               })}
         </div>
 
-        {/* 书签按钮 */}
-        <Button
-          variant="ghost"
-          size="icon"
-          className={cn('h-7 w-7', bookmarks.includes(currentPath) && 'text-yellow-500')}
-          onClick={onToggleBookmark}
-          title={bookmarks.includes(currentPath) ? t('common_remove_bookmark') : t('common_add_bookmark')}
-        >
-          <Star className={cn('h-3.5 w-3.5', bookmarks.includes(currentPath) && 'fill-current')} />
-        </Button>
+        {/* 路径书签分体下拉按钮（与 SFTP 样式交互完全一致） */}
+        <SftpBookmarkDropdown
+          currentPath={currentPath}
+          bookmarks={bookmarks}
+          onAddBookmark={onAddBookmark}
+          onRemoveBookmark={onRemoveBookmark}
+          onNavigate={onNavigateTo}
+          t={t}
+        />
 
         <Button
           variant="ghost"
@@ -101,6 +108,18 @@ export function FileToolbar({
         >
           <RefreshCw className="h-3.5 w-3.5" />
         </Button>
+
+        {onToggleShowHidden && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-sm gap-1"
+            onClick={onToggleShowHidden}
+            title={showHidden ? (t('sftp_hide_hidden') || 'Hide Hidden Files') : (t('sftp_show_hidden') || 'Show Hidden Files')}
+          >
+            {showHidden ? <Eye className="h-3.5 w-3.5 text-primary" /> : <EyeOff className="h-3.5 w-3.5 text-muted-foreground" />}
+          </Button>
+        )}
 
         <Button
           variant="ghost"
@@ -136,26 +155,6 @@ export function FileToolbar({
           />
         </div>
       </div>
-
-      {/* 书签栏 */}
-      {bookmarks.length > 0 && (
-        <div className="flex items-center gap-1 px-2 py-1 border-b bg-muted/30 overflow-x-auto">
-          <Star className="h-3.5 w-3.5 text-yellow-500 fill-current shrink-0" />
-          {bookmarks.map((bm) => (
-            <button
-              key={bm}
-              onClick={() => onNavigateTo(bm)}
-              className={cn(
-                'text-xs px-2 py-0.5 rounded-md hover:bg-accent transition-colors whitespace-nowrap shrink-0',
-                currentPath === bm ? 'bg-accent text-foreground font-medium' : 'text-muted-foreground'
-              )}
-              title={bm}
-            >
-              {bm.split('/').pop() || bm}
-            </button>
-          ))}
-        </div>
-      )}
 
       {/* 新建输入 */}
       {showNewItem && (

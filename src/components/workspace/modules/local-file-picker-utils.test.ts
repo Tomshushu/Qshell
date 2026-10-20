@@ -42,6 +42,8 @@ describe('local-file-picker-utils', () => {
 
   it('formats file size', () => {
     expect(formatFileSize(1536)).toBe('1.5 KB')
+    expect(formatFileSize(1048576 * 2.5)).toBe('2.50 MB')
+    expect(formatFileSize(1073741824 * 3.25)).toBe('3.25 GB')
   })
 
   it('correctly identifies document and code extensions across sets', () => {

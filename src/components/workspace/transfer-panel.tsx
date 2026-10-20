@@ -39,7 +39,8 @@ function formatSize(bytes: number): string {
   if (bytes <= 0) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
   const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
-  return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`
+  const decimals = i >= 2 ? 2 : (i === 0 ? 0 : 1)
+  return `${(bytes / Math.pow(1024, i)).toFixed(decimals)} ${units[i]}`
 }
 
 function formatRate(bytesPerSec: number): string {

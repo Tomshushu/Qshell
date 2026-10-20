@@ -18,6 +18,9 @@ import {
   Info,
   Trash2,
   Loader2,
+  Bookmark,
+  Eye,
+  EyeOff,
 } from 'lucide-react'
 import { ArchiveFileIcon } from '@/components/ui/file-icons'
 import { ContextMenuShortcut } from '@/components/ui/context-menu'
@@ -36,6 +39,8 @@ interface FileContextMenuProps {
   extractingArchive?: string | null
   isWindows: boolean
   onClose: () => void
+  showHidden?: boolean
+  onToggleShowHidden?: () => void
   onRefresh: () => void
   onNewItem: (type: 'file' | 'dir') => void
   onNativeUpload: (isFolder: boolean) => void
@@ -50,6 +55,9 @@ interface FileContextMenuProps {
   onChangePermissions: (file: FileEntry) => void
   onShowProperties: (file: FileEntry) => void
   onDelete: (paths: string[]) => void
+  bookmarks?: string[]
+  onAddBookmark?: (path: string) => void
+  onRemoveBookmark?: (path: string) => void
   t: (key: string) => string
 }
 
@@ -65,6 +73,8 @@ export function FileContextMenu({
   extractingArchive,
   isWindows,
   onClose,
+  showHidden,
+  onToggleShowHidden,
   onRefresh,
   onNewItem,
   onNativeUpload,
@@ -79,6 +89,9 @@ export function FileContextMenu({
   onChangePermissions,
   onShowProperties,
   onDelete,
+  bookmarks,
+  onAddBookmark,
+  onRemoveBookmark,
   t,
 }: FileContextMenuProps) {
   const [copied, setCopied] = React.useState(false)
@@ -172,6 +185,24 @@ export function FileContextMenu({
         <span>{t('fs_refresh')}</span>
         <ContextMenuShortcut>F5</ContextMenuShortcut>
       </button>
+
+      {onToggleShowHidden && (
+        <button
+          className={itemClass}
+          onMouseEnter={() => setActiveSubMenu(null)}
+          onClick={() => {
+            onToggleShowHidden()
+            onClose()
+          }}
+        >
+          {showHidden ? (
+            <EyeOff className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+          ) : (
+            <Eye className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+          )}
+          <span>{showHidden ? (t('sftp_hide_hidden') || 'Hide Hidden Files') : (t('sftp_show_hidden') || 'Show Hidden Files')}</span>
+        </button>
+      )}
 
       <button
         className={itemClass}
@@ -316,17 +347,47 @@ export function FileContextMenu({
                 </button>
               )}
               {isDirectory ? (
-                <button
-                  className={itemClass}
-                  onMouseEnter={() => setActiveSubMenu(null)}
-                  onClick={() => {
-                    onNavigateTo(file.path)
-                    onClose()
-                  }}
-                >
-                  <FolderInput className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span>{t('fs_enter_dir')}</span>
-                </button>
+                <>
+                  <button
+                    className={itemClass}
+                    onMouseEnter={() => setActiveSubMenu(null)}
+                    onClick={() => {
+                      onNavigateTo(file.path)
+                      onClose()
+                    }}
+                  >
+                    <FolderInput className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span>{t('fs_enter_dir')}</span>
+                  </button>
+                  {onAddBookmark && onRemoveBookmark && bookmarks && (
+                    <button
+                      className={itemClass}
+                      onMouseEnter={() => setActiveSubMenu(null)}
+                      onClick={() => {
+                        if (bookmarks.includes(file.path)) {
+                          onRemoveBookmark(file.path)
+                        } else {
+                          onAddBookmark(file.path)
+                        }
+                        onClose()
+                      }}
+                    >
+                      <Bookmark
+                        className={cn(
+                          "mr-2 h-4 w-4 shrink-0",
+                          bookmarks.includes(file.path)
+                            ? "fill-amber-500 text-amber-500"
+                            : "text-muted-foreground"
+                        )}
+                      />
+                      <span>
+                        {bookmarks.includes(file.path)
+                          ? (t('sftp_remove_current_bookmark') || 'Remove Bookmark')
+                          : (t('sftp_add_bookmark') || 'Bookmark Path')}
+                      </span>
+                    </button>
+                  )}
+                </>
               ) : (
                 <button
                   className={itemClass}

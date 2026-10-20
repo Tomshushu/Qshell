@@ -282,6 +282,18 @@ export interface SftpSlice {
   /** SFTP 远程面板默认是否显示隐藏文件（默认 true） */
   sftpRemoteShowHidden: boolean;
   setSftpRemoteShowHidden: (show: boolean) => void;
+  /** SFTP 本地面板默认排序字段：'name' | 'size' | 'modified' */
+  sftpLocalSortField: 'name' | 'size' | 'modified';
+  setSftpLocalSortField: (field: 'name' | 'size' | 'modified') => void;
+  /** SFTP 本地面板默认排序方向：'asc' | 'desc' */
+  sftpLocalSortOrder: 'asc' | 'desc';
+  setSftpLocalSortOrder: (order: 'asc' | 'desc') => void;
+  /** SFTP 远程面板默认排序字段：'name' | 'size' | 'modified' */
+  sftpRemoteSortField: 'name' | 'size' | 'modified';
+  setSftpRemoteSortField: (field: 'name' | 'size' | 'modified') => void;
+  /** SFTP 远程面板默认排序方向：'asc' | 'desc' */
+  sftpRemoteSortOrder: 'asc' | 'desc';
+  setSftpRemoteSortOrder: (order: 'asc' | 'desc') => void;
   /** SFTP 默认视图模式（向后兼容）：'list' 列表 | 'large' 大图标 | 'medium' 中图标 | 'small' 小图标 */
   sftpDefaultViewMode: SftpViewMode;
   setSftpDefaultViewMode: (mode: SftpViewMode) => void;
@@ -303,6 +315,21 @@ export interface SftpSlice {
   /** SFTP 上传时是否自动遵循项目根及子目录下的 .gitignore 规则 */
   sftpRespectGitignore: boolean;
   setSftpRespectGitignore: (respect: boolean) => void;
+
+  // 路径收藏与工作台文件偏好（统一管理）
+  pathBookmarks: Record<string, string[]>;
+  setPathBookmarks: (scopeKey: string, bookmarks: string[]) => void;
+  setAllPathBookmarks: (all: Record<string, string[]>) => void;
+  addPathBookmark: (scopeKey: string, path: string) => boolean;
+  removePathBookmark: (scopeKey: string, path: string) => void;
+
+  // 工作台文件模块偏好
+  workspaceFileSortField: 'name' | 'size' | 'modifiedTime';
+  setWorkspaceFileSortField: (field: 'name' | 'size' | 'modifiedTime') => void;
+  workspaceFileSortDirection: 'asc' | 'desc';
+  setWorkspaceFileSortDirection: (dir: 'asc' | 'desc') => void;
+  workspaceFileShowHidden: boolean;
+  setWorkspaceFileShowHidden: (show: boolean) => void;
 }
 
 export interface WorkspaceSlice {

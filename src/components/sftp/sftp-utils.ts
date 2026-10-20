@@ -58,6 +58,8 @@ let rightTabSeq = 0;
 export const createEmptyRightTab = (
   defaultViewMode: SftpViewMode = "list",
   defaultShowHidden = true,
+  defaultSortField: "name" | "size" | "modified" = "name",
+  defaultSortOrder: "asc" | "desc" = "asc",
 ): RightTab => ({
   id: `rt-${Date.now()}-${++rightTabSeq}`,
   serverId: "",
@@ -71,8 +73,8 @@ export const createEmptyRightTab = (
   error: null,
   disconnected: false,
   disconnectedError: null,
-  sortField: "name",
-  sortOrder: "asc",
+  sortField: defaultSortField,
+  sortOrder: defaultSortOrder,
   syncBrowsing: false,
   syncPairRoot: null,
   compareActive: false,
@@ -114,7 +116,8 @@ export function formatTransferSize(bytes: number): string {
     Math.floor(Math.log(bytes) / Math.log(1024)),
     units.length - 1,
   );
-  return `${(bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+  const decimals = i >= 2 ? 2 : (i === 0 ? 0 : 1);
+  return `${(bytes / Math.pow(1024, i)).toFixed(decimals)} ${units[i]}`;
 }
 
 export function formatTransferRate(bytesPerSec: number): string {

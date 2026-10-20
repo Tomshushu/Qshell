@@ -396,5 +396,83 @@ describe('Sync Store (Dual Engine Gitee + GitHub & Full Profile E2EE)', () => {
     expect(useSyncStore.getState().historyLimit).toBe(3)
     expect(useSyncStore.getState().historyList).toHaveLength(3)
   })
+
+  it('successfully backs up and restores pathBookmarks, file sort preferences, and AI settings', async () => {
+    useSyncStore.setState({
+      provider: 'gitee',
+      currentToken: 'valid_gitee_token',
+      currentUser: { id: 1, login: 'gitee_user', name: 'Gitee Tester', avatar_url: '', html_url: '' },
+      masterPassword: 'sync_test_pwd_123456',
+    })
+
+    // Setup initial store preferences and bookmarks
+    useAppStore.setState({
+      sftpLocalSortField: 'size',
+      sftpLocalSortOrder: 'desc',
+      sftpRemoteSortField: 'modified',
+      sftpRemoteSortOrder: 'desc',
+      workspaceFileSortField: 'size',
+      workspaceFileSortDirection: 'desc',
+      workspaceFileShowHidden: false,
+      pathBookmarks: {
+        'sftp:local': ['/local/dir1', '/local/dir2'],
+        'sftp:srv-1': ['/remote/var/log'],
+        'workspace:srv-1': ['/var/www'],
+      },
+    })
+
+    localStorage.setItem('qshell_ai_settings', JSON.stringify({ provider: 'deepseek', apiKey: 'sk-test-ai' }))
+    localStorage.setItem('qshell_ai_master_enabled', 'true')
+
+    // 1. Backup
+    const backupRes = await useSyncStore.getState().backup()
+    expect(backupRes.success).toBe(true)
+
+    // 2. Wipe local store and localStorage
+    useAppStore.setState({
+      sftpLocalSortField: 'name',
+      sftpLocalSortOrder: 'asc',
+      sftpRemoteSortField: 'name',
+      sftpRemoteSortOrder: 'asc',
+      workspaceFileSortField: 'name',
+      workspaceFileSortDirection: 'asc',
+      workspaceFileShowHidden: true,
+      pathBookmarks: {},
+    })
+    localStorage.clear()
+
+    // 3. Restore
+    const restoreRes = await useSyncStore.getState().restore('sync_test_pwd_123456')
+    expect(restoreRes.success).toBe(true)
+    expect(restoreRes.stats?.pathBookmarks).toBe(4)
+
+    // 4. Verify restored store state
+    const appState = useAppStore.getState()
+    expect(appState.sftpLocalSortField).toBe('size')
+    expect(appState.sftpLocalSortOrder).toBe('desc')
+    expect(appState.sftpRemoteSortField).toBe('modified')
+    expect(appState.sftpRemoteSortOrder).toBe('desc')
+    expect(appState.workspaceFileSortField).toBe('size')
+    expect(appState.workspaceFileSortDirection).toBe('desc')
+    expect(appState.workspaceFileShowHidden).toBe(false)
+    expect(appState.pathBookmarks['sftp:local']).toEqual(['/local/dir1', '/local/dir2'])
+    expect(appState.pathBookmarks['sftp:srv-1']).toEqual(['/remote/var/log'])
+    expect(appState.pathBookmarks['workspace:srv-1']).toEqual(['/var/www'])
+
+    // 5. Verify restored localStorage backward compatibility
+    expect(JSON.parse(localStorage.getItem('sftp-bookmarks-local') || '[]')).toEqual(['/local/dir1', '/local/dir2'])
+    expect(JSON.parse(localStorage.getItem('sftp-bookmarks-srv-1') || '[]')).toEqual(['/remote/var/log'])
+    expect(JSON.parse(localStorage.getItem('file-bookmarks-srv-1') || '[]')).toEqual(['/var/www'])
+    expect(localStorage.getItem('qshell.sftp.local.sortField')).toBe('size')
+    expect(localStorage.getItem('qshell.sftp.local.sortOrder')).toBe('desc')
+    expect(localStorage.getItem('qshell.sftp.remote.sortField')).toBe('modified')
+    expect(localStorage.getItem('qshell.sftp.remote.sortOrder')).toBe('desc')
+    expect(localStorage.getItem('qshell.workspace.files.sortField')).toBe('size')
+    expect(localStorage.getItem('qshell.workspace.files.sortDirection')).toBe('desc')
+    expect(localStorage.getItem('qshell.workspace.files.showHidden')).toBe('false')
+    expect(JSON.parse(localStorage.getItem('qshell_ai_settings') || '{}')).toEqual({ provider: 'deepseek', apiKey: 'sk-test-ai' })
+    expect(localStorage.getItem('qshell_ai_master_enabled')).toBe('true')
+  })
 })
+
 
