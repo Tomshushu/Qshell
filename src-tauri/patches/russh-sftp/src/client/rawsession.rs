@@ -293,19 +293,25 @@ impl RawSftpSession {
             .await?;
 
         if let Packet::Status(status) = &result {
-            if status.status_code == StatusCode::Ok
-                && self
-                    .handles
-                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |h| {
-                        if h > 0 {
-                            Some(h - 1)
-                        } else {
-                            None
-                        }
-                    })
-                    .is_err()
-            {
-                warn!("attempt to close more handles than exist");
+            if status.status_code == StatusCode::Ok {
+                let mut current = self.handles.load(Ordering::SeqCst);
+                let decremented = loop {
+                    if current == 0 {
+                        break false;
+                    }
+                    match self.handles.compare_exchange_weak(
+                        current,
+                        current - 1,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    ) {
+                        Ok(_) => break true,
+                        Err(actual) => current = actual,
+                    }
+                };
+                if !decremented {
+                    warn!("attempt to close more handles than exist");
+                }
             }
         }
 
