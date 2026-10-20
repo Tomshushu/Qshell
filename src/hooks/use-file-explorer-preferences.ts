@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from 'react'
 import { useAppStore } from '@/store'
-import { toBaseServerId } from '@/utils/server-id'
+import { toBaseServerId } from '@/components/sftp/sftp-utils'
 
 export type FileExplorerScope = 'sftp-local' | 'sftp-remote' | 'workspace'
 

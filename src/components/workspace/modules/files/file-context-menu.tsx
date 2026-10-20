@@ -19,7 +19,6 @@ import {
   Trash2,
   Loader2,
   Bookmark,
-  Eye,
   EyeOff,
 } from 'lucide-react'
 import { ArchiveFileIcon } from '@/components/ui/file-icons'

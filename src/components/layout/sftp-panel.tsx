@@ -732,7 +732,6 @@ export function SftpPanel() {
   // === 路径书签/收藏管理（按服务器隔离，对齐工作台文件模块 file-bookmarks-${baseServerId}）===
   // 1. 远程路径书签：跟随 active tab / selectedServerId 自动隔离切换
   const baseSelectedServerId = toBaseServerId(selectedServerId)
-  const [remoteBookmarks, setRemoteBookmarks] = useState<string[]>([])
 
   // 统一偏好与路径收藏管理（左右独立，云端双向漫游）
   const leftPrefs = useFileExplorerPreferences({
@@ -817,7 +816,7 @@ export function SftpPanel() {
         setSelectedLocalPaths(s => {
           const filtered = new Set<string>()
           for (const p of s) {
-            const name = p.split(/[/\]/).pop() || ''
+            const name = p.split(/[\/\\]/).pop() || ''
             if (!isHiddenName(name)) filtered.add(p)
           }
           return filtered
@@ -839,7 +838,7 @@ export function SftpPanel() {
         setSelectedRemotePaths(s => {
           const filtered = new Set<string>()
           for (const p of s) {
-            const name = p.split(/[/\]/).pop() || ''
+            const name = p.split(/[\/\\]/).pop() || ''
             if (!isHiddenName(name)) filtered.add(p)
           }
           return filtered
