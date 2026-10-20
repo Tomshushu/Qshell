@@ -2523,6 +2523,8 @@ export function SftpPanel() {
                     // 重置续传状态
                     lastOffset: 0,
                     lastCurrent: 0,
+                    lastRateBytes: 0,
+                    lastRateTime: now,
                     lastUpdate: now,
                     startTime: now,
                     elapsedMs: 0,
@@ -2547,14 +2549,31 @@ export function SftpPanel() {
           const newTotal = shouldUpdateParentProgress
             ? (effectiveTotal ?? existing.total)
             : existing.total
-          const dt = (now - existing.lastUpdate) / 1000
-          const dBytes = newCurrent - existing.lastCurrent
+          // 速率采样窗口机制：
+          // 高速传输时 IPC 进度事件可能每 20ms~50ms 到达一次。若每次都把 lastUpdate 设为 now，
+          // 相邻事件的 dt 永远 < 0.25s，导致速率计算分支永远进不去（被锁死在低速或 0）。
+          // 正确机制：使用专门的 lastRateTime 与 lastRateBytes 维护采样基准点，只有当
+          // (now - lastRateTime) 累计达到 250ms 时才结算一次瞬时速率并推进基准点；
+          // lastUpdate 则记录任意数据包到达的最新绝对时间，供 1s 闲置看门狗识别静默。
+          const rateStartTime = existing.lastRateTime ?? existing.lastUpdate ?? existing.startTime
+          const rateStartBytes = existing.lastRateBytes ?? existing.lastCurrent ?? 0
+          const dt = (now - rateStartTime) / 1000
+          const dBytes = newCurrent - rateStartBytes
           let rate = existing.rate
-          if (!isDoneSignal && dt > 0 && dBytes >= 0) {
-            const instantRate = dBytes / dt
-            rate = existing.rate > 0
-              ? existing.rate * RATE_SMOOTHING_ALPHA + instantRate * (1 - RATE_SMOOTHING_ALPHA)
-              : instantRate
+          let newLastRateTime = existing.lastRateTime ?? rateStartTime
+          let newLastRateBytes = existing.lastRateBytes ?? rateStartBytes
+
+          if (!isDoneSignal && dBytes >= 0) {
+            if (dt >= 0.25 || (existing.rate === 0 && dBytes > 0 && dt >= 0.05)) {
+              if (dt > 0) {
+                const instantRate = dBytes / dt
+                rate = existing.rate > 0
+                  ? existing.rate * RATE_SMOOTHING_ALPHA + instantRate * (1 - RATE_SMOOTHING_ALPHA)
+                  : instantRate
+              }
+              newLastRateTime = now
+              newLastRateBytes = newCurrent
+            }
           }
           return prev.map(t =>
             t.transferId === transferId
@@ -2603,6 +2622,8 @@ export function SftpPanel() {
                     : done ? 'completed' as const : 'transferring' as const,
                   lastUpdate: now,
                   lastCurrent: newCurrent,
+                  lastRateTime: newLastRateTime,
+                  lastRateBytes: newLastRateBytes,
                   // 跟踪最后一次已知已传输字节数（用于断点续传 offset）
                   lastOffset: newCurrent,
                   rate: done ? 0 : rate,
@@ -2647,6 +2668,8 @@ export function SftpPanel() {
           completedAt: isFailSignal || done ? now : undefined,
           lastUpdate: now,
           lastCurrent: effectiveCurrent ?? 0,
+          lastRateTime: now,
+          lastRateBytes: effectiveCurrent ?? 0,
           rate: 0,
           elapsedMs: 0,
           // 断点续传相关字段初始值
@@ -2691,18 +2714,31 @@ export function SftpPanel() {
             if (totalType === 'count') {
               bufferedChildren[index] = { ...child, current: child.total, lastCurrent: child.total, lastUpdate: now, rate: 0, status: 'completed' }
             } else {
-              const dt = child.lastUpdate ? (now - child.lastUpdate) / 1000 : 0
-              const delta = current - (child.lastCurrent ?? 0)
-              const instantRate = dt > 0 && delta >= 0 ? delta / dt : 0
-              const childRate = instantRate > 0
-                ? (child.rate ? child.rate * RATE_SMOOTHING_ALPHA + instantRate * (1 - RATE_SMOOTHING_ALPHA) : instantRate)
-                : (child.rate ?? 0)
+              const childRateStartTime = child.lastRateTime ?? child.lastUpdate ?? now
+              const childRateStartBytes = child.lastRateBytes ?? child.lastCurrent ?? 0
+              const dt = (now - childRateStartTime) / 1000
+              const delta = current - childRateStartBytes
+              let childRate = child.rate ?? 0
+              let newChildRateTime = child.lastRateTime ?? childRateStartTime
+              let newChildRateBytes = child.lastRateBytes ?? childRateStartBytes
+              if (dt >= 0.25 || (childRate === 0 && delta > 0 && dt >= 0.05)) {
+                if (dt > 0 && delta >= 0) {
+                  const instantRate = delta / dt
+                  childRate = childRate > 0
+                    ? childRate * RATE_SMOOTHING_ALPHA + instantRate * (1 - RATE_SMOOTHING_ALPHA)
+                    : instantRate
+                }
+                newChildRateTime = now
+                newChildRateBytes = current
+              }
               bufferedChildren[index] = {
                 ...child,
                 current,
                 total: total > 0 ? total : child.total,
                 lastCurrent: current,
                 lastUpdate: now,
+                lastRateTime: newChildRateTime,
+                lastRateBytes: newChildRateBytes,
                 rate: done ? 0 : childRate,
                 status: done ? 'completed' : 'transferring',
               }
@@ -2724,18 +2760,31 @@ export function SftpPanel() {
               return { ...child, current: child.total, lastCurrent: child.total, lastUpdate: now, rate: 0, status: 'completed' as const }
             }
             const itemTotal = total > 0 ? total : child.total
-            const dt = child.lastUpdate ? (now - child.lastUpdate) / 1000 : 0
-            const delta = current - (child.lastCurrent ?? 0)
-            const instantRate = dt > 0 && delta >= 0 ? delta / dt : 0
-            const childRate = instantRate > 0
-              ? (child.rate ? child.rate * RATE_SMOOTHING_ALPHA + instantRate * (1 - RATE_SMOOTHING_ALPHA) : instantRate)
-              : (child.rate ?? 0)
+            const childRateStartTime = child.lastRateTime ?? child.lastUpdate ?? now
+            const childRateStartBytes = child.lastRateBytes ?? child.lastCurrent ?? 0
+            const dt = (now - childRateStartTime) / 1000
+            const delta = current - childRateStartBytes
+            let childRate = child.rate ?? 0
+            let newChildRateTime = child.lastRateTime ?? childRateStartTime
+            let newChildRateBytes = child.lastRateBytes ?? childRateStartBytes
+            if (dt >= 0.25 || (childRate === 0 && delta > 0 && dt >= 0.05)) {
+              if (dt > 0 && delta >= 0) {
+                const instantRate = delta / dt
+                childRate = childRate > 0
+                  ? childRate * RATE_SMOOTHING_ALPHA + instantRate * (1 - RATE_SMOOTHING_ALPHA)
+                  : instantRate
+              }
+              newChildRateTime = now
+              newChildRateBytes = current
+            }
             return {
               ...child,
               current,
               total: itemTotal,
               lastCurrent: current,
               lastUpdate: now,
+              lastRateTime: newChildRateTime,
+              lastRateBytes: newChildRateBytes,
               rate: done ? 0 : childRate,
               status: done ? 'completed' as const : 'transferring' as const,
             }
@@ -2767,15 +2816,49 @@ export function SftpPanel() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // 定时刷新进行中传输的已用时间（仅在存在 transferring 记录时运行，避免空转）
+  // 定时刷新进行中传输的已用时间与实时速率衰减（避免网络静默时速率冻结虚高）
   const hasTransferring = transferRecords.some(t => t.status === 'transferring')
   useEffect(() => {
     if (!hasTransferring) return
     const timer = setInterval(() => {
+      const now = Date.now()
       setTransferRecords(prev => prev.map(t => {
         if (t.status !== 'transferring') return t
-        return { ...t, elapsedMs: Date.now() - t.startTime }
+        const idleSec = (now - t.lastUpdate) / 1000
+        let rate = t.rate
+        let lastRateTime = t.lastRateTime
+        let lastRateBytes = t.lastRateBytes
+        if (idleSec >= 2.0) {
+          rate = 0
+          lastRateTime = now
+          lastRateBytes = t.current
+        } else if (idleSec >= 1.0) {
+          rate = Math.round(t.rate * 0.5)
+          lastRateTime = now
+          lastRateBytes = t.current
+        }
+        return { ...t, rate, lastRateTime, lastRateBytes, elapsedMs: now - t.startTime }
       }))
+      setTransferChildren(prev => {
+        let changed = false
+        const next = { ...prev }
+        for (const [id, children] of Object.entries(next)) {
+          const updated = children.map(c => {
+            if (c.status !== 'transferring' || !c.rate) return c
+            const idle = c.lastUpdate ? (now - c.lastUpdate) / 1000 : 0
+            if (idle >= 2.0 && c.rate !== 0) {
+              changed = true
+              return { ...c, rate: 0, lastRateTime: now, lastRateBytes: c.current }
+            } else if (idle >= 1.0 && c.rate > 0) {
+              changed = true
+              return { ...c, rate: Math.round(c.rate * 0.5), lastRateTime: now, lastRateBytes: c.current }
+            }
+            return c
+          })
+          next[id] = updated
+        }
+        return changed ? next : prev
+      })
     }, TRANSFER_REFRESH_INTERVAL_MS)
     return () => clearInterval(timer)
   }, [hasTransferring])
@@ -3076,6 +3159,8 @@ export function SftpPanel() {
             startTime: Date.now(),
             lastUpdate: Date.now(),
             lastCurrent: t.lastOffset,
+            lastRateTime: Date.now(),
+            lastRateBytes: t.lastOffset,
             rate: 0,
           }
         : t

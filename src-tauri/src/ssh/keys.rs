@@ -13,7 +13,10 @@
 
 use std::path::Path;
 
-use russh::keys::key::KeyPair;
+// russh 0.64 将 keys 合并回主 crate，`KeyPair` 类型已由 ssh_key::PrivateKey 取代
+// （russh::keys::PrivateKey 即 ssh_key::PrivateKey 的 re-export）。
+// 保留 `KeyPair` 别名以最小化调用方改动。
+use russh::keys::PrivateKey as KeyPair;
 
 /// 密钥文件格式
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

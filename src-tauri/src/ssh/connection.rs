@@ -2,8 +2,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use russh::keys::key::PublicKey;
+use russh::keys::PublicKey;
 use russh::{ChannelMsg};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -230,7 +229,8 @@ struct ClientHandler {
     banner: Arc<std::sync::Mutex<Option<String>>>,
 }
 
-#[async_trait]
+// russh 0.64 的 Handler trait 用 RPITIT（方法返回 `impl Future`），
+// 实现时直接用 native `async fn`，无需 `#[async_trait]`。
 impl russh::client::Handler for ClientHandler {
     type Error = SshError;
 
@@ -251,14 +251,17 @@ impl russh::client::Handler for ClientHandler {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &russh::keys::key::PublicKey,
+        server_public_key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
-        use russh_keys::PublicKeyBase64;
+        use russh::keys::PublicKeyBase64;
 
-        let key_type = server_public_key.name();
-        let key_value = server_public_key.public_key_base64();
+        // 0.64 的 check_server_key 接收 PublicKeyOrCertificate，
+        // 提取内层 ssh_key::PublicKey 用于 known_hosts 校验
+        let pk = server_public_key.public_key();
+        let key_type = pk.algorithm().to_string();
+        let key_value = pk.public_key_base64();
 
-        match crate::db::check_known_host(&self.host, self.port as i32, key_type, &key_value) {
+        match crate::db::check_known_host(&self.host, self.port as i32, &key_type, &key_value) {
             Ok(crate::db::KnownHostVerifyResult::Match) => Ok(true),
             Ok(crate::db::KnownHostVerifyResult::Mismatch) => {
                 Err(SshError::HostKeyVerificationFailed(format!(
@@ -269,7 +272,7 @@ impl russh::client::Handler for ClientHandler {
             }
             Ok(crate::db::KnownHostVerifyResult::NotFound) => {
                 // Trust on first use (TOFU) - Save to SQLite
-                crate::db::save_known_host(&self.host, self.port as i32, key_type, &key_value)
+                crate::db::save_known_host(&self.host, self.port as i32, &key_type, &key_value)
                     .map_err(|e| SshError::HostKeyVerificationFailed(format!("Failed to record host key in DB: {}", e)))?;
                 Ok(true)
             }
@@ -288,8 +291,11 @@ impl russh::client::Handler for ClientHandler {
         connected_port: u32,
         originator_address: &str,
         originator_port: u32,
+        reply: russh::client::ChannelOpenHandle,
         _session: &mut russh::client::Session,
     ) -> Result<(), Self::Error> {
+        // 0.64 需要显式 accept 转发 channel，否则会被自动拒绝
+        reply.accept().await;
         let dispatched = crate::ssh::port_forward::dispatch_forwarded_channel(
             &self.server_id,
             connected_address,
@@ -427,6 +433,88 @@ use std::pin::Pin;
 /// 通过多级跳板机链路建立到 (target_host, target_port) 的 TCP 隧道
 ///
 /// 实现步骤：
+/// 建立 TCP 连接并在握手前配置高性能网络套接字参数（BDP 吞吐量优化）
+///
+/// 理论依据（RFC 1323 / RFC 7323）：
+/// TCP 窗口缩放因子（Window Scale Factor）仅在初始三次握手（SYN / SYN-ACK）单次协商锁定。
+/// 在 Windows Winsock 体系下，非阻塞套接字若未在 connect() 前显式设置 SO_RCVBUF，
+/// 系统默认锁定为 64KB（Window Scale 极低甚至为 0），导致往返时延（RTT）为 14ms~16ms 时，
+/// 最大吞吐量严格受限于带宽时延积：Throughput <= 64KB / 0.016s = 4.0 MB/s。
+///
+/// 解决方案：
+/// 使用 tokio::net::TcpSocket 在未绑定/未连接状态下显式配置 SO_RCVBUF 与 SO_SNDBUF 为 4MB，
+/// 并开启 TCP_NODELAY，使 SYN 握手阶段即可向服务端通告大窗口缩放因子（可支撑 250MB/s+ 吞吐）。
+pub(crate) async fn connect_tcp_with_buffer_tuning(
+    addr_str: &str,
+    timeout_duration: Duration,
+) -> Result<TcpStream, std::io::Error> {
+    use std::net::SocketAddr;
+    use tokio::net::TcpSocket;
+
+    let addrs: Vec<SocketAddr> = tokio::net::lookup_host(addr_str).await?.collect();
+    if addrs.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AddrNotAvailable,
+            format!("Failed to resolve address: {}", addr_str),
+        ));
+    }
+
+    let mut last_err = None;
+    for addr in addrs {
+        let socket = match addr {
+            SocketAddr::V4(_) => match TcpSocket::new_v4() {
+                Ok(s) => s,
+                Err(e) => {
+                    last_err = Some(e);
+                    continue;
+                }
+            },
+            SocketAddr::V6(_) => match TcpSocket::new_v6() {
+                Ok(s) => s,
+                Err(e) => {
+                    last_err = Some(e);
+                    continue;
+                }
+            },
+        };
+
+        // 核心：在 connect() 握手前注入 4MB 接收与发送缓冲区
+        socket.set_recv_buffer_size(4 * 1024 * 1024).ok();
+        socket.set_send_buffer_size(4 * 1024 * 1024).ok();
+        socket.set_nodelay(true).ok();
+
+        let actual_rcvbuf = socket.recv_buffer_size().unwrap_or(0);
+        let actual_sndbuf = socket.send_buffer_size().unwrap_or(0);
+
+        match tokio::time::timeout(timeout_duration, socket.connect(addr)).await {
+            Ok(Ok(stream)) => {
+                stream.set_nodelay(true).ok();
+                tracing::info!(
+                    "[TCP Tuned] Connected to {} (SO_RCVBUF: {} KB, SO_SNDBUF: {} KB)",
+                    addr,
+                    actual_rcvbuf / 1024,
+                    actual_sndbuf / 1024
+                );
+                return Ok(stream);
+            }
+            Ok(Err(e)) => last_err = Some(e),
+            Err(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("TCP connect to {} timed out after {:?}", addr_str, timeout_duration),
+                ));
+            }
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            format!("Connection to {} refused", addr_str),
+        )
+    }))
+}
+
 /// 1. TCP 连接第一级跳板机，完成握手与认证；
 /// 2. 依次在第 i 级跳板机通道内 direct_tcpip 打开第 i+1 级跳板机，在其上完成握手与认证；
 /// 3. 在最后一级跳板机通道内 direct_tcpip 连接目标 (host, port)；
@@ -448,7 +536,7 @@ pub async fn connect_via_chained_jump(
         inactivity_timeout: None,
         keepalive_interval: Some(Duration::from_secs(15)),
         keepalive_max: 4,
-        window_size: 4 * 1024 * 1024,
+        window_size: 64 * 1024 * 1024,
         maximum_packet_size: 65535,
         limits: russh::Limits {
             rekey_write_limit: usize::MAX,
@@ -458,15 +546,13 @@ pub async fn connect_via_chained_jump(
         ..Default::default()
     });
 
-    // 1. 第一跳：本地 TCP 直连到 hops[0]
+    // 1. 第一跳：本地 TCP 直连到 hops[0]（带 4MB BDP 吞吐量优化）
     let hop0 = &hops[0];
     let hop0_addr = format!("{}:{}", hop0.host, hop0.port);
     let tcp_timeout = deadline.saturating_duration_since(std::time::Instant::now());
-    let socket = timeout(tcp_timeout, TcpStream::connect(&hop0_addr))
+    let socket = connect_tcp_with_buffer_tuning(&hop0_addr, tcp_timeout)
         .await
-        .map_err(|_| SshError::ConnectionFailed(format!("第 1 级跳板机 TCP 连接超时: {}", hop0_addr)))?
-        .map_err(|e| SshError::ConnectionFailed(format!("第 1 级跳板机 TCP 连接失败: {}", e)))?;
-    socket.set_nodelay(true).ok();
+        .map_err(|e| SshError::ConnectionFailed(format!("第 1 级跳板机 TCP 连接失败 ({}): {}", hop0_addr, e)))?;
 
     let handshake_timeout = deadline.saturating_duration_since(std::time::Instant::now());
     let mut handle_0 = timeout(
@@ -607,14 +693,12 @@ async fn connect_via_proxy(
     deadline: &std::time::Instant,
     proxy: &ProxyTransportConfig,
 ) -> SshResult<Pin<Box<dyn AsyncReadWrite + Send>>> {
-    // 1. TCP 到代理服务器
+    // 1. TCP 到代理服务器（带 4MB BDP 吞吐量优化）
     let proxy_addr = format!("{}:{}", proxy.host, proxy.port);
     let tcp_timeout = deadline.saturating_duration_since(std::time::Instant::now());
-    let mut socket = timeout(tcp_timeout, TcpStream::connect(&proxy_addr))
+    let mut socket = connect_tcp_with_buffer_tuning(&proxy_addr, tcp_timeout)
         .await
-        .map_err(|_| SshError::ConnectionFailed(format!("代理 TCP 连接超时: {}", proxy_addr)))?
-        .map_err(|e| SshError::ConnectionFailed(format!("代理 TCP 连接失败: {}", e)))?;
-    socket.set_nodelay(true).ok();
+        .map_err(|e| SshError::ConnectionFailed(format!("代理 TCP 连接失败 ({}): {}", proxy_addr, e)))?;
 
     // 2. 按代理类型完成握手
     let handshake_timeout = deadline.saturating_duration_since(std::time::Instant::now());
@@ -820,16 +904,18 @@ impl SshTransport {
         let deadline = std::time::Instant::now() + Duration::from_secs(connection_timeout as u64);
 
         // SSH config
-        // 关键防护：russh 默认 limits.rekey_write_limit 为 1<<30（1GB），
-        // 当单次或持续传输达到 1023.8MB (1GB) 时，russh 会主动发起 SSH 密钥重协商（Rekey）。
-        // 由于 russh 0.45 存在 issue #761 漏洞（在数据流传输中插入 Rekey 包会导致协议时序错乱），
-        // 从而引发 `transport closed` 致命异常打断长连接。
-        // 此处将客户端主动 Rekey 阈值设为最大值，由远端服务端自行按需协商，避免客户端主动 Rekey 踩坑。
+        // rekey 相关配置（russh 0.64）：
+        // 1. 禁用客户端主动 rekey（阈值设为最大值），由服务端在 1GiB 阈值自行发起 rekey。
+        // 2. 关键：russh 在 rekey 握手期间会把对端继续回传的数据缓冲到 pending，
+        //    上限为 2 * window_size。window_size 过小时，高速下载流水线（64 并发）在
+        //    服务端 rekey 期间数据缓冲超限会触发 `Error::Pending` 断开（表现为传 1GB 断连）。
+        //    故 window_size 从 16MB 增大到 64MB，使 pending 上限达 128MB，覆盖高带宽
+        //    × 高 RTT 下 rekey 握手期间的在途数据累积，避免传输中断。
         let config = russh::client::Config {
             inactivity_timeout: None,
             keepalive_interval: Some(Duration::from_secs(15)),
             keepalive_max: 4,
-            window_size: 4 * 1024 * 1024,
+            window_size: 64 * 1024 * 1024,
             maximum_packet_size: 65535,
             limits: russh::Limits {
                 rekey_write_limit: usize::MAX,
@@ -855,11 +941,9 @@ impl SshTransport {
         } else {
             let addr = format!("{}:{}", host, port);
             let tcp_timeout = deadline.saturating_duration_since(std::time::Instant::now());
-            let socket = timeout(tcp_timeout, TcpStream::connect(&addr))
+            let socket = connect_tcp_with_buffer_tuning(&addr, tcp_timeout)
                 .await
-                .map_err(|_| SshError::ConnectionFailed(format!("TCP connect to {} timed out after {}s", addr, connection_timeout)))?
                 .map_err(|e| SshError::ConnectionFailed(format!("TCP connect to {} failed: {}", addr, e)))?;
-            socket.set_nodelay(true).ok();
             let elapsed = start.elapsed();
             tracing::info!("[SSH Perf] {} TCP connect: {:?} (累计 {:?})",
                 server_id, elapsed, elapsed);
@@ -919,11 +1003,11 @@ impl SshTransport {
     ) -> SshResult<()> {
         match auth {
             AuthMethod::Password { password } => {
-                let ok = handle
+                let result = handle
                     .authenticate_password(username, password)
                     .await
                     .map_err(|e| SshError::AuthFailed(format!("Password auth failed: {}", e)))?;
-                if !ok {
+                if !result.success() {
                     return Err(SshError::AuthFailed("Password authentication rejected".into()));
                 }
             }
@@ -934,11 +1018,12 @@ impl SshTransport {
                 let key_path = validate_and_canonicalize_key_path(private_key_path)?;
                 let key_pair = load_key_pair(&key_path, private_key_passphrase.as_deref())
                     .map_err(|e| SshError::AuthFailed(e.user_friendly_message()))?;
-                let ok = handle
-                    .authenticate_publickey(username, Arc::new(key_pair))
+                let key_with_hash = russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key_pair), None);
+                let result = handle
+                    .authenticate_publickey(username, key_with_hash)
                     .await
                     .map_err(|e| SshError::AuthFailed(format!("Public key auth failed: {}", e)))?;
-                if !ok {
+                if !result.success() {
                     return Err(SshError::AuthFailed("Public key authentication rejected".into()));
                 }
             }
@@ -969,19 +1054,18 @@ impl SshTransport {
                 let mut last_error = None;
                 let mut authenticated = false;
                 for pubkey in candidates {
-                    let (next_signer, auth_result) = timeout(
+                    let auth_result = timeout(
                         AGENT_TIMEOUT,
-                        handle.authenticate_future(username, pubkey, signer),
+                        handle.authenticate_publickey_with(username, pubkey, None, &mut signer),
                     )
                     .await
                     .map_err(|_| SshError::AuthFailed("SSH Agent 签名认证超时（8 秒）".into()))?;
-                    signer = next_signer;
                     match auth_result {
-                        Ok(true) => {
+                        Ok(result) if result.success() => {
                             authenticated = true;
                             break;
                         }
-                        Ok(false) => {}
+                        Ok(_) => {}
                         Err(e) => last_error = Some(e.to_string()),
                     }
                 }
@@ -1014,11 +1098,11 @@ impl SshTransport {
                     certificate.valid_principals(),
                     username,
                 )?;
-                let ok = handle
+                let result = handle
                     .authenticate_openssh_cert(username, Arc::new(key_pair), certificate)
                     .await
                     .map_err(|e| SshError::AuthFailed(format!("Certificate auth failed: {}", e)))?;
-                if !ok {
+                if !result.success() {
                     return Err(SshError::AuthFailed(
                         "证书认证被服务器拒绝，请确认证书未过期且 CA 已被服务器信任".into()
                     ));
@@ -1033,11 +1117,12 @@ impl SshTransport {
                     private_key_passphrase.as_deref(),
                 )
                 .map_err(|e| SshError::AuthFailed(e.user_friendly_message()))?;
-                let ok = handle
-                    .authenticate_publickey(username, Arc::new(key_pair))
+                let key_with_hash = russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key_pair), None);
+                let result = handle
+                    .authenticate_publickey(username, key_with_hash)
                     .await
                     .map_err(|e| SshError::AuthFailed(format!("Public key auth failed: {}", e)))?;
-                if !ok {
+                if !result.success() {
                     return Err(SshError::AuthFailed("Public key authentication rejected".into()));
                 }
             }
@@ -1100,11 +1185,11 @@ impl SshTransport {
                     username,
                 )?;
 
-                let ok = handle
+                let result = handle
                     .authenticate_openssh_cert(username, Arc::new(key_pair), certificate)
                     .await
                     .map_err(|e| SshError::AuthFailed(format!("Certificate auth failed: {}", e)))?;
-                if !ok {
+                if !result.success() {
                     return Err(SshError::AuthFailed(
                         "证书认证被服务器拒绝，请确认证书未过期且 CA 已被服务器信任".into()
                     ));
@@ -1665,11 +1750,11 @@ impl<'a> FileManager<'a> {
             .await
             .map_err(|e| SshError::SftpFailed(format!("Request subsystem failed: {}", e)))?;
 
-        // 开启流水线并发写入（16 深度并发请求）与 30s 请求超时，显著提升高延迟/长距离传输吞吐量
+        // 开启流水线并发写入（64 深度并发请求）与 60s 请求超时，显著提升高延迟/长距离传输吞吐量
         let sftp_cfg = russh_sftp::client::Config {
             max_packet_len: 256 * 1024,
-            max_concurrent_writes: 16,
-            request_timeout_secs: 30,
+            max_concurrent_writes: 64,
+            request_timeout_secs: 60,
         };
 
         // 用 timeout 包装 SftpSession::new_with_config，防止无限等待

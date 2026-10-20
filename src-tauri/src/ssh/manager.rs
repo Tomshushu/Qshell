@@ -1797,13 +1797,16 @@ pub async fn sftp_write(server_id: String, path: String, content: Vec<u8>) -> Re
     Ok(())
 }
 
-/// 进度上报策略辅助结构：
+/// 进度上报策略辅助结构（字节阈值 + 200ms 时间保底双重门禁）：
 /// - 小文件（<1MB）：每个 chunk 都上报，避免进度条长时间停留 0%
-/// - 大文件：取 max(1MB, total/200) 作为阈值，约 0.5% 一报，避免事件洪流
+/// - 大文件：取 max(1MB, total/200) 作为阈值，约每 0.5% 一报，避免 IPC 事件洪流
+/// - 时间保底：距上次上报超过 200ms 且有新增字节时强制上报，
+///   消除低速链路上大文件进度条数秒不动的假死观感（对齐 Chromium 滑动窗口思路）
 struct ProgressReporter<F: Fn(u64, u64)> {
     total: u64,
     threshold: u64,
     last_reported: u64,
+    last_reported_time: Option<std::time::Instant>,
     on_progress: F,
 }
 
@@ -1816,13 +1819,23 @@ impl<F: Fn(u64, u64)> ProgressReporter<F> {
         } else {
             std::cmp::max(SMALL_FILE, total / 200)
         };
-        Self { total, threshold, last_reported: 0, on_progress }
+        Self { total, threshold, last_reported: 0, last_reported_time: None, on_progress }
     }
     fn report(&mut self, transferred: u64) {
         if transferred == 0 || transferred < self.last_reported { return; }
-        if self.threshold == 0 || transferred - self.last_reported >= self.threshold {
+        // 无新增字节时跳过，避免时间保底路径反复重发同一进度
+        if self.last_reported_time.is_some() && transferred == self.last_reported { return; }
+        let now = std::time::Instant::now();
+        let time_floor_met = self
+            .last_reported_time
+            .map_or(true, |t| now.duration_since(t) >= Duration::from_millis(200));
+        if self.threshold == 0
+            || transferred - self.last_reported >= self.threshold
+            || time_floor_met
+        {
             (self.on_progress)(transferred, self.total);
             self.last_reported = transferred;
+            self.last_reported_time = Some(now);
         }
     }
     fn final_report(&mut self, transferred: u64) {
@@ -2385,13 +2398,29 @@ pub async fn sftp_download_file_with_session(
     };
     let initial_transferred: u64 = resume_offset.unwrap_or(0);
 
-    const CHUNK_SIZE: usize = 256 * 1024;
-    let mut buf = vec![0u8; CHUNK_SIZE];
+    // ── SFTP 下载流水线参数（对齐 OpenSSH sftp-client.c 黄金标准）──────────────
+    // OpenSSH sftp 客户端黄金参数：32KB 单请求 × 64 在途 = 2MB 管道（-B/-R 默认值）；
+    // 严格与 OpenSSH 服务端 2MB Channel Window 1:1 精准对齐，彻底消除超额在途请求
+    // 引发的 Window 耗尽停顿与抖动，保证数据流平稳均匀。
+    const MAX_INFLIGHT: usize = 64;
+    const TARGET_CHUNK_SIZE: usize = 32 * 1024;
+    let chunk_size = TARGET_CHUNK_SIZE.min(remote_file.max_read_len().max(1)) as u64;
+
     let mut transferred: u64 = initial_transferred;
     let mut reporter = ProgressReporter::new(total_size, on_progress);
     if initial_transferred > 0 {
         reporter.report(initial_transferred);
     }
+
+    // 在途读请求槽位：offset 用于短读补齐定位，len 用于检测短读
+    struct InflightReadSlot {
+        offset: u64,
+        len: u32,
+        read: russh_sftp::client::fs::InflightRead,
+    }
+    let mut inflight: std::collections::VecDeque<InflightReadSlot> =
+        std::collections::VecDeque::with_capacity(MAX_INFLIGHT);
+    let mut next_request_offset: u64 = initial_transferred;
 
     let write_result: Result<(), String> = async {
         loop {
@@ -2400,34 +2429,92 @@ pub async fn sftp_download_file_with_session(
                     return Err("Transfer canceled by user".to_string());
                 }
             }
-            let n = tokio::select! {
+
+            // 1. 填充在途流水线：read_at_nowait 同步直投（零 Task、微秒级），
+            //    一次压满 64 个读请求，用 4MB 在途窗口覆盖网络往返时延
+            while inflight.len() < MAX_INFLIGHT {
+                let req_len = if total_size > 0 {
+                    if next_request_offset >= total_size {
+                        break;
+                    }
+                    chunk_size.min(total_size - next_request_offset)
+                } else {
+                    chunk_size
+                };
+                let pending = remote_file
+                    .read_at_nowait(next_request_offset, req_len as u32)
+                    .map_err(|e| format!("SFTP read request failed: {}", e))?;
+                inflight.push_back(InflightReadSlot {
+                    offset: next_request_offset,
+                    len: req_len as u32,
+                    read: pending,
+                });
+                next_request_offset += req_len;
+            }
+            if inflight.is_empty() {
+                break;
+            }
+
+            // 2. FIFO 严格保序：只等队首请求，按偏移升序落盘。
+            //    临时文件任意时刻严格连续递增（零空洞），断点续传的
+            //    大小校验与尾部采样校验因此始终有效
+            let head = inflight.pop_front().unwrap();
+            let chunk_res = tokio::select! {
                 biased;
                 _ = sleep_until_cancel(cancel) => {
                     return Err("Transfer canceled by user".to_string());
                 }
-                read_result = timeout(Duration::from_secs(60), remote_file.read(&mut buf)) => {
-                    read_result
-                        .map_err(|_| "SFTP read timed out".to_string())?
+                r = timeout(Duration::from_secs(60), head.read.wait()) => {
+                    r.map_err(|_| "SFTP read timed out".to_string())?
                         .map_err(|e| format!("SFTP read failed: {}", e))?
                 }
             };
-            if n == 0 {
-                break;
-            }
-            tokio::select! {
-                biased;
-                _ = sleep_until_cancel(cancel) => {
-                    return Err("Transfer canceled by user".to_string());
+
+            match chunk_res {
+                // EOF：以 StatusCode::Eof / 空载荷为准（SFTP 规范：短读不是 EOF）
+                None => break,
+                Some(bytes) => {
+                    let n = bytes.len();
+                    if n > head.len as usize {
+                        return Err(
+                            "SFTP server returned more data than requested".to_string()
+                        );
+                    }
+                    tokio::select! {
+                        biased;
+                        _ = sleep_until_cancel(cancel) => {
+                            return Err("Transfer canceled by user".to_string());
+                        }
+                        write_result = timeout(Duration::from_secs(60), local_file.write_all(&bytes)) => {
+                            write_result
+                                .map_err(|_| "Local file write timed out".to_string())?
+                                .map_err(|e| format!("Local file write failed: {}", e))?;
+                        }
+                    }
+                    transferred += n as u64;
+                    reporter.report(transferred);
+                    apply_rate_limit(n as u64).await;
+
+                    // 短读补齐：SFTP v3 允许服务端返回少于请求长度的数据（且不是
+                    // EOF）。补发缺口区段并插回队首，已发出的大偏移请求继续排队，
+                    // 落盘偏移保持严格连续，杜绝跳段产生文件空洞
+                    if n < head.len as usize {
+                        let gap_offset = head.offset + n as u64;
+                        let gap_len = head.len - n as u32;
+                        let known_eof = total_size > 0 && gap_offset >= total_size;
+                        if !known_eof {
+                            let pending = remote_file
+                                .read_at_nowait(gap_offset, gap_len)
+                                .map_err(|e| format!("SFTP read request failed: {}", e))?;
+                            inflight.push_front(InflightReadSlot {
+                                offset: gap_offset,
+                                len: gap_len,
+                                read: pending,
+                            });
+                        }
+                    }
                 }
-                write_result = timeout(Duration::from_secs(60), local_file.write_all(&buf[..n])) => {
-                    write_result
-                        .map_err(|_| "Local file write timed out".to_string())?
-                        .map_err(|e| format!("Local file write failed: {}", e))?;
-                }
             }
-            transferred += n as u64;
-            reporter.report(transferred);
-            apply_rate_limit(n as u64).await;
             tokio::task::yield_now().await;
         }
 

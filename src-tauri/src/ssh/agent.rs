@@ -12,7 +12,7 @@
 //! - Windows 路径自实现 Pageant named pipe 客户端
 //! - 通过 `authenticate_future` + 自定义 Signer 集成到 russh 认证流程
 
-use russh::keys::key::PublicKey;
+use russh::keys::PublicKey;
 
 use super::connection::SshError;
 
@@ -60,8 +60,11 @@ impl AgentConnection {
                 let client = opt.as_mut().ok_or_else(|| {
                     SshError::AuthFailed("Agent connection already consumed".into())
                 })?;
+                // russh 0.64 返回 Vec<AgentIdentity>，映射为公钥列表
                 client.request_identities().await.map_err(|e| {
                     SshError::AuthFailed(format!("Agent request_identities 失败: {}", e))
+                }).map(|identities| {
+                    identities.into_iter().map(|id| id.public_key().into_owned()).collect()
                 })
             }
             #[cfg(windows)]
@@ -80,17 +83,12 @@ impl AgentConnection {
         match self {
             #[cfg(unix)]
             AgentConnection::Unix(opt) => {
-                use russh::CryptoVec;
-                // sign_request 是 by-ownership 的，需要 take 出来再放回
-                let client = opt.take().ok_or_else(|| {
+                // russh 0.64 的 sign_request 是 &mut self，无需 take/put 模式
+                let client = opt.as_mut().ok_or_else(|| {
                     SshError::AuthFailed("Agent connection already consumed".into())
                 })?;
-                let data_cv = CryptoVec::from_slice(&data);
-                let (new_client, result) = client.sign_request(public, data_cv).await;
-                // 把 client 放回
-                *opt = Some(new_client);
-                result
-                    .map(|v| v.to_vec())
+                let identity = russh::keys::agent::AgentIdentity::from(public.clone());
+                client.sign_request(&identity, None, data).await
                     .map_err(|e| SshError::AuthFailed(format!("Agent sign_request 失败: {}", e)))
             }
             #[cfg(windows)]
@@ -257,7 +255,7 @@ impl WindowsPageantClient {
             pos += comment_len;
 
             // 解析公钥 blob
-            match russh::keys::key::parse_public_key(blob, Some(russh::keys::key::SignatureHash::SHA2_512)) {
+            match russh::keys::key::parse_public_key(blob) {
                 Ok(pk) => keys.push(pk),
                 Err(e) => {
                     tracing::warn!("[SSH Agent] 跳过无法解析的公钥: {}", e);
@@ -295,9 +293,10 @@ impl WindowsPageantClient {
 
         // uint32(flags): SSH_AGENT_RSA_SHA2_512 = 0x04 (现代 RSA 推荐)
         // 对于 Ed25519/ECDSA，flags 会被忽略
-        let flags: u32 = match public {
-            PublicKey::RSA { .. } => 0x04, // SSH_AGENT_RSA_SHA2_512
-            _ => 0,
+        let flags: u32 = if matches!(public.algorithm(), russh::keys::Algorithm::Rsa { .. }) {
+            0x04 // SSH_AGENT_RSA_SHA2_512
+        } else {
+            0
         };
         payload.extend_from_slice(&flags.to_be_bytes());
 
@@ -359,46 +358,24 @@ impl AgentSigner {
 
 impl russh::Signer for AgentSigner {
     type Error = SshError;
-    #[allow(clippy::type_complexity)]
-    type Future = std::pin::Pin<
-        Box<dyn std::future::Future<Output = (Self, Result<russh::CryptoVec, Self::Error>)> + Send>,
-    >;
 
-    fn auth_publickey_sign(
-        self,
-        public: &PublicKey,
-        data: russh::CryptoVec,
-    ) -> Self::Future {
-        let public = public.clone();
-        let data_vec = data.to_vec();
-        Box::pin(async move {
-            // take 出 connection（self 已被消耗，从 option 中取出）
-            let mut conn = match self.connection {
-                Some(c) => c,
-                None => {
-                    return (
-                        Self { connection: None },
-                        Err(SshError::AuthFailed("Agent connection already consumed".into())),
-                    );
-                }
-            };
-
-            match conn.sign_request(&public, data_vec).await {
-                Ok(sig) => {
-                    // 把 connection 放回新的 self
-                    let new_self = Self { connection: Some(conn) };
-                    (
-                        new_self,
-                        Ok(russh::CryptoVec::from_slice(&sig)),
-                    )
-                }
-                Err(e) => {
-                    // 失败时也放回 connection（允许重试）
-                    let new_self = Self { connection: Some(conn) };
-                    (new_self, Err(e))
-                }
+    // russh 0.64 的 Signer 改为 `auth_sign(&mut self, &AgentIdentity, Option<HashAlg>, Vec<u8>)`，
+    // 使用 RPITIT（无 `Future` 关联类型），且为 &mut self（无需 take/put）。
+    // hash_alg 目前忽略：AgentConnection::sign_request 由 agent 自行选择签名 hash，
+    // Ed25519/ECDSA 不依赖 hash_alg，RSA 场景后续如需可透传。
+    fn auth_sign(
+        &mut self,
+        key: &russh::keys::agent::AgentIdentity,
+        _hash_alg: Option<russh::keys::HashAlg>,
+        to_sign: Vec<u8>,
+    ) -> impl std::future::Future<Output = Result<Vec<u8>, Self::Error>> + Send {
+        let public = key.public_key().into_owned();
+        async move {
+            match self.connection.as_mut() {
+                Some(c) => c.sign_request(&public, to_sign).await,
+                None => Err(SshError::AuthFailed("Agent connection already consumed".into())),
             }
-        })
+        }
     }
 }
 
@@ -414,7 +391,7 @@ impl AgentConnection {
         let mut infos = Vec::with_capacity(keys.len());
         for pk in keys {
             use russh::keys::PublicKeyBase64;
-            let algo = pk.name().to_string();
+            let algo = pk.algorithm().to_string();
             let b64 = pk.public_key_base64();
             infos.push(IdentityInfo {
                 algorithm: algo,

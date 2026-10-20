@@ -1763,6 +1763,330 @@ pub async fn files_download(
     }
 }
 
+// ── 传输自动重连基础设施 ─────────────────────────────────────────────────────
+// OpenSSH 服务端默认在 1GiB 流量处发起 rekey（RekeyLimit 默认 1G），russh 0.45
+// 客户端在传输中途收到服务端 KEXINIT 时会话会崩溃（客户端侧 rekey 已通过
+// limits 禁用，但无法阻止服务端发起）。表现为大文件传输在 ~1023MB 处必然断开。
+// 此处实现应用层「自动重连 + 断点续传重试」，让 rekey 断点对用户无感。
+
+/// 连续零推进重试上限：重试后数据偏移毫无推进（连上即断 / 服务端拒绝）达
+/// 到上限即放弃并返回原始错误。只要有推进就不消耗预算，任意大的文件都能
+/// 跨过多次 1GiB rekey 断点。
+const TRANSFER_RETRY_ZERO_PROGRESS_MAX: u32 = 4;
+/// 重试退避基数（ms）：800ms × 2^n，封顶 5s
+const TRANSFER_RETRY_BACKOFF_BASE_MS: u64 = 800;
+
+/// 判定传输错误是否不可重试（用户主动取消 / 本地文件系统 / 数据校验类）。
+/// 其余错误（连接断开、rekey 崩溃、SFTP 通道错误、远端超时等）一律允许自动
+/// 重连重试——断点续传的 TOCTOU 校验 + 尾部采样比对保证重试不会损坏数据。
+fn is_non_retryable_transfer_error(e: &str) -> bool {
+    let e = e.trim();
+    e.contains("canceled by user")
+        || e.contains("User canceled")
+        // 本地文件系统错误（重试必然同样失败）
+        || e.starts_with("Local file")
+        || e.starts_with("Local rename")
+        || e.starts_with("Local tmp")
+        || e.starts_with("Failed to create local")
+        || e.starts_with("Failed to open local")
+        || e.starts_with("Failed to read local")
+        || e.contains("local directory")
+        // 续传数据校验失败（数据已不一致，重试同样失败，需全新传输）
+        || e.contains("TOCTOU")
+        || e.contains("Resume verification failed")
+        || e.contains("shrank")
+        || e.contains("Insufficient disk space")
+        // 路径/参数/安全校验
+        || e.contains("Invalid path")
+        || e.contains("Invalid temporary")
+        || e.contains("Refused to")
+        || e.contains("Max recursion depth")
+        // 协议违规（服务端行为异常，重试无意义）
+        || e.contains("more data than requested")
+}
+
+/// 重试退避时长：800ms → 1.6s → 3.2s → 5s（封顶）
+fn transfer_retry_backoff(retry_no: u32) -> std::time::Duration {
+    let shift = retry_no.min(3);
+    let ms = TRANSFER_RETRY_BACKOFF_BASE_MS
+        .saturating_mul(1u64 << shift)
+        .min(5000);
+    std::time::Duration::from_millis(ms)
+}
+
+/// 重试前等待（退避），等待前后均响应取消标志。
+async fn transfer_retry_wait(cancel: Option<&Arc<AtomicBool>>, retry_no: u32) -> Result<(), String> {
+    if let Some(f) = cancel {
+        if f.load(Ordering::Relaxed) {
+            return Err("Transfer canceled by user".to_string());
+        }
+    }
+    tokio::time::sleep(transfer_retry_backoff(retry_no)).await;
+    if let Some(f) = cancel {
+        if f.load(Ordering::Relaxed) {
+            return Err("Transfer canceled by user".to_string());
+        }
+    }
+    Ok(())
+}
+
+/// 重连进度预算：跟踪断点偏移，只有连续多次「零推进」才放弃重试。
+struct TransferRetryBudget {
+    zero_progress: u32,
+    last_offset: u64,
+}
+
+impl TransferRetryBudget {
+    /// `initial_offset`：首次尝试的起始偏移（续传场景非 0）
+    fn new(initial_offset: u64) -> Self {
+        Self { zero_progress: 0, last_offset: initial_offset }
+    }
+
+    /// 断连后记录当前数据偏移（tmp 文件实际大小）。
+    /// 返回 false 表示连续零推进超限，应放弃重试。
+    fn register_offset(&mut self, current: u64) -> bool {
+        if current > self.last_offset {
+            self.zero_progress = 0;
+            self.last_offset = current;
+            true
+        } else {
+            self.zero_progress += 1;
+            self.zero_progress < TRANSFER_RETRY_ZERO_PROGRESS_MAX
+        }
+    }
+}
+
+/// 确保传输用连接可用：连接仍健康则直接复用；已断开则清理池内死连接（触发
+/// 状态广播与心跳停止）并按 DB 配置自动重连（支持 sftp:/ws: 前缀连接 ID）。
+async fn ensure_transfer_connection(server_id: &str, err_msg: &str) -> Result<(), String> {
+    let manager = crate::ssh::manager::SshManager::global();
+    if let Ok(conn) = manager.get_connection(server_id) {
+        if conn.is_connected() {
+            return Ok(());
+        }
+        crate::ssh::manager::SshManager::handle_connection_loss(server_id, &conn, err_msg).await;
+    }
+    let server = crate::commands::ssh::load_server_config(server_id).await?;
+    crate::commands::ssh::connect_server_entry(&server, server_id).await
+}
+
+/// SFTP 下载 + 断连自动重连重试驱动（各下载入口共用）。
+///
+/// - `shared_sftp`：目录流的共享会话（首轮复用；断连后随旧连接失效，重试
+///   一律由 `sftp_download_file_stream` 新建独立会话）
+/// - `initial_resume`：续传场景的起始偏移（全新传输传 None）
+/// - 断连（含服务端 1GiB rekey 崩溃）时自动重连并从本地 tmp 实际大小续传
+///   （引擎 FIFO 顺序落盘保证 tmp 大小 == 已确认写入字节数）
+/// - 重试期间始终保留 tmp；`keep_tmp_on_final_failure` 决定最终失败/取消时
+///   是否保留（单文件流传 true 供前端展示续传入口；目录/归档流传 false）
+async fn download_file_with_auto_retry(
+    server_id: &str,
+    remote_path: &str,
+    local_path: &str,
+    tmp_local_path: &str,
+    shared_sftp: Option<&russh_sftp::client::SftpSession>,
+    on_progress: impl Fn(u64, u64),
+    cancel: Option<&Arc<AtomicBool>>,
+    initial_resume: Option<u64>,
+    keep_tmp_on_final_failure: bool,
+) -> Result<(), String> {
+    let mut budget = TransferRetryBudget::new(initial_resume.unwrap_or(0));
+    let mut retry_no: u32 = 0;
+    let mut resume_offset = initial_resume;
+    let mut use_shared = shared_sftp.is_some();
+    loop {
+        let attempt = if let (Some(sftp), true) = (shared_sftp, use_shared) {
+            crate::ssh::manager::sftp_download_file_with_session(
+                sftp,
+                remote_path,
+                local_path,
+                &on_progress,
+                cancel,
+                tmp_local_path,
+                resume_offset,
+                true,
+            )
+            .await
+        } else {
+            crate::ssh::manager::sftp_download_file_stream(
+                server_id,
+                remote_path,
+                local_path,
+                &on_progress,
+                cancel,
+                tmp_local_path,
+                resume_offset,
+                true,
+            )
+            .await
+        };
+        use_shared = false;
+        match attempt {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                if is_non_retryable_transfer_error(&e) {
+                    if !keep_tmp_on_final_failure {
+                        let _ = tokio::fs::remove_file(tmp_local_path).await;
+                    }
+                    return Err(e);
+                }
+                let tmp_size = tokio::fs::metadata(tmp_local_path)
+                    .await
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                if !budget.register_offset(tmp_size) {
+                    if !keep_tmp_on_final_failure {
+                        let _ = tokio::fs::remove_file(tmp_local_path).await;
+                    }
+                    return Err(e);
+                }
+                resume_offset = if tmp_size > 0 { Some(tmp_size) } else { None };
+                eprintln!(
+                    "[Transfer] download interrupted at {} bytes ({}), auto-reconnect & resume",
+                    tmp_size, e
+                );
+                if let Err(re) = ensure_transfer_connection(server_id, &e).await {
+                    if !keep_tmp_on_final_failure {
+                        let _ = tokio::fs::remove_file(tmp_local_path).await;
+                    }
+                    return Err(format!("{} (auto-reconnect failed: {})", e, re));
+                }
+                if let Err(ce) = transfer_retry_wait(cancel, retry_no).await {
+                    if !keep_tmp_on_final_failure {
+                        let _ = tokio::fs::remove_file(tmp_local_path).await;
+                    }
+                    return Err(ce);
+                }
+                retry_no += 1;
+            }
+        }
+    }
+}
+
+/// SFTP 上传 + 断连自动重连重试驱动（各上传入口共用）。
+///
+/// - `shared_sftp`：perform_upload / files_resume_upload 的共享会话（首轮复用；
+///   断连后随旧连接失效，重试一律新建专用会话）
+/// - `initial_resume`：续传场景的起始偏移（全新传输传 None）
+/// - 断连（含服务端 1GiB rekey 崩溃）时自动重连，新建专用会话并从远端 tmp
+///   实际大小续传（查不到 = tmp 不存在 → 全新传输）
+/// - 重试期间始终保留远端 tmp；`keep_tmp_on_final_failure` 决定最终失败/取消
+///   时是否保留（单文件流传 true；目录流传 false，尽力清理）
+async fn upload_file_with_auto_retry(
+    server_id: &str,
+    local_path: &str,
+    remote_path: &str,
+    tmp_remote_path: &str,
+    shared_sftp: Option<&russh_sftp::client::SftpSession>,
+    on_progress: impl Fn(u64, u64),
+    cancel: Option<&Arc<AtomicBool>>,
+    initial_resume: Option<u64>,
+    keep_tmp_on_final_failure: bool,
+) -> Result<(), String> {
+    let sftp_tmp_posix = tmp_remote_path.replace('\\', "/");
+    let mut budget = TransferRetryBudget::new(initial_resume.unwrap_or(0));
+    let mut retry_no: u32 = 0;
+    let mut resume_offset = initial_resume;
+    let mut use_shared = shared_sftp.is_some();
+    // 最近一次的专用会话：最终失败清理远端 tmp 时优先复用（可能仍存活）
+    let mut last_session: Option<russh_sftp::client::SftpSession> = None;
+    let cleanup_remote_tmp = async |session: Option<&russh_sftp::client::SftpSession>| {
+        if let Some(s) = session {
+            let _ = s.remove_file(&sftp_tmp_posix).await;
+        }
+    };
+    loop {
+        let attempt = if let (Some(sftp), true) = (shared_sftp, use_shared) {
+            crate::ssh::manager::sftp_upload_file_with_session(
+                sftp,
+                local_path,
+                remote_path,
+                &on_progress,
+                cancel,
+                tmp_remote_path,
+                resume_offset,
+                true,
+            )
+            .await
+        } else {
+            let conn = match crate::ssh::manager::SshManager::global().get_connection(server_id) {
+                Ok(c) => c,
+                Err(e) => {
+                    if !keep_tmp_on_final_failure {
+                        cleanup_remote_tmp(last_session.as_ref().or(shared_sftp)).await;
+                    }
+                    return Err(e.to_string());
+                }
+            };
+            let session = match conn.create_dedicated_sftp_session().await {
+                Ok(s) => s,
+                Err(e) => {
+                    if !keep_tmp_on_final_failure {
+                        cleanup_remote_tmp(last_session.as_ref().or(shared_sftp)).await;
+                    }
+                    return Err(format!("SFTP session failed: {}", e));
+                }
+            };
+            let tmp_size = session
+                .metadata(&sftp_tmp_posix)
+                .await
+                .ok()
+                .map(|m| m.len())
+                .unwrap_or(0);
+            // 零推进预算在重试轮开始时判定（远端 tmp 大小此刻才可查）
+            if !budget.register_offset(tmp_size) {
+                if !keep_tmp_on_final_failure {
+                    cleanup_remote_tmp(Some(&session)).await;
+                }
+                return Err("SFTP upload failed after repeated retries".to_string());
+            }
+            resume_offset = if tmp_size > 0 { Some(tmp_size) } else { None };
+            eprintln!(
+                "[Transfer] upload retry from {} bytes (server tmp)",
+                tmp_size
+            );
+            let res = crate::ssh::manager::sftp_upload_file_with_session(
+                &session,
+                local_path,
+                remote_path,
+                &on_progress,
+                cancel,
+                tmp_remote_path,
+                resume_offset,
+                true,
+            )
+            .await;
+            last_session = Some(session);
+            res
+        };
+        use_shared = false;
+        match attempt {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                if is_non_retryable_transfer_error(&e) {
+                    if !keep_tmp_on_final_failure {
+                        cleanup_remote_tmp(last_session.as_ref().or(shared_sftp)).await;
+                    }
+                    return Err(e);
+                }
+                if let Err(re) = ensure_transfer_connection(server_id, &e).await {
+                    if !keep_tmp_on_final_failure {
+                        cleanup_remote_tmp(last_session.as_ref().or(shared_sftp)).await;
+                    }
+                    return Err(format!("{} (auto-reconnect failed: {})", e, re));
+                }
+                if let Err(ce) = transfer_retry_wait(cancel, retry_no).await {
+                    if !keep_tmp_on_final_failure {
+                        cleanup_remote_tmp(last_session.as_ref().or(shared_sftp)).await;
+                    }
+                    return Err(ce);
+                }
+                retry_no += 1;
+            }
+        }
+    }
+}
+
 /// 下载单个文件
 /// Windows: 使用新 transfer 模块（512KB 分块，PathResolver 路径统一，.downloading 临时文件）
 /// Linux: 使用 SFTP 子系统流式传输（32KB 分块，.sw-dl-tmp-{uuid} 临时文件）
@@ -1786,19 +2110,21 @@ async fn download_single_file(
 
     let file_name = remote_path.rsplit(['/', '\\']).next().unwrap_or("file");
     // 统一使用 manager.rs 成熟的 SFTP 流式传输（具备超时、取消、TOCTOU 续传校验和 Windows 路径兼容）
-    let sftp_result = crate::ssh::manager::sftp_download_file_stream(
+    // keep_tmp_on_failure=true：失败/暂停保留临时文件供断点续传
+    // （download_single_file 传入的 tmp_local_path 会通过初始进度事件发给
+    // 前端，前端据此展示续传入口）；取消时由前端显式清理。
+    // 断连（含服务端 1GiB rekey 崩溃）时自动重连并从本地 tmp 实际大小续传
+    let sftp_result = download_file_with_auto_retry(
         server_id,
         remote_path,
         local_path,
+        tmp_local_path,
+        None,
         |transferred, total| {
             send(transferred, total, file_name, "bytes", None);
         },
         cancel,
-        tmp_local_path,
         None,
-        // keep_tmp_on_failure=true：失败/暂停保留临时文件供断点续传
-        // （download_single_file 传入的 tmp_local_path 会通过初始进度事件发给
-        // 前端，前端据此展示续传入口）；取消时由前端显式清理
         true,
     )
     .await;
@@ -1900,17 +2226,16 @@ async fn download_dir_recursive(
             if let Some(parent) = local_file.parent() {
                 let _ = tokio::fs::create_dir_all(parent).await;
             }
-            // 下载失败时由 sftp_download_file_with_session 内部清理临时文件
-            // 目标文件若已存在则完全不受影响（原子写入策略）
-            // 目录递归下载不支持断点续传：keep_tmp_on_failure=false
+            // 断连（含 1GiB rekey 崩溃）自动重连并续传；目录流最终失败时清理 tmp
             let dl_tmp_path = format!("{}.sw-dl-tmp-{}", local_file_str, uuid::Uuid::new_v4());
-            crate::ssh::manager::sftp_download_file_with_session(
-                &sftp,
+            download_file_with_auto_retry(
+                server_id,
                 &entry.path,
                 local_file_str,
+                &dl_tmp_path,
+                Some(&sftp),
                 |_, _| {}, // no-op：目录下载时不报告单文件字节进度
                 cancel,
-                &dl_tmp_path,
                 None,
                 false,
             )
@@ -1984,16 +2309,16 @@ async fn download_dir_recursive_inner(
             if let Some(parent) = local_file.parent() {
                 let _ = tokio::fs::create_dir_all(parent).await;
             }
-            // 下载失败时由 sftp_download_file_with_session 内部清理临时文件
-            // 目录递归下载不支持断点续传：keep_tmp_on_failure=false
+            // 断连（含 1GiB rekey 崩溃）自动重连并续传；目录流最终失败时清理 tmp
             let dl_tmp_path = format!("{}.sw-dl-tmp-{}", local_file_str, uuid::Uuid::new_v4());
-            crate::ssh::manager::sftp_download_file_with_session(
-                sftp,
+            download_file_with_auto_retry(
+                server_id,
                 &entry.path,
                 local_file_str,
+                &dl_tmp_path,
+                Some(sftp),
                 |_, _| {}, // no-op
                 cancel,
-                &dl_tmp_path,
                 None,
                 false,
             )
@@ -2247,17 +2572,18 @@ pub async fn files_download_archive(
     // 注册传输任务，获取 cancel flag（用户可调用 files_cancel_transfer 取消下载阶段）
     let cancel_flag = register_transfer(&transfer_id);
     let _transfer_guard = TransferRegistrationGuard::new(&transfer_id);
-    // 归档下载不支持断点续传：keep_tmp_on_failure=false
+    // 归档下载最终失败/取消时清理本地 tmp（不支持对外断点续传，但内部断连可自愈）
     let dl_tmp_local = format!("{}.sw-dl-tmp-{}", local_path, uuid::Uuid::new_v4());
-    let write_result = crate::ssh::manager::sftp_download_file_stream(
+    let write_result = download_file_with_auto_retry(
         &server_id,
         &tmp_archive,
         &local_path,
+        &dl_tmp_local,
+        None,
         |transferred, total| {
             send(transferred, total, &archive_name, "downloading", None);
         },
         Some(&cancel_flag),
-        &dl_tmp_local,
         None,
         false,
     )
@@ -3096,39 +3422,23 @@ async fn upload_single_file(
     // keep_tmp_on_failure=true：失败/暂停时保留临时文件供断点续传。
     // 用户主动取消时由前端 cancelTransfer 显式调用 files_cleanup_tmp_file 清理，
     // 「暂停」复用取消通道但前端不清理，正是断点续传的前提（否则暂停=从头重传）。
-    let keep_tmp = true;
-
-    let sftp_result = if let Some(sftp) = sftp {
-        // 复用共享会话
-        crate::ssh::manager::sftp_upload_file_with_session(
-            sftp,
-            local_path,
-            remote_path,
-            |transferred, total| {
-                send(transferred, total, file_name, "bytes");
-            },
-            cancel,
-            tmp_remote_path,
-            None,
-            keep_tmp,
-        )
-        .await
-    } else {
-        // 回退：创建独立会话（向后兼容，理论上 perform_upload 总是传入 Some）
-        crate::ssh::manager::sftp_upload_file_stream(
-            server_id,
-            local_path,
-            remote_path,
-            |transferred, total| {
-                send(transferred, total, file_name, "bytes");
-            },
-            cancel,
-            tmp_remote_path,
-            None,
-            keep_tmp,
-        )
-        .await
-    };
+    //
+    // 断连（含服务端 1GiB rekey 崩溃）时自动重连，新建专用会话并从远端 tmp
+    // 实际大小续传；首轮复用外部共享会话（目录上传场景）
+    let sftp_result = upload_file_with_auto_retry(
+        server_id,
+        local_path,
+        remote_path,
+        tmp_remote_path,
+        sftp,
+        |transferred, total| {
+            send(transferred, total, file_name, "bytes");
+        },
+        cancel,
+        None,
+        true,
+    )
+    .await;
 
     sftp_result?;
     Ok(())
@@ -3275,18 +3585,18 @@ async fn upload_dir_recursive_inner(
             // 子文件字节累加成整个目录的精确进度，并显示已完成文件数。
             // sftp_upload_file_with_session 内部已用"临时文件 + rename"原子写入策略：
             // 失败时仅清理自己的临时文件，目标文件若已存在则完全不受影响。
-            // 这里不再额外调用 remove_file，避免误删原本存在的目标文件。
-            // 目录递归上传不支持断点续传：keep_tmp_on_failure=false
+            // 断连（含 1GiB rekey 崩溃）自动重连并续传；目录流最终失败时清理 tmp
             let ul_tmp_path = format!("{}.sw-upload-tmp-{}", item_remote_path, uuid::Uuid::new_v4());
-            crate::ssh::manager::sftp_upload_file_with_session(
-                sftp,
+            upload_file_with_auto_retry(
+                server_id,
                 &item_local_path,
                 &item_remote_path,
+                &ul_tmp_path,
+                Some(sftp),
                 |transferred, total| {
                     send(transferred, total, &item_remote_path, "bytes");
                 },
                 cancel,
-                &ul_tmp_path,
                 None,
                 false,
             )
@@ -3517,15 +3827,17 @@ pub async fn files_resume_upload(
     // 执行传输：续传传入 Some(offset)，全新传输传入 None
     // keep_tmp_on_failure=true：与函数文档注释对齐——失败/暂停保留临时文件允许
     // 再次续传；取消时由前端显式调用 files_cleanup_tmp_file 清理
-    let result = crate::ssh::manager::sftp_upload_file_with_session(
-        &sftp,
+    // 断连（含 1GiB rekey 崩溃）时自动重连，新建专用会话并从远端 tmp 实际大小续传
+    let result = upload_file_with_auto_retry(
+        &server_id,
         &local_path,
         &remote_path,
+        &effective_tmp_path,
+        Some(&sftp),
         |transferred, total| {
             send(transferred, total, &file_name, "bytes");
         },
         cancel_ref,
-        &effective_tmp_path,
         effective_offset,
         true,
     )
@@ -3699,15 +4011,17 @@ pub async fn files_resume_download(
     // 执行传输：续传传入 Some(offset)，全新传输传入 None
     // keep_tmp_on_failure=true：失败/暂停保留临时文件供断点续传；
     // 取消时由前端显式调用 files_cleanup_tmp_file 清理
-    let result = crate::ssh::manager::sftp_download_file_stream(
+    // 断连（含 1GiB rekey 崩溃）时自动重连并从本地 tmp 实际大小续传
+    let result = download_file_with_auto_retry(
         &server_id,
         &remote_path,
         &local_path,
+        &effective_tmp_path,
+        None,
         |transferred, total| {
             send(transferred, total, &file_name, "bytes");
         },
         cancel_ref,
-        &effective_tmp_path,
         effective_offset,
         true,
     )
@@ -3813,6 +4127,10 @@ pub async fn files_cleanup_tmp_file(
     }
 }
 
+/// `tmp_dest_path`：由调用方生成并在断连重试间复用（支持断点续传）
+/// `resume_offset`：Some(n) → 以 APPEND 模式从目标 tmp 的 n 字节处续传
+/// `keep_tmp_on_failure`：失败时是否保留目标 tmp（重试驱动传 true；目录流
+///   传 false 维持「失败即清理」的原行为）
 async fn server_to_server_single_file(
     src_sftp: &russh_sftp::client::SftpSession,
     dest_sftp: &russh_sftp::client::SftpSession,
@@ -3821,22 +4139,123 @@ async fn server_to_server_single_file(
     total_bytes: u64,
     send_progress: impl Fn(u64, u64, Option<&str>),
     cancel: Option<&Arc<AtomicBool>>,
+    tmp_dest_path: &str,
+    resume_offset: Option<u64>,
+    keep_tmp_on_failure: bool,
 ) -> Result<(), String> {
+    use russh_sftp::protocol::OpenFlags;
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
     let sftp_src_path = src_path.replace('\\', "/");
     let sftp_dest_path = dest_path.replace('\\', "/");
+    let tmp_dest_path = tmp_dest_path.replace('\\', "/");
     let mut src_file = src_sftp.open(&sftp_src_path).await
         .map_err(|e| format!("Failed to open source file: {}", e))?;
-        
-    let tmp_dest_path = format!("{}.sw-upload-tmp-{}", sftp_dest_path, uuid::Uuid::new_v4());
-    let mut dest_file = dest_sftp.create(&tmp_dest_path).await
-        .map_err(|e| format!("Failed to create destination temp file: {}", e))?;
-        
-    send_progress(0, total_bytes, Some(&tmp_dest_path));
 
-    let mut buffer = vec![0u8; 256 * 1024]; // 256KB buffer
-    let mut written = 0;
+    // 续传模式：APPEND 打开目标 tmp；全新模式：CREATE+TRUNCATE
+    let (dest_file, initial_written) = if let Some(offset) = resume_offset {
+        // 源端防回退校验：源文件在断连期间变小则中止（防「旧前缀+新内容」静默损坏）
+        if total_bytes > 0 && offset > total_bytes {
+            return Err(format!(
+                "Source file shrank since the transfer was interrupted ({} > {} bytes). \
+                 Please start a fresh transfer.",
+                offset, total_bytes
+            ));
+        }
+        let f = dest_sftp
+            .open_with_flags(&tmp_dest_path, OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::APPEND)
+            .await
+            .map_err(|e| format!("Failed to open destination temp file for resume: {}", e))?;
+
+        // TOCTOU 防护：打开后校验目标 tmp 实际大小是否等于 offset
+        let actual_size = dest_sftp
+            .metadata(&tmp_dest_path)
+            .await
+            .map_err(|e| format!("Cannot verify dest tmp size (TOCTOU): {}", e))?
+            .len();
+        if actual_size != offset {
+            return Err(format!(
+                "Resume tmp file size mismatch (TOCTOU detected): expected {} bytes, actual {} bytes. \
+                 Aborting to prevent data corruption.",
+                offset, actual_size
+            ));
+        }
+
+        // 内容采样校验：源文件与目标 tmp 在 offset 前最后 4KB 比对，
+        // 防源文件在断连期间被同尺寸修改导致静默损坏
+        const TAIL_SAMPLE_MAX: usize = 4096;
+        let sample_len = (offset as usize).min(TAIL_SAMPLE_MAX);
+        if sample_len > 0 {
+            let sample_start = offset - sample_len as u64;
+            let mut src_tail = vec![0u8; sample_len];
+            src_file
+                .seek(std::io::SeekFrom::Start(sample_start))
+                .await
+                .map_err(|e| format!("Source seek failed for tail sample: {}", e))?;
+            tokio::time::timeout(std::time::Duration::from_secs(30), src_file.read_exact(&mut src_tail))
+                .await
+                .map_err(|_| "Source read timed out (tail sample)".to_string())?
+                .map_err(|e| format!("Source read failed for tail sample: {}", e))?;
+            src_file
+                .seek(std::io::SeekFrom::Start(offset))
+                .await
+                .map_err(|e| format!("Source seek failed after tail sample: {}", e))?;
+
+            let mut tmp_read = dest_sftp
+                .open_with_flags(&tmp_dest_path, OpenFlags::READ)
+                .await
+                .map_err(|e| format!("Failed to open dest tmp for tail sample: {}", e))?;
+            tmp_read
+                .seek(std::io::SeekFrom::Start(sample_start))
+                .await
+                .map_err(|e| format!("Dest tmp seek failed for tail sample: {}", e))?;
+            let mut tmp_tail = vec![0u8; sample_len];
+            tokio::time::timeout(std::time::Duration::from_secs(30), tmp_read.read_exact(&mut tmp_tail))
+                .await
+                .map_err(|_| "Dest tmp read timed out (tail sample)".to_string())?
+                .map_err(|e| format!("Dest tmp read failed for tail sample: {}", e))?;
+            let _ = tmp_read.shutdown().await;
+            if src_tail != tmp_tail {
+                return Err(format!(
+                    "Resume verification failed: dest tmp content does not match the source at offset {} \
+                     (source file may have changed since the transfer was interrupted). \
+                     Please start a fresh transfer.",
+                    offset
+                ));
+            }
+        }
+        (f, offset)
+    } else {
+        let f = dest_sftp.create(&tmp_dest_path).await
+            .map_err(|e| format!("Failed to create destination temp file: {}", e))?;
+        (f, 0)
+    };
+    let mut dest_file = dest_file;
+
+    send_progress(initial_written, total_bytes, Some(&tmp_dest_path));
+
+    // ── SFTP 中继流水线参数（与下载引擎对齐）──────────────────────────────
+    // 旧实现读侧为 256KB 停-等：吞吐被 RTT_src 钳制（≈ 256KB ÷ RTT_src）。
+    // 改为 64 在途读请求（单请求 64KB，按 limits@openssh.com 协商值钳制），
+    // 读侧管道 4MB 覆盖带宽时延积；写侧由补丁库 poll_write 维持 64 深度
+    // 在途写流水线（单请求按 max_write_len 协商拆分），双腿并发后
+    // 吞吐 ≈ min(源→本机, 本机→目标) 两条链路带宽，不再受单请求 RTT 限制
+    const MAX_INFLIGHT: usize = 64;
+    const TARGET_CHUNK_SIZE: usize = 64 * 1024;
+    let chunk_size = TARGET_CHUNK_SIZE.min(src_file.max_read_len().max(1)) as u64;
     // s2s 直传的 read/write 60s 超时与普通上传/下载对齐，结合 sleep_until_cancel 毫秒级响应取消
     let stall_timeout = std::time::Duration::from_secs(60);
+
+    // 在途读请求槽位：offset 用于短读补齐定位，len 用于检测短读
+    struct InflightReadSlot {
+        offset: u64,
+        len: u32,
+        read: russh_sftp::client::fs::InflightRead,
+    }
+    let mut inflight: std::collections::VecDeque<InflightReadSlot> =
+        std::collections::VecDeque::with_capacity(MAX_INFLIGHT);
+    let mut next_request_offset: u64 = initial_written;
+    let mut written: u64 = initial_written;
 
     let copy_result: Result<(), String> = async {
         loop {
@@ -3846,36 +4265,90 @@ async fn server_to_server_single_file(
                 }
             }
 
-            let bytes_read = tokio::select! {
-                biased;
-                _ = crate::ssh::manager::sleep_until_cancel(cancel) => {
-                    return Err("Transfer canceled by user".to_string());
-                }
-                read_res = tokio::time::timeout(stall_timeout, src_file.read(&mut buffer)) => {
-                    read_res
-                        .map_err(|_| "Read timeout (60s, source server may be stalled)".to_string())?
-                        .map_err(|e| format!("Read error: {}", e))?
-                }
-            };
-            if bytes_read == 0 {
+            // 1. 填充读侧流水线：read_at_nowait 同步直投（零 Task、微秒级），
+            //    一次压满 64 个读请求，用 4MB 在途窗口覆盖源服务器往返时延
+            while inflight.len() < MAX_INFLIGHT {
+                let req_len = if total_bytes > 0 {
+                    if next_request_offset >= total_bytes {
+                        break;
+                    }
+                    chunk_size.min(total_bytes - next_request_offset)
+                } else {
+                    chunk_size
+                };
+                let pending = src_file
+                    .read_at_nowait(next_request_offset, req_len as u32)
+                    .map_err(|e| format!("Read request failed: {}", e))?;
+                inflight.push_back(InflightReadSlot {
+                    offset: next_request_offset,
+                    len: req_len as u32,
+                    read: pending,
+                });
+                next_request_offset += req_len;
+            }
+            if inflight.is_empty() {
                 break;
             }
 
-            tokio::select! {
+            // 2. FIFO 严格保序：只等队首读请求；到达后交写侧流水线异步吸收，
+            //    目标临时文件偏移严格连续递增，原子 rename 前的完整性可靠
+            let head = inflight.pop_front().unwrap();
+            let chunk_res = tokio::select! {
                 biased;
                 _ = crate::ssh::manager::sleep_until_cancel(cancel) => {
                     return Err("Transfer canceled by user".to_string());
                 }
-                write_res = tokio::time::timeout(stall_timeout, dest_file.write_all(&buffer[..bytes_read])) => {
-                    write_res
-                        .map_err(|_| "Write timeout (60s, destination server may be stalled)".to_string())?
-                        .map_err(|e| format!("Write error: {}", e))?
+                r = tokio::time::timeout(stall_timeout, head.read.wait()) => {
+                    r.map_err(|_| "Read timeout (60s, source server may be stalled)".to_string())?
+                        .map_err(|e| format!("Read error: {}", e))?
                 }
             };
 
-            written += bytes_read as u64;
-            send_progress(written, total_bytes, Some(&tmp_dest_path));
-            crate::ssh::manager::apply_rate_limit(bytes_read as u64).await;
+            match chunk_res {
+                // EOF：以 StatusCode::Eof / 空载荷为准（SFTP 规范：短读不是 EOF）
+                None => break,
+                Some(bytes) => {
+                    let n = bytes.len();
+                    if n > head.len as usize {
+                        return Err(
+                            "Source server returned more data than requested".to_string()
+                        );
+                    }
+                    tokio::select! {
+                        biased;
+                        _ = crate::ssh::manager::sleep_until_cancel(cancel) => {
+                            return Err("Transfer canceled by user".to_string());
+                        }
+                        write_res = tokio::time::timeout(stall_timeout, dest_file.write_all(&bytes)) => {
+                            write_res
+                                .map_err(|_| "Write timeout (60s, destination server may be stalled)".to_string())?
+                                .map_err(|e| format!("Write error: {}", e))?;
+                        }
+                    }
+                    written += n as u64;
+                    send_progress(written, total_bytes, Some(&tmp_dest_path));
+                    crate::ssh::manager::apply_rate_limit(n as u64).await;
+
+                    // 短读补齐：SFTP v3 允许服务端返回少于请求长度的数据（且不是
+                    // EOF）。补发缺口区段并插回队首，已发出的大偏移请求继续排队，
+                    // 中继落盘偏移保持严格连续，杜绝跳段产生文件空洞
+                    if n < head.len as usize {
+                        let gap_offset = head.offset + n as u64;
+                        let gap_len = head.len - n as u32;
+                        let known_eof = total_bytes > 0 && gap_offset >= total_bytes;
+                        if !known_eof {
+                            let pending = src_file
+                                .read_at_nowait(gap_offset, gap_len)
+                                .map_err(|e| format!("Read request failed: {}", e))?;
+                            inflight.push_front(InflightReadSlot {
+                                offset: gap_offset,
+                                len: gap_len,
+                                read: pending,
+                            });
+                        }
+                    }
+                }
+            }
 
             // 主动让出 CPU，确保底层 russh channel 和 TCP 读写 runner 得以高频处理网络报文
             tokio::task::yield_now().await;
@@ -3892,7 +4365,9 @@ async fn server_to_server_single_file(
     drop(src_file);
 
     if let Err(e) = copy_result {
-        let _ = dest_sftp.remove_file(&tmp_dest_path).await;
+        if !keep_tmp_on_failure {
+            let _ = dest_sftp.remove_file(&tmp_dest_path).await;
+        }
         return Err(e);
     }
 
@@ -3975,7 +4450,13 @@ async fn server_to_server_dir_recursive(
             let meta = src_sftp.metadata(&entry.path).await
                 .map_err(|e| format!("Failed to read metadata: {}", e))?;
             let size = meta.size.unwrap_or(0);
-            
+
+            // 目录流不支持断点续传：每文件独立 tmp，失败即清理（维持原行为）
+            let item_tmp_path = format!(
+                "{}.sw-upload-tmp-{}",
+                item_dest_path.replace('\\', "/"),
+                uuid::Uuid::new_v4()
+            );
             server_to_server_single_file(
                 src_sftp,
                 dest_sftp,
@@ -3984,6 +4465,9 @@ async fn server_to_server_dir_recursive(
                 size,
                 |_, _, _| {},
                 cancel,
+                &item_tmp_path,
+                None,
+                false,
             ).await?;
             
             let done = completed.fetch_add(1, Ordering::SeqCst) + 1;
@@ -4118,22 +4602,122 @@ pub async fn files_server_to_server_transfer(
             1,
         ).await
     } else {
+        // 单文件传输：断连自动重连重试（双腿 1GiB rekey 均可能断）
+        // tmp 路径只生成一次，重试间复用；续传偏移取目标 tmp 实际大小
         let meta = src_sftp.metadata(&src_path).await.map_err(|e| e.to_string())?;
-        let size = meta.size.unwrap_or(0);
-        
+        let mut size = meta.size.unwrap_or(0);
+
         send_progress_closure(0, size, &file_name, "bytes", None, None);
-        
-        server_to_server_single_file(
-            &src_sftp,
-            &dest_sftp,
-            &src_path,
-            &final_dest_path,
-            size,
-            |current, total, tmp| {
-                send_progress_closure(current, total, &file_name, "bytes", None, tmp);
-            },
-            cancel_ref,
-        ).await
+
+        let tmp_dest_path = format!(
+            "{}.sw-upload-tmp-{}",
+            final_dest_path.replace('\\', "/"),
+            uuid::Uuid::new_v4()
+        );
+        let mut src_sftp = src_sftp;
+        let mut dest_sftp = dest_sftp;
+        let mut budget = TransferRetryBudget::new(0);
+        let mut retry_no: u32 = 0;
+        let mut resume_offset: Option<u64> = None;
+        // 循环携带状态：读取点均在首次赋值之后，初始值仅为类型占位
+        #[allow(unused_assignments)]
+        let mut last_error = String::from("SFTP transfer failed");
+        loop {
+            let attempt = server_to_server_single_file(
+                &src_sftp,
+                &dest_sftp,
+                &src_path,
+                &final_dest_path,
+                size,
+                |current, total, tmp| {
+                    send_progress_closure(current, total, &file_name, "bytes", None, tmp);
+                },
+                cancel_ref,
+                &tmp_dest_path,
+                resume_offset,
+                true,
+            )
+            .await;
+            match attempt {
+                Ok(()) => break Ok(()),
+                Err(e) => {
+                    if is_non_retryable_transfer_error(&e) {
+                        let _ = dest_sftp.remove_file(&tmp_dest_path).await;
+                        break Err(e);
+                    }
+                    last_error = e.clone();
+                    eprintln!(
+                        "[Transfer] s2s interrupted ({}), auto-reconnect both legs & resume",
+                        e
+                    );
+                    // 重连双腿（健康的一条会被 ensure_transfer_connection 短路复用）
+                    if let Err(re) = ensure_transfer_connection(&src_server_id, &e).await {
+                        let _ = dest_sftp.remove_file(&tmp_dest_path).await;
+                        break Err(format!("{} (auto-reconnect source failed: {})", e, re));
+                    }
+                    if let Err(re) = ensure_transfer_connection(&dest_server_id, &e).await {
+                        let _ = dest_sftp.remove_file(&tmp_dest_path).await;
+                        break Err(format!("{} (auto-reconnect destination failed: {})", e, re));
+                    }
+                    if let Err(ce) = transfer_retry_wait(cancel_ref, retry_no).await {
+                        let _ = dest_sftp.remove_file(&tmp_dest_path).await;
+                        break Err(ce);
+                    }
+                    retry_no += 1;
+                    // 新建双腿专用会话 + 查询目标 tmp 实际大小作为续传偏移
+                    let sessions = async {
+                        let s_conn = crate::ssh::manager::SshManager::global()
+                            .get_connection(&src_server_id)
+                            .map_err(|e| e.to_string())?;
+                        let d_conn = crate::ssh::manager::SshManager::global()
+                            .get_connection(&dest_server_id)
+                            .map_err(|e| e.to_string())?;
+                        let s = s_conn
+                            .create_dedicated_sftp_session()
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        let d = d_conn
+                            .create_dedicated_sftp_session()
+                            .await
+                            .map_err(|e| e.to_string())?;
+                        Ok::<_, String>((s, d))
+                    };
+                    match sessions.await {
+                        Ok((s, d)) => {
+                            // 重取源文件大小（防断连期间源文件变化）+ 目标 tmp 实际大小
+                            size = s
+                                .metadata(&src_path)
+                                .await
+                                .ok()
+                                .and_then(|m| m.size)
+                                .unwrap_or(size);
+                            let tmp_size = d
+                                .metadata(&tmp_dest_path)
+                                .await
+                                .ok()
+                                .map(|m| m.len())
+                                .unwrap_or(0);
+                            if !budget.register_offset(tmp_size) {
+                                let _ = d.remove_file(&tmp_dest_path).await;
+                                break Err(last_error);
+                            }
+                            resume_offset = if tmp_size > 0 { Some(tmp_size) } else { None };
+                            src_sftp = s;
+                            dest_sftp = d;
+                        }
+                        Err(se) => {
+                            // 会话重建失败：消耗一次零推进预算后重走重连流程
+                            if !budget.register_offset(0) {
+                                break Err(format!(
+                                    "{} (recreate SFTP sessions failed: {})",
+                                    last_error, se
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
     };
     
     unregister_transfer(&transfer_id);

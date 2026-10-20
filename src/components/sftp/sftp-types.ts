@@ -63,6 +63,8 @@ export interface TransferRecordItem {
   completedAt?: number;
   lastUpdate: number;
   lastCurrent: number;
+  lastRateTime?: number;
+  lastRateBytes?: number;
   rate: number;
   elapsedMs: number;
   error?: string;
@@ -80,6 +82,8 @@ export interface TransferChildRecord {
   total: number;
   lastCurrent?: number;
   lastUpdate?: number;
+  lastRateTime?: number;
+  lastRateBytes?: number;
   rate?: number;
   status: "waiting" | "transferring" | "completed" | "failed" | "canceled";
   error?: string;

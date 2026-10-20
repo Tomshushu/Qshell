@@ -27,8 +27,9 @@ tokio = { version = "1", features = ["full"] }
 # socket2: Telnet TCP keepalive 探测配置（tokio 自带的 set_keepalive 只能开启
 # SO_KEEPALIVE，Windows 默认 2 小时才开始探测，无法及时发现 NAT 静默丢弃的死连接）
 socket2 = "0.6"
-russh = "0.45"
-russh-keys = "0.45"
+# russh 0.64 默认 crypto backend 是 aws-lc-rs（Windows 需 NASM 汇编器），
+# 改用纯预编译的 ring backend 避免 NASM 依赖；保留 flate2(压缩) + rsa(RSA 密钥)
+russh = { version = "0.64", default-features = false, features = ["flate2", "ring", "rsa"] }
 russh-sftp = "2.1"
 # ssh-key 用于 PPK (PuTTY) 格式私钥解析、证书加载、密钥生成，russh-keys 0.45 未开启 ppk feature
 # 注: ssh-key 0.6 不含 ppk feature，需要 0.7+（当前为 RC）。
@@ -74,4 +75,4 @@ codegen-units = 1
 panic = "abort"
 
 [patch.crates-io]
-russh = { path = "patches/russh" }
+russh-sftp = { path = "patches/russh-sftp" }
