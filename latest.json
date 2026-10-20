@@ -17,11 +17,11 @@
     },
     "darwin-aarch64": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTWo3SmRaaTIzQnJsLytJVEpHSTBSSEJnVFNJODg1S2FzcW5TRktBQXlqcEJtU0EydHpTTVlXUHFCcHljYk1pRFF6MlRrS1g3dXlQbXhvcktmenNHQ1c2Yi92Rys2UVFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNTE5NTcxCWZpbGU6UXNoZWxsLmFwcC50YXIuZ3oKcEVMNW81OEZZd2RHbGtqR1kwVEtTK1hIQTFTaWgwTTRjdkcwVlJPWFpUd0FzR3djQkJ3cU9nVzFnb3VDa2QvK2hhbiszempoQnpZaURmMDdXT2tERGc9PQo=",
-      "url": "https://gh-proxy.com/https://github.com/Tomshushu/Qshell/releases/download/v1.0.14/Qshell_aarch64.app.tar.gz"
+      "url": "https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.14/Qshell_1.0.14_aarch64.app.tar.gz"
     },
     "darwin-aarch64-app": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTWo3SmRaaTIzQnJsLytJVEpHSTBSSEJnVFNJODg1S2FzcW5TRktBQXlqcEJtU0EydHpTTVlXUHFCcHljYk1pRFF6MlRrS1g3dXlQbXhvcktmenNHQ1c2Yi92Rys2UVFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNTE5NTcxCWZpbGU6UXNoZWxsLmFwcC50YXIuZ3oKcEVMNW81OEZZd2RHbGtqR1kwVEtTK1hIQTFTaWgwTTRjdkcwVlJPWFpUd0FzR3djQkJ3cU9nVzFnb3VDa2QvK2hhbiszempoQnpZaURmMDdXT2tERGc9PQo=",
-      "url": "https://gh-proxy.com/https://github.com/Tomshushu/Qshell/releases/download/v1.0.14/Qshell_aarch64.app.tar.gz"
+      "url": "https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.14/Qshell_1.0.14_aarch64.app.tar.gz"
     },
     "windows-x86_64": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRTWo3SmRaaTIzQmdySEtjb1l4WEJKWFNXVWVNV3ozcVJ4RUxKNCtUS2JUcjdRY2hKVDdDekxFSE1ZUkxLZ2lROGZGSWFYaGFJV0h5VHIwUGtwZHFPaEZ2T0hKMmgxQXdjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkyNTE5NzI0CWZpbGU6UXNoZWxsXzEuMC4xNF94NjQtc2V0dXAuZXhlCjVIMWpPdXlTMlhSRG1sWEc4NEV0d3RoNThRNzdFQm9pNFNKYWhBUHVnQnFxbDVrR3N5RStJank2V2t5SXB4SlBTY0ZIWnVzTStXVG1HWHJRYk9yVkRnPT0K",
