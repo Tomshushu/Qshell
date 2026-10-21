@@ -2720,6 +2720,7 @@ export default {
   sftp_transfer_clear: "清空",
   sftp_transfer_completed: "已完成",
   sftp_transfer_failed: "失败",
+  sftp_transfer_preflight: "正在检查…",
   sftp_transfer_transferring: "传输中",
   sftp_transfer_upload: "上传",
   sftp_transfer_download: "下载",

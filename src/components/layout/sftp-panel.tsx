@@ -2698,6 +2698,8 @@ export function SftpPanel() {
                     ? (t.status === 'paused' as const ? t.resumable : false)
                     : (t.tmpPath || tmpPath ? true : t.resumable),
                   resuming: done ? (t.status === 'paused' as const ? t.resuming : false) : t.resuming,
+                  // 当收到非 preflight 事件时清除 phase，使 UI 从"正在检查…"切换到"传输中"
+                  phase: data.phase || undefined,
                 }
               : t
           )
@@ -2739,6 +2741,8 @@ export function SftpPanel() {
           // 仅 .sw-*-tmp-<uuid> 命名（Linux 路径）支持续传；Windows 的 .uploading/.downloading 不支持。
           resumable: isResumableTmpPath(tmpPath),
           resuming: false,
+          // 传输阶段标识（preflight=预检中），传递给 UI 渲染对应动画
+          phase: data.phase || undefined,
         }
         // 新传输自动展开面板（通过 ref 读取最新值，避免依赖）
         if (!transferPanelOpenRef.current) setTransferPanelOpen(true)
@@ -7861,7 +7865,13 @@ export function SftpPanel() {
                         </td>
                         {/* 状态 */}
                         <td className="px-2 py-1.5 shrink-0">
-                          {item.status === 'transferring' && (
+                          {item.status === 'transferring' && item.phase === 'preflight' && (
+                            <span className="text-muted-foreground inline-flex items-center gap-1">
+                              <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                              {t('sftp_transfer_preflight')}
+                            </span>
+                          )}
+                          {item.status === 'transferring' && item.phase !== 'preflight' && (
                             <span className="text-primary inline-flex items-center gap-1">
                               <Loader2 className="h-2.5 w-2.5 animate-spin" />
                               {t('sftp_transfer_transferring')}

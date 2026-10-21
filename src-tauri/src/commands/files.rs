@@ -1556,6 +1556,26 @@ pub async fn files_download(
         .unwrap_or("file")
         .to_string();
 
+    // 提前注册传输任务并发送 preflight 事件，让前端立即创建传输记录
+    //（原本在 sftp_stat + 磁盘预检之后才发，高延迟下用户需等 ~1s 才能看到记录）
+    let cancel_flag = register_transfer(&transfer_id);
+    let _transfer_guard = TransferRegistrationGuard::new(&transfer_id);
+    send_progress(
+        &app,
+        TransferProgress {
+            transfer_id: transfer_id.clone(),
+            r#type: "download".to_string(),
+            current: 0,
+            total: 0,
+            file_name: file_name.clone(),
+            done: None,
+            phase: Some("preflight".to_string()),
+            total_type: Some("bytes".to_string()),
+            tmp_path: None,
+            error: None,
+        },
+    );
+
     // 判断远程路径是文件还是目录
     // 优先用 SFTP stat（跨平台）；失败时回退 shell 命令（Linux 用 test -d，Windows 无可靠回退）
     let is_remote_dir = match crate::ssh::manager::sftp_stat(&server_id, &target_remote_path).await {
@@ -1603,6 +1623,19 @@ pub async fn files_download(
         match folder {
             Some(p) => std::path::Path::new(&p.to_string()).join(&file_name).to_string_lossy().to_string(),
             None => {
+                // 已发送 preflight 事件，需通知前端传输取消
+                send_progress(&app, TransferProgress {
+                    transfer_id: transfer_id.clone(),
+                    r#type: "download".to_string(),
+                    current: 0, total: 0,
+                    file_name: file_name.clone(),
+                    done: Some(false),
+                    phase: None,
+                    total_type: Some("bytes".to_string()),
+                    tmp_path: None,
+                    error: Some("User canceled".to_string()),
+                });
+                unregister_transfer(&transfer_id);
                 return Ok(FileDownloadResult {
                     success: false,
                     error: Some("User canceled".to_string()),
@@ -1621,6 +1654,19 @@ pub async fn files_download(
         match file {
             Some(p) => p.to_string(),
             None => {
+                // 已发送 preflight 事件，需通知前端传输取消
+                send_progress(&app, TransferProgress {
+                    transfer_id: transfer_id.clone(),
+                    r#type: "download".to_string(),
+                    current: 0, total: 0,
+                    file_name: file_name.clone(),
+                    done: Some(false),
+                    phase: None,
+                    total_type: Some("bytes".to_string()),
+                    tmp_path: None,
+                    error: Some("User canceled".to_string()),
+                });
+                unregister_transfer(&transfer_id);
                 return Ok(FileDownloadResult {
                     success: false,
                     error: Some("User canceled".to_string()),
@@ -1638,12 +1684,26 @@ pub async fn files_download(
                 // 5% 安全余量：文件系统元数据、簇对齐等开销
                 let needed = remote_size + remote_size / 20;
                 if needed > available {
+                    let msg = format!(
+                        "Insufficient disk space: required ~{} bytes ({} with 5% margin), available {} bytes",
+                        remote_size, needed, available
+                    );
+                    // 已发送 preflight 事件，需通知前端传输失败
+                    send_progress(&app, TransferProgress {
+                        transfer_id: transfer_id.clone(),
+                        r#type: "download".to_string(),
+                        current: 0, total: 0,
+                        file_name: file_name.clone(),
+                        done: Some(false),
+                        phase: None,
+                        total_type: Some("bytes".to_string()),
+                        tmp_path: None,
+                        error: Some(msg.clone()),
+                    });
+                    unregister_transfer(&transfer_id);
                     return Ok(FileDownloadResult {
                         success: false,
-                        error: Some(format!(
-                            "Insufficient disk space: required ~{} bytes ({} with 5% margin), available {} bytes",
-                            remote_size, needed, available
-                        )),
+                        error: Some(msg),
                         local_path: None,
                     });
                 }
@@ -1673,9 +1733,7 @@ pub async fn files_download(
         );
     };
 
-    // 注册传输任务，获取 cancel flag（用户可调用 files_cancel_transfer 取消）
-    let cancel_flag = register_transfer(&transfer_id);
-    let _transfer_guard = TransferRegistrationGuard::new(&transfer_id);
+    // cancel_flag 和 TransferRegistrationGuard 已在 preflight 阶段注册
     let cancel_ref: Option<&Arc<AtomicBool>> = Some(&cancel_flag);
 
     // 执行下载
@@ -2962,7 +3020,7 @@ pub async fn files_upload_from_paths(
                 total: 0,
                 file_name: base_name,
                 done: None,
-                phase: None,
+                phase: Some("preflight".to_string()),
                 total_type: Some("bytes".to_string()),
                 tmp_path: Some(tmp.clone()),
                 error: None,
@@ -2970,6 +3028,32 @@ pub async fn files_upload_from_paths(
         );
         Some(tmp)
     } else {
+        // 多文件/目录上传：提前发送 preflight 事件，让前端立即创建传输记录。
+        // 原本需要等写权限预检 + 文件计数完成后才发，高延迟下用户需等 ~1s 才能看到记录。
+        let preflight_name = if local_paths.len() == 1 {
+            StdPath::new(&local_paths[0])
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file")
+                .to_string()
+        } else {
+            format!("{} file(s)", local_paths.len())
+        };
+        send_progress(
+            &app,
+            TransferProgress {
+                transfer_id: transfer_id.clone(),
+                r#type: "upload".to_string(),
+                current: 0,
+                total: 0,
+                file_name: preflight_name,
+                done: None,
+                phase: Some("preflight".to_string()),
+                total_type: Some("count".to_string()),
+                tmp_path: None,
+                error: None,
+            },
+        );
         None
     };
 

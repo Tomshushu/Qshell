@@ -470,10 +470,11 @@ export interface TransferProgressData {
   /** 失败原因（仅 done=false 的失败结束事件携带，前端用于将传输记录置为失败） */
   error?: string;
   /** 阶段标识：
+   * - 'preflight'：传输预检阶段（权限检查/磁盘空间预检/文件计数等）
    * - 'packing'/'packed'：归档下载打包阶段
    * - 'tmpLost'：续传时临时文件丢失，已降级为全新传输（前端应重置进度并提示用户）
    */
-  phase?: "packing" | "packed" | "downloading" | "tmpLost";
+  phase?: "preflight" | "packing" | "packed" | "downloading" | "tmpLost";
 }
 
 export interface LocalUploadStats {

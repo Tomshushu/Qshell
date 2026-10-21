@@ -73,6 +73,8 @@ export interface TransferRecordItem {
   lastOffset: number;
   resumable: boolean;
   resuming: boolean;
+  /** 传输阶段标识（preflight=预检中, tmpLost=临时文件丢失等） */
+  phase?: string;
 }
 
 export interface TransferChildRecord {
