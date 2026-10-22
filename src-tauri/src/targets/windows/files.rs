@@ -122,6 +122,7 @@ pub async fn files_list(server_id: String, dir_path: String) -> Result<Vec<FileE
                 name: e.name,
                 path: posix_path,
                 is_directory: e.is_dir,
+                is_symlink: e.is_symlink,
                 size: e.size as i64,
                 modified_time: format_mtime(e.mtime),
                 permissions: format_permissions(e.permissions),

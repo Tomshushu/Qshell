@@ -125,7 +125,18 @@ fn format_mode_octal(perms: Option<u32>) -> String {
 /// 影响范围仅限「列表展示与基于列表文件名的后续操作」，上传/下载路径由前端传入正确字符串不受影响。
 pub async fn files_list(server_id: String, dir_path: String) -> Result<Vec<FileEntry>, String> {
     let target_type = load_target_type(&server_id).await;
-    validate_path_for_target(dir_path.clone(), false, &target_type)
+    files_list_with_target(server_id, dir_path, &target_type).await
+}
+
+/// `files_list` 的显式目标类型版本（目录递归传输内部使用）。
+/// 调用方一次性查询 target_type 后透传，避免每个子目录重复触发
+/// `load_server_config`（DB 查询 + 主密钥解密 + 多条 info 日志）。
+pub async fn files_list_with_target(
+    server_id: String,
+    dir_path: String,
+    target_type: &str,
+) -> Result<Vec<FileEntry>, String> {
+    validate_path_for_target(dir_path.clone(), false, target_type)
         .valid
         .then_some(())
         .ok_or_else(|| format!("Invalid path: {}", dir_path))?;
@@ -133,23 +144,28 @@ pub async fn files_list(server_id: String, dir_path: String) -> Result<Vec<FileE
 
     let entries = crate::ssh::manager::sftp_read_dir(&server_id, &dir_path).await?;
 
-    // 路径分隔符：Windows 用 '\'，Linux 用 '/'
-    let sep = if is_windows { '\\' } else { '/' };
-    let base = dir_path.trim_end_matches(['/', '\\']);
+    // 内部路径统一使用 POSIX 形态（Windows 也返回 `/C:/Users/...`）：
+    // 浏览链路由 targets/*/files.rs 做同一归一，传输链路必须与之一致，
+    // 否则续传 tmp 前缀比对、忽略规则、去重都会因字符串形态不同而失效。
+    let mut base = dir_path.replace('\\', "/").trim_end_matches('/').to_string();
+    if is_windows && !base.is_empty() && !base.starts_with('/') {
+        base = format!("/{}", base);
+    }
 
     let file_entries: Vec<FileEntry> = entries
         .into_iter()
         .map(|e| {
-            // path 字段：父目录 + 分隔符 + 文件名
+            // path 字段：父目录 + '/' + 文件名（统一 POSIX）
             let path = if base.is_empty() {
                 e.name.clone()
             } else {
-                format!("{}{}{}", base, sep, e.name)
+                format!("{}/{}", base, e.name)
             };
             FileEntry {
                 name: e.name,
                 path,
                 is_directory: e.is_dir,
+                is_symlink: e.is_symlink,
                 size: e.size as i64,
                 modified_time: format_mtime(e.mtime),
                 permissions: format_permissions(e.permissions, is_windows),

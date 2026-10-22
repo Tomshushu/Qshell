@@ -477,6 +477,22 @@ export interface TransferProgressData {
   phase?: "preflight" | "packing" | "packed" | "downloading" | "tmpLost";
 }
 
+/** 目录传输中单个子文件的失败明细（部分成功语义） */
+export interface TransferFailureItem {
+  path: string;
+  error: string;
+}
+
+/** 目录传输结束后的失败汇总事件：后端一次性下发，前端据此把记录标为「部分成功」 */
+export interface TransferFailuresData {
+  transferId: string;
+  type: string;
+  serverId: string;
+  succeeded: number;
+  skipped: number;
+  failures: TransferFailureItem[];
+}
+
 export interface LocalUploadStats {
   totalFiles: number;
   totalBytes: number;
@@ -1188,6 +1204,9 @@ export interface BackendAdapter {
       serverId: string,
       remotePath: string,
       localDest?: string,
+      concurrency?: number,
+      /** 目录续传：目标已存在且大小一致时跳过 */
+      skipExisting?: boolean,
     ) => Promise<FileDownloadResult>;
     downloadArchive: (
       serverId: string,
@@ -1200,12 +1219,18 @@ export interface BackendAdapter {
       serverId: string,
       remoteDir: string,
       uploadType: "file" | "dir" | "auto",
+      concurrency?: number,
+      /** 目录续传：远端已存在且大小一致时跳过 */
+      skipExisting?: boolean,
     ) => Promise<FileUploadResult>;
     uploadFromPaths: (
       serverId: string,
       remoteDir: string,
       localPaths: string[],
       targetFileName?: string,
+      concurrency?: number,
+      /** 目录续传：远端已存在且大小一致时跳过 */
+      skipExisting?: boolean,
     ) => Promise<FileUploadResult>;
     getLocalUploadStats: (paths: string[]) => Promise<LocalUploadStats>;
     /**
@@ -1284,6 +1309,10 @@ export interface BackendAdapter {
     onTransferProgress: (
       callback: (data: TransferProgressData) => void,
     ) => () => void;
+    /** 订阅目录传输失败明细（部分成功语义） */
+    onTransferFailures: (
+      callback: (data: TransferFailuresData) => void,
+    ) => () => void;
     backup: (serverId: string, path: string) => Promise<CommandResult>;
     chown: (
       serverId: string,
@@ -1313,6 +1342,7 @@ export interface BackendAdapter {
       destServerId: string,
       destPath: string,
       targetName?: string,
+      concurrency?: number,
     ) => Promise<CommandResult>;
     // 本地文件系统访问（用于上传对话框）
     getSystemRoots: () => Promise<string[]>;

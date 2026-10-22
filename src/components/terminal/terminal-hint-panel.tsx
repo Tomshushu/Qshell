@@ -72,7 +72,10 @@ export function TerminalHintPanel({
                     ? (hint.disabledReason ?? t("tm_hint_not_applicable"))
                     : hint.desc || undefined
                 }
-                onClick={() => onSelectHint(hint)}
+                onClick={() => {
+                  if (hint.disabled) return;
+                  onSelectHint(hint);
+                }}
                 onMouseEnter={() => onHoverHint(i)}
               >
                 {/* 语义图标 */}

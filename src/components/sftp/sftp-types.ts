@@ -57,7 +57,9 @@ export interface TransferRecordItem {
     | "completed"
     | "failed"
     | "skipped"
-    | "canceled";
+    | "canceled"
+    /** 部分成功：目录传输中有文件失败，但其余文件已完成 */
+    | "partial";
   timestamp: number;
   startTime: number;
   completedAt?: number;
@@ -75,6 +77,10 @@ export interface TransferRecordItem {
   resuming: boolean;
   /** 传输阶段标识（preflight=预检中, tmpLost=临时文件丢失等） */
   phase?: string;
+  /** 部分成功统计（仅 status === 'partial' 时有意义） */
+  failedCount?: number;
+  succeededCount?: number;
+  skippedCount?: number;
 }
 
 export interface TransferChildRecord {

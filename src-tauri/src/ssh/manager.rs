@@ -24,6 +24,26 @@ lazy_static::lazy_static! {
         tokio::sync::RwLock::new(HashMap::new());
     static ref GID_CACHE: tokio::sync::RwLock<HashMap<String, HashMap<u32, String>>> =
         tokio::sync::RwLock::new(HashMap::new());
+    /// 每服务器传输通道预算（对齐 OpenSSH 默认 MaxSessions=10，预留 2 个给目录浏览与计数命令）
+    static ref TRANSFER_CHANNEL_LIMITERS: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Semaphore>>> =
+        std::sync::Mutex::new(HashMap::new());
+}
+
+/// 单服务器可同时占用的传输 channel 数。OpenSSH 默认 MaxSessions=10，
+/// 预留 2 个给目录浏览 / fast_count 等短命令，避免 "channel open failure"。
+const TRANSFER_CHANNELS_PER_SERVER: usize = 8;
+
+/// 获取某服务器的传输通道租约；持有期间占用一个名额，drop 即归还。
+pub async fn acquire_transfer_channel(server_id: &str) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    let semaphore = {
+        let mut map = TRANSFER_CHANNEL_LIMITERS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        map.entry(server_id.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(TRANSFER_CHANNELS_PER_SERVER)))
+            .clone()
+    };
+    semaphore.acquire_owned().await.ok()
 }
 
 /// Set the global AppHandle (called once during app setup)
@@ -1855,19 +1875,10 @@ impl<F: Fn(u64, u64)> ProgressReporter<F> {
     }
 }
 
-/// 应用全局限速：若 RATE_LIMIT_KBPS > 0，按 chunk 字节数计算应 sleep 的时间
-/// sleep_ms = (bytes / (kbps * 1024)) * 1000
-/// 在 chunk 循环中每块写入后调用，避免传输占满带宽
+/// 应用全局限速：通过全局令牌桶（GlobalRateLimiter）严格控制总吞吐，
+/// 无论单任务还是多任务并发传输，总带宽严格受控于设定值，绝不超速。
 pub(crate) async fn apply_rate_limit(bytes: u64) {
-    let kbps = crate::commands::files::RATE_LIMIT_KBPS.load(Ordering::Relaxed);
-    if kbps == 0 || bytes == 0 {
-        return;
-    }
-    // f64 计算避免整数除法截断；u64 毫秒足以覆盖任何合理 sleep 时长
-    let sleep_ms = (bytes as f64 / (kbps as f64 * 1024.0)) * 1000.0;
-    if sleep_ms >= 1.0 {
-        tokio::time::sleep(Duration::from_millis(sleep_ms as u64)).await;
-    }
+    crate::ssh::rate_limiter::GLOBAL_RATE_LIMITER.acquire(bytes).await;
 }
 
 /// PowerShell 上传/下载回退已移除。
@@ -1886,6 +1897,7 @@ pub async fn sftp_upload_file_stream(
     tmp_remote_path: &str,
     resume_offset: Option<u64>,
     keep_tmp_on_failure: bool,
+    durable: bool,
 ) -> Result<(), String> {
     let conn = SshManager::global()
         .get_connection(server_id)
@@ -1904,6 +1916,7 @@ pub async fn sftp_upload_file_stream(
         tmp_remote_path,
         resume_offset,
         keep_tmp_on_failure,
+        durable,
     )
     .await;
 
@@ -1923,6 +1936,7 @@ pub async fn sftp_download_file_stream(
     tmp_local_path: &str,
     resume_offset: Option<u64>,
     keep_tmp_on_failure: bool,
+    durable: bool,
 ) -> Result<(), String> {
     let conn = SshManager::global()
         .get_connection(server_id)
@@ -1941,6 +1955,7 @@ pub async fn sftp_download_file_stream(
         tmp_local_path,
         resume_offset,
         keep_tmp_on_failure,
+        durable,
     )
     .await;
 
@@ -1948,6 +1963,40 @@ pub async fn sftp_download_file_stream(
         SshManager::handle_connection_loss(server_id, &conn, e).await;
     }
     res
+}
+
+/// 尽力保留文件修改时间（失败忽略，不影响传输结果）。
+/// 上传场景：用本地 mtime 设置远端文件；仅同步时间戳，不改变远端权限位。
+async fn apply_remote_mtime_from_local(sftp: &russh_sftp::client::SftpSession, remote_path: &str, local_path: &str) {
+    use russh_sftp::protocol::FileAttributes;
+    let Ok(meta) = std::fs::metadata(local_path) else { return };
+    let Some(mtime) = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as u32)
+    else {
+        return;
+    };
+    let attrs = FileAttributes {
+        size: None,
+        uid: None,
+        user: None,
+        gid: None,
+        group: None,
+        permissions: None,
+        atime: None,
+        mtime: Some(mtime),
+    };
+    let _ = sftp.set_metadata(remote_path, attrs).await;
+}
+
+/// 下载场景：用远端 mtime 设置本地文件修改时间（失败忽略）。
+fn apply_local_mtime_from_remote(remote_mtime: Option<u32>, local_path: &str) {
+    let Some(mtime) = remote_mtime else { return };
+    let Ok(file) = std::fs::OpenOptions::new().write(true).open(local_path) else { return };
+    let timestamp = std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime as u64);
+    let _ = file.set_modified(timestamp);
 }
 
 /// 流式上传本地文件到远程路径（使用已有的 SFTP 会话）。
@@ -1961,6 +2010,8 @@ pub async fn sftp_upload_file_with_session(
     tmp_remote_path: &str,
     resume_offset: Option<u64>,
     keep_tmp_on_failure: bool,
+    // 是否在 flush 后执行 fsync（durable=false 用于目录批量传输，跳过逐文件 fsync）
+    durable: bool,
 ) -> Result<(), String> {
     // 安全检查：禁止上传到系统根路径（与 delete/rename/chmod 对齐）
     if is_dangerous_root_path(remote_path) {
@@ -2223,12 +2274,15 @@ pub async fn sftp_upload_file_with_session(
             Ok(Err(e)) => return Err(format!("SFTP flush failed: {}", e)),
             Err(_) => return Err("SFTP flush timeout (60s)".to_string()),
         }
-        // sync_all 调用 fsync 扩展，部分 SFTP 服务器（嵌入式 sshd）不支持
-        // 失败/超时仅记录日志，不中断传输（数据已通过 flush 写入）
-        match tokio::time::timeout(std::time::Duration::from_secs(60), remote_file.sync_all()).await {
-            Ok(Ok(_)) => {}
-            Ok(Err(e)) => eprintln!("[SFTP] sync_all warning (data already flushed): {}", e),
-            Err(_) => eprintln!("[SFTP] sync_all timeout (60s, data already flushed)"),
+        // sync_all 调用 fsync 扩展，部分 SFTP 服务器（嵌入式 sshd）不支持。
+        // 目录批量传输（durable=false）跳过：数据已 flush 到服务端，
+        // 万级小文件下逐文件 fsync 会额外耗费 50–200 秒（只与文件数相关）。
+        if durable {
+            match tokio::time::timeout(std::time::Duration::from_secs(60), remote_file.sync_all()).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => eprintln!("[SFTP] sync_all warning (data already flushed): {}", e),
+                Err(_) => eprintln!("[SFTP] sync_all timeout (60s, data already flushed)"),
+            }
         }
         // 递归传输会连续打开大量文件，必须等待 CLOSE 确认后再处理下一个文件。
         match tokio::time::timeout(std::time::Duration::from_secs(60), remote_file.shutdown()).await {
@@ -2251,6 +2305,9 @@ pub async fn sftp_upload_file_with_session(
     // 原子 rename 覆盖目标（三步法：备份 → rename → 删除备份，避免数据丢失）
     sftp_atomic_rename_overwrite(sftp, &sftp_tmp_path, &sftp_remote_path).await?;
 
+    // 元数据保留：同步修改时间（远端不支持 SETSTAT 时静默忽略）
+    apply_remote_mtime_from_local(sftp, &sftp_remote_path, local_path).await;
+
     Ok(())
 }
 
@@ -2265,6 +2322,8 @@ pub async fn sftp_download_file_with_session(
     tmp_local_path: &str,
     resume_offset: Option<u64>,
     keep_tmp_on_failure: bool,
+    // 是否在 flush 后执行 fsync（durable=false 用于目录批量传输，跳过逐文件 fsync）
+    durable: bool,
 ) -> Result<(), String> {
     use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
     use tokio::time::timeout;
@@ -2542,10 +2601,14 @@ pub async fn sftp_download_file_with_session(
             Ok(Err(e)) => return Err(format!("Local file flush failed: {}", e)),
             Err(_) => return Err("Local file flush timeout (60s)".to_string()),
         }
-        match tokio::time::timeout(std::time::Duration::from_secs(60), local_file.sync_all()).await {
-            Ok(Ok(_)) => {}
-            Ok(Err(e)) => return Err(format!("Local file sync failed: {}", e)),
-            Err(_) => return Err("Local file sync timeout (60s)".to_string()),
+        // 目录批量下载（durable=false）跳过 fsync：flush 已完成、随后原子 rename，
+        // 逐文件 fsync 在万级小文件场景是主要额外耗时
+        if durable {
+            match tokio::time::timeout(std::time::Duration::from_secs(60), local_file.sync_all()).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => return Err(format!("Local file sync failed: {}", e)),
+                Err(_) => return Err("Local file sync timeout (60s)".to_string()),
+            }
         }
         Ok(())
     }
@@ -2588,6 +2651,11 @@ pub async fn sftp_download_file_with_session(
             "Local rename failed (download completed but atomic move failed): {}",
             last_rename_err
         ));
+    }
+
+    // 元数据保留：同步本地文件修改时间（读取远端 mtime 失败时跳过）
+    if let Ok(meta) = sftp.metadata(remote_path).await {
+        apply_local_mtime_from_remote(meta.mtime, local_path);
     }
 
     Ok(())

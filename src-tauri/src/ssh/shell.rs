@@ -521,7 +521,15 @@ pub async fn shell_create(
                             });
                         }
                         Some(ShellCmd::Resize { cols, rows }) => {
-                            let _ = ch.window_change(cols, rows, 0, 0).await;
+                            // 合并积压的 Resize：拖动窗口会产生高频 window_change 请求，
+                            // 逐条执行既造成 SSH 请求洪流又会挤占用户输入，这里只取最新一条。
+                            let mut last_cols = cols;
+                            let mut last_rows = rows;
+                            while let Ok(ShellCmd::Resize { cols: c, rows: r }) = rx.try_recv() {
+                                last_cols = c;
+                                last_rows = r;
+                            }
+                            let _ = ch.window_change(last_cols, last_rows, 0, 0).await;
                         }
                         Some(ShellCmd::Close) | None => break,
                     },
@@ -689,7 +697,8 @@ pub async fn shell_create(
                     data: None,
                 });
             }
-            let _ = ch.close().await;
+            // ch.close() 等待远端响应，半开连接下可能长期挂起；加 5s 超时避免僵尸 task / channel 泄漏
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), ch.close()).await;
             Ok(())
         }.await;
 
@@ -1101,7 +1110,7 @@ async fn spawn_follow_stream(
                     }
                 }
             }
-            let _ = ch.close().await;
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), ch.close()).await;
             Ok(())
         }
         .await;

@@ -2720,6 +2720,8 @@ export default {
   sftp_transfer_clear: "清空",
   sftp_transfer_completed: "已完成",
   sftp_transfer_failed: "失败",
+  sftp_transfer_partial: "部分成功",
+  sftp_transfer_retry_skip: "重试（跳过已完成文件）",
   sftp_transfer_preflight: "正在检查…",
   sftp_transfer_transferring: "传输中",
   sftp_transfer_upload: "上传",

@@ -159,6 +159,17 @@ function toIconFile(file: Pick<FileEntry, 'name' | 'path' | 'isDirectory' | 'siz
 const DANGEROUS_ROOTS = ['/', '/etc', '/usr', '/bin', '/sbin', '/lib', '/lib64', '/boot', '/dev', '/proc', '/sys', '/var', '/home', '/root', '/opt']
 const isDangerousPath = (p: string) => DANGEROUS_ROOTS.includes(p) || p.split('/').filter(Boolean).length <= 1
 
+/**
+ * 判断错误是否为「用户取消」。
+ * 后端文案随版本/语言变化（"User canceled" / "Transfer canceled by user" 等），
+ * 不能再用中文字面量精确比较（永远匹配不上），统一做大小写无关的包含匹配。
+ */
+const isUserCanceledError = (error?: string | null): boolean => {
+  if (!error) return false
+  const s = error.toLowerCase()
+  return s.includes('cancel') || error.includes('用户取消') || error.includes('已取消')
+}
+
 /** 获取文件类型图标和颜色 */
 // 文件图标统一使用 local-file-picker-utils 中的 renderFileIcon/getFileIconMeta
 // 与 SFTP 模块共用同一套图标和配色（图片/视频/音频/代码/表格/归档/文档/文件夹）
@@ -200,6 +211,8 @@ export function FilesModule({
   useEffect(() => { toastRef.current = toast }, [toast])
   const baseServerId = extractBaseServerId(serverId)
   const server = useAppStore((s) => s.servers.find((sv) => sv.id === baseServerId))
+  // 用户设置里的 SFTP 并发数（1-10）：本模块此前写死 3，导致设置不生效且内外层并发相乘
+  const sftpTransferConcurrency = useAppStore((s) => Number(s.sftpTransferConcurrency) || 3)
   const isWindows = server?.targetType === 'windows'
   const isTelnet = server?.protocol === 'telnet'
   const isNetwork = server?.targetType === 'network'
@@ -227,6 +240,31 @@ export function FilesModule({
   const editDirtyRef = useRef(false)
   // 待确认的编码切换（dirty 时先弹确认框）
   const [pendingEncodingChange, setPendingEncodingChange] = useState<string | null>(null)
+  // 预览/编辑链路请求序号：快速连续打开多个文件时丢弃过期响应，
+  // 避免慢请求后到覆盖新文件内容（否则会把 A 的内容保存进 B）
+  const viewerReqIdRef = useRef(0)
+  // 属性对话框请求序号（同类竞态：连续对两个文件点属性）
+  const statReqIdRef = useRef(0)
+  // 当前编码是否为「自动检测兜底结果」（非 UTF-8、无 BOM，主要是不确定的 GB18030）
+  const autoDetectedEncodingRef = useRef(false)
+  // 用户已确认按自动检测编码写回（避免重复弹框）
+  const encodingSaveAckRef = useRef(false)
+  // 待确认的「按自动检测编码保存」
+  const [pendingEncodingSave, setPendingEncodingSave] = useState(false)
+
+  // 切换目录时重置「新建文件/文件夹」输入：避免输入内容残留、在错误目录里创建条目
+  useEffect(() => {
+    setShowNewItem(false)
+    setNewItemName('')
+  }, [currentPath])
+
+  // 卸载时清理「再次点击重命名」的延时句柄，避免定时器操作已卸载组件
+  useEffect(() => () => {
+    if (pendingRenameTimerRef.current !== null) {
+      window.clearTimeout(pendingRenameTimerRef.current)
+      pendingRenameTimerRef.current = null
+    }
+  }, [])
   const [newItemName, setNewItemName] = useState('')
   const [showNewItem, setShowNewItem] = useState(false)
   const [newItemType, setNewItemType] = useState<'file' | 'dir'>('file')
@@ -249,6 +287,9 @@ export function FilesModule({
   const [renameValue, setRenameValue] = useState('')
   const [permissionsFile, setPermissionsFile] = useState<FileEntry | null>(null)
   const treeLoadingRef = useRef(new Set<string>())
+  // 目录树节点请求序号：force 重载会绕过 loading 去重，与进行中的同路径请求并发时，
+  // 只允许最后一次请求写入，避免旧响应覆盖新树
+  const treeReqIdRef = useRef(new Map<string, number>())
   const [openingPath, setOpeningPath] = useState<string | null>(null)
   const lastFetchedPathRef = useRef<string>('')
   // 文件列表请求序号：每次 fetchFiles 自增，过期请求的结果被丢弃，
@@ -282,6 +323,8 @@ export function FilesModule({
   const pendingRenameRef = useRef<string | null>(null)
   // 双击标志：用于消歧「再次点击重命名」与「双击进入目录/打开文件」
   const rowDblClickedRef = useRef(false)
+  // 「再次点击重命名」的延时句柄：卸载/重复点击时需要清理，避免悬挂定时器操作已卸载组件
+  const pendingRenameTimerRef = useRef<number | null>(null)
   // 同步追踪 treeRoot 最新值,供 loadNodeChildren 在 async 上下文中读取,
   // 避免 React 18 并发模式下 setState updater 非同步执行导致的 canLoad 误判。
   const treeRootRef = useRef(treeRoot)
@@ -394,6 +437,9 @@ export function FilesModule({
       // 过期请求丢弃：用户已切换到其他目录
       if (timedOut || reqId !== fetchFilesReqIdRef.current) return
       setFiles(data)
+      // 刷新后清理已不存在的选中项（重命名/删除/外部变更），避免对失效路径执行操作
+      const present = new Set(data.map(f => f.path))
+      setSelectedFiles(prev => (prev.length === 0 ? prev : prev.filter(p => present.has(p))))
       // 性能优化：不在列表加载路径同步更新 treeRoot（会触发整树深拷贝，阻塞渲染）
       // 树节点的子节点只在 loadNodeChildren（用户主动展开或祖先链加载）中更新
       treeLoadingRef.current.delete(path)
@@ -463,6 +509,9 @@ export function FilesModule({
     setOpeningPath(targetPath)
     lastFetchedPathRef.current = targetPath
     setCurrentPath(targetPath)
+    // 切换目录必须清空选中集：否则在 A 目录选中的文件会残留到 B 目录，
+    // 按 Delete / 右键删除时会删掉上一目录的文件（误删远端数据的直接来源）
+    setSelectedFiles([])
     // 切换目录后回到顶部：否则新目录会保留上一目录的滚动偏移
     // （旧内容此刻仍在 DOM 中，scrollTo 能产生 scroll 事件同步 virtualizer 内部状态）
     resetListScroll()
@@ -531,6 +580,10 @@ export function FilesModule({
     if (!node || node.loading) return
     if (node.loaded && !force) return
 
+    // 请求序号：force 重载与进行中的同路径请求并发时，只允许最后一次响应写入树
+    const reqId = (treeReqIdRef.current.get(nodePath) || 0) + 1
+    treeReqIdRef.current.set(nodePath, reqId)
+
     treeLoadingRef.current.add(nodePath)
     setTreeRoot(prev => {
       const n = findTreeNode(prev, nodePath)
@@ -560,13 +613,15 @@ export function FilesModule({
     let children: TreeNode[] = []
     try {
       const data = await sshService.listFiles(serverId, nodePath)
-      if (timedOut) return
+      if (timedOut || treeReqIdRef.current.get(nodePath) !== reqId) return
       children = fileEntriesToTreeNodes(data)
     } catch (err) {
-      if (!timedOut) setError(err instanceof Error ? err.message : t('fs_err_load_tree'))
+      if (!timedOut && treeReqIdRef.current.get(nodePath) === reqId) {
+        setError(err instanceof Error ? err.message : t('fs_err_load_tree'))
+      }
     } finally {
       window.clearTimeout(clientTimeoutId)
-      if (!timedOut) {
+      if (!timedOut && treeReqIdRef.current.get(nodePath) === reqId) {
         treeLoadingRef.current.delete(nodePath)
         setTreeRoot(prev => {
           const n = findTreeNode(prev, nodePath)
@@ -811,36 +866,58 @@ export function FilesModule({
         return
       }
     })
-    return () => { unsub?.() }
-  }, [isActive])
+    // 目录传输部分成功：按 serverId 过滤，避免把 SFTP 面板的传输提示到本模块
+    const unsubFailures = sshService.onTransferFailures((data) => {
+      if (data.serverId !== serverId) return
+      if (!data.failures || data.failures.length === 0) return
+      const first = data.failures[0]
+      toastRef.current.warning(
+        `部分完成：成功 ${data.succeeded}，失败 ${data.failures.length}${first ? `（${first.path}: ${first.error}）` : ''}`,
+        5000,
+      )
+    })
+    return () => { unsub?.(); unsubFailures?.() }
+  }, [isActive, serverId])
 
   // === 拖拽上传 ===
   const handleUpload = useCallback(async (selectedPaths: string[]) => {
     setTransferLoading('upload')
+    // 本模块拿不到后端 transferId，用进出计数让「关闭窗口」能拦截正在进行的传输
+    sshService.beginBusyOperation()
     try {
-      const result = await sshService.uploadFromPaths(serverId, currentPath, selectedPaths)
+      const result = await sshService.uploadFromPaths(
+        serverId,
+        currentPath,
+        selectedPaths,
+        undefined,
+        sftpTransferConcurrency,
+      )
       if (result.success && result.results) {
         const failed = result.results.filter((r) => !r.success)
+        const successCount = result.results.filter((r) => r.success).length
         if (failed.length > 0) {
           setError(`${t('fs_err_upload')}: ${failed.map((r) => r.fileName).join(', ')}`)
+        } else if (successCount === 0) {
+          // 空目录没有任何文件条目，不能报“上传完成”
+          toastRef.current.warning('未上传任何文件（目标可能是空目录）')
         } else {
           // E6: 上传完成 toast 提示
-          const successCount = result.results.filter((r) => r.success).length
           toastRef.current.success(`上传完成,共 ${successCount} 个文件`)
         }
         fetchFiles(currentPath)
         if (expandedPaths.has(currentPath)) {
           loadNodeChildren(currentPath, true)
         }
-      } else if (!result.success && result.error !== '用户取消') {
+      } else if (!result.success && !isUserCanceledError(result.error)) {
         setError(`${t('fs_err_upload')}: ${result.error || t('common_unknown_error')}`)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : t('fs_err_upload'))
     } finally {
+      sshService.endBusyOperation()
       setTransferLoading(null)
     }
-  }, [serverId, currentPath, fetchFiles, loadNodeChildren, expandedPaths, t])
+  }, [serverId, currentPath, fetchFiles, loadNodeChildren, expandedPaths, t, sftpTransferConcurrency])
 
   // === 原生文件选择器上传（调用系统自带资源管理器）===
   const handleNativeUpload = useCallback(async (directory: boolean = false) => {
@@ -1028,10 +1105,13 @@ export function FilesModule({
   }
 
   // 应用解码结果到编辑器状态（refs 供异步保存逻辑读取最新值）
-  const applyDecodedText = (text: string, encoding: string, eol: TextEol, hasBom: boolean) => {
+  const applyDecodedText = (text: string, encoding: string, eol: TextEol, hasBom: boolean, autoDetected = false) => {
     editFileEncodingRef.current = encoding
     editFileEolRef.current = eol
     editFileHasBomRef.current = hasBom
+    // 自动检测兜底得到的编码（GB18030 等）不可靠，保存前需用户确认
+    autoDetectedEncodingRef.current = autoDetected
+    encodingSaveAckRef.current = false
     setEditFileEncoding(encoding)
     setEditFileEol(eol)
     setEditFileHasBom(hasBom)
@@ -1042,6 +1122,8 @@ export function FilesModule({
   // 统一的文件查看器：预览 + 编辑一体（与 SFTP 面板一致），编辑在弹框内进行。
   // mode='edit' 直接进入编辑态（双击/F4/右键编辑）；'preview' 进入预览态（右键预览/大文件降级）。
   const openViewer = async (file: FileEntry, mode: 'preview' | 'edit') => {
+    // 请求序号：连续快速打开多个文件时，只允许最后一次请求写入编辑器状态
+    const reqId = ++viewerReqIdRef.current
     const kind = getFileKind(file.name)
     if (kind === 'unsupported') {
       toastRef.current.warning(t('fs_preview_unsupported'))
@@ -1079,6 +1161,8 @@ export function FilesModule({
     setViewerEditable(false) // 待文本解码成功后再置位，避免二进制内容闪现编辑态
     try {
       const base64 = await sshService.readBinaryFile(serverId, file.path)
+      // 过期响应直接丢弃：用户已打开另一个文件，不能覆盖新文件的编辑内容
+      if (reqId !== viewerReqIdRef.current) return
       const bytes = base64ToBytes(base64)
       setPreviewRawBytes(bytes)
       if (editable) {
@@ -1092,15 +1176,18 @@ export function FilesModule({
           setViewerEditable(false)
           setViewerMode('preview')
         } else {
-          applyDecodedText(decoded.text, decoded.encoding, decoded.eol, decoded.hasBom)
+          // 仅 GB18030 兜底属于“自动检测猜测”，保存前需用户确认
+          applyDecodedText(decoded.text, decoded.encoding, decoded.eol, decoded.hasBom, decoded.encoding === 'gb18030')
           setViewerEditable(true)
           setViewerMode(mode)
         }
       }
     } catch (e) {
-      setPreviewError((e as Error).message || t('fs_preview_failed'))
+      if (reqId === viewerReqIdRef.current) {
+        setPreviewError((e as Error).message || t('fs_preview_failed'))
+      }
     } finally {
-      setPreviewLoading(false)
+      if (reqId === viewerReqIdRef.current) setPreviewLoading(false)
     }
   }
 
@@ -1118,20 +1205,29 @@ export function FilesModule({
   // dirty 时由确认框把关（pendingEncodingChange），此处直接执行重读
   const reopenWithEncoding = async (encoding: string) => {
     if (!previewFile) return
+    const reqId = ++viewerReqIdRef.current
     setEditLoading(true)
     try {
       const base64 = await sshService.readBinaryFile(serverId, previewFile.path)
+      if (reqId !== viewerReqIdRef.current) return
       const bytes = base64ToBytes(base64)
       const decoded = decodeTextWithEncoding(bytes, encoding)
       if (isBinaryContent(decoded.text)) {
         toastRef.current.warning('该编码下文件包含二进制内容，请选择其他编码')
         return
       }
-      applyDecodedText(decoded.text, encoding, decoded.eol, decoded.hasBom)
+      // 用户显式指定的编码是可信的，保存时无需再确认
+      applyDecodedText(decoded.text, encoding, decoded.eol, decoded.hasBom, false)
+      // 之前因二进制内容被判为只读的文本文件，显式选对编码后应恢复可编辑
+      if (isEditableFile(previewFile)) {
+        setViewerEditable(true)
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('fs_err_read'))
+      if (reqId === viewerReqIdRef.current) {
+        setError(err instanceof Error ? err.message : t('fs_err_read'))
+      }
     } finally {
-      setEditLoading(false)
+      if (reqId === viewerReqIdRef.current) setEditLoading(false)
     }
   }
 
@@ -1143,6 +1239,13 @@ export function FilesModule({
 
   const handleSave = async () => {
     if (!previewFile) return
+    const encoding = editFileEncodingRef.current
+    // 自动检测兜底编码（GB18030 等）不可靠：首次保存必须显式确认，
+    // 否则“打开 → 保存”一次就会把原文件按错误编码不可逆转码
+    if (autoDetectedEncodingRef.current && encoding !== 'utf-8' && !encodingSaveAckRef.current) {
+      setPendingEncodingSave(true)
+      return
+    }
     setEditLoading(true)
     try {
       const backupResult = await sshService.backupFile(serverId, previewFile.path)
@@ -1151,7 +1254,6 @@ export function FilesModule({
         return
       }
       // 按原编码/换行符/BOM 回写：UTF-8 无 BOM 直接写文本，其余走 ::base64:: 原始字节写回
-      const encoding = editFileEncodingRef.current
       const normalized = normalizeEol(editContent, editFileEolRef.current)
       let contentToWrite: string
       if (encoding === 'utf-8' && !editFileHasBomRef.current) {
@@ -1282,13 +1384,18 @@ export function FilesModule({
 
   const handleDelete = useCallback((paths: string[]) => {
     if (paths.length === 0) return
+    // 防御：只允许删除当前目录列表中真实存在的条目。
+    // 选中集一旦残留上一目录的路径（目录切换/刷新竞态），这里会直接拦截，避免误删远端文件。
+    const present = new Set(files.map(f => f.path))
+    const valid = paths.filter(p => present.has(p))
+    if (valid.length === 0) return
     // B4: 客户端预检危险根路径,弹 toast.warning 提示用户
-    const hasDangerous = paths.some(p => isDangerousPath(p))
+    const hasDangerous = valid.some(p => isDangerousPath(p))
     if (hasDangerous) {
       toastRef.current.warning(t('common_dangerous_path_warn'))
     }
-    setPendingDelete(paths)
-  }, [t])
+    setPendingDelete(valid)
+  }, [files, t])
 
   const confirmDelete = async () => {
     console.log('[ConfirmDelete] Starting deletion...', pendingDelete)
@@ -1385,9 +1492,10 @@ export function FilesModule({
     setTransferLoading(file.path)
     // E6: 下载开始 toast 提示
     toastRef.current.info(`开始下载 ${file.name}...`)
+    sshService.beginBusyOperation()
     try {
-      const result = await sshService.downloadFile(serverId, file.path)
-      if (!result.success && result.error !== '用户取消') {
+      const result = await sshService.downloadFile(serverId, file.path, undefined, sftpTransferConcurrency)
+      if (!result.success && !isUserCanceledError(result.error)) {
         setError(`${t('fs_err_download')}: ${result.error || t('common_unknown_error')}`)
       } else if (result.success) {
         // E6: 下载完成 toast 提示
@@ -1396,6 +1504,7 @@ export function FilesModule({
     } catch (err) {
       setError(err instanceof Error ? err.message : t('fs_err_download'))
     } finally {
+      sshService.endBusyOperation()
       setTransferLoading(null)
     }
   }
@@ -1417,27 +1526,38 @@ export function FilesModule({
       toastRef.current.info(`开始下载 ${paths.length} 个文件...`)
 
       const selectedFileEntries = files.filter(f => paths.includes(f.path))
+      if (selectedFileEntries.length === 0) {
+        // 选中集与当前目录列表不一致（列表已刷新）：不能静默跳过还提示成功
+        toastRef.current.warning('未找到可下载的文件，请刷新后重试')
+        setTransferLoading(null)
+        return
+      }
 
       // E7: 用并发数控制替代 Promise.all，避免批量下载时 SSH 通道拥堵
       const downloadTasks = selectedFileEntries.map((file) => async () => {
         try {
-          return await sshService.downloadFile(serverId, file.path, destFolder)
+          return await sshService.downloadFile(serverId, file.path, destFolder, sftpTransferConcurrency)
         } catch (err) {
           return { success: false, error: err instanceof Error ? err.message : String(err) }
         }
       })
 
-      const results = await runWithConcurrency(downloadTasks, FILE_TRANSFER_CONCURRENCY)
-      const failed = results.filter(r => !r.success)
+      sshService.beginBusyOperation()
+      const results = await runWithConcurrency(downloadTasks, sftpTransferConcurrency)
+      const failed = results.filter(r => !r.success && !isUserCanceledError(r.error))
+      const succeeded = results.filter(r => r.success).length
       if (failed.length > 0) {
         setError(`${t('fs_err_download')}: ${failed.map(r => r.error || t('common_unknown_error')).join(', ')}`)
+      } else if (succeeded === 0) {
+        toastRef.current.warning('没有文件被下载')
       } else {
-        // E6: 批量下载完成 toast 提示
-        toastRef.current.success(`下载完成,共 ${paths.length} 个文件`)
+        // E6: 批量下载完成 toast 提示（按实际成功数，而非选中数）
+        toastRef.current.success(`下载完成,共 ${succeeded} 个文件`)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : t('fs_err_download'))
     } finally {
+      sshService.endBusyOperation()
       setTransferLoading(null)
       setSelectedFiles([])
     }
@@ -1449,7 +1569,7 @@ export function FilesModule({
     toastRef.current.info(`开始打包下载 ${file.name} (${format})...`)
     try {
       const result = await sshService.downloadArchive(serverId, file.path, format)
-      if (!result.success && result.error !== '用户取消') {
+      if (!result.success && !isUserCanceledError(result.error)) {
         setError(`${t('fs_err_pack')}: ${result.error || t('common_unknown_error')}`)
       } else if (result.success) {
         // E6: 打包下载完成 toast 提示
@@ -1489,16 +1609,21 @@ export function FilesModule({
 
   // 打开文件属性对话框
   const handleShowProperties = async (file: FileEntry) => {
+    const reqId = ++statReqIdRef.current
     setPropertiesFile(file)
     setStatInfo(null)
     setStatLoading(true)
     try {
       const info = await sshService.statInfo(serverId, file.path)
+      // 丢弃过期响应：连续查看两个文件的属性时不能串数据
+      if (reqId !== statReqIdRef.current) return
       setStatInfo(info)
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('fs_err_props'))
+      if (reqId === statReqIdRef.current) {
+        setError(err instanceof Error ? err.message : t('fs_err_props'))
+      }
     } finally {
-      setStatLoading(false)
+      if (reqId === statReqIdRef.current) setStatLoading(false)
     }
   }
 
@@ -1810,7 +1935,11 @@ export function FilesModule({
                         if (!pending || pending !== file.path) return
                         // 延时消歧：双击会在 click 后触发 onDoubleClick（已置 rowDblClickedRef），
                         // 500ms（系统双击判定窗口）内发生双击则不重命名，交由双击进入目录/打开文件
-                        window.setTimeout(() => {
+                        if (pendingRenameTimerRef.current !== null) {
+                          window.clearTimeout(pendingRenameTimerRef.current)
+                        }
+                        pendingRenameTimerRef.current = window.setTimeout(() => {
+                          pendingRenameTimerRef.current = null
                           if (rowDblClickedRef.current) return
                           startRename(file)
                         }, 500)
@@ -1996,6 +2125,22 @@ export function FilesModule({
         onCancel={() => setPendingEncodingChange(null)}
       />
 
+      {/* 自动检测编码保存确认：GB18030 兜底检测不可靠，避免“打开即保存”把原文件不可逆转码 */}
+      <ConfirmDialog
+        open={pendingEncodingSave}
+        title="按自动检测的编码保存？"
+        description={`当前文件编码为自动检测结果（${editFileEncoding}），可能并不准确。按此编码写回会导致非该编码的文件内容损坏。建议先在上方编码下拉框中选择正确编码并确认内容正常后再保存。`}
+        confirmLabel="仍然保存"
+        cancelLabel="取消"
+        variant="destructive"
+        onConfirm={() => {
+          setPendingEncodingSave(false)
+          encodingSaveAckRef.current = true
+          void handleSave()
+        }}
+        onCancel={() => setPendingEncodingSave(false)}
+      />
+
       {/* 文件预览可调整大小对话框（预览 + 编辑一体，与 SFTP 面板一致） */}
       <ResizablePreviewDialog
         open={!!previewFile}
@@ -2016,10 +2161,13 @@ export function FilesModule({
           const ext = previewFile.name.split('.').pop()?.toLowerCase() || ''
           const isJson = ext === 'json'
           const ready = !previewLoading && !previewError
+          // 文本类扩展名即使被判为二进制（如 UTF-16 无 BOM），也必须能手动切换编码自救
+          const isTextFile = getFileKind(previewFile.name) === 'text'
           return (
             <div className="flex flex-wrap items-center justify-end gap-1.5">
-              {/* 编码选择（Notepad++ 式：手动切换重新打开）+ 换行符徽标 */}
-              {viewerEditable && ready && (
+              {/* 编码选择（Notepad++ 式：手动切换重新打开）+ 换行符徽标。
+                  条件不再依赖 viewerEditable：二进制判定（如 UTF-16 无 BOM）后用户仍需入口手动选对编码 */}
+              {(viewerEditable || isTextFile) && ready && (
                 <>
                   <select
                     value={editFileEncoding}

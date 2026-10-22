@@ -15,6 +15,12 @@ export interface TerminalSelectionToolbarProps {
   onCopy: () => void;
   onPasteSelection: () => void;
   onSearch: () => void;
+  /**
+   * 在浮动条上右键时转交给终端右键菜单。
+   * 浮动条渲染在终端容器之外且正好覆盖选区松手位置，若不转发，
+   * 用户「选中后右键」会点到浮动条上，导致终端右键菜单弹不出来。
+   */
+  onContextMenu?: (x: number, y: number) => void;
 }
 
 const openExternalUrl = async (url: string) => {
@@ -68,6 +74,7 @@ export function TerminalSelectionToolbar({
   onCopy,
   onPasteSelection,
   onSearch,
+  onContextMenu,
 }: TerminalSelectionToolbarProps) {
   const { t } = useTranslation();
   const enableAiGlobal = useAIStore((s) => s.enableAiGlobal);
@@ -147,6 +154,13 @@ export function TerminalSelectionToolbar({
       onMouseDown={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
+      onContextMenu={(e) => {
+        // 右键落在浮动条上：阻止浏览器默认菜单，并把点击坐标转交给终端右键菜单，
+        // 保证「选中文本 → 右键」始终能弹出复制/AI 诊断等操作
+        e.preventDefault();
+        e.stopPropagation();
+        onContextMenu?.(e.clientX, e.clientY);
+      }}
     >
       {/* 复制 */}
       <button

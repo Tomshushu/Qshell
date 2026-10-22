@@ -88,6 +88,10 @@ pub struct FileEntry {
     pub name: String,
     pub path: String,
     pub is_directory: bool,
+    /// 是否为符号链接。SFTP readdir 的 file_type 已携带该信息，传输递归直接复用，
+    /// 避免为每个目录条目额外发一次 stat（大目录下是 1+N 次串行 RTT）。
+    #[serde(default)]
+    pub is_symlink: bool,
     pub size: i64,
     pub modified_time: String,
     pub permissions: String,
@@ -587,6 +591,7 @@ pub fn parse_file_list(output: &str, dir_path: &str) -> Vec<FileEntry> {
                 name,
                 path: file_path,
                 is_directory,
+                is_symlink,
                 size,
                 modified_time,
                 permissions,
@@ -664,6 +669,7 @@ pub fn parse_file_list(output: &str, dir_path: &str) -> Vec<FileEntry> {
                 name,
                 path: file_path,
                 is_directory,
+                is_symlink,
                 size,
                 modified_time: date,
                 permissions: permissions.to_string(),

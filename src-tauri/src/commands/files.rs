@@ -406,6 +406,62 @@ async fn load_target_type(server_id: &str) -> String {
 /// 64 层足以覆盖正常使用场景（POSIX PATH_MAX 通常 4096，每层至少 1 字符 + /）
 const MAX_RECURSION_DEPTH: u32 = 64;
 
+/// 目录传输中单个子文件的失败记录（部分成功语义：单个失败不中止整体传输）
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TransferFailure {
+    path: String,
+    error: String,
+}
+
+/// 目录递归传输的汇总结果
+#[derive(Default)]
+struct TransferSummary {
+    succeeded: u64,
+    skipped: u64,
+    failed: Vec<TransferFailure>,
+    /// 致命错误（会话/连接级失败，或连续失败触发熔断）。
+    /// 调用方据此把整条传输记录置为 failed；为 None 时即使有 failed 明细也算「部分成功」。
+    fatal: Option<String>,
+}
+
+/// 熔断阈值：连续失败达到该数量即停止派发，避免磁盘满/权限异常时产生海量失败记录
+const MAX_CONSECUTIVE_FAILURES: u64 = 20;
+
+/// 发送目录传输失败明细事件（前端据此把记录标为「部分成功」并展示失败清单）
+fn send_transfer_failures(
+    app: &AppHandle,
+    transfer_id: &str,
+    transfer_type: &str,
+    server_id: &str,
+    summary: &TransferSummary,
+) {
+    if summary.failed.is_empty() {
+        return;
+    }
+    #[derive(Clone, Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FailuresPayload<'a> {
+        transfer_id: &'a str,
+        r#type: &'a str,
+        server_id: &'a str,
+        succeeded: u64,
+        skipped: u64,
+        failures: &'a [TransferFailure],
+    }
+    let _ = app.emit(
+        "transfer:failures",
+        FailuresPayload {
+            transfer_id,
+            r#type: transfer_type,
+            server_id,
+            succeeded: summary.succeeded,
+            skipped: summary.skipped,
+            failures: &summary.failed,
+        },
+    );
+}
+
 // 全局限速（KB/s）：0 表示不限速
 // 由前端 files_set_rate_limit 命令设置，sftp_upload_*/sftp_download_* 的 chunk 循环读取此值
 // 用 AtomicU64 + Relaxed ordering：限速不需要强一致性，各 chunk 读取最新值即可
@@ -522,6 +578,7 @@ pub async fn files_cancel_all_transfers() -> Result<usize, String> {
 /// kbps=0 表示不限速；前端 store 持久化此值，应用启动时调用一次同步到后端
 #[tauri::command]
 pub async fn files_set_rate_limit(kbps: u64) -> Result<(), String> {
+    crate::ssh::rate_limiter::GLOBAL_RATE_LIMITER.set_limit(kbps);
     RATE_LIMIT_KBPS.store(kbps, Ordering::Relaxed);
     Ok(())
 }
@@ -638,6 +695,7 @@ pub async fn files_list(server_id: String, dir_path: String) -> Result<String, S
                     name: name.clone(),
                     path: format!("/{}/", name), // "/C:/"
                     is_directory: true,
+                    is_symlink: false,
                     size: 0,
                     modified_time: String::new(),
                     permissions: "---".to_string(),
@@ -1415,6 +1473,14 @@ pub struct UploadFileResult {
     pub error: Option<String>,
 }
 
+/// 上传批次汇总：results 为顶层条目结果，failures 为目录内部的部分成功失败明细
+struct UploadBatchOutcome {
+    results: Vec<UploadFileResult>,
+    succeeded: u64,
+    skipped: u64,
+    failures: Vec<TransferFailure>,
+}
+
 /// 发送传输进度事件到前端
 fn send_progress(app: &AppHandle, progress: TransferProgress) {
     let _ = app.emit("transfer:progress", &progress);
@@ -1480,37 +1546,124 @@ fn get_local_available_space(path: &str) -> Result<u64, String> {
     }
 }
 
+/// 查询远程目录所在磁盘的可用空间（字节）。
+/// Linux 走 `df -kP`（2s 超时），Windows 走 PowerShell，失败返回 None（跳过预检）。
+async fn get_remote_available_space(server_id: &str, remote_dir: &str) -> Option<u64> {
+    let target_type = load_target_type(server_id).await;
+    if target_type.eq_ignore_ascii_case("windows") {
+        let escaped = remote_dir.replace('\'', "''");
+        let cmd = format!(
+            "powershell.exe -NoProfile -NonInteractive -Command \"(Get-PSDrive -Name (Split-Path -Qualifier '{}').TrimEnd(':')).Free\"",
+            escaped
+        );
+        let out = crate::ssh::manager::SshManager::global()
+            .execute(server_id, &cmd, 3)
+            .await
+            .ok()?;
+        return out.stdout.trim().parse::<u64>().ok();
+    }
+    let escaped = crate::validators::escape_shell_arg(remote_dir.to_string());
+    let cmd = format!("df -kP {} 2>/dev/null | tail -1 | awk '{{print $4}}'", escaped);
+    let out = crate::ssh::manager::SshManager::global()
+        .execute(server_id, &cmd, 2)
+        .await
+        .ok()?;
+    out.stdout
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .map(|kb| kb.saturating_mul(1024))
+}
+
+/// 递归统计本地路径集合的总字节数（跳过符号链接，避免环路）。
+/// 在 `spawn_blocking` 中调用，供上传前的远端空间预检使用。
+fn local_paths_total_size(paths: &[String]) -> u64 {
+    fn sum_path(path: &str, depth: u32) -> u64 {
+        if depth > MAX_RECURSION_DEPTH {
+            return 0;
+        }
+        let meta = match std::fs::symlink_metadata(path) {
+            Ok(m) => m,
+            Err(_) => return 0,
+        };
+        if meta.file_type().is_symlink() {
+            return 0;
+        }
+        if !meta.is_dir() {
+            return meta.len();
+        }
+        let mut total: u64 = 0;
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                total = total.saturating_add(sum_path(&entry.path().to_string_lossy(), depth + 1));
+            }
+        }
+        total
+    }
+    paths
+        .iter()
+        .map(|p| sum_path(p, 0))
+        .fold(0u64, |acc, v| acc.saturating_add(v))
+}
+
+/// 查询远程目录的总大小（字节）：`du -sb`，3 秒硬超时，失败返回 None。
+/// 仅用于目录下载前的本地磁盘空间预检；大目录超时时跳过预检，不影响传输。
+async fn get_remote_dir_size(server_id: &str, remote_dir: &str) -> Option<u64> {
+    let target_type = load_target_type(server_id).await;
+    if target_type.eq_ignore_ascii_case("windows") {
+        return None;
+    }
+    let escaped = crate::validators::escape_shell_arg(remote_dir.to_string());
+    let cmd = format!("du -sb {} 2>/dev/null | cut -f1", escaped);
+    let out = crate::ssh::manager::SshManager::global()
+        .execute(server_id, &cmd, 3)
+        .await
+        .ok()?;
+    out.stdout.trim().parse::<u64>().ok()
+}
+
 /// 查询远程文件/目录的总大小（字节）
 /// 单文件：stat -c %s；目录：du -sb（可能较慢，有 10s 超时）
 /// 失败返回 None（调用方跳过预检）
-async fn get_remote_size(server_id: &str, remote_path: &str, is_dir: bool) -> Option<u64> {
+/// 快速获取远程目录中的文件总数（避免耗时的 SFTP 逐层递归）
+/// Linux 目标通过 find -type f | wc -l 由远程内核极速统计（耗时仅数十毫秒）；
+/// 设置 2 秒硬超时，若超时或非 Linux 目标则返回 None，退化为流式动态计数模式。
+async fn fast_count_remote_files(server_id: &str, remote_path: &str) -> Option<u64> {
     let target_type = load_target_type(server_id).await;
     if target_type.eq_ignore_ascii_case("windows") {
-        if is_dir {
-            None
-        } else {
-            let meta = crate::ssh::manager::sftp_stat(server_id, remote_path).await.ok()?;
-            Some(meta.len())
-        }
+        None
     } else {
         let escaped = crate::validators::escape_shell_arg(remote_path.to_string());
-        let cmd = if is_dir {
-            // du -sb 输出: <bytes>\t<path>
-            format!("du -sb {} 2>/dev/null | head -1", escaped)
-        } else {
-            format!("stat -c %s {} 2>/dev/null", escaped)
-        };
+        let cmd = format!("find {} -type f 2>/dev/null | wc -l", escaped);
+        let out = crate::ssh::manager::SshManager::global()
+            .execute(server_id, &cmd, 2)
+            .await
+            .ok()?;
+        let stdout = out.stdout.trim();
+        stdout.parse::<u64>().ok().filter(|&count| count > 0)
+    }
+}
+
+async fn get_remote_size(server_id: &str, remote_path: &str, is_dir: bool) -> Option<u64> {
+    if is_dir {
+        // 目录场景跳过远程磁盘大小预检：
+        // 1. 递归统计包含几千小文件的目录可能耗时 5~10 秒甚至触发 10s 硬超时，严重阻塞下载启动；
+        // 2. 本地磁盘空间检查对目录下载性价比极低，若磁盘空间不足，后续写入文件时 OS 会返回 ENOSPC 自然失败并报错。
+        return None;
+    }
+    let target_type = load_target_type(server_id).await;
+    if target_type.eq_ignore_ascii_case("windows") {
+        let meta = crate::ssh::manager::sftp_stat(server_id, remote_path).await.ok()?;
+        Some(meta.len())
+    } else {
+        let escaped = crate::validators::escape_shell_arg(remote_path.to_string());
+        let cmd = format!("stat -c %s {} 2>/dev/null", escaped);
         let out = crate::ssh::manager::SshManager::global()
             .execute(server_id, &cmd, 10)
             .await
             .ok()?;
         let stdout = out.stdout.trim();
-        if is_dir {
-            // du 输出格式：<bytes>\t<path>，取第一个字段
-            stdout.split('\t').next()?.trim().parse::<u64>().ok()
-        } else {
-            stdout.parse::<u64>().ok()
-        }
+        stdout.parse::<u64>().ok()
     }
 }
 
@@ -1524,6 +1677,9 @@ pub async fn files_download(
     server_id: String,
     remote_path: String,
     local_dest: Option<String>,
+    concurrency: Option<usize>,
+    // 目录续传：目标已存在且大小一致时跳过（仅目录传输生效）
+    skip_existing: Option<bool>,
 ) -> Result<FileDownloadResult, String> {
     use tauri_plugin_dialog::DialogExt;
 
@@ -1556,8 +1712,24 @@ pub async fn files_download(
         .unwrap_or("file")
         .to_string();
 
+    // 先做快速 sftp_stat 判断是文件还是目录（~10ms），确保预检阶段就能正确下发 total_type（目录=count，单文件=bytes）
+    let is_remote_dir = match crate::ssh::manager::sftp_stat(&server_id, &target_remote_path).await {
+        Ok(meta) => meta.is_dir(),
+        Err(_) => {
+            if target_type.eq_ignore_ascii_case("windows") {
+                false
+            } else {
+                let escaped_path = crate::validators::escape_shell_arg(target_remote_path.clone());
+                let stat_cmd = format!("test -d {} && echo \"dir\" || echo \"file\"", escaped_path);
+                let stat_res = ssh_execute_command(&server_id, &stat_cmd).await;
+                stat_res.stdout.trim() == "dir"
+            }
+        }
+    };
+
+    let initial_total_type = if is_remote_dir { "count" } else { "bytes" };
+
     // 提前注册传输任务并发送 preflight 事件，让前端立即创建传输记录
-    //（原本在 sftp_stat + 磁盘预检之后才发，高延迟下用户需等 ~1s 才能看到记录）
     let cancel_flag = register_transfer(&transfer_id);
     let _transfer_guard = TransferRegistrationGuard::new(&transfer_id);
     send_progress(
@@ -1570,28 +1742,11 @@ pub async fn files_download(
             file_name: file_name.clone(),
             done: None,
             phase: Some("preflight".to_string()),
-            total_type: Some("bytes".to_string()),
+            total_type: Some(initial_total_type.to_string()),
             tmp_path: None,
             error: None,
         },
     );
-
-    // 判断远程路径是文件还是目录
-    // 优先用 SFTP stat（跨平台）；失败时回退 shell 命令（Linux 用 test -d，Windows 无可靠回退）
-    let is_remote_dir = match crate::ssh::manager::sftp_stat(&server_id, &target_remote_path).await {
-        Ok(meta) => meta.is_dir(),
-        Err(_) => {
-            if target_type.eq_ignore_ascii_case("windows") {
-                // Windows 下 test -d 不可用（PowerShell/cmd 无此命令），回退为 false（按文件处理）
-                false
-            } else {
-                let escaped_path = crate::validators::escape_shell_arg(target_remote_path.clone());
-                let stat_cmd = format!("test -d {} && echo \"dir\" || echo \"file\"", escaped_path);
-                let stat_res = ssh_execute_command(&server_id, &stat_cmd).await;
-                stat_res.stdout.trim() == "dir"
-            }
-        }
-    };
 
     // 弹出对话框选择保存位置
     let local_path = if let Some(dest) = local_dest {
@@ -1676,9 +1831,15 @@ pub async fn files_download(
         }
     };
 
-    // 磁盘空间预检：查询远程文件大小，与本地可用空间对比
-    // 失败（查询不到大小或磁盘空间）时跳过预检，不阻塞下载（失败由后续传输过程捕获）
-    if let Some(remote_size) = get_remote_size(&server_id, &target_remote_path, is_remote_dir).await {
+    // 磁盘空间预检：查询远程文件/目录大小，与本地可用空间对比
+    // 失败（查询不到大小、超时或磁盘空间查询失败）时跳过预检，不阻塞下载
+    let remote_size_hint = if is_remote_dir {
+        // 目录用 du -sb（3s 超时）；超时返回 None 直接跳过，避免阻塞下载启动
+        get_remote_dir_size(&server_id, &target_remote_path).await
+    } else {
+        get_remote_size(&server_id, &target_remote_path, false).await
+    };
+    if let Some(remote_size) = remote_size_hint {
         match get_local_available_space(&local_path) {
             Ok(available) => {
                 // 5% 安全余量：文件系统元数据、簇对齐等开销
@@ -1715,11 +1876,13 @@ pub async fn files_download(
         }
     }
 
-    let send = |current: u64, total: u64, name: &str, total_type: &str, done: Option<bool>| {
+    let app_send = app.clone();
+    let tid_send = transfer_id.clone();
+    let send: Arc<dyn Fn(u64, u64, &str, &str, Option<bool>) + Send + Sync + 'static> = Arc::new(move |current: u64, total: u64, name: &str, total_type: &str, done: Option<bool>| {
         send_progress(
-            &app,
+            &app_send,
             TransferProgress {
-                transfer_id: transfer_id.clone(),
+                transfer_id: tid_send.clone(),
                 r#type: "download".to_string(),
                 current,
                 total,
@@ -1731,7 +1894,7 @@ pub async fn files_download(
                 error: None,
             },
         );
-    };
+    });
 
     // cancel_flag 和 TransferRegistrationGuard 已在 preflight 阶段注册
     let cancel_ref: Option<&Arc<AtomicBool>> = Some(&cancel_flag);
@@ -1755,9 +1918,32 @@ pub async fn files_download(
                 error: None,
             },
         );
-        // 递归下载目录：total 为文件计数（不支持断点续传）
+        // 递归下载目录：按 concurrency 并发下载子文件（内部连接池复用 Dedicated SFTP Session）
         let local_base = local_path.clone();
-        download_dir_recursive(&app, &server_id, &target_remote_path, &local_base, &send, cancel_ref).await
+        match download_dir_recursive(
+            &app,
+            &server_id,
+            &target_remote_path,
+            &local_base,
+            send.clone(),
+            cancel_ref,
+            &transfer_id,
+            &file_name,
+            skip_existing.unwrap_or(false),
+            concurrency.unwrap_or(3),
+        )
+        .await
+        {
+            Ok(summary) => {
+                // 部分成功：先下发失败明细，再由前端把记录标为 partial
+                send_transfer_failures(&app, &transfer_id, "download", &server_id, &summary);
+                match summary.fatal {
+                    Some(fatal) => Err(fatal),
+                    None => Ok(()),
+                }
+            }
+            Err(e) => Err(e),
+        }
     } else {
         // 单文件下载：生成临时文件路径，发送携带 tmp_path 的初始事件（前端用于断点续传）
         // 统一使用 .sw-dl-tmp-{uuid} 命名，满足 validators.rs 格式校验并支持断点续传
@@ -1777,7 +1963,7 @@ pub async fn files_download(
                 error: None,
             },
         );
-        download_single_file(&server_id, &target_remote_path, &local_path, &tmp_local_path, &send, cancel_ref).await
+        download_single_file(&server_id, &target_remote_path, &local_path, &tmp_local_path, &|c, t, n, tt, d| send(c, t, n, tt, d), cancel_ref).await
     };
 
     // 无论成功/失败/取消都注销，避免内存泄漏和过期取消
@@ -1786,7 +1972,8 @@ pub async fn files_download(
     match result {
         Ok(()) => {
             // current/total 设为 0 表示不更新进度值，只标记完成
-            send(0, 0, &file_name, "bytes", Some(true));
+            let finish_total_type = if is_remote_dir { "count" } else { "bytes" };
+            send(0, 0, &file_name, finish_total_type, Some(true));
             Ok(FileDownloadResult {
                 success: true,
                 error: None,
@@ -1947,6 +2134,8 @@ async fn download_file_with_auto_retry(
     cancel: Option<&Arc<AtomicBool>>,
     initial_resume: Option<u64>,
     keep_tmp_on_final_failure: bool,
+    // 目录批量传输传 false：跳过逐文件 fsync（数据已 flush，万级小文件下 fsync 是主要耗时）
+    durable: bool,
 ) -> Result<(), String> {
     let mut budget = TransferRetryBudget::new(initial_resume.unwrap_or(0));
     let mut retry_no: u32 = 0;
@@ -1963,6 +2152,7 @@ async fn download_file_with_auto_retry(
                 tmp_local_path,
                 resume_offset,
                 true,
+                durable,
             )
             .await
         } else {
@@ -1975,6 +2165,7 @@ async fn download_file_with_auto_retry(
                 tmp_local_path,
                 resume_offset,
                 true,
+                durable,
             )
             .await
         };
@@ -2040,6 +2231,8 @@ async fn upload_file_with_auto_retry(
     cancel: Option<&Arc<AtomicBool>>,
     initial_resume: Option<u64>,
     keep_tmp_on_final_failure: bool,
+    // 目录批量传输传 false：跳过逐文件 fsync（数据已 flush，万级小文件下 fsync 是主要耗时）
+    durable: bool,
 ) -> Result<(), String> {
     let sftp_tmp_posix = tmp_remote_path.replace('\\', "/");
     let mut budget = TransferRetryBudget::new(initial_resume.unwrap_or(0));
@@ -2064,6 +2257,7 @@ async fn upload_file_with_auto_retry(
                 tmp_remote_path,
                 resume_offset,
                 true,
+                durable,
             )
             .await
         } else {
@@ -2112,6 +2306,7 @@ async fn upload_file_with_auto_retry(
                 tmp_remote_path,
                 resume_offset,
                 true,
+                durable,
             )
             .await;
             last_session = Some(session);
@@ -2184,6 +2379,7 @@ async fn download_single_file(
         cancel,
         None,
         true,
+        true,
     )
     .await;
 
@@ -2193,135 +2389,23 @@ async fn download_single_file(
 
 /// 递归下载远程目录
 /// `cancel`: 可选的取消标志，每个文件传输前检查；用户点取消时立即返回错误
-async fn download_dir_recursive(
-    app: &AppHandle,
-    server_id: &str,
-    remote_path: &str,
-    target_local_dir: &str,
-    send: &impl Fn(u64, u64, &str, &str, Option<bool>),
-    cancel: Option<&Arc<AtomicBool>>,
-) -> Result<(), String> {
-    // 先递归获取完整清单；manifest 事件只用于前端明细，不改变传输过程。
-    let manifest_result = crate::files::remote::files_transfer_manifest(
-        server_id.to_string(),
-        remote_path.to_string(),
-    )
-    .await;
-    let (manifest, total_files) = match manifest_result {
-        Ok(items) => {
-            let total = items.len() as u64;
-            (items, total)
-        }
-        Err(_) => {
-            // 清单失败时保留旧的计数回退，不能让实际传输退化成无进度。
-            let total = crate::files::remote::files_count_recursive(server_id.to_string(), remote_path.to_string()).await.unwrap_or(0);
-            (Vec::new(), total)
-        }
-    };
-    for item in &manifest {
-        send(0, item.size, &item.path, "manifest", None);
-    }
-    let completed = Arc::new(AtomicU64::new(0));
-
-    let local_dir = StdPath::new(target_local_dir);
-    tokio::fs::create_dir_all(&local_dir)
-        .await
-        .map_err(|e| format!("Failed to create local directory: {}", e))?;
-
-    // 创建一次独立的 SFTP 会话，复用给整个目录下载（隔离目录浏览缓存，避免会话竞争与冲突）
-    let conn = crate::ssh::manager::SshManager::global()
-        .get_connection(server_id)
-        .map_err(|e| e.to_string())?;
-    let sftp = conn
-        .create_dedicated_sftp_session()
-        .await
-        .map_err(|e| format!("SFTP session failed: {}", e))?;
-
-    // 获取远程目录列表（使用 SFTP，跨平台）
-    let entries = crate::files::remote::files_list(server_id.to_string(), remote_path.to_string()).await?;
-
-    for entry in &entries {
-        // 每个文件开始前检查取消标志
-        if let Some(flag) = cancel {
-            if flag.load(Ordering::Relaxed) {
-                return Err("Transfer canceled by user".to_string());
-            }
-        }
-        // 跳过忽略项（.、.. 永远跳过，以及按用户配置过滤）
-        if entry.name == "." || entry.name == ".." || crate::validators::is_ignored(&entry.name) {
-            continue;
-        }
-        // symlink 检测：用 SFTP stat 检测是否为 symlink，是则跳过（跨平台）
-        // 防止 symlink 指向 / 或敏感目录导致递归下载意料外内容
-        // 注意：test -L 是 bash 内建，在 Windows PowerShell/cmd 默认 shell 下不可用
-        let is_symlink = match crate::ssh::manager::sftp_stat(server_id, &entry.path).await {
-            Ok(meta) => meta.is_symlink(),
-            Err(_) => false, // stat 失败时不跳过，尝试正常下载
-        };
-        if is_symlink {
-            continue;
-        }
-        if entry.is_directory {
-            // 递归下载子目录
-            Box::pin(download_dir_recursive_inner(
-                app,
-                server_id,
-                &entry.path,
-                local_dir.to_str().unwrap_or(""),
-                send,
-                &completed,
-                total_files,
-                &sftp,
-                cancel,
-                2, // 外层 download_dir_recursive 已是第 1 层，子目录从第 2 层开始
-            ))
-            .await?;
-        } else {
-            // 目录下载：不发送字节级进度，只发送文件计数进度
-            let local_file = local_dir.join(&entry.name);
-            let local_file_str = local_file.to_str().unwrap_or("");
-            // 确保本地目录存在（用 tokio::fs 避免阻塞异步运行时）
-            if let Some(parent) = local_file.parent() {
-                let _ = tokio::fs::create_dir_all(parent).await;
-            }
-            // 断连（含 1GiB rekey 崩溃）自动重连并续传；目录流最终失败时清理 tmp
-            let dl_tmp_path = format!("{}.sw-dl-tmp-{}", local_file_str, uuid::Uuid::new_v4());
-            download_file_with_auto_retry(
-                server_id,
-                &entry.path,
-                local_file_str,
-                &dl_tmp_path,
-                Some(&sftp),
-                |_, _| {}, // no-op：目录下载时不报告单文件字节进度
-                cancel,
-                None,
-                false,
-            )
-            .await?;
-
-            // 更新文件计数进度（total_type="count"）
-            let done = completed.fetch_add(1, Ordering::SeqCst) + 1;
-            if total_files > 0 {
-                send(done, total_files, &entry.path, "count", None);
-            }
-        }
-    }
-
-    Ok(())
+struct RemoteDownloadItem {
+    remote_path: String,
+    local_path: String,
 }
 
-/// 递归下载内部函数（带进度计数器）
-/// `depth`: 当前递归深度，从 1 开始；超过 MAX_RECURSION_DEPTH 时拒绝继续（防 symlink 循环栈溢出）
-async fn download_dir_recursive_inner(
-    app: &AppHandle,
+/// 递归遍历远程目录结构并流式投递待下载文件到 MPSC Channel（生产者）
+/// 支持毫秒级启动，首个文件发现后立即触发下载，边扫边传，避免数千文件前置全量阻塞。
+async fn walk_remote_dir_to_channel(
     server_id: &str,
     remote_path: &str,
     local_base: &str,
-    send: &impl Fn(u64, u64, &str, &str, Option<bool>),
-    completed: &Arc<AtomicU64>,
-    total_files: u64,
-    sftp: &russh_sftp::client::SftpSession,
+    tx: &tokio::sync::mpsc::Sender<RemoteDownloadItem>,
     cancel: Option<&Arc<AtomicBool>>,
+    target_type: &str,
+    // 目录续传：目标已存在且大小一致时跳过
+    skip_existing: bool,
+    skipped: &Arc<AtomicU64>,
     depth: u32,
 ) -> Result<(), String> {
     if depth > MAX_RECURSION_DEPTH {
@@ -2330,66 +2414,381 @@ async fn download_dir_recursive_inner(
             MAX_RECURSION_DEPTH, remote_path
         ));
     }
+    if let Some(flag) = cancel {
+        if flag.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+    }
 
-    let dir_name = remote_path.rsplit(['/', '\\']).next().unwrap_or("root");
-    let local_dir = StdPath::new(local_base).join(dir_name);
+    // 顶层（depth == 1）的 local_base 已是完整目标目录（调用方 files_download 已把顶层目录名拼好，
+    // 见 files.rs 中 local_path 的构造），这里不能再 join 一次目录名，否则会多嵌套一层同名目录
+    // （下载 proj 实际落到 .../proj/proj）。仅子目录递归（depth > 1）需要拼接子目录名。
+    let local_dir = if depth <= 1 {
+        StdPath::new(local_base).to_path_buf()
+    } else {
+        let dir_name = remote_path.rsplit(['/', '\\']).next().unwrap_or("root");
+        StdPath::new(local_base).join(dir_name)
+    };
     tokio::fs::create_dir_all(&local_dir)
         .await
         .map_err(|e| format!("Failed to create local directory: {}", e))?;
 
-    let entries = crate::files::remote::files_list(server_id.to_string(), remote_path.to_string()).await?;
+    let entries = match crate::files::remote::files_list_with_target(
+        server_id.to_string(),
+        remote_path.to_string(),
+        target_type,
+    )
+    .await
+    {
+        Ok(e) => e,
+        Err(err) => return Err(err),
+    };
 
-    for entry in &entries {
-        // 每个文件开始前检查取消标志
+    for entry in entries {
         if let Some(flag) = cancel {
             if flag.load(Ordering::Relaxed) {
-                return Err("Transfer canceled by user".to_string());
+                return Ok(());
             }
         }
+        if entry.name == "." || entry.name == ".." || crate::validators::is_ignored(&entry.name) {
+            continue;
+        }
+        // 直接复用 readdir 已返回的 is_symlink，避免为每个条目额外发一次 stat
+        //（大目录下会退化成 1+N 次串行 RTT，是扫描吞吐的硬上限）
+        if entry.is_symlink {
+            // 符号链接记入 skipped，前端汇总提示（默认策略为跳过）
+            skipped.fetch_add(1, Ordering::Relaxed);
+            continue;
+        }
+
         if entry.is_directory {
-            Box::pin(download_dir_recursive_inner(
-                app,
+            Box::pin(walk_remote_dir_to_channel(
                 server_id,
                 &entry.path,
                 local_dir.to_str().unwrap_or(""),
-                send,
-                completed,
-                total_files,
-                sftp,
+                tx,
                 cancel,
+                target_type,
+                skip_existing,
+                skipped,
                 depth + 1,
             ))
             .await?;
         } else {
-            // 目录下载：不发送字节级进度，只发送文件计数进度
             let local_file = local_dir.join(&entry.name);
-            let local_file_str = local_file.to_str().unwrap_or("");
+            let local_file_str = local_file.to_str().unwrap_or("").to_string();
             if let Some(parent) = local_file.parent() {
                 let _ = tokio::fs::create_dir_all(parent).await;
             }
-            // 断连（含 1GiB rekey 崩溃）自动重连并续传；目录流最终失败时清理 tmp
-            let dl_tmp_path = format!("{}.sw-dl-tmp-{}", local_file_str, uuid::Uuid::new_v4());
-            download_file_with_auto_retry(
-                server_id,
-                &entry.path,
-                local_file_str,
+            // 目录续传：本地已存在同名且大小一致的普通文件时直接跳过
+            if skip_existing {
+                if let Ok(local_meta) = tokio::fs::metadata(&local_file).await {
+                    if local_meta.is_file() && local_meta.len() == entry.size.max(0) as u64 {
+                        skipped.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+                }
+            }
+            if tx.send(RemoteDownloadItem {
+                remote_path: entry.path,
+                local_path: local_file_str,
+            }).await.is_err() {
+                // 接收端已关闭（如用户取消或遇错退出），提早中止扫描
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 递归下载远程目录（生产者-消费者并发架构 + Dedicated SFTP 会话池）
+/// `concurrency`: 最大并发传输的子文件数（1~10，默认 3）
+/// `cancel`: 可选的取消标志，用户点击取消时立即终止并清理
+async fn download_dir_recursive(
+    app: &AppHandle,
+    server_id: &str,
+    remote_path: &str,
+    target_local_dir: &str,
+    send: Arc<dyn Fn(u64, u64, &str, &str, Option<bool>) + Send + Sync + 'static>,
+    cancel: Option<&Arc<AtomicBool>>,
+    transfer_id: &str,
+    file_name: &str,
+    // 目录续传：目标已存在且大小一致时跳过
+    skip_existing: bool,
+    concurrency: usize,
+) -> Result<TransferSummary, String> {
+    let completed = Arc::new(AtomicU64::new(0));
+    let total_files = Arc::new(AtomicU64::new(0));
+    let skipped = Arc::new(AtomicU64::new(0));
+
+    // 采用异步后台快速计数，避免阻塞主传输流程。
+    // Linux 远端通过 find -type f | wc -l 统计，由远程内核完成（仅需数十毫秒）；
+    // 同时不阻塞当前线程，立即建立 SFTP 会话并启动首个文件下载。
+    let fast_count_handle = {
+        let server_id_owned = server_id.to_string();
+        let remote_path_owned = remote_path.to_string();
+        let total_files_clone = total_files.clone();
+        let completed_clone = completed.clone();
+        let app_clone = app.clone();
+        let transfer_id_clone = transfer_id.to_string();
+        let file_name_clone = file_name.to_string();
+
+        tokio::spawn(async move {
+            if let Some(count) = fast_count_remote_files(&server_id_owned, &remote_path_owned).await {
+                total_files_clone.store(count, Ordering::Relaxed);
+                let current = completed_clone.load(Ordering::Relaxed);
+                send_progress(
+                    &app_clone,
+                    TransferProgress {
+                        transfer_id: transfer_id_clone,
+                        r#type: "download".to_string(),
+                        current,
+                        total: count,
+                        file_name: file_name_clone,
+                        done: None,
+                        phase: None,
+                        total_type: Some("count".to_string()),
+                        tmp_path: None,
+                        error: None,
+                    },
+                );
+            }
+        })
+    };
+
+    let local_dir = StdPath::new(target_local_dir);
+    tokio::fs::create_dir_all(&local_dir)
+        .await
+        .map_err(|e| format!("Failed to create local directory: {}", e))?;
+
+    let worker_limit = concurrency.max(1).min(10);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<RemoteDownloadItem>(worker_limit * 8);
+
+    // 启动目录树流式扫描生产者（边扫边产出，首个文件毫秒级立即启动传输）
+    // 一次查询目标类型，供整个目录树扫描复用（避免每个子目录都走 load_server_config）
+    let target_type_producer = load_target_type(server_id).await;
+    let server_id_producer = server_id.to_string();
+    let remote_path_producer = remote_path.to_string();
+    let local_base_producer = target_local_dir.to_string();
+    let cancel_producer = cancel.cloned();
+    let skipped_producer = skipped.clone();
+
+    let scan_handle = tokio::spawn(async move {
+        walk_remote_dir_to_channel(
+            &server_id_producer,
+            &remote_path_producer,
+            &local_base_producer,
+            &tx,
+            cancel_producer.as_ref(),
+            &target_type_producer,
+            skip_existing,
+            &skipped_producer,
+            1,
+        )
+        .await
+    });
+
+    // Dedicated SFTP Session 连接池，最多维持 worker_limit 个会话复用（安全控制在 MaxSessions 限额内）
+    let conn = crate::ssh::manager::SshManager::global()
+        .get_connection(server_id)
+        .map_err(|e| e.to_string())?;
+    // 池中会话与其通道租约绑定：会话在池中时继续占用预算，drop 时自动归还
+    let session_pool = Arc::new(tokio::sync::Mutex::new(Vec::<
+        (russh_sftp::client::SftpSession, tokio::sync::OwnedSemaphorePermit),
+    >::with_capacity(worker_limit)));
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(worker_limit));
+    let mut join_set = tokio::task::JoinSet::new();
+    // 致命错误（会话/连接级）与「可继续的文件级失败」分离：后者不中止整体传输
+    let fatal_error = Arc::new(tokio::sync::Mutex::new(None::<String>));
+    let failures = Arc::new(tokio::sync::Mutex::new(Vec::<TransferFailure>::new()));
+    let fail_streak = Arc::new(AtomicU64::new(0));
+
+    while let Some(task) = rx.recv().await {
+        if let Some(flag) = cancel {
+            if flag.load(Ordering::Relaxed) {
+                break;
+            }
+        }
+
+        // 仅致命错误（会话/连接级）或连续失败熔断时停止派发；
+        // 单个文件失败只记录，不中止整体传输（部分成功语义）
+        {
+            let err_guard = fatal_error.lock().await;
+            if err_guard.is_some() {
+                break;
+            }
+        }
+        if fail_streak.load(Ordering::Relaxed) >= MAX_CONSECUTIVE_FAILURES {
+            let mut err_guard = fatal_error.lock().await;
+            if err_guard.is_none() {
+                *err_guard = Some(format!(
+                    "Aborted after {} consecutive file failures",
+                    MAX_CONSECUTIVE_FAILURES
+                ));
+            }
+            break;
+        }
+
+        let permit = match semaphore.clone().acquire_owned().await {
+            Ok(p) => p,
+            Err(_) => break,
+        };
+
+        let conn_clone = conn.clone();
+        let session_pool_clone = session_pool.clone();
+        let send_clone = send.clone();
+        let completed_clone = completed.clone();
+        let total_files_clone = total_files.clone();
+        let server_id_owned = server_id.to_string();
+        let cancel_owned = cancel.cloned();
+        let fatal_error_clone = fatal_error.clone();
+        let failures_clone = failures.clone();
+        let fail_streak_clone = fail_streak.clone();
+
+        join_set.spawn(async move {
+            let _permit = permit;
+            if let Some(ref flag) = cancel_owned {
+                if flag.load(Ordering::Relaxed) {
+                    return;
+                }
+            }
+
+            // 从连接池中复用已有 SFTP 会话，或创建新的专用会话
+            let (sftp, channel_permit) = {
+                let existing = {
+                    let mut pool = session_pool_clone.lock().await;
+                    pool.pop()
+                };
+                match existing {
+                    Some(pair) => pair,
+                    None => {
+                        // 先租用该服务器的传输通道名额，再创建专用会话（池中会话继续持有租约）
+                        let permit = match crate::ssh::manager::acquire_transfer_channel(&server_id_owned).await {
+                            Some(p) => p,
+                            None => return,
+                        };
+                        match conn_clone.create_dedicated_sftp_session().await {
+                            Ok(s) => (s, permit),
+                            Err(e) => {
+                                let mut err_guard = fatal_error_clone.lock().await;
+                                if err_guard.is_none() {
+                                    *err_guard = Some(format!("SFTP session failed: {}", e));
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+            };
+
+            let dl_tmp_path = format!("{}.sw-dl-tmp-{}", task.local_path, uuid::Uuid::new_v4());
+            let send_bytes = send_clone.clone();
+            let file_remote = task.remote_path.clone();
+
+            let dl_res = download_file_with_auto_retry(
+                &server_id_owned,
+                &task.remote_path,
+                &task.local_path,
                 &dl_tmp_path,
-                Some(sftp),
-                |_, _| {}, // no-op
-                cancel,
+                Some(&sftp),
+                move |transferred, total| {
+                    send_bytes(transferred, total, &file_remote, "bytes", None);
+                },
+                cancel_owned.as_ref(),
                 None,
                 false,
-            )
-            .await?;
+                // 目录批量下载：跳过逐文件 fsync
+                false,
+            ).await;
 
-            let done = completed.fetch_add(1, Ordering::SeqCst) + 1;
-            if total_files > 0 {
-                send(done, total_files, &entry.path, "count", None);
+            match dl_res {
+                Ok(()) => {
+                    // 会话正常完成，放回连接池供后续子文件复用
+                    {
+                        let mut pool = session_pool_clone.lock().await;
+                        pool.push((sftp, channel_permit));
+                    }
+                    fail_streak_clone.store(0, Ordering::Relaxed);
+                    let done = completed_clone.fetch_add(1, Ordering::SeqCst) + 1;
+                    let total = total_files_clone.load(Ordering::Relaxed);
+                    send_clone(done, total, &task.remote_path, "count", None);
+                }
+                Err(e) => {
+                    // 失败会话不放回池，自动 drop 释放 Channel。
+                    // 单个文件失败只记录并继续派发（部分成功语义），连续失败由外层熔断。
+                    fail_streak_clone.fetch_add(1, Ordering::Relaxed);
+                    failures_clone.lock().await.push(TransferFailure {
+                        path: task.remote_path.clone(),
+                        error: e,
+                    });
+                }
+            }
+        });
+
+        // 保持 JoinSet 适度回收，避免积累已完成 Task 句柄
+        while join_set.len() >= worker_limit * 2 {
+            if let Some(res) = join_set.join_next().await {
+                if let Err(e) = res {
+                    eprintln!("[download_dir] task panicked: {}", e);
+                }
             }
         }
     }
 
-    Ok(())
+    // 早停路径（cancel / first_error / 信号量错误 break）必须主动丢弃接收端：
+    // 否则 rx 在函数返回前始终存活，生产者的 tx.send() 会在通道缓冲（worker_limit*8）填满后
+    // 永久阻塞，导致下方 scan_handle.await 永远等不到生产者退出——整个命令挂起，
+    // TransferRegistrationGuard 无法 Drop（cancel 失效）、SFTP 会话池与连接无法释放。
+    // 丢弃 rx 后 send() 立即返回 Err，生产者按 is_err 分支退出，scan_handle 正常收尾。
+    drop(rx);
+
+    // 等待所有在途并发下载任务全部完成
+    while let Some(res) = join_set.join_next().await {
+        if let Err(e) = res {
+            eprintln!("[download_dir] task panicked: {}", e);
+        }
+    }
+
+    // 中止后台快速计数任务，避免传输结束/失败/取消后仍滞后补发 count 进度事件
+    fast_count_handle.abort();
+
+    // 检查扫描任务是否报错
+    if let Ok(Err(scan_err)) = scan_handle.await {
+        return Err(scan_err);
+    }
+
+    // 致命错误（会话/连接级或熔断）随汇总返回，由调用方决定记录状态
+    let fatal = fatal_error.lock().await.take();
+
+    // 检查是否取消
+    if let Some(flag) = cancel {
+        if flag.load(Ordering::Relaxed) {
+            return Err("Transfer canceled by user".to_string());
+        }
+    }
+
+    let failed = std::mem::take(&mut *failures.lock().await);
+    let succeeded = completed.load(Ordering::Relaxed);
+    let final_total = total_files.load(Ordering::Relaxed);
+
+    // 对齐事件：全部成功时才对齐到 total；存在失败时保留真实完成数，绝不伪造 100%
+    if failed.is_empty() {
+        let (aligned_done, aligned_total) = if final_total > 0 {
+            (final_total, final_total)
+        } else {
+            (succeeded, succeeded)
+        };
+        send(aligned_done, aligned_total, file_name, "count", None);
+    } else {
+        send(succeeded, final_total.max(succeeded), file_name, "count", None);
+    }
+
+    Ok(TransferSummary {
+        succeeded,
+        skipped: skipped.load(Ordering::Relaxed),
+        failed,
+        fatal,
+    })
 }
 
 /// 下载远程目录为压缩包
@@ -2644,6 +3043,7 @@ pub async fn files_download_archive(
         Some(&cancel_flag),
         None,
         false,
+        true,
     )
     .await;
     // 注销传输任务（无论成功/失败/取消）
@@ -2677,6 +3077,9 @@ pub async fn files_upload(
     server_id: String,
     remote_dir: String,
     upload_type: String,
+    concurrency: Option<usize>,
+    // 目录续传：远端已存在且大小一致时跳过
+    skip_existing: Option<bool>,
 ) -> Result<FileUploadResult, String> {
     use tauri_plugin_dialog::DialogExt;
 
@@ -2839,7 +3242,55 @@ pub async fn files_upload(
         None
     };
 
-    let results = perform_upload(&server_id, &file_paths, &target_remote_dir, None, send.clone(), cancel_ref, tmp_path_override.as_deref()).await;
+    // 远端空间预检：按待传总字节数 + 5% 余量检查（预检失败不阻塞传输）
+    if let Some(available) = get_remote_available_space(&server_id, &target_remote_dir).await {
+        let paths_for_size: Vec<String> = file_paths.clone();
+        let needed = tokio::task::spawn_blocking(move || local_paths_total_size(&paths_for_size))
+            .await
+            .unwrap_or(0);
+        let required = needed.saturating_add(needed / 20);
+        if needed > 0 && required > available {
+            let msg = format!(
+                "Insufficient remote disk space: required ~{} bytes ({} with 5% margin), available {} bytes",
+                needed, required, available
+            );
+            send_progress(&app, TransferProgress {
+                transfer_id: transfer_id.clone(),
+                r#type: "upload".to_string(),
+                current: 0,
+                total: 0,
+                file_name: String::new(),
+                done: Some(false),
+                phase: None,
+                total_type: None,
+                tmp_path: None,
+                error: Some(msg.clone()),
+            });
+            unregister_transfer(&transfer_id);
+            return Ok(FileUploadResult { success: false, error: Some(msg), results: Vec::new() });
+        }
+    }
+
+    let UploadBatchOutcome { results, succeeded, skipped, failures } = perform_upload(
+        &server_id,
+        &file_paths,
+        &target_remote_dir,
+        None,
+        send.clone(),
+        cancel_ref,
+        tmp_path_override.as_deref(),
+        skip_existing.unwrap_or(false),
+        concurrency.unwrap_or(3),
+    )
+    .await;
+    // 目录内部部分成功：下发失败明细，前端据此把记录标为 partial
+    send_transfer_failures(
+        &app,
+        &transfer_id,
+        "upload",
+        &server_id,
+        &TransferSummary { succeeded, skipped, failed: failures, fatal: None },
+    );
 
     // 无论成功/失败/取消都注销，避免内存泄漏和过期取消
     unregister_transfer(&transfer_id);
@@ -2889,6 +3340,9 @@ pub async fn files_upload_from_paths(
     remote_dir: String,
     local_paths: Vec<String>,
     target_file_name: Option<String>,
+    concurrency: Option<usize>,
+    // 目录续传：远端已存在且大小一致时跳过
+    skip_existing: Option<bool>,
 ) -> Result<FileUploadResult, String> {
     let target_type = load_target_type(&server_id).await;
     let is_windows = target_type.eq_ignore_ascii_case("windows");
@@ -3141,7 +3595,55 @@ pub async fn files_upload_from_paths(
         }
     }
 
-    let results = perform_upload(&server_id, &local_paths, &target_remote_dir, override_name.as_deref(), send.clone(), cancel_ref, tmp_path_override.as_deref()).await;
+    // 远端空间预检：按待传总字节数 + 5% 余量检查（预检失败不阻塞传输）
+    if let Some(available) = get_remote_available_space(&server_id, &target_remote_dir).await {
+        let paths_for_size: Vec<String> = local_paths.clone();
+        let needed = tokio::task::spawn_blocking(move || local_paths_total_size(&paths_for_size))
+            .await
+            .unwrap_or(0);
+        let required = needed.saturating_add(needed / 20);
+        if needed > 0 && required > available {
+            let msg = format!(
+                "Insufficient remote disk space: required ~{} bytes ({} with 5% margin), available {} bytes",
+                needed, required, available
+            );
+            send_progress(&app, TransferProgress {
+                transfer_id: transfer_id.clone(),
+                r#type: "upload".to_string(),
+                current: 0,
+                total: 0,
+                file_name: String::new(),
+                done: Some(false),
+                phase: None,
+                total_type: None,
+                tmp_path: None,
+                error: Some(msg.clone()),
+            });
+            unregister_transfer(&transfer_id);
+            return Ok(FileUploadResult { success: false, error: Some(msg), results: Vec::new() });
+        }
+    }
+
+    let UploadBatchOutcome { results, succeeded, skipped, failures } = perform_upload(
+        &server_id,
+        &local_paths,
+        &target_remote_dir,
+        override_name.as_deref(),
+        send.clone(),
+        cancel_ref,
+        tmp_path_override.as_deref(),
+        skip_existing.unwrap_or(false),
+        concurrency.unwrap_or(3),
+    )
+    .await;
+    // 目录内部部分成功：下发失败明细，前端据此把记录标为 partial
+    send_transfer_failures(
+        &app,
+        &transfer_id,
+        "upload",
+        &server_id,
+        &TransferSummary { succeeded, skipped, failed: failures, fatal: None },
+    );
 
     // 无论成功/失败/取消都注销，避免内存泄漏和过期取消
     unregister_transfer(&transfer_id);
@@ -3195,7 +3697,9 @@ async fn perform_upload(
     send: Arc<dyn Fn(u64, u64, &str, &str) + Send + Sync + 'static>,
     cancel: Option<&Arc<AtomicBool>>,
     tmp_path_override: Option<&str>,
-) -> Vec<UploadFileResult> {
+    skip_existing: bool,
+    concurrency: usize,
+) -> UploadBatchOutcome {
     // 判断是否为单文件上传（跳过递归统计文件数，减少文件IO/线程调度开销，使临时文件更快捷地生成）
     let is_single_file = local_paths.len() == 1
         && std::fs::metadata(&local_paths[0])
@@ -3219,6 +3723,10 @@ async fn perform_upload(
         .unwrap_or(0)
     };
     let completed = Arc::new(AtomicU64::new(0));
+    // 目录内部的部分成功统计（单文件上传也按 succeeded=1 计入）
+    let batch_succeeded = Arc::new(AtomicU64::new(0));
+    let batch_skipped = Arc::new(AtomicU64::new(0));
+    let batch_failures = Arc::new(tokio::sync::Mutex::new(Vec::<TransferFailure>::new()));
 
     // 发送初始进度事件
     // 单文件上传：不发送文件计数初始事件，由 upload_single_file 发送字节级进度
@@ -3246,7 +3754,31 @@ async fn perform_upload(
             Ok(s) => Arc::new(s),
             Err(e) => {
                 // SFTP 会话创建失败：所有文件都标记为失败
-                return local_paths
+                return UploadBatchOutcome {
+                    results: local_paths
+                        .iter()
+                        .map(|p| {
+                            let name = StdPath::new(p)
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("file")
+                                .to_string();
+                            UploadFileResult {
+                                file_name: name,
+                                success: false,
+                                error: Some(format!("SFTP session failed: {}", e)),
+                            }
+                        })
+                        .collect(),
+                    succeeded: 0,
+                    skipped: 0,
+                    failures: Vec::new(),
+                };
+            }
+        },
+        Err(e) => {
+            return UploadBatchOutcome {
+                results: local_paths
                     .iter()
                     .map(|p| {
                         let name = StdPath::new(p)
@@ -3257,28 +3789,14 @@ async fn perform_upload(
                         UploadFileResult {
                             file_name: name,
                             success: false,
-                            error: Some(format!("SFTP session failed: {}", e)),
+                            error: Some(e.to_string()),
                         }
                     })
-                    .collect();
-            }
-        },
-        Err(e) => {
-            return local_paths
-                .iter()
-                .map(|p| {
-                    let name = StdPath::new(p)
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("file")
-                        .to_string();
-                    UploadFileResult {
-                        file_name: name,
-                        success: false,
-                        error: Some(e.to_string()),
-                    }
-                })
-                .collect();
+                    .collect(),
+                succeeded: 0,
+                skipped: 0,
+                failures: Vec::new(),
+            };
         }
     };
 
@@ -3290,9 +3808,23 @@ async fn perform_upload(
         remote_dir.to_string()
     };
 
+    let worker_limit = concurrency.max(1).min(10);
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(worker_limit));
     let mut join_set = tokio::task::JoinSet::new();
+    let mut results = Vec::new();
 
     for local_path in local_paths {
+        if let Some(ref flag) = cancel {
+            if flag.load(Ordering::Relaxed) {
+                break;
+            }
+        }
+
+        let permit = match semaphore.clone().acquire_owned().await {
+            Ok(p) => p,
+            Err(_) => break,
+        };
+
         let server_id = server_id.to_string();
         let local_path = local_path.clone();
         // 目录内部会在每个子文件完成后自行更新 completed；只有顶层普通文件
@@ -3308,8 +3840,12 @@ async fn perform_upload(
         let sftp_clone = sftp.clone();
         let cancel_clone = cancel.cloned();
         let tmp_path_override = tmp_path_override.map(|s| s.to_string());
+        let batch_succeeded_clone = batch_succeeded.clone();
+        let batch_skipped_clone = batch_skipped.clone();
+        let batch_failures_clone = batch_failures.clone();
 
         join_set.spawn(async move {
+            let _permit = permit;
             // 每个文件开始前检查取消标志
             if let Some(ref flag) = cancel_clone {
                 if flag.load(Ordering::Relaxed) {
@@ -3356,14 +3892,31 @@ async fn perform_upload(
                 &server_id,
                 &local_path,
                 &remote_path,
-                &*send_clone,
+                send_clone.clone(),
                 &completed_clone,
                 total_files,
                 Some(&sftp_clone),
                 cancel_clone.as_ref(),
                 tmp_path_override.as_deref(),
+                skip_existing,
+                concurrency,
             ).await {
-                Ok(()) => {
+                Ok(summary) => {
+                    if !summary.failed.is_empty() {
+                        batch_failures_clone.lock().await.extend(summary.failed);
+                    }
+                    if summary.skipped > 0 {
+                        batch_skipped_clone.fetch_add(summary.skipped, Ordering::Relaxed);
+                    }
+                    batch_succeeded_clone.fetch_add(summary.succeeded, Ordering::Relaxed);
+                    // 致命错误（会话/连接级或熔断）仍按整体失败处理
+                    if let Some(fatal) = summary.fatal {
+                        return UploadFileResult {
+                            file_name: base_name,
+                            success: false,
+                            error: Some(fatal),
+                        };
+                    }
                     if !is_single_file && is_top_level_file && total_files > 0 {
                         let done = completed_clone.fetch_add(1, Ordering::SeqCst) + 1;
                         send_clone(done, total_files, &remote_path, "count");
@@ -3381,9 +3934,23 @@ async fn perform_upload(
                 },
             }
         });
+
+        while join_set.len() >= worker_limit * 2 {
+            if let Some(res) = join_set.join_next().await {
+                match res {
+                    Ok(upload_res) => results.push(upload_res),
+                    Err(e) => {
+                        results.push(UploadFileResult {
+                            file_name: "unknown".to_string(),
+                            success: false,
+                            error: Some(format!("Concurrent task failed: {}", e)),
+                        });
+                    }
+                }
+            }
+        }
     }
 
-    let mut results = Vec::new();
     while let Some(res) = join_set.join_next().await {
         match res {
             Ok(upload_res) => results.push(upload_res),
@@ -3397,7 +3964,14 @@ async fn perform_upload(
         }
     }
 
-    results
+    // 先取出失败明细（临时 MutexGuard 需在构造返回值前释放）
+    let failures = std::mem::take(&mut *batch_failures.lock().await);
+    UploadBatchOutcome {
+        results,
+        succeeded: batch_succeeded.load(Ordering::Relaxed),
+        skipped: batch_skipped.load(Ordering::Relaxed),
+        failures,
+    }
 }
 
 /// 递归统计本地路径下的文件数
@@ -3446,7 +4020,9 @@ fn count_local_files_inner(path: &str, depth: u32, extra_rules: &[String]) -> u6
             count += count_local_files_inner(&p_str, depth + 1, &current_rules);
         }
     }
-    count.max(1)
+    // 只统计真实文件数：此前 count.max(1) 会让每个空目录/仅含子目录的目录都虚增 1，
+    // 目录树越深总数越失真（前端进度分母被放大，收尾还要靠对齐事件掩盖）
+    count
 }
 
 /// 上传单个文件或目录
@@ -3455,27 +4031,60 @@ async fn upload_path(
     server_id: &str,
     local_path: &str,
     remote_path: &str,
-    send: &(dyn Fn(u64, u64, &str, &str) + Send + Sync),
+    send: Arc<dyn Fn(u64, u64, &str, &str) + Send + Sync + 'static>,
     completed: &Arc<AtomicU64>,
     total_files: u64,
     sftp: Option<&russh_sftp::client::SftpSession>,
     cancel: Option<&Arc<AtomicBool>>,
     tmp_path_override: Option<&str>,
-) -> Result<(), String> {
+    skip_existing: bool,
+    concurrency: usize,
+) -> Result<TransferSummary, String> {
     let metadata = std::fs::metadata(local_path)
         .map_err(|e| format!("Failed to read local file: {}", e))?;
 
     if metadata.is_dir() {
         // 仅在顶层 upload_path 调用处发送一次清单；递归子目录走 inner，不重复发送。
-        let mut manifest = Vec::new();
-        collect_local_transfer_manifest(local_path, remote_path, &mut manifest, 1, &[])?;
-        for (path, size) in &manifest {
+        // 目录树扫描是同步阻塞 IO（std::fs::read_dir + metadata），必须放到 blocking 线程池，
+        // 否则会占用 tokio worker 线程，阻塞同一 runtime 上的其他异步任务
+        let manifest_local = local_path.to_string();
+        let manifest_remote = remote_path.to_string();
+        let manifest = tokio::task::spawn_blocking(move || {
+            let mut items = Vec::new();
+            collect_local_transfer_manifest(&manifest_local, &manifest_remote, &mut items, 1, &[])
+                .map(|_| items)
+        })
+        .await
+        .map_err(|e| format!("Manifest scan task failed: {}", e))??;
+        // 分批下发清单：万级文件时不要在一个 tick 内灌入全部事件，
+        // 每 200 条让出一次，给前端 rAF 合批与 UI 渲染留出时间片
+        for (index, (path, size)) in manifest.iter().enumerate() {
             send(0, *size, path, "manifest");
+            if index % 200 == 199 {
+                tokio::task::yield_now().await;
+            }
         }
-        upload_dir_recursive(server_id, local_path, remote_path, send, completed, total_files, sftp, cancel).await
+        upload_dir_recursive(
+            server_id,
+            local_path,
+            remote_path,
+            send,
+            completed,
+            total_files,
+            sftp,
+            cancel,
+            skip_existing,
+            concurrency,
+        ).await
     } else {
         // 单文件上传：tmp_path_override 来自 commands 层（支持断点续传）或 None（目录递归）
-        upload_single_file(server_id, local_path, remote_path, send, sftp, cancel, tmp_path_override).await
+        upload_single_file(server_id, local_path, remote_path, &*send, sftp, cancel, tmp_path_override).await?;
+        Ok(TransferSummary {
+            succeeded: 1,
+            skipped: 0,
+            failed: Vec::new(),
+            fatal: None,
+        })
     }
 }
 
@@ -3521,6 +4130,7 @@ async fn upload_single_file(
         cancel,
         None,
         true,
+        true,
     )
     .await;
 
@@ -3528,59 +4138,22 @@ async fn upload_single_file(
     Ok(())
 }
 
-/// 递归上传本地目录
-/// sftp 参数为 perform_upload 创建的共享会话；为 None 时创建独立会话
-async fn upload_dir_recursive(
-    server_id: &str,
-    local_path: &str,
-    remote_path: &str,
-    send: &(dyn Fn(u64, u64, &str, &str) + Send + Sync),
-    completed: &Arc<AtomicU64>,
-    total_files: u64,
-    sftp: Option<&russh_sftp::client::SftpSession>,
-    cancel: Option<&Arc<AtomicBool>>,
-) -> Result<(), String> {
-    // 若调用方未传入共享会话，则创建一次会话复用给整个目录上传
-    let owned_sftp;
-    let sftp_ref: &russh_sftp::client::SftpSession = if let Some(s) = sftp {
-        s
-    } else {
-        let conn = crate::ssh::manager::SshManager::global()
-            .get_connection(server_id)
-            .map_err(|e| e.to_string())?;
-        owned_sftp = conn
-            .create_dedicated_sftp_session()
-            .await
-            .map_err(|e| format!("SFTP session failed: {}", e))?;
-        &owned_sftp
-    };
-
-    upload_dir_recursive_inner(
-        server_id,
-        local_path,
-        remote_path,
-        send,
-        completed,
-        total_files,
-        sftp_ref,
-        cancel,
-        1, // 顶层目录从第 1 层开始
-        &[],
-    )
-    .await
+struct LocalUploadItem {
+    local_path: String,
+    remote_path: String,
 }
 
-/// 递归上传内部函数（带 SFTP 会话复用）
-/// `depth`: 当前递归深度，从 1 开始；超过 MAX_RECURSION_DEPTH 时拒绝继续（防 symlink 循环栈溢出）
-async fn upload_dir_recursive_inner(
-    server_id: &str,
+/// 递归遍历本地目录结构并流式投递待上传文件到 MPSC Channel（生产者）
+/// 同时按需在远端创建目标目录结构（使用专用 SFTP 会话，不与文件传输竞争通道）
+async fn walk_local_dir_to_channel(
     local_path: &str,
     remote_path: &str,
-    send: &(dyn Fn(u64, u64, &str, &str) + Send + Sync),
-    completed: &Arc<AtomicU64>,
-    total_files: u64,
     sftp: &russh_sftp::client::SftpSession,
+    tx: &tokio::sync::mpsc::Sender<LocalUploadItem>,
     cancel: Option<&Arc<AtomicBool>>,
+    // 目录续传：远端已存在且大小一致时跳过
+    skip_existing: bool,
+    skipped: &Arc<AtomicU64>,
     depth: u32,
     extra_rules: &[String],
 ) -> Result<(), String> {
@@ -3590,13 +4163,15 @@ async fn upload_dir_recursive_inner(
             MAX_RECURSION_DEPTH, remote_path
         ));
     }
+    if let Some(flag) = cancel {
+        if flag.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+    }
 
-    // 使用当前复用的 SFTP 会话创建远程目录。
-    // 不能调用 files_mkdir：该命令每次都会新建 SFTP session，递归目录较深时
-    // 很容易耗尽服务端 channel/handle 限额，随后连目录刷新也会失败。
+    // 使用专用 SFTP 会话在远端创建目录（若已存在则忽略）
     let remote_dir_path = remote_path.replace('\\', "/");
     if let Err(e) = sftp.create_dir(&remote_dir_path).await {
-        // 目录可能已由并发任务或上一次重试创建；仅在确认它确实存在且为目录时忽略错误。
         match sftp.metadata(&remote_dir_path).await {
             Ok(meta) if meta.is_dir() => {}
             _ => return Err(format!("SFTP mkdir failed: {}", e)),
@@ -3613,11 +4188,15 @@ async fn upload_dir_recursive_inner(
     let entries = std::fs::read_dir(local_path)
         .map_err(|e| format!("Failed to read local directory: {}", e))?;
 
+    let is_windows_path = remote_path.contains('\\')
+        || (remote_path.len() >= 2
+            && remote_path.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false)
+            && remote_path.chars().nth(1) == Some(':'));
+
     for entry in entries {
-        // 每个文件开始前检查取消标志
         if let Some(flag) = cancel {
             if flag.load(Ordering::Relaxed) {
-                return Err("Transfer canceled by user".to_string());
+                return Ok(());
             }
         }
         let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
@@ -3626,8 +4205,6 @@ async fn upload_dir_recursive_inner(
             continue;
         }
         let item_local_path = entry.path().to_string_lossy().to_string();
-        let is_windows_path = remote_path.contains('\\')
-            || (remote_path.len() >= 2 && remote_path.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false) && remote_path.chars().nth(1) == Some(':'));
         let item_remote_path = if is_windows_path {
             if remote_path.ends_with('\\') {
                 format!("{}{}", remote_path, item_name)
@@ -3643,58 +4220,270 @@ async fn upload_dir_recursive_inner(
         };
 
         let metadata = entry.metadata().map_err(|e| format!("Failed to read metadata: {}", e))?;
-        // symlink 检测：跳过 symlink（不跟随），防止 symlink 指向 / 或敏感目录导致递归上传意料外内容
-        // entry.file_type() 返回 Result<FileType, io::Error>，不跟随 symlink
         let file_type = entry.file_type().map_err(|e| format!("Failed to read file type: {}", e))?;
         if file_type.is_symlink() {
-            // 跳过 symlink，避免递归上传 symlink 指向的目录树（可能指向 / 或其他敏感目录）
+            // 符号链接记入 skipped（默认策略为跳过）
+            skipped.fetch_add(1, Ordering::Relaxed);
             continue;
         }
+
         if metadata.is_dir() {
-            Box::pin(upload_dir_recursive_inner(
-                server_id,
+            Box::pin(walk_local_dir_to_channel(
                 &item_local_path,
                 &item_remote_path,
-                send,
-                completed,
-                total_files,
                 sftp,
+                tx,
                 cancel,
+                skip_existing,
+                skipped,
                 depth + 1,
                 &current_rules,
             ))
             .await?;
         } else {
-            // 目录上传同时发送字节级进度和文件计数进度：前端可将所有
-            // 子文件字节累加成整个目录的精确进度，并显示已完成文件数。
-            // sftp_upload_file_with_session 内部已用"临时文件 + rename"原子写入策略：
-            // 失败时仅清理自己的临时文件，目标文件若已存在则完全不受影响。
-            // 断连（含 1GiB rekey 崩溃）自动重连并续传；目录流最终失败时清理 tmp
-            let ul_tmp_path = format!("{}.sw-upload-tmp-{}", item_remote_path, uuid::Uuid::new_v4());
-            upload_file_with_auto_retry(
-                server_id,
-                &item_local_path,
-                &item_remote_path,
-                &ul_tmp_path,
-                Some(sftp),
-                |transferred, total| {
-                    send(transferred, total, &item_remote_path, "bytes");
-                },
-                cancel,
-                None,
-                false,
-            )
-            .await?;
-
-            // 更新文件计数进度（total_type="count"）
-            let done = completed.fetch_add(1, Ordering::SeqCst) + 1;
-            if total_files > 0 {
-                send(done, total_files, &item_remote_path, "count");
+            // 目录续传：远端已存在同名且大小一致的文件时直接跳过
+            if skip_existing {
+                if let Ok(remote_meta) = sftp.metadata(&item_remote_path).await {
+                    if remote_meta.len() == metadata.len() {
+                        skipped.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+                }
+            }
+            if tx.send(LocalUploadItem {
+                local_path: item_local_path,
+                remote_path: item_remote_path,
+            }).await.is_err() {
+                return Ok(());
             }
         }
     }
 
     Ok(())
+}
+
+/// 递归上传本地目录（生产者-消费者并发架构 + Dedicated SFTP 会话池）
+/// 支持与 download_dir_recursive 相同的并发控制与全局限速
+async fn upload_dir_recursive(
+    server_id: &str,
+    local_path: &str,
+    remote_path: &str,
+    send: Arc<dyn Fn(u64, u64, &str, &str) + Send + Sync + 'static>,
+    completed: &Arc<AtomicU64>,
+    total_files: u64,
+    _sftp: Option<&russh_sftp::client::SftpSession>,
+    cancel: Option<&Arc<AtomicBool>>,
+    // 目录续传：远端已存在且大小一致时跳过
+    skip_existing: bool,
+    concurrency: usize,
+) -> Result<TransferSummary, String> {
+    let conn = crate::ssh::manager::SshManager::global()
+        .get_connection(server_id)
+        .map_err(|e| e.to_string())?;
+    let skipped = Arc::new(AtomicU64::new(0));
+
+    let worker_limit = concurrency.max(1).min(10);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<LocalUploadItem>(worker_limit * 8);
+
+    // 目录扫描与远端目录创建使用专用的 SFTP 会话，绝不与大文件上传流量竞争 channel
+    let producer_sftp = conn
+        .create_dedicated_sftp_session()
+        .await
+        .map_err(|e| format!("SFTP session failed for directory scan: {}", e))?;
+
+    let local_path_producer = local_path.to_string();
+    let remote_path_producer = remote_path.to_string();
+    let cancel_producer = cancel.cloned();
+    let skipped_producer = skipped.clone();
+
+    let scan_handle = tokio::spawn(async move {
+        walk_local_dir_to_channel(
+            &local_path_producer,
+            &remote_path_producer,
+            &producer_sftp,
+            &tx,
+            cancel_producer.as_ref(),
+            skip_existing,
+            &skipped_producer,
+            1,
+            &[],
+        )
+        .await
+    });
+
+    // 池中会话与其通道租约绑定：会话在池中时继续占用预算，drop 时自动归还
+    let session_pool = Arc::new(tokio::sync::Mutex::new(Vec::<
+        (russh_sftp::client::SftpSession, tokio::sync::OwnedSemaphorePermit),
+    >::with_capacity(worker_limit)));
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(worker_limit));
+    let mut join_set = tokio::task::JoinSet::new();
+    // 致命错误（会话/连接级）与「可继续的文件级失败」分离：后者不中止整体传输
+    let fatal_error = Arc::new(tokio::sync::Mutex::new(None::<String>));
+    let failures = Arc::new(tokio::sync::Mutex::new(Vec::<TransferFailure>::new()));
+    let fail_streak = Arc::new(AtomicU64::new(0));
+
+    while let Some(task) = rx.recv().await {
+        if let Some(flag) = cancel {
+            if flag.load(Ordering::Relaxed) {
+                break;
+            }
+        }
+
+        // 仅致命错误（会话/连接级）或连续失败熔断时停止派发
+        {
+            let err_guard = fatal_error.lock().await;
+            if err_guard.is_some() {
+                break;
+            }
+        }
+        if fail_streak.load(Ordering::Relaxed) >= MAX_CONSECUTIVE_FAILURES {
+            let mut err_guard = fatal_error.lock().await;
+            if err_guard.is_none() {
+                *err_guard = Some(format!(
+                    "Aborted after {} consecutive file failures",
+                    MAX_CONSECUTIVE_FAILURES
+                ));
+            }
+            break;
+        }
+
+        let permit = match semaphore.clone().acquire_owned().await {
+            Ok(p) => p,
+            Err(_) => break,
+        };
+
+        let conn_clone = conn.clone();
+        let session_pool_clone = session_pool.clone();
+        let send_clone = send.clone();
+        let completed_clone = completed.clone();
+        let server_id_owned = server_id.to_string();
+        let cancel_owned = cancel.cloned();
+        let fatal_error_clone = fatal_error.clone();
+        let failures_clone = failures.clone();
+        let fail_streak_clone = fail_streak.clone();
+
+        join_set.spawn(async move {
+            let _permit = permit;
+            if let Some(ref flag) = cancel_owned {
+                if flag.load(Ordering::Relaxed) {
+                    return;
+                }
+            }
+
+            let (sftp, channel_permit) = {
+                let existing = {
+                    let mut pool = session_pool_clone.lock().await;
+                    pool.pop()
+                };
+                match existing {
+                    Some(pair) => pair,
+                    None => {
+                        // 先租用该服务器的传输通道名额，再创建专用会话（池中会话继续持有租约）
+                        let permit = match crate::ssh::manager::acquire_transfer_channel(&server_id_owned).await {
+                            Some(p) => p,
+                            None => return,
+                        };
+                        match conn_clone.create_dedicated_sftp_session().await {
+                            Ok(s) => (s, permit),
+                            Err(e) => {
+                                let mut err_guard = fatal_error_clone.lock().await;
+                                if err_guard.is_none() {
+                                    *err_guard = Some(format!("SFTP session failed: {}", e));
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+            };
+
+            let ul_tmp_path = format!("{}.sw-upload-tmp-{}", task.remote_path.replace('\\', "/"), uuid::Uuid::new_v4());
+            let send_bytes = send_clone.clone();
+            let file_remote = task.remote_path.clone();
+
+            let ul_res = upload_file_with_auto_retry(
+                &server_id_owned,
+                &task.local_path,
+                &task.remote_path,
+                &ul_tmp_path,
+                Some(&sftp),
+                move |transferred, total| {
+                    send_bytes(transferred, total, &file_remote, "bytes");
+                },
+                cancel_owned.as_ref(),
+                None,
+                false,
+                // 目录批量上传：跳过逐文件 fsync
+                false,
+            )
+            .await;
+
+            match ul_res {
+                Ok(()) => {
+                    {
+                        let mut pool = session_pool_clone.lock().await;
+                        pool.push((sftp, channel_permit));
+                    }
+                    fail_streak_clone.store(0, Ordering::Relaxed);
+                    let done = completed_clone.fetch_add(1, Ordering::SeqCst) + 1;
+                    if total_files > 0 {
+                        send_clone(done, total_files, &task.remote_path, "count");
+                    }
+                }
+                Err(e) => {
+                    // 单个文件失败只记录并继续派发（部分成功语义），连续失败由外层熔断
+                    fail_streak_clone.fetch_add(1, Ordering::Relaxed);
+                    failures_clone.lock().await.push(TransferFailure {
+                        path: task.remote_path.clone(),
+                        error: e,
+                    });
+                }
+            }
+        });
+
+        while join_set.len() >= worker_limit * 2 {
+            if let Some(res) = join_set.join_next().await {
+                if let Err(e) = res {
+                    eprintln!("[upload_dir] task panicked: {}", e);
+                }
+            }
+        }
+    }
+
+    // 早停路径（cancel / first_error / 信号量错误 break）必须主动丢弃接收端，
+    // 否则 rx 存活期间生产者的 tx.send() 在缓冲填满后永久阻塞，导致 scan_handle.await
+    // 死锁（命令挂起、SFTP 会话泄漏）。丢弃 rx 后 send() 返回 Err，生产者按 is_err 分支退出。
+    drop(rx);
+
+    while let Some(res) = join_set.join_next().await {
+        if let Err(e) = res {
+            eprintln!("[upload_dir] task panicked: {}", e);
+        }
+    }
+
+    if let Ok(Err(scan_err)) = scan_handle.await {
+        return Err(scan_err);
+    }
+
+    let fatal = fatal_error.lock().await.take();
+
+    if let Some(flag) = cancel {
+        if flag.load(Ordering::Relaxed) {
+            return Err("Transfer canceled by user".to_string());
+        }
+    }
+
+    // 不发送以 remote_path（完整远程目录路径）为 file_name 的「对齐」count 事件：
+    // 顶层记录的 file_name 是 basename，完整路径会被前端判为子文件事件，
+    // 生成一条与父目录同名的假子记录。父记录进度由每个子文件完成时的 count 事件推进，
+    // 最终由命令结束时的 done 事件触发前端将 current/total 严丝合缝对齐。
+    let failed = std::mem::take(&mut *failures.lock().await);
+    Ok(TransferSummary {
+        succeeded: completed.load(Ordering::Relaxed),
+        skipped: skipped.load(Ordering::Relaxed),
+        failed,
+        fatal,
+    })
 }
 
 // ============================================================
@@ -3924,6 +4713,7 @@ pub async fn files_resume_upload(
         cancel_ref,
         effective_offset,
         true,
+        true,
     )
     .await;
 
@@ -4107,6 +4897,7 @@ pub async fn files_resume_download(
         },
         cancel_ref,
         effective_offset,
+        true,
         true,
     )
     .await;
@@ -4459,28 +5250,56 @@ async fn server_to_server_single_file(
     let rename_result = crate::ssh::manager::sftp_atomic_rename_overwrite(dest_sftp, &tmp_dest_path, &sftp_dest_path).await;
     if rename_result.is_err() {
         let _ = dest_sftp.remove_file(&tmp_dest_path).await;
+    } else {
+        // 元数据保留：目标文件沿用源文件 mtime（SETSTAT 不支持时静默忽略）
+        if let Ok(meta) = src_sftp.metadata(src_path).await {
+            if let Some(mtime) = meta.mtime {
+                let attrs = russh_sftp::protocol::FileAttributes {
+                    size: None,
+                    uid: None,
+                    user: None,
+                    gid: None,
+                    group: None,
+                    permissions: None,
+                    atime: None,
+                    mtime: Some(mtime),
+                };
+                let _ = dest_sftp.set_metadata(sftp_dest_path.clone(), attrs).await;
+            }
+        }
     }
     rename_result
 }
 
-async fn server_to_server_dir_recursive(
+struct ServerToServerItem {
+    src_path: String,
+    dest_path: String,
+    size: u64,
+}
+
+async fn walk_s2s_dir_to_channel(
     server_id_src: &str,
-    server_id_dest: &str,
     src_sftp: &russh_sftp::client::SftpSession,
     dest_sftp: &russh_sftp::client::SftpSession,
     src_path: &str,
     dest_path: &str,
-    send: &(dyn Fn(u64, u64, &str, &str) + Send + Sync),
-    completed: &Arc<AtomicU64>,
-    total_files: u64,
+    tx: &tokio::sync::mpsc::Sender<ServerToServerItem>,
     cancel: Option<&Arc<AtomicBool>>,
+    target_type: &str,
+    // 目录续传：目标已存在且大小一致时跳过
+    skip_existing: bool,
+    skipped: &Arc<AtomicU64>,
     depth: u32,
 ) -> Result<(), String> {
     if depth > MAX_RECURSION_DEPTH {
         return Err(format!("Max recursion depth exceeded at {}", src_path));
     }
-    
-    // 使用已复用的 dest_sftp 会话创建目录，避免反复新建 SFTP channel；若目录已存在则安全跳过
+    if let Some(flag) = cancel {
+        if flag.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+    }
+
     let remote_dest_dir = dest_path.replace('\\', "/");
     if let Err(e) = dest_sftp.create_dir(&remote_dest_dir).await {
         match dest_sftp.metadata(&remote_dest_dir).await {
@@ -4488,78 +5307,336 @@ async fn server_to_server_dir_recursive(
             _ => return Err(format!("SFTP mkdir failed on dest: {}", e)),
         }
     }
-    
-    let entries = crate::files::remote::files_list(server_id_src.to_string(), src_path.to_string()).await?;
-    
+
+    let entries = crate::files::remote::files_list_with_target(
+        server_id_src.to_string(),
+        src_path.to_string(),
+        target_type,
+    )
+    .await?;
+
     for entry in entries {
         if let Some(flag) = cancel {
             if flag.load(Ordering::Relaxed) {
-                return Err("Transfer canceled by user".to_string());
+                return Ok(());
             }
         }
         if entry.name == "." || entry.name == ".." || crate::validators::is_ignored(&entry.name) {
             continue;
         }
 
-        // symlink 检测：跳过软链接，防止无限循环递归（跨平台）
-        let is_symlink = match crate::ssh::manager::sftp_stat(server_id_src, &entry.path).await {
-            Ok(meta) => meta.is_symlink(),
-            Err(_) => false,
-        };
-        if is_symlink {
+        // symlink 检测：直接复用 readdir 返回的 is_symlink（零额外 RTT）
+        if entry.is_symlink {
+            // 符号链接记入 skipped（默认策略为跳过）
+            skipped.fetch_add(1, Ordering::Relaxed);
             continue;
         }
-        
+
         let item_dest_path = if remote_dest_dir == "/" {
             format!("/{}", entry.name)
         } else {
             format!("{}/{}", remote_dest_dir, entry.name)
         };
-        
+
         if entry.is_directory {
-            Box::pin(server_to_server_dir_recursive(
+            Box::pin(walk_s2s_dir_to_channel(
                 server_id_src,
-                server_id_dest,
                 src_sftp,
                 dest_sftp,
                 &entry.path,
                 &item_dest_path,
-                send,
-                completed,
-                total_files,
+                tx,
                 cancel,
+                target_type,
+                skip_existing,
+                skipped,
                 depth + 1,
-            )).await?;
+            ))
+            .await?;
         } else {
-            let meta = src_sftp.metadata(&entry.path).await
-                .map_err(|e| format!("Failed to read metadata: {}", e))?;
-            let size = meta.size.unwrap_or(0);
+            // readdir 已返回文件大小，无需再为每个文件发一次 metadata RTT
+            let size = entry.size.max(0) as u64;
 
-            // 目录流不支持断点续传：每文件独立 tmp，失败即清理（维持原行为）
+            // 目录续传：目标已存在同名且大小一致的文件时直接跳过
+            if skip_existing {
+                if let Ok(meta) = dest_sftp.metadata(&item_dest_path).await {
+                    if meta.len() == size {
+                        skipped.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+                }
+            }
+
+            if tx.send(ServerToServerItem {
+                src_path: entry.path,
+                dest_path: item_dest_path,
+                size,
+            }).await.is_err() {
+                return Ok(());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn server_to_server_dir_recursive(
+    server_id_src: &str,
+    server_id_dest: &str,
+    src_conn: &Arc<crate::ssh::connection::SshConnection>,
+    dest_conn: &Arc<crate::ssh::connection::SshConnection>,
+    src_path: &str,
+    dest_path: &str,
+    send: Arc<dyn Fn(u64, u64, &str, &str) + Send + Sync + 'static>,
+    completed: &Arc<AtomicU64>,
+    total_files: &Arc<AtomicU64>,
+    cancel: Option<&Arc<AtomicBool>>,
+    // 目录续传：目标已存在且大小一致时跳过
+    skip_existing: bool,
+    concurrency: usize,
+) -> Result<TransferSummary, String> {
+    let worker_limit = concurrency.max(1).min(10);
+    let skipped = Arc::new(AtomicU64::new(0));
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<ServerToServerItem>(worker_limit * 8);
+
+    let producer_src_sftp = src_conn.create_dedicated_sftp_session().await.map_err(|e| e.to_string())?;
+    let producer_dest_sftp = dest_conn.create_dedicated_sftp_session().await.map_err(|e| e.to_string())?;
+
+    // 一次查询源服务器目标类型，供整个目录树扫描复用（避免每个子目录都走 load_server_config）
+    let target_type_producer = load_target_type(server_id_src).await;
+    let src_id = server_id_src.to_string();
+    let s_path = src_path.to_string();
+    let d_path = dest_path.to_string();
+    let cancel_producer = cancel.cloned();
+    let skipped_producer = skipped.clone();
+
+    let scan_handle = tokio::spawn(async move {
+        walk_s2s_dir_to_channel(
+            &src_id,
+            &producer_src_sftp,
+            &producer_dest_sftp,
+            &s_path,
+            &d_path,
+            &tx,
+            cancel_producer.as_ref(),
+            &target_type_producer,
+            skip_existing,
+            &skipped_producer,
+            1,
+        )
+        .await
+    });
+
+    // 两侧会话分别绑定各自服务器的通道租约
+    let src_pool = Arc::new(tokio::sync::Mutex::new(Vec::<
+        (russh_sftp::client::SftpSession, tokio::sync::OwnedSemaphorePermit),
+    >::with_capacity(worker_limit)));
+    let dest_pool = Arc::new(tokio::sync::Mutex::new(Vec::<
+        (russh_sftp::client::SftpSession, tokio::sync::OwnedSemaphorePermit),
+    >::with_capacity(worker_limit)));
+    let channel_server_src = server_id_src.to_string();
+    let channel_server_dest = server_id_dest.to_string();
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(worker_limit));
+    let mut join_set = tokio::task::JoinSet::new();
+    // 致命错误（会话/连接级）与「可继续的文件级失败」分离：后者不中止整体传输
+    let fatal_error = Arc::new(tokio::sync::Mutex::new(None::<String>));
+    let failures = Arc::new(tokio::sync::Mutex::new(Vec::<TransferFailure>::new()));
+    let fail_streak = Arc::new(AtomicU64::new(0));
+
+    while let Some(task) = rx.recv().await {
+        if let Some(flag) = cancel {
+            if flag.load(Ordering::Relaxed) {
+                break;
+            }
+        }
+        // 仅致命错误（会话/连接级）或连续失败熔断时停止派发
+        {
+            let err_guard = fatal_error.lock().await;
+            if err_guard.is_some() {
+                break;
+            }
+        }
+        if fail_streak.load(Ordering::Relaxed) >= MAX_CONSECUTIVE_FAILURES {
+            let mut err_guard = fatal_error.lock().await;
+            if err_guard.is_none() {
+                *err_guard = Some(format!(
+                    "Aborted after {} consecutive file failures",
+                    MAX_CONSECUTIVE_FAILURES
+                ));
+            }
+            break;
+        }
+
+        let permit = match semaphore.clone().acquire_owned().await {
+            Ok(p) => p,
+            Err(_) => break,
+        };
+
+        let src_conn_clone = src_conn.clone();
+        let dest_conn_clone = dest_conn.clone();
+        let src_pool_clone = src_pool.clone();
+        let dest_pool_clone = dest_pool.clone();
+        let send_clone = send.clone();
+        let completed_clone = completed.clone();
+        let total_files_clone = total_files.clone();
+        let cancel_owned = cancel.cloned();
+        let fatal_error_clone = fatal_error.clone();
+        let failures_clone = failures.clone();
+        let fail_streak_clone = fail_streak.clone();
+        let channel_server_src_clone = channel_server_src.clone();
+        let channel_server_dest_clone = channel_server_dest.clone();
+
+        join_set.spawn(async move {
+            let _permit = permit;
+            if let Some(ref flag) = cancel_owned {
+                if flag.load(Ordering::Relaxed) {
+                    return;
+                }
+            }
+
+            let (src_sftp, src_channel_permit) = {
+                let existing = src_pool_clone.lock().await.pop();
+                match existing {
+                    Some(pair) => pair,
+                    None => {
+                        let permit = match crate::ssh::manager::acquire_transfer_channel(&channel_server_src_clone).await {
+                            Some(p) => p,
+                            None => return,
+                        };
+                        match src_conn_clone.create_dedicated_sftp_session().await {
+                            Ok(s) => (s, permit),
+                            Err(e) => {
+                                let mut err_guard = fatal_error_clone.lock().await;
+                                if err_guard.is_none() {
+                                    *err_guard = Some(format!("Src SFTP session failed: {}", e));
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+            };
+
+            let (dest_sftp, dest_channel_permit) = {
+                let existing = dest_pool_clone.lock().await.pop();
+                match existing {
+                    Some(pair) => pair,
+                    None => {
+                        let permit = match crate::ssh::manager::acquire_transfer_channel(&channel_server_dest_clone).await {
+                            Some(p) => p,
+                            None => return,
+                        };
+                        match dest_conn_clone.create_dedicated_sftp_session().await {
+                            Ok(s) => (s, permit),
+                            Err(e) => {
+                                let mut err_guard = fatal_error_clone.lock().await;
+                                if err_guard.is_none() {
+                                    *err_guard = Some(format!("Dest SFTP session failed: {}", e));
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+            };
+
             let item_tmp_path = format!(
                 "{}.sw-upload-tmp-{}",
-                item_dest_path.replace('\\', "/"),
+                task.dest_path.replace('\\', "/"),
                 uuid::Uuid::new_v4()
             );
-            server_to_server_single_file(
-                src_sftp,
-                dest_sftp,
-                &entry.path,
-                &item_dest_path,
-                size,
-                |_, _, _| {},
-                cancel,
+            let send_bytes = send_clone.clone();
+            let src_path_display = task.src_path.clone();
+            // 进度节流：s2s 内核按 chunk 回调（64KB/次，100MB/s 时约 1600 次/秒/文件），
+            // 每次都 emit 会跨 IPC 序列化并刷爆前端。与 manager.rs 的 ProgressReporter 对齐，
+            // 限制为 200ms 一次，传输完成时补发终值。
+            let last_emit_ms = Arc::new(AtomicU64::new(0));
+
+            let transfer_res = server_to_server_single_file(
+                &src_sftp,
+                &dest_sftp,
+                &task.src_path,
+                &task.dest_path,
+                task.size,
+                move |transferred, total, _| {
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    let prev = last_emit_ms.load(Ordering::Relaxed);
+                    if transferred < total && now_ms.saturating_sub(prev) < 200 {
+                        return;
+                    }
+                    last_emit_ms.store(now_ms, Ordering::Relaxed);
+                    send_bytes(transferred, total, &src_path_display, "bytes");
+                },
+                cancel_owned.as_ref(),
                 &item_tmp_path,
                 None,
                 false,
-            ).await?;
-            
-            let done = completed.fetch_add(1, Ordering::SeqCst) + 1;
-            send(done, total_files, &entry.path, "count");
+            )
+            .await;
+
+            match transfer_res {
+                Ok(()) => {
+                    src_pool_clone.lock().await.push((src_sftp, src_channel_permit));
+                    dest_pool_clone.lock().await.push((dest_sftp, dest_channel_permit));
+
+                    fail_streak_clone.store(0, Ordering::Relaxed);
+                    let done = completed_clone.fetch_add(1, Ordering::SeqCst) + 1;
+                    let total = total_files_clone.load(Ordering::Relaxed);
+                    send_clone(done, total, &task.src_path, "count");
+                }
+                Err(e) => {
+                    // 单个文件失败只记录并继续派发（部分成功语义），连续失败由外层熔断
+                    fail_streak_clone.fetch_add(1, Ordering::Relaxed);
+                    failures_clone.lock().await.push(TransferFailure {
+                        path: task.src_path.clone(),
+                        error: e,
+                    });
+                }
+            }
+        });
+
+        while join_set.len() >= worker_limit * 2 {
+            if let Some(res) = join_set.join_next().await {
+                if let Err(e) = res {
+                    eprintln!("[s2s_dir] task panicked: {}", e);
+                }
+            }
         }
     }
-    
-    Ok(())
+
+    // 早停路径（cancel / first_error / 信号量错误 break）必须主动丢弃接收端，
+    // 否则 rx 存活期间生产者的 tx.send() 在缓冲填满后永久阻塞，导致 scan_handle.await
+    // 死锁（命令挂起、SFTP 会话泄漏）。丢弃 rx 后 send() 返回 Err，生产者按 is_err 分支退出。
+    drop(rx);
+
+    while let Some(res) = join_set.join_next().await {
+        if let Err(e) = res {
+            eprintln!("[s2s_dir] task panicked: {}", e);
+        }
+    }
+
+    if let Ok(Err(scan_err)) = scan_handle.await {
+        return Err(scan_err);
+    }
+
+    let fatal = fatal_error.lock().await.take();
+
+    if let Some(flag) = cancel {
+        if flag.load(Ordering::Relaxed) {
+            return Err("Transfer canceled by user".to_string());
+        }
+    }
+
+    let failed = std::mem::take(&mut *failures.lock().await);
+    Ok(TransferSummary {
+        succeeded: completed.load(Ordering::Relaxed),
+        skipped: skipped.load(Ordering::Relaxed),
+        failed,
+        fatal,
+    })
 }
 
 #[tauri::command]
@@ -4570,6 +5647,9 @@ pub async fn files_server_to_server_transfer(
     dest_server_id: String,
     dest_path: String,
     target_name: Option<String>,
+    concurrency: Option<usize>,
+    // 目录续传：目标已存在且大小一致时跳过
+    skip_existing: Option<bool>,
 ) -> Result<CommandResult, String> {
     let src_target_type = load_target_type(&src_server_id).await;
     let dest_target_type = load_target_type(&dest_server_id).await;
@@ -4642,50 +5722,115 @@ pub async fn files_server_to_server_transfer(
     
     let src_conn = crate::ssh::manager::SshManager::global().get_connection(&src_server_id).map_err(|e| e.to_string())?;
     let dest_conn = crate::ssh::manager::SshManager::global().get_connection(&dest_server_id).map_err(|e| e.to_string())?;
-    // 使用独立 SFTP 会话（与 perform_upload 一致）：create_sftp_session 返回缓存的
-    // 共享会话，长时间传输与用户同时浏览目录的 readdir 交错复用同一 session，
-    // Windows sftp-server 不支持这种交错，会互相干扰甚至句柄报错
-    let src_sftp = src_conn.create_dedicated_sftp_session().await.map_err(|e| e.to_string())?;
-    let dest_sftp = dest_conn.create_dedicated_sftp_session().await.map_err(|e| e.to_string())?;
     
     let result = if is_dir {
         // 文件夹传输：先发送一个携带顶层文件夹名的初始事件，让前端能绑定源/目标路径
         // 后续子文件进度事件的 file_name 是子文件名，但此时记录已存在，不会再查 pendingPathsRef
         send_progress_closure(0, 0, &file_name, "count", None, None);
-        let manifest_result = crate::files::remote::files_transfer_manifest(src_server_id.clone(), src_path.clone()).await;
-        let (manifest, total_files) = match manifest_result {
-            Ok(items) => {
-                let total = items.len() as u64;
-                (items, total)
-            }
-            Err(_) => {
-                let total = crate::files::remote::files_count_recursive(src_server_id.clone(), src_path.clone()).await.unwrap_or(0);
-                (Vec::new(), total)
-            }
-        };
-        for item in &manifest {
-            send_progress_closure(0, item.size, &item.path, "manifest", None, None);
-        }
         let completed = Arc::new(AtomicU64::new(0));
+        let total_files = Arc::new(AtomicU64::new(0));
 
-        let send_closure = |done: u64, total: u64, name: &str, total_type: &str| {
-            send_progress_closure(done, total, name, total_type, None, None);
+        let fast_count_handle = {
+            let src_server_id_clone = src_server_id.clone();
+            let src_path_clone = src_path.clone();
+            let total_files_clone = total_files.clone();
+            let completed_clone = completed.clone();
+            let app_clone = app.clone();
+            let transfer_id_clone = transfer_id.clone();
+            let file_name_clone = file_name.clone();
+
+            tokio::spawn(async move {
+                if let Some(count) = fast_count_remote_files(&src_server_id_clone, &src_path_clone).await {
+                    total_files_clone.store(count, Ordering::Relaxed);
+                    let current = completed_clone.load(Ordering::Relaxed);
+                    send_progress(
+                        &app_clone,
+                        TransferProgress {
+                            transfer_id: transfer_id_clone,
+                            r#type: "s2s".to_string(),
+                            current,
+                            total: count,
+                            file_name: file_name_clone,
+                            done: None,
+                            phase: None,
+                            total_type: Some("count".to_string()),
+                            tmp_path: None,
+                            error: None,
+                        },
+                    );
+                }
+            })
         };
+
+        let app_clone = app.clone();
+        let transfer_id_clone = transfer_id.clone();
+        let send_closure = Arc::new(move |done: u64, total: u64, name: &str, total_type: &str| {
+            send_progress(
+                &app_clone,
+                TransferProgress {
+                    transfer_id: transfer_id_clone.clone(),
+                    r#type: "s2s".to_string(),
+                    current: done,
+                    total,
+                    file_name: name.to_string(),
+                    done: None,
+                    phase: None,
+                    total_type: Some(total_type.to_string()),
+                    tmp_path: None,
+                    error: None,
+                },
+            );
+        });
         
-        server_to_server_dir_recursive(
+        let dir_res = server_to_server_dir_recursive(
             &src_server_id,
             &dest_server_id,
-            &src_sftp,
-            &dest_sftp,
+            &src_conn,
+            &dest_conn,
             &src_path,
             &final_dest_path,
-            &send_closure,
+            send_closure,
             &completed,
-            total_files,
+            &total_files,
             cancel_ref,
-            1,
-        ).await
+            skip_existing.unwrap_or(false),
+            concurrency.unwrap_or(3),
+        ).await;
+
+        // 中止后台快速计数任务，避免传输结束后滞后补发 count 进度事件
+        fast_count_handle.abort();
+
+        if let Ok(summary) = &dir_res {
+            // 部分成功：下发失败明细，前端据此把记录标为 partial
+            send_transfer_failures(&app, &transfer_id, "s2s", &src_server_id, summary);
+            let final_total = total_files.load(Ordering::Relaxed);
+            let final_done = completed.load(Ordering::Relaxed);
+            // 全部成功才对齐到 total；有失败时保留真实完成数，绝不伪造 100%
+            let (aligned_done, aligned_total) = if !summary.failed.is_empty() {
+                (final_done, final_total.max(final_done))
+            } else if final_total > 0 {
+                (final_total, final_total)
+            } else {
+                (final_done, final_done)
+            };
+            send_progress_closure(aligned_done, aligned_total, &file_name, "count", None, None);
+        }
+
+        // 致命错误（会话/连接级或熔断）转为 Err，让整条记录标记失败
+        match dir_res {
+            Ok(summary) => match summary.fatal {
+                Some(fatal) => Err(fatal),
+                None => Ok(()),
+            },
+            Err(e) => Err(e),
+        }
     } else {
+        // 使用独立 SFTP 会话（与 perform_upload 一致）：create_sftp_session 返回缓存的
+        // 共享会话，长时间传输与用户同时浏览目录的 readdir 交错复用同一 session，
+        // Windows sftp-server 不支持这种交错，会互相干扰甚至句柄报错
+        let src_sftp = src_conn.create_dedicated_sftp_session().await.map_err(|e| e.to_string())?;
+        let dest_sftp = dest_conn.create_dedicated_sftp_session().await.map_err(|e| e.to_string())?;
+
         // 单文件传输：断连自动重连重试（双腿 1GiB rekey 均可能断）
         // tmp 路径只生成一次，重试间复用；续传偏移取目标 tmp 实际大小
         let meta = src_sftp.metadata(&src_path).await.map_err(|e| e.to_string())?;
@@ -4706,6 +5851,8 @@ pub async fn files_server_to_server_transfer(
         // 循环携带状态：读取点均在首次赋值之后，初始值仅为类型占位
         #[allow(unused_assignments)]
         let mut last_error = String::from("SFTP transfer failed");
+        // 与目录并发任务一致：chunk 级进度按 200ms 节流，完成时补发终值
+        let last_emit_ms = Arc::new(AtomicU64::new(0));
         loop {
             let attempt = server_to_server_single_file(
                 &src_sftp,
@@ -4714,6 +5861,15 @@ pub async fn files_server_to_server_transfer(
                 &final_dest_path,
                 size,
                 |current, total, tmp| {
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    let prev = last_emit_ms.load(Ordering::Relaxed);
+                    if current < total && now_ms.saturating_sub(prev) < 200 {
+                        return;
+                    }
+                    last_emit_ms.store(now_ms, Ordering::Relaxed);
                     send_progress_closure(current, total, &file_name, "bytes", None, tmp);
                 },
                 cancel_ref,

@@ -67,6 +67,7 @@ import type {
   ComposeStreamEvent,
   SystemDfRow,
   TransferProgressData,
+  TransferFailuresData,
   ShellOutputData,
   ShellClosedData,
   ShellErrorData,
@@ -104,6 +105,8 @@ export interface ActiveTransferRecord {
 
 const activeTransfers = new Map<string, ActiveTransferRecord>();
 let isExiting = false;
+// 未携带 transferId 的传输操作计数（工作台文件模块使用）
+let busyOperations = 0;
 
 // 重新导出状态机辅助函数，方便业务层直接从 sshService 引用
 export {
@@ -1259,9 +1262,11 @@ export const sshService = {
     serverId: string,
     remotePath: string,
     localDest?: string,
+    concurrency?: number,
+    skipExisting?: boolean,
   ): Promise<FileDownloadResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.files.download(serverId, remotePath, localDest);
+    return backend.files.download(serverId, remotePath, localDest, concurrency, skipExisting);
   },
 
   async downloadArchive(
@@ -1287,9 +1292,11 @@ export const sshService = {
     serverId: string,
     remoteDir: string,
     uploadType: "file" | "dir" | "auto" = "file",
+    concurrency?: number,
+    skipExisting?: boolean,
   ): Promise<FileUploadResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.files.upload(serverId, remoteDir, uploadType);
+    return backend.files.upload(serverId, remoteDir, uploadType, concurrency, skipExisting);
   },
 
   async uploadFromPaths(
@@ -1297,6 +1304,8 @@ export const sshService = {
     remoteDir: string,
     localPaths: string[],
     targetFileName?: string,
+    concurrency?: number,
+    skipExisting?: boolean,
   ): Promise<FileUploadResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
     return backend.files.uploadFromPaths(
@@ -1304,6 +1313,8 @@ export const sshService = {
       remoteDir,
       localPaths,
       targetFileName,
+      concurrency,
+      skipExisting,
     );
   },
 
@@ -1321,6 +1332,7 @@ export const sshService = {
     destServerId: string,
     destPath: string,
     targetName?: string,
+    concurrency?: number,
   ): Promise<CommandResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
     return backend.files.serverToServerTransfer(
@@ -1329,6 +1341,7 @@ export const sshService = {
       destServerId,
       destPath,
       targetName,
+      concurrency,
     );
   },
 
@@ -1353,9 +1366,22 @@ export const sshService = {
     activeTransfers.delete(transferId);
   },
 
+  /**
+   * 标记一个「未按 transferId 注册」的传输操作开始/结束。
+   * 工作台文件模块直接调用 files_* 命令、拿不到后端 transferId，
+   * 用计数让 hasActiveTransfers() 同样能拦住关窗，退出时的全量取消由后端广播兜底。
+   */
+  beginBusyOperation(): void {
+    busyOperations += 1;
+  },
+
+  endBusyOperation(): void {
+    if (busyOperations > 0) busyOperations -= 1;
+  },
+
   /** 是否有活跃传输正在进行中 */
   hasActiveTransfers(): boolean {
-    return activeTransfers.size > 0;
+    return activeTransfers.size > 0 || busyOperations > 0;
   },
 
   /** 获取当前所有活跃传输列表 */
@@ -1580,6 +1606,14 @@ export const sshService = {
       }
       callback(data);
     });
+  },
+
+  /** 订阅目录传输失败明细（部分成功语义） */
+  onTransferFailures(
+    callback: (data: TransferFailuresData) => void,
+  ): (() => void) | null {
+    if (!backend) return null;
+    return backend.files.onTransferFailures(callback);
   },
 
   // ==================== Docker ====================

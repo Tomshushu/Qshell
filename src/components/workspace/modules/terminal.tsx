@@ -176,6 +176,7 @@ import {
   useLatestRef,
   serialTextWriteQueues,
   writeSerialTextWithDelays,
+  clearSerialWriteQueue,
   TerminalPasteConfirmDialog,
   TerminalTransferDialog,
   TerminalContextMenu,
@@ -1635,11 +1636,19 @@ export function TerminalModule({
   useEffect(() => {
     if (!ctxMenu) return;
     const close = () => setCtxMenu(null);
+    // 右键关闭：终端实例/划词工具条/终端区域已通过 preventDefault 表示「这次右键由我处理」，
+    // 此时应让菜单按新坐标重新打开，而不是立刻被这个全局监听关掉（否则第二次右键看起来没反应）
+    const onWindowContextMenu = (e: MouseEvent) => {
+      if (e.defaultPrevented) return;
+      const target = e.target as Element | null;
+      if (target?.closest?.(".terminal-context-menu")) return;
+      setCtxMenu(null);
+    };
     window.addEventListener("click", close);
-    window.addEventListener("contextmenu", close);
+    window.addEventListener("contextmenu", onWindowContextMenu);
     return () => {
       window.removeEventListener("click", close);
-      window.removeEventListener("contextmenu", close);
+      window.removeEventListener("contextmenu", onWindowContextMenu);
     };
   }, [ctxMenu]);
 
@@ -2344,7 +2353,7 @@ export function TerminalModule({
       }
       if (outputWriteInFlightRef.current.has(queuedTermId)) continue;
 
-      // 弹性单帧预算：积压严重或未上滚时单帧放大到 4MB，以极速冲刷排空，杜绝内存中形成“堰塞湖”
+      // 弹性单帧预算：积压严重或未上滚时单帧放大（MAX_OUTPUT_BYTES_PER_FRAME_FLOOD），以极速冲刷排空，杜绝内存中形成“堰塞湖”
       const isFlooding = item.totalChars > FLOOD_THRESHOLD_CHARS || !item.wasScrolledUp;
       const frameBudget = isFlooding
         ? MAX_OUTPUT_BYTES_PER_FRAME_FLOOD
@@ -2808,13 +2817,14 @@ export function TerminalModule({
       if (isSerialSession) {
         if (serialHexViewModeRef.current) {
           const bytes = rawData ? decodeBase64Bytes(rawData) : new TextEncoder().encode(data);
-          let hexOut = "";
+          // 用数组 push + join 替代逐字节字符串拼接，避免高速串口下 O(n²) 复制卡死主线程
+          const hexParts: string[] = [];
           for (let i = 0; i < bytes.length; i++) {
             const hex = bytes[i].toString(16).toUpperCase().padStart(2, "0");
-            hexOut += hex + " ";
-            if ((i + 1) % 16 === 0) hexOut += "\r\n";
+            hexParts.push(hex, " ");
+            if ((i + 1) % 16 === 0) hexParts.push("\r\n");
           }
-          outputData = hexOut;
+          outputData = hexParts.join("");
         } else {
           // 换行模式转换
           if (serialNewlineModeRef.current === "crlf" || serialNewlineModeRef.current === "auto") {
@@ -2833,20 +2843,22 @@ export function TerminalModule({
             const ms = String(now.getMilliseconds()).padStart(3, "0");
             const ts = `\x1b[90m[${h}:${m}:${s}.${ms}]\x1b[0m `;
 
-            let res = "";
+            // 用数组 push + join 替代逐字符拼接，避免时间戳注入变成 O(n²)
+            const tsParts: string[] = [];
             let atStart = isStart;
             for (let i = 0; i < outputData.length; i++) {
-              if (atStart && outputData[i] !== "\r" && outputData[i] !== "\n") {
-                res += ts;
+              const ch = outputData[i];
+              if (atStart && ch !== "\r" && ch !== "\n") {
+                tsParts.push(ts);
                 atStart = false;
               }
-              res += outputData[i];
-              if (outputData[i] === "\n") {
+              tsParts.push(ch);
+              if (ch === "\n") {
                 atStart = true;
               }
             }
             serialLineStartMapRef.current.set(termId, atStart);
-            outputData = res;
+            outputData = tsParts.join("");
           }
         }
       }
@@ -3356,6 +3368,8 @@ export function TerminalModule({
           if (current?.term) discardPendingXtermWrites(current.term);
           outputWriteQueuesRef.current.delete(termId);
           outputWriteInFlightRef.current.delete(termId);
+          // 取消串口延迟发送队列，防止某次挂起阻塞后续输入
+          clearSerialWriteQueue(sessionId);
           xtermPendingCharsRef.current.delete(termId);
           serialPausedOutputRef.current.delete(termId);
           const resizeTimer = resizeTimersRef.current.get(sessionId);
@@ -4617,9 +4631,11 @@ export function TerminalModule({
           if (event.key === "Tab" && !event.ctrlKey && !event.altKey) {
             const hints = cmdHintsRef.current;
             if (hints.length > 0) {
-              // Tab 补全选中项
+              // Tab 补全选中项（跳过禁用项）
               event.preventDefault();
-              const hint = hints[hintIndexRef.current] || hints[0];
+              const hint = hints.find((h, i) => !h.disabled && i >= hintIndexRef.current)
+                || hints.find(h => !h.disabled)
+                || hints[0];
               const sid = xtermInstances.current.get(termId)?.sessionId;
               if (sid) {
                 // Tab 补全不带尾随空格：补全后停留在当前 token，
@@ -5184,7 +5200,7 @@ export function TerminalModule({
           }
 
           term.writeln(
-            `\x1b[90m正在打开串口 ${serialCfg.portName} (${serialCfg.baudRate} baud, ${serialCfg.dataBits}${serialCfg.parity[0].toUpperCase()}${serialCfg.stopBits})...\x1b[0m`,
+            `\x1b[90m正在打开串口 ${serialCfg.portName} (${serialCfg.baudRate} baud, ${serialCfg.dataBits}${serialCfg.parity?.[0]?.toUpperCase() ?? ''}${serialCfg.stopBits})...\x1b[0m`,
           );
           console.log(
             `[Terminal Init] ${sId} 调用 sshService.createSerialShell(port=${serialCfg.portName}, baud=${serialCfg.baudRate})...`,
@@ -5429,6 +5445,8 @@ export function TerminalModule({
           if (current?.term) discardPendingXtermWrites(current.term);
           outputWriteQueuesRef.current.delete(termId);
           outputWriteInFlightRef.current.delete(termId);
+          // 取消串口延迟发送队列，防止某次挂起阻塞后续输入
+          clearSerialWriteQueue(sessionId);
           xtermPendingCharsRef.current.delete(termId);
           serialPausedOutputRef.current.delete(termId);
           const resizeTimer = resizeTimersRef.current.get(sessionId);
@@ -6809,6 +6827,14 @@ export function TerminalModule({
       const isTerminalTarget =
         container?.contains(target) ||
         Boolean(target.closest?.(".xterm, .xterm-screen, .xterm-viewport, .term-host"));
+
+      // 点击终端外的其它 UI（侧边栏/文件树/标签页等）时关闭划词浮动条，
+      // 避免其一直悬浮遮挡；浮动条自身（role=toolbar）除外，否则点它的按钮会先被卸载
+      const isSelectionToolbar = !!target.closest?.('[role="toolbar"]');
+      if (!isSelectionToolbar && !isTerminalTarget) {
+        setSelectionToolbar(null);
+        return;
+      }
 
       if (isTerminalTarget) {
         // 用户鼠标点击了终端，主动释放搜索框焦点并聚焦终端
@@ -8362,6 +8388,16 @@ export function TerminalModule({
       <div
         ref={terminalContainerRef}
         className="flex-1 h-full w-full relative overflow-hidden"
+        onContextMenu={(e) => {
+          // 兜底：终端容器之外的空白区域/覆盖层上的右键也要能弹出菜单。
+          // 每个终端实例的 contextmenu 监听已处理并 preventDefault，这里跳过避免重复处理。
+          if (e.defaultPrevented) return;
+          e.preventDefault();
+          setSelectionToolbar(null);
+          const inst = activeTermId ? xtermInstances.current.get(activeTermId) : undefined;
+          const hasSelection = !!inst?.term.getSelection();
+          setCtxMenu({ x: e.clientX, y: e.clientY, hasSelection });
+        }}
         onMouseDown={(e) => {
           const target = e.target as Element | null;
           // 点击搜索栏内部时，保持搜索栏焦点
@@ -8770,6 +8806,11 @@ export function TerminalModule({
         onCopy={handleCopy}
         onPasteSelection={handlePasteSelection}
         onSearch={handleSearch}
+        onContextMenu={(x, y) => {
+          // 右键落在划词工具条上：关闭工具条并在同一坐标打开终端右键菜单
+          setSelectionToolbar(null);
+          setCtxMenu({ x, y, hasSelection: true });
+        }}
       />
 
       <TerminalPasteConfirmDialog

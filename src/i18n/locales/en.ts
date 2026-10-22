@@ -3001,6 +3001,8 @@ export default {
   sftp_perm_save: "Save",
   sftp_transfer_completed: "Completed",
   sftp_transfer_failed: "Failed",
+  sftp_transfer_partial: "Partial",
+  sftp_transfer_retry_skip: "Retry (skip completed files)",
   sftp_transfer_preflight: "Checking…",
   sftp_transfer_transferring: "Transferring",
   sftp_transfer_upload: "Upload",

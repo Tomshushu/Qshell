@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { Fragment, memo, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { listen } from '@tauri-apps/api/event'
 import { useVirtualizer } from '@tanstack/react-virtual'
@@ -223,6 +223,125 @@ import {
   SftpActionsDropdown,
   SftpBookmarkDropdown,
 } from '@/components/sftp/sftp-dropdowns'
+
+// 传输明细固定行高（px）：虚拟滚动无需逐行测量，偏移稳定
+const TRANSFER_CHILD_ROW_HEIGHT = 24
+// 超过该数量才启用虚拟滚动；少量子记录直接整表渲染，避免虚拟化开销
+const TRANSFER_CHILD_VIRTUALIZE_THRESHOLD = 60
+
+/**
+ * 传输明细子文件列表。
+ * 此前用 slice(0, 2000).map 一次性挂载全部行（单条展开可达 1 万+ DOM 节点），
+ * 配合高频进度事件重渲染会直接卡死界面。超过阈值后改为虚拟滚动，只渲染可视区域。
+ */
+const TransferChildList = memo(function TransferChildList({
+  childRecords,
+  basePath,
+  maxHeight,
+  fixedHeight,
+  isTransferring,
+}: {
+  childRecords: TransferChildRecord[]
+  basePath?: string
+  maxHeight: number
+  fixedHeight?: number
+  isTransferring: boolean
+}) {
+  const { t } = useTranslation()
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const virtualize = childRecords.length > TRANSFER_CHILD_VIRTUALIZE_THRESHOLD
+  const virtualizer = useVirtualizer({
+    count: virtualize ? childRecords.length : 0,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => TRANSFER_CHILD_ROW_HEIGHT,
+    overscan: 12,
+  })
+
+  const normalizeBase = basePath?.replace(/\\/g, '/').replace(/\/$/, '')
+
+  const renderRow = (child: TransferChildRecord) => {
+    // 空文件 total=0，无法用除法计算百分比；一旦状态完成应显示 100%。
+    // 同时限制范围，避免异常/迟到进度事件显示负数或超过 100%。
+    const childPercent = child.status === 'completed'
+      ? 100
+      : child.total > 0
+        ? Math.min(100, Math.max(0, Math.round((child.current / child.total) * 100)))
+        : 0
+    const normalizedChildPath = child.path.replace(/\\/g, '/')
+    const displayPath = normalizeBase && normalizedChildPath.startsWith(`${normalizeBase}/`)
+      ? normalizedChildPath.slice(normalizeBase.length + 1)
+      : normalizedChildPath
+    return (
+      <div
+        key={child.path}
+        className="grid h-6 grid-cols-[minmax(0,1fr)_80px_110px] items-center gap-2 border-b border-border/20 px-2 text-[10px] last:border-b-0"
+      >
+        <span className="truncate font-mono" title={child.path}>{displayPath}</span>
+        <span className={cn(
+          child.status === 'completed' ? 'text-green-600' :
+          child.status === 'failed' ? 'text-red-500' :
+          child.status === 'canceled' ? 'text-amber-500' :
+          child.status === 'transferring' ? 'text-primary' : 'text-muted-foreground'
+        )}>
+          {child.status === 'completed' ? t('sftp_transfer_completed') :
+            child.status === 'failed' ? (child.error || t('sftp_transfer_failed')) :
+            child.status === 'canceled' ? t('sftp_transfer_canceled') :
+            child.status === 'transferring' ? t('sftp_transfer_transferring') : '…'}
+        </span>
+        <div className="flex items-center gap-1">
+          <div className="h-1 flex-1 overflow-hidden rounded bg-muted">
+            <div className={cn('h-full', child.status === 'failed' ? 'bg-red-500' : child.status === 'completed' ? 'bg-green-500' : 'bg-primary')} style={{ width: `${Math.min(100, Math.max(0, childPercent))}%` }} />
+          </div>
+          <span className="w-7 text-right font-mono">{childPercent}%</span>
+        </div>
+      </div>
+    )
+  }
+
+  if (childRecords.length === 0) {
+    return (
+      <div className="rounded-md border border-border/40">
+        <div className="px-2 py-3 text-center text-[10px] text-muted-foreground">
+          {isTransferring ? t('sftp_transfer_transferring') : '暂无子文件记录'}
+        </div>
+      </div>
+    )
+  }
+
+  const contentHeight = virtualize
+    ? virtualizer.getTotalSize()
+    : childRecords.length * TRANSFER_CHILD_ROW_HEIGHT
+
+  return (
+    <div
+      ref={scrollRef}
+      className="overflow-auto rounded-md border border-border/40"
+      style={virtualize
+        ? { height: fixedHeight ?? maxHeight }
+        : { maxHeight, height: contentHeight > maxHeight ? maxHeight : undefined }}
+    >
+      {virtualize ? (
+        <div style={{ height: contentHeight, position: 'relative' }}>
+          {virtualizer.getVirtualItems().map(v => {
+            const child = childRecords[v.index]
+            if (!child) return null
+            return (
+              <div
+                key={child.path}
+                className="absolute left-0 right-0 top-0"
+                style={{ transform: `translateY(${v.start}px)` }}
+              >
+                {renderRow(child)}
+              </div>
+            )
+          })}
+        </div>
+      ) : (
+        childRecords.map(renderRow)
+      )}
+    </div>
+  )
+})
 
 export function SftpPanel() {
   const { t } = useTranslation()
@@ -661,6 +780,15 @@ export function SftpPanel() {
   const manifestBufferRef = useRef<Map<string, TransferChildRecord[]>>(new Map())
   const manifestFlushRafRef = useRef<number | null>(null)
   const directoryTransferIdsRef = useRef<Set<string>>(new Set())
+  // bytes 进度事件合批缓冲：万级小文件时每秒可能上千条事件，逐条 setState 会让
+  // 8000 行组件全量重渲染。这里按帧合并，每个文件只保留最新一条状态。
+  const progressBufferRef = useRef<Map<string, TransferProgressData>>(new Map())
+  const progressFlushRafRef = useRef<number | null>(null)
+  // 每个 transferId 的顶层名称（首个非 manifest 事件的 fileName 即顶层记录名，同步登记）。
+  // 后端 preflight 与初始 count 事件背靠背到达时，第二条事件处理时 transferRecordsRef
+  // 可能尚未同步（React 未重渲染，parent 查找为 undefined），此时不能依赖 parent?.fileName
+  // 判定「是否子文件事件」，否则父级同名事件会被误判为子文件，生成一条与父目录同名的假子记录。
+  const transferTopNameRef = useRef<Map<string, string>>(new Map())
   const [transferPanelOpen, setTransferPanelOpen] = useState<boolean>(false)
   // 传输提示（如"临时文件已丢失，从头开始传输"），自动消失
   const [transferNotice, setTransferNotice] = useState<string | null>(null)
@@ -2437,12 +2565,17 @@ export function SftpPanel() {
   const transferPanelOpenRef = useRef(transferPanelOpen)
   transferPanelOpenRef.current = transferPanelOpen
   useEffect(() => {
-    const unsubscribe = sshService.onTransferProgress((data: TransferProgressData) => {
+    // 单条进度事件的实际处理逻辑（bytes 事件会先进入合批缓冲，再由 flush 统一调用）
+    const processProgressEvent = (data: TransferProgressData) => {
       if (!mountedRef.current) return
       // 忽略打包阶段进度（不影响传输记录）
       if (data.phase === 'packing' || data.phase === 'packed') return
 
       const { transferId, type, current, total, fileName, done, totalType, tmpPath, phase } = data
+      // 目录传输任务（manifest 清单或 count 计数事件）均标记为目录传输任务
+      if (totalType === 'manifest' || totalType === 'count') {
+        directoryTransferIdsRef.current.add(transferId)
+      }
       // manifest 是目录正式传输前的子文件清单事件。它不参与父记录进度计算，
       // 按动画帧批量写入，避免数千文件扫描时触发数千次 React 重渲染。
       if (totalType === 'manifest') {
@@ -2473,6 +2606,10 @@ export function SftpPanel() {
           })
         }
         return
+      }
+      // 首个非 manifest 事件的 fileName 即顶层记录名，同步登记（不依赖可能滞后的 transferRecordsRef）
+      if (!transferTopNameRef.current.has(transferId)) {
+        transferTopNameRef.current.set(transferId, fileName)
       }
       const isDoneSignal = !!done && total === 0
       // 失败结束信号：done===false（后端在传输失败时发送，携带 error 原因）
@@ -2604,12 +2741,38 @@ export function SftpPanel() {
           // 目录父记录只接收文件计数事件。子文件的 bytes 事件仅用于更新展开详情，
           // 不能覆盖父记录的 current/total，否则分母会随当前文件大小不断变化。
           const shouldUpdateParentProgress = !isDirectoryRecord || totalType === 'count'
-          const newCurrent = shouldUpdateParentProgress
-            ? (effectiveCurrent ?? existing.current)
-            : existing.current
-          const newTotal = shouldUpdateParentProgress
-            ? (effectiveTotal ?? existing.total)
-            : existing.total
+
+          // 锁定总数分母：一旦获取到有效总数（> 0），分母绝对保持不变（绝不被 0 冲掉，也绝不降低缩水）
+          let newTotal = existing.total
+          if (shouldUpdateParentProgress) {
+            if (effectiveTotal !== undefined && effectiveTotal > 0) {
+              if (isDirectoryRecord) {
+                if (existing.total === 0) {
+                  newTotal = effectiveTotal
+                }
+              } else {
+                newTotal = effectiveTotal
+              }
+            }
+          }
+
+          let newCurrent = existing.current
+          if (shouldUpdateParentProgress) {
+            if (effectiveCurrent !== undefined) {
+              newCurrent = Math.max(existing.current, effectiveCurrent)
+            }
+          }
+
+          // 传输完成时（isDoneSignal 结束信号或 done: true）：
+          // 确保分子（current）严丝合缝对齐总数（total），显示例如 3000/3000，前后数量绝对对齐；
+          // 分母（total）在整个过程中始终锁定保持不变。
+          if (isDoneSignal || done) {
+            if (newTotal > 0) {
+              newCurrent = newTotal
+            } else if (newCurrent > 0) {
+              newTotal = newCurrent
+            }
+          }
           // 速率采样窗口机制：
           // 高速传输时 IPC 进度事件可能每 20ms~50ms 到达一次。若每次都把 lastUpdate 设为 now，
           // 相邻事件的 dt 永远 < 0.25s，导致速率计算分支永远进不去（被锁死在低速或 0）。
@@ -2720,7 +2883,7 @@ export function SftpPanel() {
           targetServerName: pendingTargetServer,
           current: effectiveCurrent ?? 0,
           total: effectiveTotal ?? 0,
-          totalType: directoryTransferIdsRef.current.has(transferId) ? 'count' : totalType,
+          totalType: (directoryTransferIdsRef.current.has(transferId) || totalType === 'count') ? 'count' : totalType,
           // 捕获首个进度事件携带的 tmpPath（用于断点续传）
           tmpPath: tmpPath,
           percent: isFailSignal ? 0 : isDoneSignal ? 100 : percent,
@@ -2766,7 +2929,10 @@ export function SftpPanel() {
       const hasChildManifest = directoryTransferIdsRef.current.has(transferId)
         || !!bufferedChildren?.length
         || !!transferChildrenRef.current[transferId]?.length
-      if ((parent?.totalType === 'count' || hasChildManifest) && fileName && fileName !== parent?.fileName) {
+      // 用同步登记的顶层名称判定子文件事件：parent 可能因渲染时序短暂滞后（见 transferTopNameRef 注释），
+      // 不能用 parent?.fileName 做唯一判据，否则父级同名事件（如初始 count）会在竞态窗口内生成假子记录。
+      const topName = transferTopNameRef.current.get(transferId)
+      if ((parent?.totalType === 'count' || hasChildManifest) && fileName && fileName !== topName) {
         const normalized = fileName.replace(/\\/g, '/')
         if (bufferedChildren) {
           for (let index = 0; index < bufferedChildren.length; index++) {
@@ -2811,8 +2977,7 @@ export function SftpPanel() {
           }
         }
         setTransferChildren(prev => {
-          const children = prev[transferId]
-          if (!children) return prev
+          const children = prev[transferId] || []
           let changed = false
           const nextChildren = children.map(child => {
             const childNormalized = child.path.replace(/\\/g, '/')
@@ -2854,6 +3019,19 @@ export function SftpPanel() {
               status: done ? 'completed' as const : 'transferring' as const,
             }
           })
+          if (!changed && (parent?.totalType === 'count' || directoryTransferIdsRef.current.has(transferId))) {
+            const isCompleted = totalType === 'count' || !!done
+            const newChild: TransferChildRecord = {
+              path: fileName,
+              size: totalType === 'bytes' ? total : 0,
+              current: totalType === 'bytes' ? current : 1,
+              total: totalType === 'bytes' ? total : 1,
+              status: isCompleted ? 'completed' : 'transferring',
+              lastUpdate: now,
+              rate: 0,
+            }
+            return { ...prev, [transferId]: [newChild, ...children].slice(0, 500) }
+          }
           return changed ? { ...prev, [transferId]: nextChildren } : prev
         })
       }
@@ -2863,16 +3041,95 @@ export function SftpPanel() {
           [transferId]: prev[transferId].map(child => {
             if (child.status === 'completed' || child.status === 'canceled') return child
             if (isDoneSignal) return { ...child, current: child.total, status: 'completed' as const }
-            if (child.status === 'transferring') {
+            // 失败时把「传输中」和「等待中」的子记录都置为失败：
+            // 否则 waiting 会永远显示省略号，用户以为还在排队
+            if (child.status === 'transferring' || child.status === 'waiting') {
               return { ...child, status: 'failed' as const, error: data.error || tRef.current('sftp_transfer_failed') }
             }
             return child
           }),
         } : prev)
       }
+    }
+
+    // 冲刷合批缓冲：处理 count/done 等关键事件前先冲刷，
+    // 保证滞后的字节事件不会晚于终态事件被应用（进度只增不减，但顺序仍应保持）。
+    const flushProgressBuffer = () => {
+      if (progressFlushRafRef.current !== null) {
+        cancelAnimationFrame(progressFlushRafRef.current)
+        progressFlushRafRef.current = null
+      }
+      const buffered = progressBufferRef.current
+      if (buffered.size === 0) return
+      const events = Array.from(buffered.values())
+      buffered.clear()
+      for (const evt of events) processProgressEvent(evt)
+    }
+
+    const unsubscribe = sshService.onTransferProgress((data: TransferProgressData) => {
+      // 高频道字节进度（非终态、非阶段事件）走 rAF 合批；
+      // 其余事件（count/done/失败/manifest）立即处理，保证状态流转及时
+      const isHighFrequencyBytes = data.totalType === 'bytes' && data.done == null && !data.phase
+      if (!isHighFrequencyBytes) {
+        flushProgressBuffer()
+        processProgressEvent(data)
+        return
+      }
+      // 同一文件的多次字节进度只保留最新一条，下一帧统一更新
+      progressBufferRef.current.set(`${data.transferId}:${data.fileName}`, data)
+      if (progressFlushRafRef.current === null) {
+        progressFlushRafRef.current = requestAnimationFrame(() => {
+          progressFlushRafRef.current = null
+          flushProgressBuffer()
+        })
+      }
     })
+
+    // 部分成功：目录传输结束后端一次性下发失败明细。
+    // 记录置为 partial（而不是 completed/failed），并把失败文件补进明细列表。
+    const unsubscribeFailures = sshService.onTransferFailures((data) => {
+      if (!mountedRef.current) return
+      const failures = data.failures || []
+      if (failures.length === 0) return
+      setTransferRecords(prev => prev.map(t => t.transferId === data.transferId
+        ? {
+            ...t,
+            status: 'partial' as const,
+            failedCount: failures.length,
+            succeededCount: data.succeeded,
+            skippedCount: data.skipped,
+          }
+        : t))
+      setTransferChildren(prev => {
+        const children = prev[data.transferId] || []
+        const existing = new Set(children.map(c => c.path))
+        const extra: TransferChildRecord[] = failures
+          .filter(f => !existing.has(f.path))
+          .map(f => ({
+            path: f.path,
+            size: 0,
+            current: 0,
+            total: 0,
+            status: 'failed' as const,
+            error: f.error,
+            lastUpdate: Date.now(),
+            rate: 0,
+          }))
+        if (extra.length === 0) return prev
+        return { ...prev, [data.transferId]: [...extra, ...children].slice(0, 500) }
+      })
+      // 记录已进入终态，移出全局活跃传输表
+      sshService.unregisterActiveTransfer(data.transferId)
+    })
+
     return () => {
       if (typeof unsubscribe === 'function') unsubscribe()
+      if (typeof unsubscribeFailures === 'function') unsubscribeFailures()
+      if (progressFlushRafRef.current !== null) {
+        cancelAnimationFrame(progressFlushRafRef.current)
+        progressFlushRafRef.current = null
+      }
+      progressBufferRef.current.clear()
       if (manifestFlushRafRef.current !== null) {
         cancelAnimationFrame(manifestFlushRafRef.current)
         manifestFlushRafRef.current = null
@@ -3055,6 +3312,31 @@ export function SftpPanel() {
     }
   }, [])
 
+  // 记录数量封顶（slice(0, 500)）后，清理被丢弃记录残留的子数据与索引，
+  // 避免长时间运行时 transferChildren / directoryTransferIdsRef / transferTopNameRef 只增不减。
+  // 只清理「曾经在 records 中出现过、现在已经消失」的 id，避免误删 manifest 先到、父记录尚未渲染的子数据。
+  const prevRecordIdsRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    const ids = new Set(transferRecords.map(t => t.transferId))
+    const prevIds = prevRecordIdsRef.current
+    prevRecordIdsRef.current = ids
+    const removed = new Set<string>()
+    for (const id of prevIds) if (!ids.has(id)) removed.add(id)
+    if (removed.size === 0) return
+    setTransferChildren(prev => {
+      const keys = Object.keys(prev)
+      if (!keys.some(k => removed.has(k))) return prev
+      const next: Record<string, TransferChildRecord[]> = {}
+      for (const k of keys) if (!removed.has(k)) next[k] = prev[k]
+      return next
+    })
+    for (const id of removed) {
+      directoryTransferIdsRef.current.delete(id)
+      transferTopNameRef.current.delete(id)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transferRecords])
+
   // 传输记录操作：清空已完成和已跳过，保留 failed/canceled 以支持断点续传
   const clearCompletedTransfers = useCallback(() => {
     const removed = new Set(transferRecordsRef.current
@@ -3063,7 +3345,10 @@ export function SftpPanel() {
     setTransferRecords(prev => prev.filter(t => !removed.has(t.transferId)))
     setTransferChildren(children => Object.fromEntries(Object.entries(children).filter(([id]) => !removed.has(id))))
     setExpandedTransfers(expanded => new Set(Array.from(expanded).filter(id => !removed.has(id))))
-    for (const id of removed) directoryTransferIdsRef.current.delete(id)
+    for (const id of removed) {
+      directoryTransferIdsRef.current.delete(id)
+      transferTopNameRef.current.delete(id)
+    }
   }, [])
 
   const clearAllTransfers = useCallback(() => {
@@ -3076,6 +3361,7 @@ export function SftpPanel() {
     setTransferChildren({})
     setExpandedTransfers(new Set())
     directoryTransferIdsRef.current.clear()
+    transferTopNameRef.current.clear()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -3094,7 +3380,47 @@ export function SftpPanel() {
       return next
     })
     directoryTransferIdsRef.current.delete(id)
+    transferTopNameRef.current.delete(id)
   }, [])
+
+  /**
+   * 目录记录失败/取消后的重试：跳过目标端已存在且大小一致的文件（目录续传）。
+   * 单文件记录不显示该入口（续传走独立的 resume 流程）。
+   */
+  const retryTransferSkipExisting = useCallback(async (item: TransferRecordItem) => {
+    if (!item.sourcePath || !item.targetPath) return
+    const isCanceled = (msg?: string | null) => !!msg && msg.toLowerCase().includes('cancel')
+    try {
+      if (item.type === 'download') {
+        const res = await sshService.downloadFile(
+          item.serverId,
+          item.sourcePath,
+          item.targetPath,
+          sftpTransferConcurrency,
+          true,
+        )
+        if (!res.success && !isCanceled(res.error)) {
+          toastRef.current?.warning(res.error || tRef.current('sftp_transfer_failed'))
+        }
+      } else if (item.type === 'upload') {
+        // targetPath 是远端完整路径（含目录名），重试时以父目录作为 remoteDir
+        const parent = item.targetPath.replace(/\\/g, '/').replace(/\/[^/]+$/, '') || '/'
+        const res = await sshService.uploadFromPaths(
+          item.serverId,
+          parent,
+          [item.sourcePath],
+          undefined,
+          sftpTransferConcurrency,
+          true,
+        )
+        if (!res.success && !isCanceled(res.error)) {
+          toastRef.current?.warning(res.error || tRef.current('sftp_transfer_failed'))
+        }
+      }
+    } catch (err) {
+      toastRef.current?.warning(getErrorMessage(err, tRef.current('sftp_transfer_failed')))
+    }
+  }, [sftpTransferConcurrency])
 
   /**
    * 取消传输任务
@@ -3524,8 +3850,18 @@ export function SftpPanel() {
     serverId?: string,
   ) => {
     const map = pendingPathsRef.current
+    const now = Date.now()
+    // 清理 60s 仍未消费的登记：传输在首个进度事件前失败/取消时没人来取，
+    // 残留条目会被后续同名传输按 FIFO 误绑定（显示上一次的源/目标路径）
+    if (map.size > 64) {
+      for (const [key, items] of map) {
+        const fresh = items.filter(i => now - i.ts < 60_000)
+        if (fresh.length === 0) map.delete(key)
+        else if (fresh.length !== items.length) map.set(key, fresh)
+      }
+    }
     const arr = map.get(fileName) || []
-    arr.push({ source, target, sourceServerName, targetServerName, serverId, ts: Date.now() })
+    arr.push({ source, target, sourceServerName, targetServerName, serverId, ts: now })
     map.set(fileName, arr)
     // 自动展开面板
     if (!transferPanelOpen) setTransferPanelOpen(true)
@@ -3788,7 +4124,7 @@ export function SftpPanel() {
     // 注：progress 事件携带的 fileName 是远程原文件名，故 key 仍用 file.name
     recordPendingPath(file.name, file.path, targetLocalPath, serverNameOf(selectedServerId), undefined, selectedServerId)
     try {
-      const res = await sshService.downloadFile(selectedServerId, file.path, targetLocalPath)
+      const res = await sshService.downloadFile(selectedServerId, file.path, targetLocalPath, sftpTransferConcurrency)
       // 用户取消（含对话框取消和传输中取消）：不显示错误，记录已由 cancelTransfer 标记
       const isCanceled = !res.success && (res.error === 'User canceled' || (res.error || '').includes('canceled'))
       if (!res.success && !isCanceled) {
@@ -4236,7 +4572,7 @@ export function SftpPanel() {
       await runWithConcurrency(toDownload, sftpTransferConcurrency, async ({ file, target }) => {
         try {
           // 传入完整的 target 路径（含副本名），后端检测到非目录时直接用作目标文件路径
-          const res = await sshService.downloadFile(srcServerId, file.path, target)
+          const res = await sshService.downloadFile(srcServerId, file.path, target, sftpTransferConcurrency)
           // 用户取消（含对话框取消和传输中取消）：不加入 failures，记录已由 cancelTransfer 标记
           const isCanceled = !res.success && (res.error === 'User canceled' || (res.error || '').includes('canceled'))
           if (res.success) {
@@ -4288,7 +4624,9 @@ export function SftpPanel() {
       const name = p.split(/[/\\]/).pop() || ''
       if (!name) continue
       let targetName: string | undefined // undefined 表示沿用本地 basename（replace 或无冲突）
-      const originalTarget = `${targetPath}/${name}`
+      // 用 joinPath 拼远程路径：Windows 远程目标必须用 '\' 分隔，
+      // 硬编码 '/' 会产生混合分隔符并波及续传临时文件路径
+      const originalTarget = joinPath(targetPath, name)
       if (destFilesList.some(f => f.name === name) || usedRemoteNames.has(name)) {
         const action = await askConflict(name, targetPath, 'upload', myBatchId)
         if (action === 'stop') {
@@ -4304,7 +4642,7 @@ export function SftpPanel() {
           usedRemoteNames.add(targetName)
         }
       }
-      toUpload.push({ path: p, name, target: targetName ? `${targetPath}/${targetName}` : originalTarget, targetName })
+      toUpload.push({ path: p, name, target: targetName ? joinPath(targetPath, targetName) : originalTarget, targetName })
     }
     if (toUpload.length === 0) {
       if (transferBatchIdRef.current === myBatchId) resetConflictState()
@@ -4342,7 +4680,7 @@ export function SftpPanel() {
           // 缺少此登记会导致新建传输记录的 sourcePath/targetPath 为空（列表两列显示 "-"）。
           recordPendingPath(targetName ?? name, path, target, undefined, serverNameOf(targetServerId), targetServerId)
           // targetName 仅在 duplicate 时传入，后端用其覆盖远程文件名
-          const res = await sshService.uploadFromPaths(targetServerId, targetPath, [path], targetName)
+          const res = await sshService.uploadFromPaths(targetServerId, targetPath, [path], targetName, sftpTransferConcurrency)
           if (res.success) {
             anySuccess = true
             // 单个文件上传成功后立即刷新远程目录（不用等所有文件传完）
@@ -4426,7 +4764,7 @@ export function SftpPanel() {
     for (const file of srcFiles) {
       const name = file.name
       let targetName: string | undefined
-      const originalTarget = `${destDirPath}/${name}`
+      const originalTarget = joinPath(destDirPath, name)
       if (destFilesList.some(f => f.name === name) || usedDestNames.has(name)) {
         const action = await askConflict(name, destDirPath, 'upload', myBatchId)
         if (action === 'stop') {
@@ -4442,7 +4780,7 @@ export function SftpPanel() {
         }
       }
       usedDestNames.add(targetName ?? name)
-      recordPendingPath(name, file.path, `${destDirPath}/${targetName ?? name}`, serverNameOf(srcServerId), serverNameOf(destServerId), destServerId)
+      recordPendingPath(name, file.path, joinPath(destDirPath, targetName ?? name), serverNameOf(srcServerId), serverNameOf(destServerId), destServerId)
       toTransfer.push({ file, targetName })
     }
     if (toTransfer.length === 0) {
@@ -4475,7 +4813,7 @@ export function SftpPanel() {
       await runWithConcurrency(toTransfer, sftpTransferConcurrency, async ({ file, targetName }) => {
         try {
           const res = await sshService.serverToServerTransfer(
-            srcServerId, file.path, destServerId, destDirPath, targetName,
+            srcServerId, file.path, destServerId, destDirPath, targetName, sftpTransferConcurrency,
           )
           if (res.exitCode === 0) {
             anySuccess = true
@@ -7781,24 +8119,45 @@ export function SftpPanel() {
                     // totalType='count' 表示目录递归传输，total 是文件数；否则为字节数
                     const isFileCount = item.totalType === 'count'
                     const sizeText = isFileCount
-                      ? `${item.current}/${item.total}`
-                      : `${formatTransferSize(item.current)} / ${formatTransferSize(item.total)}`
+                      ? (item.total > 0
+                          ? (item.status === 'completed' ? `${item.total}/${item.total}` : `${item.current}/${item.total}`)
+                          : `${item.current}`)
+                      : (item.status === 'completed' && item.total > 0
+                          ? `${formatTransferSize(item.total)} / ${formatTransferSize(item.total)}`
+                          : `${formatTransferSize(item.current)} / ${formatTransferSize(item.total)}`)
                     // 目录总进度按所有子文件字节加权。并发传输时，各子文件已传字节和
                     // 实时速率自然累加；清单无大小时才回退到文件计数百分比。
                     const directorySummary = directoryTransferSummaries[item.transferId]
-                    const directoryTotalBytes = isDirectoryTask ? (directorySummary?.totalBytes ?? 0) : 0
-                    const directoryCurrentBytes = isDirectoryTask ? (directorySummary?.currentBytes ?? 0) : 0
-                    const weightedDirectoryPercent = directoryTotalBytes > 0
-                      ? Math.round((directoryCurrentBytes / directoryTotalBytes) * 100)
-                      : item.percent
-                    // 传输尚未收到最终完成信号时最多显示 99%，避免四舍五入提前到 100%。
-                    const displayPercent = isDirectoryTask
-                      ? item.status === 'completed'
-                        ? 100
-                        : Math.min(99, weightedDirectoryPercent)
-                      : item.percent
+                    const directoryTotalBytes = isDirectoryTask && !isFileCount ? (directorySummary?.totalBytes ?? 0) : 0
+                    const directoryCurrentBytes = isDirectoryTask && !isFileCount ? (directorySummary?.currentBytes ?? 0) : 0
+
+                    // 统计当前并发传输中所有子文件的进度贡献比例（activeChildrenRatio），支持多并发传输时主进度条平滑递增
+                    let activeChildRatio = 0
+                    if (isFileCount && item.total > 0) {
+                      const activeChildren = childRecords.filter(c => c.status === 'transferring' && c.total > 0)
+                      for (const child of activeChildren) {
+                        activeChildRatio += Math.min(0.99, Math.max(0, child.current / child.total))
+                      }
+                    }
+
+                    // 目录文件计数任务（totalType=count）：按 已完成文件数 + 当前文件进度比例 / 总文件数 综合计算百分比；
+                    // 既保持了大文件传输时的平滑递增，又避免了小文件时的阶跃卡顿。
+                    const displayPercent = (() => {
+                      if (item.status === 'completed') return 100
+                      if (isFileCount) {
+                        if (item.total > 0) {
+                          const fractionalCurrent = item.current + activeChildRatio
+                          return Math.min(99, Math.round((fractionalCurrent / item.total) * 100))
+                        }
+                        return 0
+                      }
+                      if (isDirectoryTask && directoryTotalBytes > 0) {
+                        return Math.min(99, Math.round((directoryCurrentBytes / directoryTotalBytes) * 100))
+                      }
+                      return item.percent
+                    })()
                     const displayRate = isDirectoryTask ? (directorySummary?.activeRate ?? 0) : item.rate
-                    const hasDeterminateProgress = isDirectoryTask ? directoryTotalBytes > 0 || item.total > 0 : item.total > 0
+                    const hasDeterminateProgress = isDirectoryTask ? (isFileCount ? item.total > 0 : directoryTotalBytes > 0) : item.total > 0
                     // 源/目标路径：远端显示「服务器名: 路径」，本地侧显示「本地: 路径」；过长由 CSS 省略
                     const sourceLabel = item.sourceServerName
                       ? `${item.sourceServerName}: ${item.sourcePath ?? ''}`
@@ -7888,6 +8247,15 @@ export function SftpPanel() {
                               {t('sftp_transfer_failed')}
                             </span>
                           )}
+                          {item.status === 'partial' && (
+                            <span
+                              className="text-amber-600"
+                              title={`${item.succeededCount ?? 0} ${t('sftp_transfer_completed')} / ${item.failedCount ?? 0} ${t('sftp_transfer_failed')}`}
+                            >
+                              {t('sftp_transfer_partial')}
+                              {(item.failedCount ?? 0) > 0 && ` (${item.failedCount})`}
+                            </span>
+                          )}
                           {item.status === 'skipped' && (
                             <span className="text-muted-foreground">{t('sftp_transfer_skipped')}</span>
                           )}
@@ -7937,6 +8305,7 @@ export function SftpPanel() {
                                     className={cn(
                                       "h-full transition-all",
                                       item.status === 'failed' ? "bg-red-500" :
+                                      item.status === 'partial' ? "bg-amber-500" :
                                       item.status === 'completed' ? "bg-green-500" :
                                       item.status === 'canceled' ? "bg-amber-500" :
                                       item.status === 'paused' ? "bg-blue-500" : "bg-primary"
@@ -8019,6 +8388,19 @@ export function SftpPanel() {
                             </div>
                           ) : (
                             <div className="flex items-center gap-2">
+                              {/* 目录记录失败/取消后：重试并跳过目标端已存在且大小一致的文件 */}
+                              {(item.status === 'failed' || item.status === 'canceled')
+                                && item.type !== 's2s'
+                                && item.sourcePath
+                                && item.targetPath && (
+                                <button
+                                  onClick={() => void retryTransferSkipExisting(item)}
+                                  className="text-muted-foreground/70 hover:text-foreground"
+                                  title={t('sftp_transfer_retry_skip')}
+                                >
+                                  <RefreshCw className="h-3 w-3" />
+                                </button>
+                              )}
                               {/* 完成的下载：在本地文件夹中显示 */}
                               {item.status === 'completed' && item.type === 'download' && item.targetPath && (
                                 <button
@@ -8063,66 +8445,25 @@ export function SftpPanel() {
                       </tr>
                       {isExpanded && (() => {
                         const expandedCount = Math.max(1, expandedTransfers.size)
-                        const unexpandedCount = Math.max(0, transferRecords.length - expandedCount)
+                        // 与主列表实际渲染上限（slice(0, 100)）保持一致，
+                        // 否则记录超过 100 条时 availableHeight 会被算成负数，展开区高度失去意义
+                        const renderedRecords = Math.min(transferRecords.length, 100)
+                        const unexpandedCount = Math.max(0, renderedRecords - expandedCount)
                         // 固定高度占用：顶部折叠条(28) + 表头(28) + 未展开主行(每行40) + 展开主行(每行40) + 内外边距与安全余量(24)
                         const fixedOccupied = 28 + 28 + (unexpandedCount * 40) + (expandedCount * 40) + 24
                         const availableHeight = Math.max(220, transferPanelHeight - fixedOccupied)
                         const dynamicHeight = Math.max(220, Math.floor(availableHeight / expandedCount))
-                        const hasManyChildren = childRecords.length * 26 > dynamicHeight
+                        const hasManyChildren = childRecords.length * TRANSFER_CHILD_ROW_HEIGHT > dynamicHeight
                         return (
                           <tr key={`${item.transferId}-children`} className="bg-muted/10">
                             <td colSpan={10} className="px-8 py-2">
-                              <div
-                                className="overflow-auto rounded-md border border-border/40"
-                                style={{
-                                  maxHeight: dynamicHeight,
-                                  height: hasManyChildren ? dynamicHeight : undefined,
-                                }}
-                              >
-                              {childRecords.length === 0 ? (
-                                <div className="px-2 py-3 text-center text-[10px] text-muted-foreground">
-                                  {item.status === 'transferring' ? '正在获取子文件清单…' : '暂无子文件记录'}
-                                </div>
-                              ) : childRecords.slice(0, 2000).map(child => {
-                                // 空文件 total=0，无法用除法计算百分比；一旦状态完成应显示 100%。
-                                // 同时限制范围，避免异常/迟到进度事件显示负数或超过 100%。
-                                const childPercent = child.status === 'completed'
-                                  ? 100
-                                  : child.total > 0
-                                    ? Math.min(100, Math.max(0, Math.round((child.current / child.total) * 100)))
-                                    : 0
-                                const basePath = (item.type === 'upload' ? item.targetPath : item.sourcePath)?.replace(/\\/g, '/').replace(/\/$/, '')
-                                const normalizedChildPath = child.path.replace(/\\/g, '/')
-                                const displayPath = basePath && normalizedChildPath.startsWith(`${basePath}/`)
-                                  ? normalizedChildPath.slice(basePath.length + 1)
-                                  : normalizedChildPath
-                                return (
-                                  <div key={child.path} className="grid grid-cols-[minmax(0,1fr)_80px_110px] items-center gap-2 border-b border-border/20 px-2 py-1 text-[10px] last:border-b-0">
-                                    <span className="truncate font-mono" title={child.path}>{displayPath}</span>
-                                    <span className={cn(
-                                      child.status === 'completed' ? 'text-green-600' :
-                                      child.status === 'failed' ? 'text-red-500' :
-                                      child.status === 'canceled' ? 'text-amber-500' :
-                                      child.status === 'transferring' ? 'text-primary' : 'text-muted-foreground'
-                                    )}>
-                                      {child.status === 'completed' ? t('sftp_transfer_completed') :
-                                        child.status === 'failed' ? (child.error || t('sftp_transfer_failed')) :
-                                        child.status === 'canceled' ? t('sftp_transfer_canceled') :
-                                        child.status === 'transferring' ? t('sftp_transfer_transferring') : '…'}
-                                    </span>
-                                    <div className="flex items-center gap-1">
-                                      <div className="h-1 flex-1 overflow-hidden rounded bg-muted">
-                                        <div className={cn('h-full', child.status === 'failed' ? 'bg-red-500' : child.status === 'completed' ? 'bg-green-500' : 'bg-primary')} style={{ width: `${Math.min(100, Math.max(0, childPercent))}%` }} />
-                                      </div>
-                                      <span className="w-7 text-right font-mono">{childPercent}%</span>
-                                    </div>
-                                  </div>
-                                )
-                              })}
-                              {childRecords.length > 2000 && (
-                                <div className="px-2 py-1 text-center text-[10px] text-muted-foreground">仅显示前 2000 项</div>
-                              )}
-                            </div>
+                              <TransferChildList
+                                childRecords={childRecords}
+                                basePath={item.type === 'upload' ? item.targetPath : item.sourcePath}
+                                maxHeight={dynamicHeight}
+                                fixedHeight={hasManyChildren ? dynamicHeight : undefined}
+                                isTransferring={item.status === 'transferring'}
+                              />
                           </td>
                         </tr>
                       )

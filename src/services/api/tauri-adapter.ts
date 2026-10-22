@@ -32,6 +32,7 @@ import type {
   DockerFileEntry,
   DockerCpResult,
   TransferProgressData,
+  TransferFailuresData,
   LocalUploadStats,
   ShellOutputData,
   ShellClosedData,
@@ -275,6 +276,10 @@ function ensureTailListener(): Promise<void> {
 const transferProgressCallbacks = new Set<
   (data: TransferProgressData) => void
 >();
+// 目录传输失败明细（部分成功语义）：与进度事件共用同一个 IPC 监听初始化
+const transferFailureCallbacks = new Set<
+  (data: TransferFailuresData) => void
+>();
 let transferListenerInitialized = false;
 
 // ==================== Compose 部署输出事件 ====================
@@ -313,6 +318,16 @@ function ensureTransferListener(): Promise<void> {
           cb(data);
         } catch (error) {
           console.error("[Transfer Event] subscriber failed:", error);
+        }
+      });
+    });
+    await listen<TransferFailuresData>("transfer:failures", (event) => {
+      const data = event.payload;
+      transferFailureCallbacks.forEach((cb) => {
+        try {
+          cb(data);
+        } catch (error) {
+          console.error("[Transfer Failures Event] subscriber failed:", error);
         }
       });
     });
@@ -1502,11 +1517,15 @@ export const tauriAdapter: BackendAdapter = {
       serverId,
       remotePath,
       localDest,
+      concurrency,
+      skipExisting,
     ): Promise<FileDownloadResult> {
       return safeInvoke<FileDownloadResult>("files_download", {
         serverId,
         remotePath,
         localDest,
+        concurrency: concurrency ?? null,
+        skipExisting: skipExisting ?? null,
       });
     },
     async downloadArchive(
@@ -1526,11 +1545,13 @@ export const tauriAdapter: BackendAdapter = {
     async installExtractionTool(serverId, path): Promise<OperationResult> {
       return safeInvoke<OperationResult>("files_install_extraction_tool", { serverId, path });
     },
-    async upload(serverId, remoteDir, uploadType): Promise<FileUploadResult> {
+    async upload(serverId, remoteDir, uploadType, concurrency, skipExisting): Promise<FileUploadResult> {
       return safeInvoke<FileUploadResult>("files_upload", {
         serverId,
         remoteDir,
         uploadType,
+        concurrency: concurrency ?? null,
+        skipExisting: skipExisting ?? null,
       });
     },
     async uploadFromPaths(
@@ -1538,12 +1559,16 @@ export const tauriAdapter: BackendAdapter = {
       remoteDir,
       localPaths,
       targetFileName?,
+      concurrency?,
+      skipExisting?,
     ): Promise<FileUploadResult> {
       return safeInvoke<FileUploadResult>("files_upload_from_paths", {
         serverId,
         remoteDir,
         localPaths,
         targetFileName: targetFileName ?? null,
+        concurrency: concurrency ?? null,
+        skipExisting: skipExisting ?? null,
       });
     },
     async getLocalUploadStats(paths): Promise<LocalUploadStats> {
@@ -1635,6 +1660,13 @@ export const tauriAdapter: BackendAdapter = {
         transferProgressCallbacks.delete(callback);
       };
     },
+    onTransferFailures(callback): () => void {
+      transferFailureCallbacks.add(callback);
+      void ensureTransferListener();
+      return () => {
+        transferFailureCallbacks.delete(callback);
+      };
+    },
     async backup(serverId, path): Promise<CommandResult> {
       return safeInvoke<CommandResult>("files_backup", { serverId, path });
     },
@@ -1669,6 +1701,7 @@ export const tauriAdapter: BackendAdapter = {
       destServerId,
       destPath,
       targetName?,
+      concurrency?,
     ): Promise<CommandResult> {
       return safeInvoke<CommandResult>("files_server_to_server_transfer", {
         srcServerId,
@@ -1676,6 +1709,7 @@ export const tauriAdapter: BackendAdapter = {
         destServerId,
         destPath,
         targetName: targetName ?? null,
+        concurrency: concurrency ?? null,
       });
     },
     // 本地文件系统访问
