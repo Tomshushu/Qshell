@@ -1140,8 +1140,18 @@ impl SshManager {
         let session_ids: Vec<String> = entry.session_ids.lock()
             .map(|ids| ids.iter().cloned().collect())
             .unwrap_or_default();
-        for sid in session_ids {
-            super::shell::shell_cancel(&sid).await;
+        if session_ids.is_empty() {
+            return;
+        }
+        // 并行取消所有会话：原串行 await 在掉线批量清理（多分屏）时会产生 N×2s 的
+        // Disconnected 延迟，并行化后整体耗时收敛为单个会话的最长等待（约 2s）。
+        // shell_cancel 仅短暂持有 sessions() 锁、其余均为原子/通知原语，并发安全。
+        let handles: Vec<_> = session_ids
+            .into_iter()
+            .map(|sid| tokio::spawn(async move { super::shell::shell_cancel(&sid).await }))
+            .collect();
+        for h in handles {
+            let _ = h.await;
         }
     }
 

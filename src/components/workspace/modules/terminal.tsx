@@ -1834,8 +1834,9 @@ export function TerminalModule({
     // 保底防线：若数据含有 Windows CRLF，统一清洗为规范换行，消除 PTY ICRNL 双换行隐患
     const cleanData = data.includes("\r\n") ? normalizeShellCommandText(data) : data;
     lastActivityTimesRef.current.set(currentSid, Date.now());
+    // 串口会话不参与输入广播：字节精确的点对点通道，既不做广播源也不做广播目标
+    const isSerial = server?.targetType === "serial" || server?.protocol === "serial";
     if (sshService.isSessionAlive(currentSid)) {
-      const isSerial = server?.targetType === "serial" || server?.protocol === "serial";
       // A raw file transfer must remain byte-exact. Drop interactive input while
       // it owns the port so keyboard/paste bytes cannot corrupt the file stream.
       if (isSerial && serialFileTransferActiveRef.current) return;
@@ -1860,10 +1861,15 @@ export function TerminalModule({
       });
     }
     if (!tabId) return;
-    const { broadcastTabIds } = useAppStore.getState();
+    if (isSerial) return; // 串口源不广播
+    const { broadcastTabIds, tabs, servers } = useAppStore.getState();
     if (!broadcastTabIds.includes(tabId)) return;
     for (const otherTabId of broadcastTabIds) {
       if (otherTabId === tabId) continue;
+      // 串口目标跳过广播
+      const otherTab = tabs.find((t) => t.id === otherTabId);
+      const otherServer = otherTab ? servers.find((sv) => sv.id === otherTab.serverId) : undefined;
+      if (otherServer?.targetType === "serial" || otherServer?.protocol === "serial") continue;
       const sid = sshService.getTabActiveSessionId(otherTabId);
       if (sid && sshService.isSessionAlive(sid)) {
         lastActivityTimesRef.current.set(sid, Date.now());
@@ -1979,9 +1985,13 @@ export function TerminalModule({
             console.warn("[Terminal] Ctrl+C failed:", error);
           });
         if (tabId) {
-          const { broadcastTabIds } = useAppStore.getState();
+          const { broadcastTabIds, tabs, servers } = useAppStore.getState();
           for (const otherTabId of broadcastTabIds) {
             if (otherTabId === tabId) continue;
+            // 串口目标不支持 SIGINT，跳过
+            const otherTab = tabs.find((t) => t.id === otherTabId);
+            const otherServer = otherTab ? servers.find((sv) => sv.id === otherTab.serverId) : undefined;
+            if (otherServer?.targetType === "serial" || otherServer?.protocol === "serial") continue;
             const otherSid = sshService.getTabActiveSessionId(otherTabId);
             if (otherSid && sshService.isSessionAlive(otherSid)) {
               sigintActiveUntilRef.current.set(otherSid, Date.now() + 1000);
