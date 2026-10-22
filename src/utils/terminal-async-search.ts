@@ -889,11 +889,15 @@ export class AsyncTerminalSearcher {
 
   private _notifyState(isSearching: boolean) {
     if (this._disposed || !this._onStateChange) return;
+    // 全量扫描进行中 _matches 为部分结果，_activeIndex 可能暂时大于 resultCount，
+    // 夹紧避免出现「4801/300」这类荒谬计数
+    const count = this._matches.length;
+    const idx = count > 0 ? Math.min(this._activeIndex, count - 1) : 0;
     this._onStateChange({
-      resultIndex: this._activeIndex,
-      resultCount: this._matches.length,
+      resultIndex: idx,
+      resultCount: count,
       isSearching,
-      isCapped: this._matches.length >= MAX_MATCHES_LIMIT,
+      isCapped: count >= MAX_MATCHES_LIMIT,
     });
   }
 }

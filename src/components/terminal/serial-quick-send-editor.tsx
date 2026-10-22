@@ -132,7 +132,11 @@ export function SerialQuickSendEditor({
         onPointerUp={(event) => {
           if (serialSendResizeRef.current?.pointerId !== event.pointerId) return;
           serialSendResizeRef.current = null;
-          event.currentTarget.releasePointerCapture(event.pointerId);
+          try {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          } catch {
+            // 指针捕获可能已被浏览器隐式释放（窗口失焦/手势中断），忽略 NotFoundError
+          }
         }}
         onPointerCancel={() => {
           serialSendResizeRef.current = null;

@@ -1372,6 +1372,9 @@ impl<'a> ExecManager<'a> {
 
                 let mut stdout = Vec::new();
                 let mut pending: Vec<u8> = Vec::new(); // UTF-8 跨 chunk 残部
+                // 流式命令（docker logs/compose）返回的完整 stdout 上限：防止超长输出无界增长。
+                // on_chunk 回调仍会收到全量数据（用于实时展示），这里只限制返回缓冲。
+                const MAX_STREAM_STDOUT_BYTES: usize = 16 * 1024 * 1024;
                 let mut exit_code = -1i32;
                 // Eof/Close 后给个 200ms 兜底窗口：部分服务端/代理把 ExitStatus 排在
                 // Close 之后甚至丢失，直接 break 会让 exit_code 永远停留在初始的 -1i32，
@@ -1390,7 +1393,11 @@ impl<'a> ExecManager<'a> {
 
                     match next_msg {
                         Some(ChannelMsg::Data { data }) => {
-                            stdout.extend_from_slice(&data);
+                            if stdout.len() < MAX_STREAM_STDOUT_BYTES {
+                                let room = MAX_STREAM_STDOUT_BYTES - stdout.len();
+                                let take = data.len().min(room);
+                                stdout.extend_from_slice(&data[..take]);
+                            }
                             pending.extend_from_slice(&data);
                             // 只回调完整 UTF-8 前缀，残部留待下个 chunk
                             let valid = match std::str::from_utf8(&pending) {

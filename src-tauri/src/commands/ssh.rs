@@ -2314,12 +2314,13 @@ pub async fn ssh_create_shell(
     rows: Option<u32>,
     encoding: Option<String>,
 ) -> Result<CreateShellResult, String> {
+    // 夹取合理上限，防止异常参数（如 u32::MAX）让服务端分配超大终端缓冲区
     let c = match cols {
-        Some(val) if val > 0 => val,
+        Some(val) if val > 0 => val.min(1000),
         _ => 80,
     };
     let r = match rows {
-        Some(val) if val > 0 => val,
+        Some(val) if val > 0 => val.min(1000),
         _ => 24,
     };
     let window_label = window.label().to_string();

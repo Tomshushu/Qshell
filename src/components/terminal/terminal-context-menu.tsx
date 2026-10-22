@@ -75,8 +75,8 @@ export function TerminalContextMenu({
 
   if (!ctxMenu) return null;
 
-  // 边界检测：预估宽度 220（含右侧快捷键提示），高度 320（含 AI 项、清屏与录制子项）
-  const pos = clampMenuToViewport(ctxMenu.x, ctxMenu.y, 220, 320);
+  // 边界检测：预估宽度 220（含右侧快捷键提示），高度 440（含 AI 项、清屏与录制子项，留足余量避免底部溢出）
+  const pos = clampMenuToViewport(ctxMenu.x, ctxMenu.y, 220, 440);
   const isSubmenuLeft =
     typeof window !== "undefined" && pos.left + 220 + 210 > window.innerWidth;
 
@@ -92,6 +92,7 @@ export function TerminalContextMenu({
       onMouseDown={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
       onClick={onClose}
+      onContextMenu={(e) => e.preventDefault()}
     >
       {/* 复制 */}
       <button

@@ -84,7 +84,7 @@ export const stripAnsiForRecording = (s: string): string => {
       .replace(new RegExp(`${ESC}\\][^${BEL}${ESC}]*(?:${BEL}|${ESC}\\\\)`, "g"), "")
       // CSI（颜色、光标、清屏等）及 8-bit CSI
       .replace(new RegExp(`${ESC}\\[[0-?]*[ -/]*[@-~]`, "g"), "")
-      .replace(new RegExp(`${CS19B}\\[[0-?]*[ -/]*[@-~]`, "g"), "")
+      .replace(new RegExp(`${CS19B}[0-?]*[ -/]*[@-~]`, "g"), "")
       // 其他单字符 ESC 序列
       .replace(new RegExp(`${ESC}[()][0-2A-Z0-9]`, "g"), "")
       .replace(new RegExp(`${ESC}[=><78]`, "g"), "")

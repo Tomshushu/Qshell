@@ -196,7 +196,7 @@ export function TerminalLockOverlay({
 
   const handleUnlock = (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (inputVal === expectedPassword) {
+    if (inputVal.trim() === expectedPassword) {
       onUnlock();
     } else {
       setError(true);
