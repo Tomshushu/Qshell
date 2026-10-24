@@ -892,7 +892,7 @@ export class AsyncTerminalSearcher {
     // 全量扫描进行中 _matches 为部分结果，_activeIndex 可能暂时大于 resultCount，
     // 夹紧避免出现「4801/300」这类荒谬计数
     const count = this._matches.length;
-    const idx = count > 0 ? Math.min(this._activeIndex, count - 1) : 0;
+    const idx = count > 0 ? Math.max(0, Math.min(this._activeIndex, count - 1)) : 0;
     this._onStateChange({
       resultIndex: idx,
       resultCount: count,

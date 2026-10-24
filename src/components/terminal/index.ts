@@ -8,5 +8,4 @@ export * from "./terminal-search-bar";
 export * from "./terminal-recording-badge";
 export * from "./terminal-hint-panel";
 export * from "./serial-quick-send-editor";
-export * from "./terminal-session-lock";
 export * from "./terminal-selection-toolbar";

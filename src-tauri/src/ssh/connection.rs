@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use russh::keys::PublicKey;
@@ -325,6 +325,38 @@ impl russh::client::Handler for ClientHandler {
 // 旧 API（`SshConnection::execute` / `create_shell_channel` / `create_sftp_session`）
 // 通过 `SshConnection`（一个组合 facade）继续保留，对外不破坏调用方代码。
 
+/// 终端交互连接（shell / exec）的 SSH 接收窗口默认值：1MB。
+///
+/// 小窗口 → Ctrl+C 中断时通道内积压的在途数据少，后端能迅速读完丢弃、立即恢复 prompt。
+/// 取 1MB（对齐 OpenSSH 默认窗口量级）：内网 RTT < 5ms 时 BDP 只有几百 KB，
+/// 1MB 已足够覆盖「背压暂停期间」的预取，不会拖慢海量日志「刷到最新」的吞吐。
+pub const TERMINAL_WINDOW_SIZE_DEFAULT_KB: u32 = 1 * 1024;
+
+/// 终端窗口大小（KB）的运行时配置：用户可在设置面板调整（256KB ~ 16MB）。
+///
+/// `window_size` 是 SSH 连接级配置、建立后无法修改，因此修改后需**重连**才生效。
+static TERMINAL_WINDOW_SIZE_KB: AtomicU32 = AtomicU32::new(TERMINAL_WINDOW_SIZE_DEFAULT_KB);
+
+/// 读取当前终端窗口大小（字节），clamp 到 256KB~16MB。
+pub fn terminal_window_size_bytes() -> u32 {
+    TERMINAL_WINDOW_SIZE_KB
+        .load(Ordering::Relaxed)
+        .clamp(256, 16 * 1024)
+        * 1024
+}
+
+/// 设置终端窗口大小（KB），clamp 到 256KB~16MB。
+pub fn set_terminal_window_size_kb(kb: u32) {
+    TERMINAL_WINDOW_SIZE_KB.store(kb.clamp(256, 16 * 1024), Ordering::Relaxed);
+}
+
+/// 文件传输（SFTP）专用连接的 SSH 接收窗口：64MB。
+///
+/// 大窗口 → rekey 期间 pending 上限（2×window = 128MB）足以覆盖高带宽 × 高 RTT 下
+/// 「64 并发下载」的在途数据，避免传大文件（如 1GB）时 `Error::Pending` 断连。
+/// SFTP 走独立 SSH 连接，因此不会把大窗口的「中断慢」代价带给终端。
+pub const TRANSFER_WINDOW_SIZE: u32 = 64 * 1024 * 1024;
+
 /// 底层 SSH 传输层：持有 russh handle，提供 channel 申请。
 ///
 /// `handle` 包在 `tokio::sync::Mutex` 中：russh 的 `tcpip_forward` 要求 `&mut self`，
@@ -370,6 +402,7 @@ pub struct JumpConfig<'a> {
 
 /// SOCKS5 / HTTP 代理传输配置（用于 SSH 外连经代理建立 TCP 隧道）。
 /// 与 `JumpConfig`（SSH 跳板机）互斥：代理只做 TCP 层隧道，不做 SSH 认证。
+#[derive(Clone)]
 pub struct ProxyTransportConfig {
     /// 代理类型：`socks5` | `http`
     pub proxy_type: String,
@@ -536,7 +569,8 @@ pub async fn connect_via_chained_jump(
         inactivity_timeout: None,
         keepalive_interval: Some(Duration::from_secs(15)),
         keepalive_max: 4,
-        window_size: 64 * 1024 * 1024,
+        // 跳板机连接主要承载文件传输隧道，用大窗口避免 rekey pending 超限。
+        window_size: TRANSFER_WINDOW_SIZE,
         maximum_packet_size: 65535,
         limits: russh::Limits {
             rekey_write_limit: usize::MAX,
@@ -874,6 +908,7 @@ impl SshTransport {
         connection_timeout: u32,
         jump: Option<JumpConfig<'_>>,
         proxy: Option<ProxyTransportConfig>,
+        window_size: u32,
     ) -> SshResult<Self> {
         let chain = jump.map(|j| vec![ResolvedJumpHop {
             host: j.host.to_string(),
@@ -882,10 +917,14 @@ impl SshTransport {
             auth: j.auth.clone(),
             timeout_secs: j.timeout_secs,
         }]);
-        Self::connect_routed(server_id, host, port, username, auth, connection_timeout, chain, proxy).await
+        Self::connect_routed(server_id, host, port, username, auth, connection_timeout, chain, proxy, window_size).await
     }
 
     /// 建立 TCP+SSH 握手并完成认证，返回传输层实例（支持多级链式跳板机或代理）。
+    ///
+    /// `window_size`：SSH 接收窗口大小。终端连接用 `TERMINAL_WINDOW_SIZE`（小窗口，
+    /// Ctrl+C 中断时通道在途数据少、能快速丢弃）；SFTP 等文件传输连接用
+    /// `TRANSFER_WINDOW_SIZE`（大窗口，避免高带宽 × 高 RTT 下 rekey pending 超限断连）。
     pub async fn connect_routed(
         server_id: String,
         host: String,
@@ -895,6 +934,7 @@ impl SshTransport {
         connection_timeout: u32,
         jump_chain: Option<Vec<ResolvedJumpHop>>,
         proxy: Option<ProxyTransportConfig>,
+        window_size: u32,
     ) -> SshResult<Self> {
         let start = std::time::Instant::now();
         tracing::info!("[SSH Perf] {} 开始连接 {}:{}{}",
@@ -906,16 +946,14 @@ impl SshTransport {
         // SSH config
         // rekey 相关配置（russh 0.64）：
         // 1. 禁用客户端主动 rekey（阈值设为最大值），由服务端在 1GiB 阈值自行发起 rekey。
-        // 2. 关键：russh 在 rekey 握手期间会把对端继续回传的数据缓冲到 pending，
-        //    上限为 2 * window_size。window_size 过小时，高速下载流水线（64 并发）在
-        //    服务端 rekey 期间数据缓冲超限会触发 `Error::Pending` 断开（表现为传 1GB 断连）。
-        //    故 window_size 从 16MB 增大到 64MB，使 pending 上限达 128MB，覆盖高带宽
-        //    × 高 RTT 下 rekey 握手期间的在途数据累积，避免传输中断。
+        // 2. window_size 由调用方按用途指定（见 TERMINAL_WINDOW_SIZE / TRANSFER_WINDOW_SIZE）：
+        //    终端用小窗口（中断时在途数据少、能快速丢弃）；文件传输用大窗口
+        //    （rekey 期间 pending 上限 = 2×window，避免高带宽 × 高 RTT 下传大文件断连）。
         let config = russh::client::Config {
             inactivity_timeout: None,
             keepalive_interval: Some(Duration::from_secs(15)),
             keepalive_max: 4,
-            window_size: 64 * 1024 * 1024,
+            window_size,
             maximum_packet_size: 65535,
             limits: russh::Limits {
                 rekey_write_limit: usize::MAX,
@@ -1698,12 +1736,28 @@ impl<'a> ExecManager<'a> {
 
 /// 文件管理器：基于 transport 提供 SFTP 会话与文件流。
 pub struct FileManager<'a> {
+    /// 终端连接（回退用）
     transport: &'a SshTransport,
+    /// SFTP 专用连接（64MB 大窗口）；None 时回退到 transport。
+    sftp_transport: Option<&'a SshTransport>,
 }
 
 impl<'a> FileManager<'a> {
     pub fn new(transport: &'a SshTransport) -> Self {
-        Self { transport }
+        Self { transport, sftp_transport: None }
+    }
+
+    /// 使用 SFTP 专用连接（大窗口）构造，避免终端小窗口拖累文件传输。
+    pub fn with_sftp_transport(
+        transport: &'a SshTransport,
+        sftp_transport: &'a SshTransport,
+    ) -> Self {
+        Self { transport, sftp_transport: Some(sftp_transport) }
+    }
+
+    /// SFTP 实际使用的连接（优先专用大窗口连接）。
+    fn sftp_conn(&self) -> &SshTransport {
+        self.sftp_transport.unwrap_or(self.transport)
     }
 
     /// 创建一个 SFTP 子系统会话
@@ -1749,7 +1803,8 @@ impl<'a> FileManager<'a> {
 
     /// SFTP session 创建的内部实现（单次尝试，带 30 秒超时）
     async fn create_sftp_session_inner(&self) -> SshResult<russh_sftp::client::SftpSession> {
-        let channel = self.transport.open_session_channel().await?;
+        // 走 SFTP 专用连接（大窗口，若由 SshConnection 注入），否则回退到终端连接
+        let channel = self.sftp_conn().open_session_channel().await?;
         // want_reply=false：不等待服务端确认 subsystem 启动，直接开始 SFTP 握手。
         // Windows OpenSSH 在某些配置下 subsystem 启动慢（如 DefaultShell=PowerShell
         // 的 profile 输出），want_reply=true 会导致等待确认超时。
@@ -1793,6 +1848,22 @@ impl<'a> FileManager<'a> {
 // server_id / disconnect / keepalive_send），上层 manager.rs 不需要立即改写。
 // 内部委托给 Transport + ExecManager + FileManager。
 
+/// 建立连接所需的全部参数：供「SFTP 专用独立连接」复用同一主机/认证/跳板/代理配置。
+///
+/// 终端连接用 4MB 小窗口（中断快），SFTP 需要 64MB 大窗口（rekey 不断连）；
+/// russh 的 window_size 是连接级配置、无法按 channel 区分，因此 SFTP 单独建一条连接。
+#[derive(Clone)]
+struct ConnectParams {
+    server_id: String,
+    host: String,
+    port: u16,
+    username: String,
+    auth: AuthMethod,
+    connection_timeout: u32,
+    jump_chain: Option<Vec<ResolvedJumpHop>>,
+    proxy: Option<ProxyTransportConfig>,
+}
+
 pub struct SshConnection {
     transport: SshTransport,
     /// Application heartbeat：由 manager 启动的后台任务通过此 flag 取消。
@@ -1806,6 +1877,10 @@ pub struct SshConnection {
     /// 防止非交互通道抢先触发 OpenSSH PAM pam_open_session 导致 loginmsg (MOTD) 被提前清除。
     first_shell_ready: Arc<AtomicBool>,
     first_shell_notify: Arc<tokio::sync::Notify>,
+    /// 建立连接参数：SFTP 独立连接复用（见 sftp_transport）。
+    connect_params: Arc<ConnectParams>,
+    /// SFTP 专用的独立传输层（大窗口）：懒创建，避免终端小窗口拖累文件传输。
+    sftp_transport: tokio::sync::Mutex<Option<Arc<SshTransport>>>,
 }
 
 impl SshConnection {
@@ -1818,13 +1893,27 @@ impl SshConnection {
         auth: &AuthMethod,
         connection_timeout: u32,
     ) -> SshResult<Self> {
-        let transport = SshTransport::connect(server_id, host, port, username, auth, connection_timeout, None, None).await?;
+        let connect_params = ConnectParams {
+            server_id: server_id.clone(),
+            host: host.clone(),
+            port,
+            username: username.to_string(),
+            auth: auth.clone(),
+            connection_timeout,
+            jump_chain: None,
+            proxy: None,
+        };
+        let transport = SshTransport::connect(
+            server_id, host, port, username, auth, connection_timeout, None, None, terminal_window_size_bytes(),
+        ).await?;
         Ok(Self {
             transport,
             heartbeat_cancel: Arc::new(AtomicBool::new(false)),
             sftp_cache: tokio::sync::Mutex::new(None),
             first_shell_ready: Arc::new(AtomicBool::new(false)),
             first_shell_notify: Arc::new(tokio::sync::Notify::new()),
+            connect_params: Arc::new(connect_params),
+            sftp_transport: tokio::sync::Mutex::new(None),
         })
     }
 
@@ -1838,8 +1927,26 @@ impl SshConnection {
         connection_timeout: u32,
         jump: JumpConfig<'_>,
     ) -> SshResult<Self> {
+        // 保存跳板链，供 SFTP 独立连接复用同一路径
+        let jump_chain = vec![ResolvedJumpHop {
+            host: jump.host.to_string(),
+            port: jump.port,
+            username: jump.username.to_string(),
+            auth: jump.auth.clone(),
+            timeout_secs: jump.timeout_secs,
+        }];
+        let connect_params = ConnectParams {
+            server_id: server_id.clone(),
+            host: host.clone(),
+            port,
+            username: username.to_string(),
+            auth: auth.clone(),
+            connection_timeout,
+            jump_chain: Some(jump_chain),
+            proxy: None,
+        };
         let transport = SshTransport::connect(
-            server_id, host, port, username, auth, connection_timeout, Some(jump), None,
+            server_id, host, port, username, auth, connection_timeout, Some(jump), None, terminal_window_size_bytes(),
         ).await?;
         Ok(Self {
             transport,
@@ -1847,6 +1954,8 @@ impl SshConnection {
             sftp_cache: tokio::sync::Mutex::new(None),
             first_shell_ready: Arc::new(AtomicBool::new(false)),
             first_shell_notify: Arc::new(tokio::sync::Notify::new()),
+            connect_params: Arc::new(connect_params),
+            sftp_transport: tokio::sync::Mutex::new(None),
         })
     }
 
@@ -1860,8 +1969,18 @@ impl SshConnection {
         connection_timeout: u32,
         hops: Vec<ResolvedJumpHop>,
     ) -> SshResult<Self> {
+        let connect_params = ConnectParams {
+            server_id: server_id.clone(),
+            host: host.clone(),
+            port,
+            username: username.to_string(),
+            auth: auth.clone(),
+            connection_timeout,
+            jump_chain: Some(hops.clone()),
+            proxy: None,
+        };
         let transport = SshTransport::connect_routed(
-            server_id, host, port, username, auth, connection_timeout, Some(hops), None,
+            server_id, host, port, username, auth, connection_timeout, Some(hops), None, terminal_window_size_bytes(),
         ).await?;
         Ok(Self {
             transport,
@@ -1869,6 +1988,8 @@ impl SshConnection {
             sftp_cache: tokio::sync::Mutex::new(None),
             first_shell_ready: Arc::new(AtomicBool::new(false)),
             first_shell_notify: Arc::new(tokio::sync::Notify::new()),
+            connect_params: Arc::new(connect_params),
+            sftp_transport: tokio::sync::Mutex::new(None),
         })
     }
 
@@ -1882,8 +2003,18 @@ impl SshConnection {
         connection_timeout: u32,
         proxy: ProxyTransportConfig,
     ) -> SshResult<Self> {
+        let connect_params = ConnectParams {
+            server_id: server_id.clone(),
+            host: host.clone(),
+            port,
+            username: username.to_string(),
+            auth: auth.clone(),
+            connection_timeout,
+            jump_chain: None,
+            proxy: Some(proxy.clone()),
+        };
         let transport = SshTransport::connect(
-            server_id, host, port, username, auth, connection_timeout, None, Some(proxy),
+            server_id, host, port, username, auth, connection_timeout, None, Some(proxy), terminal_window_size_bytes(),
         ).await?;
         Ok(Self {
             transport,
@@ -1891,6 +2022,8 @@ impl SshConnection {
             sftp_cache: tokio::sync::Mutex::new(None),
             first_shell_ready: Arc::new(AtomicBool::new(false)),
             first_shell_notify: Arc::new(tokio::sync::Notify::new()),
+            connect_params: Arc::new(connect_params),
+            sftp_transport: tokio::sync::Mutex::new(None),
         })
     }
 
@@ -1959,6 +2092,81 @@ impl SshConnection {
         self.transport.cancel_remote_forward(bind_address, port).await
     }
 
+    /// 获取（或懒创建）SFTP 专用传输层（64MB 大窗口）。
+    ///
+    /// 终端连接用 4MB 小窗口（Ctrl+C 中断时在途数据少、能快速丢弃），SFTP 需要 64MB
+    /// 大窗口（rekey 期间 pending 上限 2×window，避免高带宽 × 高 RTT 下传大文件断连）。
+    /// russh 的 window_size 是连接级配置、无法按 channel 区分，所以为 SFTP 单独建一条
+    /// 复用同一 host / 认证 / 跳板 / 代理的 SSH 连接，两者互不拖累。
+    async fn get_or_create_sftp_transport(&self) -> SshResult<Arc<SshTransport>> {
+        let mut guard = self.sftp_transport.lock().await;
+        if let Some(t) = guard.as_ref() {
+            if t.is_alive() {
+                return Ok(t.clone());
+            }
+            *guard = None;
+        }
+        let p = &*self.connect_params;
+        let transport = SshTransport::connect_routed(
+            p.server_id.clone(),
+            p.host.clone(),
+            p.port,
+            &p.username,
+            &p.auth,
+            p.connection_timeout,
+            p.jump_chain.clone(),
+            p.proxy.clone(),
+            TRANSFER_WINDOW_SIZE,
+        ).await?;
+        let transport = Arc::new(transport);
+        *guard = Some(transport.clone());
+        Ok(transport)
+    }
+
+    /// 使用 SFTP 专用连接（优先）或主连接（回退）创建 SFTP 会话。
+    async fn open_sftp_session_with_fallback(&self) -> SshResult<russh_sftp::client::SftpSession> {
+        match self.get_or_create_sftp_transport().await {
+            Ok(sftp_transport) => {
+                match FileManager::with_sftp_transport(&self.transport, &sftp_transport)
+                    .create_sftp_session()
+                    .await
+                {
+                    Ok(sftp) => Ok(sftp),
+                    Err(err) => {
+                        if !sftp_transport.is_alive() {
+                            let mut guard = self.sftp_transport.lock().await;
+                            if guard.as_ref().map_or(false, |t| Arc::ptr_eq(t, &sftp_transport)) {
+                                *guard = None;
+                            }
+                            drop(guard);
+                            if self.transport.is_alive() {
+                                tracing::warn!(
+                                    "[SFTP] {} 专用连接已断开 ({})，回退到主连接创建 SFTP 会话",
+                                    self.server_id(),
+                                    err
+                                );
+                                return FileManager::new(&self.transport).create_sftp_session().await;
+                            }
+                        }
+                        Err(err)
+                    }
+                }
+            }
+            Err(err) => {
+                if self.transport.is_alive() {
+                    tracing::warn!(
+                        "[SFTP] {} 建立专用连接失败 ({})，回退到主连接创建 SFTP 会话",
+                        self.server_id(),
+                        err
+                    );
+                    FileManager::new(&self.transport).create_sftp_session().await
+                } else {
+                    Err(err)
+                }
+            }
+        }
+    }
+
     /// Create an SFTP session over this SSH connection.
     /// 创建/获取 SFTP 子系统会话（带缓存）。
     ///
@@ -1974,8 +2182,8 @@ impl SshConnection {
                 return Ok(std::sync::Arc::clone(sftp));
             }
         }
-        // 缓存为空，创建新 session（带超时和重试）
-        let sftp = FileManager::new(&self.transport).create_sftp_session().await?;
+        // 缓存为空，创建新 session（带超时、专用连接健康检查及主连接回退）
+        let sftp = self.open_sftp_session_with_fallback().await?;
         let sftp = std::sync::Arc::new(sftp);
         // 放入缓存
         let mut cache = self.sftp_cache.lock().await;
@@ -1991,14 +2199,23 @@ impl SshConnection {
     /// session 用完自动 drop 时关闭 channel。
     pub async fn create_dedicated_sftp_session(&self) -> SshResult<russh_sftp::client::SftpSession> {
         self.wait_for_first_shell(1000).await;
-        FileManager::new(&self.transport).create_sftp_session().await
+        // 走 SFTP 专用连接（64MB 大窗口），失败时自动检查健康度或回退主连接
+        self.open_sftp_session_with_fallback().await
     }
 
     /// 清空 SFTP session 缓存，强制下次操作重建 session。
     /// 在 SFTP 操作返回连接错误时调用，让后续操作能自动恢复。
     pub async fn invalidate_sftp_cache(&self) {
-        let mut cache = self.sftp_cache.lock().await;
-        *cache = None;
+        {
+            let mut cache = self.sftp_cache.lock().await;
+            *cache = None;
+        }
+        let mut guard = self.sftp_transport.lock().await;
+        if let Some(t) = guard.as_ref() {
+            if !t.is_alive() {
+                *guard = None;
+            }
+        }
     }
 
     /// Check if this connection is still alive.
@@ -2012,7 +2229,18 @@ impl SshConnection {
     }
 
     /// Disconnect by sending SSH disconnect message.
+    ///
+    /// 注意：本方法只在「连接丢失（心跳）/ 用户主动断开 / 应用退出」时调用，
+    /// 正常 SFTP 传输期间不会触发，因此不会打断进行中的文件传输。
     pub async fn disconnect(&self) {
+        // 一并断开 SFTP 专用连接（独立连接，避免泄漏）。
+        // 加 3 秒超时保护：SFTP 连接无响应时不让断开流程永久挂起。
+        {
+            let mut guard = self.sftp_transport.lock().await;
+            if let Some(t) = guard.take() {
+                let _ = tokio::time::timeout(Duration::from_secs(3), t.disconnect()).await;
+            }
+        }
         self.transport.disconnect().await;
     }
 

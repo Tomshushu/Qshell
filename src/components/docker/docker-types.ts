@@ -1,5 +1,3 @@
-import type { DockerContainer as DockerContainerType } from "@/types";
-
 export interface DockerModuleProps {
   serverId: string;
   initialView?: "overview" | "containers" | "images" | "networks" | "volumes" | "compose";

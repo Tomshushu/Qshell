@@ -1,59 +1,37 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   Plus,
   Loader2,
-  AlertCircle,
-  Copy,
-  Clipboard,
-  ClipboardPaste,
-  Search,
-  X,
   ArrowUp,
   ArrowDown,
   Check,
-  Regex,
   Minimize2,
   Binary,
   Send,
   ChevronDown,
   Play,
   Pause,
-  Activity,
   Cable,
   Zap,
-  Repeat2,
   Trash2,
   ListOrdered,
-  Sparkles,
-  CornerDownLeft,
-  History,
   FileUp,
-  ArrowLeftRight,
   RefreshCw,
   WifiOff,
   Download,
-  ChevronRight,
-  FileText,
-  Folder,
-  Terminal as TerminalIcon,
-  SlidersHorizontal,
-  Lock,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { SelectPopover } from '@/components/ui/select-popover'
 import {
   SerialSequenceDialog,
   type SerialSequenceItem,
 } from "./serial-sequence-dialog";
 import { SerialIapDialog } from "./serial-iap-dialog";
 import {
-  SERIAL_CHECKSUM_OPTIONS,
   type SerialChecksumType,
   appendChecksumToHex,
 } from "@/lib/serial-checksum";
-import { decodeBase64Bytes, formatSerialHex, parseSerialHex } from "@/lib/serial-utils";
+import { decodeBase64Bytes, formatSerialHex } from "@/lib/serial-utils";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -64,8 +42,7 @@ import { sshService } from "@/services/ssh-service";
 import { backend } from "@/services/api";
 import { useAppStore } from "@/store";
 import { ConnectionState } from "@/services/ssh-connection-state";
-import { reconnectManager, MAX_RECONNECT_ATTEMPTS } from "@/services/reconnect-manager";
-import { clampMenuToViewport } from "@/lib/menu-position";
+import { reconnectManager } from "@/services/reconnect-manager";
 import { useTranslation } from "@/i18n";
 import {
   matchHints,
@@ -79,10 +56,18 @@ import {
   recordCommand,
   suggestHistory,
 } from "@/lib/command-intelligence/command-history";
+import { invalidateRankingCache } from "@/lib/command-intelligence/ranking";
+import {
+  parseAliasOutput,
+  isUserAliasesLoaded,
+  setUserAliases,
+} from "@/lib/command-intelligence/alias-map";
 import { detectPlatform } from "@/lib/command-intelligence/platform-detector";
 import {
   recordMarkovTransition,
   getMarkovHintItems,
+  updateSessionEntities,
+  boostHintsWithRecentEntities,
 } from "@/lib/command-intelligence/markov-chain";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -103,14 +88,6 @@ import {
 } from "@/lib/session-recording";
 
 import { useToast } from "@/components/ui/toast";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { playSound, SoundType } from "@/lib/sound";
 import { useShortcutStore } from "@/store/shortcut-store";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
@@ -137,29 +114,14 @@ import {
   type ZmodemDetectionLike,
   type ZmodemSentryLike,
   type ZmodemModuleLike,
-  type ContextMenuState,
-  type SearchState,
-  type PendingPaste,
-  type UploadRecord,
-  type SerialSignals,
-  type SerialStats,
-  type SerialFileProgress,
-  type RecordingFileState,
-  type ShellIntegrationState,
-  type CommandMarkerItem,
-  type XtermInstanceHolder,
   FONT_PRESETS,
-  SEARCH_DECORATIONS,
-  ESC,
-  BEL,
-  CS19B,
   getXtermCore,
   discardPendingXtermWrites,
   findSigintBoundary,
   stripUnsafeEscapes,
   writeMotdIfMissing,
+  writeChunked,
   stripAnsiForRecording,
-  BYTES_PER_MB,
   MAX_PENDING_BUFFER,
   DANGEROUS_COMMAND_RE,
   MAX_OUTPUT_BYTES_PER_FRAME_DEFAULT,
@@ -172,7 +134,6 @@ import {
   computeSafeTerminalDimensions,
   syncTerminalScrollAndDimensions,
   fitTerminalSafely,
-  renderHintItemIcon,
   useLatestRef,
   serialTextWriteQueues,
   writeSerialTextWithDelays,
@@ -305,7 +266,6 @@ export function TerminalModule({
     y: number;
     text: string;
   } | null>(null);
-  const selectionToolbarRef = useLatestRef(selectionToolbar);
   const selectionTimerRef = useRef<number | null>(null);
   const [showSearch, setShowSearch] = useState(false);
   const showSearchRef = useRef(false);
@@ -425,11 +385,6 @@ export function TerminalModule({
     return { clean, hasInvalid, isOdd, bytes, checksumResult };
   }, [serialSendText, serialSendType, serialChecksumType]);
 
-  const serialSendResizeRef = useRef<{
-    pointerId: number;
-    startY: number;
-    startHeight: number;
-  } | null>(null);
   const serialAutoSendInFlightRef = useRef(false);
   const serialFileTransferActiveRef = useRef(false);
   const serialFileSenderRef = useRef<((path: string) => Promise<boolean>) | null>(null);
@@ -515,6 +470,12 @@ export function TerminalModule({
   const [cmdHints, setCmdHints] = useState<HintItem[]>([]);
   const [hintIndex, setHintIndex] = useState(0);
   const [hintVisible, setHintVisible] = useState(false);
+  // 路径/动态补全的异步请求中：远端 ls / docker ps 有 RTT，
+  // 期间显示「补全中…」，避免按 Tab 时面板瞬间消失、看起来像没反应。
+  const [hintLoading, setHintLoading] = useState(false);
+  // 「补全中」延迟显示的定时器：快速输入时每个请求几十毫秒就返回，
+  // 立即显示会闪烁干扰，只有超过阈值才真正显示（见 scheduleHintLoading）。
+  const hintLoadingTimerRef = useRef<number | null>(null);
   const currentInputRef = useRef(""); // 追踪当前输入行
   // MED-2：指令提示相关 ref 改用 useLatestRef
   const cmdHintsRef = useLatestRef(cmdHints); // 闭包中访问最新值
@@ -592,7 +553,8 @@ export function TerminalModule({
   const recordTerminalCwd = useCallback((termId: string, cwd: string) => {
     if (!cwd) return;
     terminalCwdRef.current.set(termId, cwd);
-    if (termId === activeTermIdRef.current) {
+    // 文件面板只认绝对路径；home 未就绪时的 `~` 占位形式仅内部补全使用，不外推
+    if (termId === activeTermIdRef.current && cwd.startsWith("/")) {
       onCwdChangeRef.current?.(cwd);
     }
   }, []);
@@ -646,6 +608,7 @@ export function TerminalModule({
   // 用户上滚查看历史时才使用外层队列；普通跟随输出直接交给 xterm.js 的
   // WriteBuffer。历史队列仍限制单终端一个写入帧，避免滚动位置被并行写入破坏。
   const outputWriteInFlightRef = useRef<Set<string>>(new Set());
+  const outputWriteTokenRef = useRef<Map<string, number>>(new Map());
   // 普通跟随模式直接交给 xterm.js 自己的 WriteBuffer；这里仅统计已交给
   // xterm、尚未执行完 callback 的字符量，用于给 SSH 读取做高低水位流控。
   const xtermPendingCharsRef = useRef<Map<string, number>>(new Map());
@@ -736,7 +699,7 @@ export function TerminalModule({
       }
     }
   }, [terminalEncoding]);
-  // 全局自动重连开关（设置面板，默认关闭）
+  // 全局自动重连开关（设置面板，默认开启）
   const terminalAutoReconnect = useAppStore((s) => s.terminalAutoReconnect);
   // 防空闲保活配置（默认关闭，因底层已有 15s 纯 SSH 协议心跳，避免向终端注入字符破坏日志）
   const terminalAntiIdleEnabled = useAppStore(
@@ -758,7 +721,7 @@ export function TerminalModule({
   );
   // MED-2：以下 ref 改用 useLatestRef，消除重复的 useEffect 同步样板
   const terminalScrollbackLinesRef = useLatestRef(terminalScrollbackLines);
-  // 全局自动重连开关 ref，默认关闭
+  // 全局自动重连开关 ref，默认开启
   const terminalAutoReconnectRef = useLatestRef(terminalAutoReconnect ?? false);
 
   // 防空闲保活 refs
@@ -857,8 +820,14 @@ export function TerminalModule({
   const terminalHintEnabledRef = useRef(terminalHintEnabled ?? true);
   useEffect(() => {
     terminalHintEnabledRef.current = terminalHintEnabled ?? true;
-    // 开关关闭时立即清空当前提示
+    // 开关关闭时立即清空当前提示及挂起的异步请求
     if (!terminalHintEnabled) {
+      pathFetchIdRef.current += 1;
+      if (hintLoadingTimerRef.current !== null) {
+        window.clearTimeout(hintLoadingTimerRef.current);
+        hintLoadingTimerRef.current = null;
+      }
+      setHintLoading(false);
       setCmdHints([]);
       setHintVisible(false);
     }
@@ -954,9 +923,76 @@ export function TerminalModule({
   // 若 runMatchHints 依赖 platform，已存在终端的 onData/customKeyEventHandler 闭包会持有旧值，
   // 导致不兼容命令不标灰。改用 ref 后 runMatchHints 引用稳定，所有闭包自动读取最新 platform。
   const platformRef = useLatestRef(platform);
+
+  /**
+   * 显示「补全中…」：延迟 300ms 且只对最新请求生效。
+   *
+   * 快速输入时每次按键都会发起新请求、几十毫秒就返回，立即显示会不断闪烁；
+   * 延迟后只有「远端确实慢」（>300ms）才出现，且过期请求不会误显示。
+   */
+  const scheduleHintLoading = useCallback((myId: number) => {
+    if (hintLoadingTimerRef.current !== null) {
+      window.clearTimeout(hintLoadingTimerRef.current);
+    }
+    hintLoadingTimerRef.current = window.setTimeout(() => {
+      hintLoadingTimerRef.current = null;
+      if (!isUnmountedRef.current && pathFetchIdRef.current === myId) {
+        setHintLoading(true);
+      }
+    }, 300);
+  }, []);
+
+  /** 清除「补全中…」及其定时器 */
+  const clearHintLoading = useCallback(() => {
+    if (hintLoadingTimerRef.current !== null) {
+      window.clearTimeout(hintLoadingTimerRef.current);
+      hintLoadingTimerRef.current = null;
+    }
+    setHintLoading(false);
+  }, []);
+
+  /**
+   * 懒加载用户真实 shell 别名（~/.bashrc / ~/.bash_aliases / ~/.zshrc）。
+   *
+   * 仅在 SSH Linux/macOS 会话且连接成功后加载；请求成功才标记已加载，
+   * 若连接未就绪或短暂失败允许后续重试。
+   */
+  const aliasFetchInflightRef = useRef<Set<string>>(new Set());
+  const serverRef = useLatestRef(server);
+  const ensureAliasesLoaded = useCallback((sid: string) => {
+    if (!sid || isUserAliasesLoaded(sid) || aliasFetchInflightRef.current.has(sid)) return;
+    const srv = serverRef.current;
+    if (
+      srv?.targetType === "serial" ||
+      srv?.protocol === "serial" ||
+      srv?.protocol === "telnet" ||
+      srv?.targetType === "network" ||
+      srv?.targetType === "bmc"
+    ) {
+      return;
+    }
+    aliasFetchInflightRef.current.add(sid);
+    void sshService
+      .execute(
+        sid,
+        "cat ~/.bashrc ~/.bash_aliases ~/.zshrc 2>/dev/null | grep -E '^[[:space:]]*alias[[:space:]]' || true",
+      )
+      .then((r) => {
+        aliasFetchInflightRef.current.delete(sid);
+        if (r?.success) {
+          setUserAliases(sid, parseAliasOutput(r.stdout ?? ""));
+        }
+      })
+      .catch(() => {
+        aliasFetchInflightRef.current.delete(sid);
+      });
+  }, []);
+
   const runMatchHints = useCallback(
     (input: string, opts?: { silent?: boolean }) => {
       const silent = opts?.silent ?? false;
+      // 每次重新匹配先复位 loading（含定时器）；异步分支稍后会重新排期
+      clearHintLoading();
       // 指令提示总开关关闭时，不显示任何提示
       if (!terminalHintEnabledRef.current) {
         setCmdHints([]);
@@ -964,149 +1000,240 @@ export function TerminalModule({
         hintResultRef.current = null;
         return;
       }
+
+      // 终端状态感知保护：
+      // 1. 备用屏幕（Alternate Screen，如 vim / htop / less / tmux / nano）中严禁弹出补全框
+      // 2. 密码输入或交互确认提示行（Password: / Passphrase: / [y/N] / (yes/no)）严禁弹出补全框
+      const curTermId = activeTermIdRef.current;
+      const activeTerm = curTermId
+        ? xtermInstances.current.get(curTermId)?.term
+        : undefined;
+      if (activeTerm) {
+        try {
+          const buf = activeTerm.buffer?.active;
+          if (buf?.type === "alternate") {
+            pathFetchIdRef.current += 1;
+            setCmdHints([]);
+            setHintVisible(false);
+            return;
+          }
+          if (buf) {
+            const curLine = buf
+              .getLine(buf.baseY + buf.cursorY)
+              ?.translateToString(true) ?? "";
+            if (
+              /(?:password|passphrase|密码)[^:：]*[:：]\s*$/i.test(curLine) ||
+              /\[(?:y\/n|yes\/no)\]|\((?:yes\/no)\)/i.test(curLine)
+            ) {
+              pathFetchIdRef.current += 1;
+              setCmdHints([]);
+              setHintVisible(false);
+              return;
+            }
+          }
+        } catch {
+          /* ignore buffer inspection error */
+        }
+      }
+
+      // 懒加载用户别名（不阻塞本次补全，加载完成后下次输入生效）
+      ensureAliasesLoaded(serverId);
       // silent 模式：↑↓调历史、退格删改等非主动输入场景，只更新内部 hintResultRef
       // （供 Tab 补全仍能工作），但不弹出提示框，避免干扰翻历史。
       if (silent) {
         // H4 修复：silent 模式也自增 pathFetchIdRef，使之前 pending 的异步请求失效，
         // 避免其 resolve 后意外弹出提示框干扰历史导航
         pathFetchIdRef.current += 1;
-        const result = matchHints(input, 12, platformRef.current);
+        const result = matchHints(input, 12, platformRef.current, serverId);
         hintResultRef.current = result;
         return;
       }
-      const result = matchHints(input, 12, platformRef.current);
+      const result = matchHints(input, 12, platformRef.current, serverId);
       hintResultRef.current = result;
 
-      // 进入参数/文件名阶段后，不再展示命令级候选。命令引擎无法识别
-      // 当前子命令时也必须让真实 Shell 接管 Tab/Enter（例如 sudo rm -rf BE
-      // 的远端文件名补全），避免无关候选阻断 Bash/Zsh 自身补全。
-      const tokenCount = input.trim() ? input.trim().split(/\s+/).length : 0;
-      if (tokenCount > 1 && result.phase === "command") {
+      // 若处于命令阶段但末尾为空格（如刚输入 `sudo ` 尚未敲入目标命令首字母），暂不弹出命令面板
+      if (/\s$/.test(input) && result.phase === "command") {
         pathFetchIdRef.current += 1;
         setCmdHints([]);
         setHintVisible(false);
         return;
       }
 
-      // 动态补全阶段：异步拉取远程资源（容器名/服务名/分支名等）
-      // 复用 pathFetchIdRef 做请求版本控制：动态与路径补全互斥，
-      // 任意一方发起时自增版本号即可使另一方 pending 的结果失效。
+      const cwd = curTermId
+        ? terminalCwdRef.current.get(curTermId) ?? homeDirRef.current
+        : homeDirRef.current;
+      const prevCmd = curTermId
+        ? lastSubmittedCommandPerTermRef.current.get(curTermId)
+        : undefined;
+      const scopeId = serverId || curTermId || "default";
+
+      // 提取上一条命令执行后的终端末尾输出（最多 12 行），用于报错感知与智能修复推荐
+      let recentOutput = "";
+      if (prevCmd && activeTerm) {
+        try {
+          const buf = activeTerm.buffer?.active;
+          if (buf) {
+            const curAbsY = buf.baseY + buf.cursorY;
+            const startY = Math.max(0, curAbsY - 12);
+            const outLines: string[] = [];
+            for (let y = startY; y < curAbsY; y++) {
+              const l = buf.getLine(y)?.translateToString(true)?.trim();
+              if (l) outLines.push(l);
+            }
+            recentOutput = outLines.join("\n");
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+
+      // 统一计算高优先级「预测层候选」（报错智能修复 + 马尔可夫连招 + 全阶段三维上下文历史）
+      const buildPredictiveHints = (staticItems: HintItem[]): HintItem[] => {
+        const trimmed = input.trim();
+        if (!trimmed) return [];
+        const markovHints = getMarkovHintItems(prevCmd, input, cwd, 2, {
+          scopeId,
+          serverId,
+          lastOutput: recentOutput,
+          platform: platformRef.current,
+        });
+        const markovLabels = new Set(markovHints.map((m) => m.label));
+        const staticLabels = new Set(staticItems.map((i) => i.label));
+
+        // 全阶段上下文历史推荐（支持命令/子命令/参数/动态阶段及多词缩写，按 ServerId+CWD 加权）
+        const histBudget = result.phase === "command" ? 2 : 3;
+        const rawHist = suggestHistory(input, histBudget, {
+          serverId,
+          cwd: cwd || undefined,
+        });
+        const dedupHist = rawHist.filter((h) => {
+          if (markovLabels.has(h.label) || staticLabels.has(h.label)) return false;
+          if (h.label === trimmed) return false;
+          return true;
+        });
+        return [...markovHints, ...dedupHist];
+      };
+
+      const applyHintList = (list: HintItem[]) => {
+        if (list.length > 0) {
+          const firstEnabledIdx = list.findIndex((h) => !h.disabled);
+          setCmdHints(list);
+          setHintIndex(firstEnabledIdx >= 0 ? firstEnabledIdx : 0);
+          setHintVisible(true);
+        } else {
+          setCmdHints([]);
+          setHintVisible(false);
+        }
+      };
+
+      const chainNames = result.commandChain.map((c) => c.cmd);
+
+      // 动态补全阶段：流式合成（先秒出匹配的连招/历史完整命令，再异步合入远端实时资源）
       if (result.phase === "dynamic" && result.dynamicProvider) {
-        setCmdHints([]);
-        setHintVisible(false);
+        const predictive = buildPredictiveHints([]);
+        if (predictive.length > 0) {
+          applyHintList(predictive);
+        } else {
+          setCmdHints([]);
+          setHintVisible(false);
+        }
         pathFetchIdRef.current += 1;
         const myId = pathFetchIdRef.current;
+        scheduleHintLoading(myId);
         const provider = result.dynamicProvider;
-        const chainNames = result.commandChain.map((c) => c.cmd);
         const tokens = result.tokens ?? [];
         const currentToken = result.currentToken ?? "";
-        fetchDynamicHints(serverId, provider, chainNames, tokens, currentToken)
-          .then((items) => {
-            // 组件已卸载：丢弃结果，避免在已卸载组件上 setState（轻微内存泄漏）
+        fetchDynamicHints(
+          serverId,
+          provider,
+          chainNames,
+          tokens,
+          currentToken,
+          cwd || undefined,
+        )
+          .then((remoteItems) => {
             if (isUnmountedRef.current) return;
-            // 过期请求（用户已继续输入或切换到其它阶段）的结果丢弃
             if (pathFetchIdRef.current !== myId) return;
-            if (items.length > 0) {
-              setCmdHints(items);
-              setHintIndex(0);
-              setHintVisible(true);
-            } else {
-              setCmdHints([]);
-              setHintVisible(false);
-            }
+            clearHintLoading();
+            const boostedRemote = boostHintsWithRecentEntities(
+              remoteItems,
+              chainNames,
+              scopeId,
+            );
+            const predLabels = new Set(predictive.map((p) => p.label));
+            const merged = [
+              ...predictive,
+              ...boostedRemote.filter((r) => !predLabels.has(r.label)),
+            ];
+            applyHintList(merged);
           })
           .catch((err) => {
             console.warn("[Terminal] fetchDynamicHints failed:", err);
+            if (pathFetchIdRef.current === myId) clearHintLoading();
           });
         return;
       }
 
-      // 路径阶段：异步拉取远程目录条目，本地先隐藏提示面板
+      // 路径阶段：流式合成（先展示匹配的连招/历史，再异步拉取远程目录条目并结合最近实体置顶）
       if (result.phase === "path" && result.expectingPath) {
-        setCmdHints([]);
-        setHintVisible(false);
-        // 取最后一个 token 作为路径输入（与引擎 currentToken 一致）
+        const predictive = buildPredictiveHints([]);
+        if (predictive.length > 0) {
+          applyHintList(predictive);
+        } else {
+          setCmdHints([]);
+          setHintVisible(false);
+        }
         const pathInput = input.match(/\S*$/)?.[0] ?? "";
         pathFetchIdRef.current += 1;
         const myId = pathFetchIdRef.current;
-        matchRemotePath(serverId, pathInput, 20)
-          .then((items) => {
-            // 组件已卸载：丢弃结果，避免在已卸载组件上 setState（轻微内存泄漏）
+        scheduleHintLoading(myId);
+        const pathFilterMode = result.pathFilterMode ?? "all";
+        const containerMode = result.commandChain[0]?.cmd === "docker";
+        matchRemotePath(
+          serverId,
+          pathInput,
+          20,
+          cwd || undefined,
+          pathFilterMode,
+          containerMode,
+        )
+          .then((remoteItems) => {
             if (isUnmountedRef.current) return;
-            // 过期请求（用户已继续输入或切换到非路径阶段）的结果丢弃
             if (pathFetchIdRef.current !== myId) return;
-            if (items.length > 0) {
-              setCmdHints(items);
-              setHintIndex(0);
-              setHintVisible(true);
-            } else {
-              setCmdHints([]);
-              setHintVisible(false);
-            }
+            clearHintLoading();
+            const boostedRemote = boostHintsWithRecentEntities(
+              remoteItems,
+              chainNames,
+              scopeId,
+            );
+            const predLabels = new Set(predictive.map((p) => p.label));
+            const merged = [
+              ...predictive,
+              ...boostedRemote.filter((r) => !predLabels.has(r.label)),
+            ];
+            applyHintList(merged);
           })
           .catch((err) => {
             console.warn("[Terminal] matchRemotePath failed:", err);
+            if (pathFetchIdRef.current === myId) clearHintLoading();
           });
         return;
       }
 
-      // 非路径/非动态阶段：自增版本号，使之前 pending 的异步请求失效，
-      // 避免其 resolve 后覆盖当前阶段的提示
+      // 非路径/非动态阶段：自增版本号，使之前 pending 的异步请求失效
       pathFetchIdRef.current += 1;
 
-      // 命令阶段：合并历史推荐（与静态命令去重，历史在前）
-      // 策略：静态候选已足够（≥4 条）时不显示历史，避免历史霸屏；
-      //       静态候选不足时补充最多 2 条最常用历史，让用户快速复用完整命令。
-      let items = result.items;
-      if (result.phase === "command" && input.trim() && items.length < 4) {
-        // 当前输入的第一个 token（命令名阶段，input 即单 token 或起始 token）
-        const cmdToken = input.trim().split(/\s+/)[0] ?? "";
-        // 静态候选越少，可补充的历史越多（最多 2 条）
-        const histBudget = Math.min(2, 4 - items.length);
-        const hist = suggestHistory(input.trim(), histBudget);
-        if (hist.length > 0) {
-          const staticLabels = new Set(items.map((i) => i.label));
-          const dedupHist = hist.filter((h) => {
-            // 与静态候选去重
-            if (staticLabels.has(h.label)) return false;
-            // 关键：仅过滤与当前输入完全相同的单字命令，避免"输入完整命令名仍以历史形式弹回"。
-            // 不要用 h.label.split(/\s+/)[0] === cmdToken 过滤——那会误伤多词历史：
-            // 输入 git 时会过滤掉 git status / git push 等最有用的历史推荐。
-            // 例：输入 lscpu（已知命令）→ 引擎返回空 → 不应再以历史形式弹 lscpu
-            //     输入 git → 应保留 git status / git push 等多词历史
-            if (cmdToken && h.label === cmdToken) return false;
-            return true;
-          });
-          if (dedupHist.length > 0) items = [...dedupHist, ...items];
-        }
-      }
+      // 融合预测层（报错修复 + 马尔可夫连招 + 上下文历史）与静态命令/子命令/参数层
+      const predictive = buildPredictiveHints(result.items);
+      const predLabels = new Set(predictive.map((p) => p.label));
+      const items = [
+        ...predictive,
+        ...result.items.filter((item) => !predLabels.has(item.label)),
+      ];
 
-      // 马尔可夫转移连招预测：结合上一条提交指令与 OSC-7 提取的工作目录推测下一步高概率动作
-      if (input.trim()) {
-        const curTermId = activeTermIdRef.current;
-        const prevCmd = curTermId
-          ? lastSubmittedCommandPerTermRef.current.get(curTermId)
-          : undefined;
-        const curCwd = curTermId
-          ? terminalCwdRef.current.get(curTermId)
-          : undefined;
-        const markovHints = getMarkovHintItems(prevCmd, input.trim(), curCwd, 2);
-        if (markovHints.length > 0) {
-          const markovLabels = new Set(markovHints.map((m) => m.label));
-          items = [...markovHints, ...items.filter((item) => !markovLabels.has(item.label))];
-        }
-      }
-
-      if (items.length > 0) {
-        setCmdHints(items);
-        setHintIndex(0);
-        setHintVisible(true);
-      } else {
-        setCmdHints([]);
-        setHintVisible(false);
-      }
+      applyHintList(items);
     },
-    [serverId],
+    [clearHintLoading, ensureAliasesLoaded, scheduleHintLoading, serverId],
   );
 
   // 提示面板关闭后恢复终端焦点（React 卸载面板 DOM 后执行）
@@ -1167,7 +1294,7 @@ export function TerminalModule({
         const containerH = container.clientHeight;
         const cursorBottomY = screenOffsetTop + (cursorY + 1) * cellHeight;
         const cursorTopY = screenOffsetTop + cursorY * cellHeight;
-        const panelW = 340;
+        const panelW = 360;
         // 判断放在上方还是下方：若下方空间足以容纳 180px 或者光标在上半区，则放下方；否则紧贴光标上方
         const placeBelow =
           cursorBottomY + 180 <= containerH ||
@@ -1217,11 +1344,13 @@ export function TerminalModule({
 
   // 切换活跃终端时清空指令提示状态，避免跨终端状态污染（B3 简化方案）
   useEffect(() => {
+    pathFetchIdRef.current += 1;
+    clearHintLoading();
     currentInputRef.current = "";
     setCmdHints([]);
     setHintIndex(0);
     setHintVisible(false);
-  }, [activeTermId]);
+  }, [activeTermId, clearHintLoading]);
 
   // 监听字体大小变化，动态调整所有终端实例的字号并 resize 后端 PTY
   useEffect(() => {
@@ -1282,6 +1411,8 @@ export function TerminalModule({
         terminalHintEnabledRef.current = next;
         // 关闭时立即清空提示；开启时不主动弹出（等用户输入触发）
         if (!next) {
+          pathFetchIdRef.current += 1;
+          clearHintLoading();
           setCmdHints([]);
           setHintVisible(false);
         }
@@ -2022,6 +2153,8 @@ export function TerminalModule({
       }
 
       // 4. 清理输入和提示
+      pathFetchIdRef.current += 1;
+      clearHintLoading();
       currentInputRef.current = "";
       setCmdHints([]);
       setHintVisible(false);
@@ -2029,7 +2162,7 @@ export function TerminalModule({
       // 5. 聚焦终端
       term?.focus();
     },
-    [activeTermId, tabId],
+    [activeTermId, clearHintLoading, tabId],
   );
 
   // 在 window 冒泡阶段再兜底一次。xterm 的 custom key handler 通常足够；
@@ -2435,8 +2568,17 @@ export function TerminalModule({
             );
 
       const capturedWasScrolledUp = item.wasScrolledUp;
+      const writeToken = (outputWriteTokenRef.current.get(queuedTermId) ?? 0) + 1;
+      outputWriteTokenRef.current.set(queuedTermId, writeToken);
       outputWriteInFlightRef.current.add(queuedTermId);
-      item.term.write(frameData, () => {
+      const isWriteCancelled = () =>
+        isUnmountedRef.current ||
+        !outputWriteInFlightRef.current.has(queuedTermId) ||
+        outputWriteTokenRef.current.get(queuedTermId) !== writeToken;
+
+      // 写入完成后的收尾逻辑（未读计数 + 调度下一帧冲刷）
+      const finalizeWrite = () => {
+        if (isWriteCancelled()) return;
         outputWriteInFlightRef.current.delete(queuedTermId);
         if (capturedWasScrolledUp) {
           // 终端可能在异步写入期间已被用户滚到底部，此时无需记数
@@ -2458,7 +2600,33 @@ export function TerminalModule({
         if (outputWriteQueuesRef.current.has(queuedTermId) && outputWriteFrameRef.current === null) {
           outputWriteFrameRef.current = window.setTimeout(flushTerminalOutputQueues, 0);
         }
-      });
+      };
+
+      // U1 修复：大帧拆分写。单帧最高可达 1MB，一次性 term.write 会让 xterm
+      // 同步解析整块并长时间占用主线程（键盘输入饥饿）。这里切成 64KB 块逐块
+      // write，块间让出宏任务，使键盘事件 / rAF 能及时抢占，消除洪峰期输入延迟。
+      const LARGE_FRAME_CHUNK_BYTES = 64 * 1024;
+      if (frameData.length > LARGE_FRAME_CHUNK_BYTES) {
+        void (async () => {
+          let offset = 0;
+          while (offset < frameData.length) {
+            if (isWriteCancelled()) {
+              return;
+            }
+            const chunk = frameData.slice(offset, offset + LARGE_FRAME_CHUNK_BYTES);
+            offset += LARGE_FRAME_CHUNK_BYTES;
+            await new Promise<void>((resolve) => item.term.write(chunk, () => resolve()));
+            if (isWriteCancelled()) {
+              return;
+            }
+            // 块间让出宏任务，让键盘事件、rAF 等及时执行
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+          }
+          finalizeWrite();
+        })();
+      } else {
+        item.term.write(frameData, finalizeWrite);
+      }
     }
 
     // 若队列中仍有未消费完的积压数据，调度下一帧继续冲刷直至完全排空
@@ -2563,9 +2731,8 @@ export function TerminalModule({
         existing.term = term;
         existing.chunks.push(data);
         existing.totalChars += data.length;
-        totalChars = existing.totalChars;
 
-        // 流控防爆内存保护：当单终端待渲染积压超过 4MB 时淘汰最旧的积压块，保证内存恒定可控
+        // 流控防爆内存保护：当单终端待渲染积压超过 64MB 时淘汰最旧的积压块，保证内存恒定可控
         if (existing.totalChars > MAX_QUEUE_BUFFER_CHARS) {
           while (existing.chunks.length > 1 && existing.totalChars > MAX_QUEUE_BUFFER_CHARS / 2) {
             const dropped = existing.chunks.shift();
@@ -2574,6 +2741,8 @@ export function TerminalModule({
             }
           }
         }
+        // 丢弃后更新 totalChars，使下方背压判断基于丢弃后的真实积压（否则丢弃后仍会误判高水位触发 pause）
+        totalChars = existing.totalChars;
         // MED-3：wasScrolledUp 仅在首次判定为用户上滚时置 true，之后不再被后续帧覆盖为 false。
         // 避免两帧之间用户「先上滚再下滚」导致本批次已积压块被错误标记为未上滚（少算新输出计数）。
         // 是否真正计入新输出仍由冲刷时的实时 viewport 检查（viewportY >= baseY）兜底。
@@ -2658,11 +2827,14 @@ export function TerminalModule({
       if (!clean) return;
       pendingCommandRef.current.set(termId, clean);
 
+      const scopeId = serverId || termId;
+      updateSessionEntities(clean, scopeId);
+
       // 本地马尔可夫模型自适应强化学习：记录相邻执行命令转移对
       const prevCmd = lastSubmittedCommandPerTermRef.current.get(termId);
       const currentCwd = terminalCwdRef.current.get(termId);
       if (prevCmd && prevCmd !== clean) {
-        recordMarkovTransition(prevCmd, clean, currentCwd);
+        recordMarkovTransition(prevCmd, clean, currentCwd, scopeId);
       }
       lastSubmittedCommandPerTermRef.current.set(termId, clean);
 
@@ -2674,17 +2846,24 @@ export function TerminalModule({
         const target = clean.replace(/^cd\s*/i, "").trim().replace(/^['"]|['"]$/g, "");
         const isSimplePath = !!target && !/[\s$&|;<>*?`]/.test(target) && !target.startsWith("-");
         if (!target || target === "~") {
-          if (homeDirRef.current) {
-            recordTerminalCwd(termId, homeDirRef.current);
-          }
+          // home 已知用绝对路径；未知时记录 shell 语义的 `~`（补全侧 toShellPath 支持
+          // `"$HOME/..."` 展开），保证 cd 链条不断裂，后续相对推导不会落到错误基准。
+          recordTerminalCwd(termId, homeDirRef.current || "~");
         } else if (isSimplePath && target.startsWith("/")) {
           recordTerminalCwd(termId, target);
         } else if (isSimplePath && target.startsWith("~/") && homeDirRef.current) {
           const resolved = target.replace(/^~/, homeDirRef.current.replace(/\/+$/, ""));
           recordTerminalCwd(termId, resolved);
+        } else if (isSimplePath && target.startsWith("~/")) {
+          // home 尚未取到时的 `~/x`：保留 ~ 前缀原样记录（toShellPath 会展开 $HOME）
+          recordTerminalCwd(termId, target);
         } else if (isSimplePath) {
           // 相对路径（含 ./ ../ ..）
-          const current = terminalCwdRef.current.get(termId) || homeDirRef.current || "/";
+          // 基准：已跟踪 cwd → home → `~`（home 未就绪时的占位，防止 cd 链断裂：
+          // 例 `cd deploy` 在 home 未就绪时记为 ~/deploy，后续 `cd iot-gateway`
+          // → ~/deploy/iot-gateway，而不是错落到 /home/hongyan/iot-gateway）。
+          const current =
+            terminalCwdRef.current.get(termId) || homeDirRef.current || "~";
           const resolved = resolveRelativePath(current, target);
           if (resolved) {
             recordTerminalCwd(termId, resolved);
@@ -3374,6 +3553,18 @@ export function TerminalModule({
         const sessionCleanup = () => {
           if (sessionCleanupDone) return;
           sessionCleanupDone = true;
+          // 断连/关闭：使所有 in-flight 的路径/动态补全请求失效（resolve 后会被版本号丢弃）；
+          // 若该会话属于当前活跃终端，同时清掉补全面板状态，避免旧补全列表残留到新会话。
+          pathFetchIdRef.current += 1;
+          if (termId === activeTermIdRef.current) {
+            setCmdHints([]);
+            setHintVisible(false);
+            setHintLoading(false);
+            if (hintLoadingTimerRef.current !== null) {
+              window.clearTimeout(hintLoadingTimerRef.current);
+              hintLoadingTimerRef.current = null;
+            }
+          }
           const current = xtermInstances.current.get(termId);
           if (current?.term) discardPendingXtermWrites(current.term);
           outputWriteQueuesRef.current.delete(termId);
@@ -3435,6 +3626,10 @@ export function TerminalModule({
         // 若不更新，重连后这些场景会拿到旧的（已关闭的）sessionId，导致输入丢失。
         const xinst = xtermInstances.current.get(termId);
         if (xinst) xtermInstances.current.set(termId, { ...xinst, sessionId });
+
+        // 重连得到的是全新 shell 进程，PWD 已回到 home：清空重连前的 cwd 缓存，
+        // 否则相对路径补全会继续 ls 旧目录（表现为「cd 前缀什么都不提示」）。
+        terminalCwdRef.current.delete(termId);
 
         // 注册到 tab 会话管理
         if (tabId) {
@@ -3509,7 +3704,13 @@ export function TerminalModule({
                     highlightRulesRef.current,
                   ),
             );
-            xtermInfo.term.write(safeHistory);
+            await writeChunked(
+              xtermInfo.term,
+              safeHistory,
+              64 * 1024,
+              undefined,
+              () => isUnmountedRef.current || !sshService.isSessionAlive(sessionId),
+            );
           }
         } catch (e) {
           console.error("Failed to get shell history during reconnect:", e);
@@ -3688,7 +3889,11 @@ export function TerminalModule({
             if (currentInputRef.current.trim()) {
               rememberSubmittedCommand(termId, submittedCommand);
               recordCommand(currentInputRef.current);
+              // 新命令入历史后令排名缓存失效，下一次补全即反映最新频次
+              invalidateRankingCache();
             }
+            pathFetchIdRef.current += 1;
+            clearHintLoading();
             currentInputRef.current = "";
             setCmdHints([]);
             setHintVisible(false);
@@ -3707,6 +3912,8 @@ export function TerminalModule({
             return;
           } else if (data === "\x15") {
             // Ctrl+U 清空当前行
+            pathFetchIdRef.current += 1;
+            clearHintLoading();
             currentInputRef.current = "";
             setCmdHints([]);
             setHintVisible(false);
@@ -3770,6 +3977,8 @@ export function TerminalModule({
             // 关键修复：↑ 调历史后 shell 显示 `docker logs -f`，但 currentInputRef 已失效，
             // 必须从 buffer 读取真实内容，否则后续输入容器名时会被误判为命令阶段。
             // 先关闭当前提示（避免重建前显示错位），延迟从 buffer 重建
+            pathFetchIdRef.current += 1;
+            clearHintLoading();
             setCmdHints([]);
             setHintVisible(false);
             // 用当前终端实例重建（普通模式与迁移模式都已注册到 xtermInstances）
@@ -4638,25 +4847,40 @@ export function TerminalModule({
           // - Enter：始终透传给 shell 执行命令，绝不补全
           //   用户诉求：输入 ls 后回车应执行 ls，而非被提示框补全成 lsof。
           //   补全统一由 Tab 负责，Enter 永远执行。
-          if (event.key === "Tab" && !event.ctrlKey && !event.altKey) {
+          if (event.key === "Tab" && !event.ctrlKey && !event.altKey && !event.shiftKey) {
             const hints = cmdHintsRef.current;
             if (hints.length > 0) {
+              // 无任何可用（非禁用）候选时不拦截 Tab，交还给远端 Shell 原生补全
+              const hint = hints.find((h, i) => !h.disabled && i >= hintIndexRef.current)
+                || hints.find(h => !h.disabled);
+              if (!hint) {
+                setCmdHints([]);
+                setHintVisible(false);
+                return true;
+              }
               // Tab 补全选中项（跳过禁用项）
               event.preventDefault();
-              const hint = hints.find((h, i) => !h.disabled && i >= hintIndexRef.current)
-                || hints.find(h => !h.disabled)
-                || hints[0];
               const sid = xtermInstances.current.get(termId)?.sessionId;
               if (sid) {
                 // Tab 补全不带尾随空格：补全后停留在当前 token，
                 // 用户需手动按空格才会进入下一阶段（参数/子命令提示）。
-                const { insertText: rawInsert, newInput: rawNewInput } =
-                  applyHint(currentInputRef.current, hint);
+                const {
+                  insertText: rawInsert,
+                  newInput: rawNewInput,
+                  cursorBack,
+                } = applyHint(currentInputRef.current, hint);
                 const insertText = rawInsert.replace(/\s+$/, "");
                 const newInput = rawNewInput.replace(/\s+$/, "");
                 if (insertText) {
-                  broadcastToShells(sid, insertText);
-                  currentInputRef.current = newInput;
+                  const moveLeft =
+                    cursorBack && cursorBack > 0
+                      ? "\x1b[D".repeat(cursorBack)
+                      : "";
+                  broadcastToShells(sid, insertText + moveLeft);
+                  currentInputRef.current =
+                    cursorBack && cursorBack > 0 && newInput.length >= cursorBack
+                      ? newInput.slice(0, -cursorBack)
+                      : newInput;
                   // Tab 补全成功反馈音（受全局音效开关控制）
                   playSound(SoundType.Complete);
                   // 补全后关闭提示框：避免立即弹出下一阶段提示干扰用户
@@ -4676,25 +4900,43 @@ export function TerminalModule({
           // - 用户按↑↓调历史 → silent 不弹提示 → 上下键透传翻历史
           if (cmdHintsRef.current.length > 0) {
             if (event.key === "ArrowUp") {
+              const hints = cmdHintsRef.current;
               // 防御性：idx 越界时先归零（理论上不会越界，但快速切换 cmdHints 时有一瞬间可能）
-              const idx = Math.min(
-                hintIndexRef.current,
-                cmdHintsRef.current.length - 1,
-              );
-              const next = idx > 0 ? idx - 1 : cmdHintsRef.current.length - 1;
-              // 同步更新 ref，防止快速连按时 useEffect 未及时同步导致跳步
-              hintIndexRef.current = next;
-              setHintIndex(next);
+              const idx = Math.min(hintIndexRef.current, hints.length - 1);
+              // 向上查找下一个非禁用项（跳过 disabled，避免高亮到不可用项）
+              let next = -1;
+              for (let i = idx - 1; i >= 0; i -= 1) {
+                if (!hints[i].disabled) { next = i; break; }
+              }
+              if (next < 0) {
+                for (let i = hints.length - 1; i > idx; i -= 1) {
+                  if (!hints[i].disabled) { next = i; break; }
+                }
+              }
+              if (next >= 0) {
+                // 同步更新 ref，防止快速连按时 useEffect 未及时同步导致跳步
+                hintIndexRef.current = next;
+                setHintIndex(next);
+              }
               return false; // 拦截，翻提示项
             }
             if (event.key === "ArrowDown") {
-              const idx = Math.min(
-                hintIndexRef.current,
-                cmdHintsRef.current.length - 1,
-              );
-              const next = idx < cmdHintsRef.current.length - 1 ? idx + 1 : 0;
-              hintIndexRef.current = next;
-              setHintIndex(next);
+              const hints = cmdHintsRef.current;
+              const idx = Math.min(hintIndexRef.current, hints.length - 1);
+              // 向下查找下一个非禁用项
+              let next = -1;
+              for (let i = idx + 1; i < hints.length; i += 1) {
+                if (!hints[i].disabled) { next = i; break; }
+              }
+              if (next < 0) {
+                for (let i = 0; i < idx; i += 1) {
+                  if (!hints[i].disabled) { next = i; break; }
+                }
+              }
+              if (next >= 0) {
+                hintIndexRef.current = next;
+                setHintIndex(next);
+              }
               return false; // 拦截，翻提示项
             }
             // Esc 关闭提示
@@ -5436,6 +5678,9 @@ export function TerminalModule({
           }
           sessionId = result.sessionId;
           bannerText = result.banner;
+          // 新建 shell 的 PWD 是 home：清掉可能残留的旧 cwd（同 termId 复用场景），
+          // 避免相对路径补全列到上一个会话的目录。
+          terminalCwdRef.current.delete(termId);
         }
 
         // 关键修复：createShell 成功后立即将 closeShell 加入 cleanups，
@@ -5451,6 +5696,18 @@ export function TerminalModule({
         const sessionCleanup = () => {
           if (sessionCleanupDone) return;
           sessionCleanupDone = true;
+          // 断连/关闭：使所有 in-flight 的路径/动态补全请求失效（resolve 后会被版本号丢弃）；
+          // 若该会话属于当前活跃终端，同时清掉补全面板状态，避免旧补全列表残留到新会话。
+          pathFetchIdRef.current += 1;
+          if (termId === activeTermIdRef.current) {
+            setCmdHints([]);
+            setHintVisible(false);
+            setHintLoading(false);
+            if (hintLoadingTimerRef.current !== null) {
+              window.clearTimeout(hintLoadingTimerRef.current);
+              hintLoadingTimerRef.current = null;
+            }
+          }
           const current = xtermInstances.current.get(termId);
           if (current?.term) discardPendingXtermWrites(current.term);
           outputWriteQueuesRef.current.delete(termId);
@@ -5585,7 +5842,13 @@ export function TerminalModule({
                     highlightRulesRef.current,
                   ),
             );
-            writeMotdIfMissing(term, bannerText, safeHistory, currentServer);
+            await writeMotdIfMissing(
+              term,
+              bannerText,
+              safeHistory,
+              currentServer,
+              () => isUnmountedRef.current || Boolean(sessionId && !sshService.isSessionAlive(sessionId)),
+            );
           } else if (history) {
             const safeHistory = stripUnsafeEscapes(
               isSerial
@@ -5596,10 +5859,21 @@ export function TerminalModule({
                     highlightRulesRef.current,
                   ),
             );
-            term.write(safeHistory);
+            await writeChunked(
+              term,
+              safeHistory,
+              64 * 1024,
+              undefined,
+              () => isUnmountedRef.current || Boolean(sessionId && !sshService.isSessionAlive(sessionId)),
+            );
           }
         } catch (e) {
           console.error("Failed to get shell history:", e);
+        }
+
+        if (isUnmountedRef.current || (sessionId && !sshService.isSessionAlive(sessionId))) {
+          sessionCleanup();
+          return;
         }
 
         // 标记历史渲染完毕，并冲刷在加载历史期间接收到的实时缓冲数据
@@ -5771,11 +6045,20 @@ export function TerminalModule({
 
           // 追踪当前输入行，用于指令提示与历史记录
           if (data === "\r" || data === "\n") {
-            // 回车执行命令：记录到历史，再清空输入追踪
+            // 回车执行命令：记录到历史（附带主机与工作目录上下文），再清空输入追踪
             if (currentInputRef.current.trim()) {
+              const curCwd =
+                terminalCwdRef.current.get(termId) ?? homeDirRef.current;
               rememberSubmittedCommand(termId, currentInputRef.current);
-              recordCommand(currentInputRef.current);
+              recordCommand(currentInputRef.current, {
+                serverId,
+                cwd: curCwd,
+              });
+              // 新命令入历史后令排名缓存失效，下一次补全即反映最新频次
+              invalidateRankingCache();
             }
+            pathFetchIdRef.current += 1;
+            clearHintLoading();
             currentInputRef.current = "";
             setCmdHints([]);
             setHintVisible(false);
@@ -5786,10 +6069,19 @@ export function TerminalModule({
               const part = parts[idx];
               const fullCmd = idx === 0 ? currentInputRef.current + part : part;
               if (fullCmd.trim()) {
+                const curCwd =
+                  terminalCwdRef.current.get(termId) ?? homeDirRef.current;
                 rememberSubmittedCommand(termId, fullCmd);
-                recordCommand(fullCmd);
+                recordCommand(fullCmd, {
+                  serverId,
+                  cwd: curCwd,
+                });
+                // 新命令入历史后令排名缓存失效，下一次补全即反映最新频次
+                invalidateRankingCache();
               }
             }
+            pathFetchIdRef.current += 1;
+            clearHintLoading();
             currentInputRef.current = parts[parts.length - 1] || "";
             setCmdHints([]);
             setHintVisible(false);
@@ -5808,6 +6100,8 @@ export function TerminalModule({
             return;
           } else if (data === "\x15") {
             // Ctrl+U 清空当前行
+            pathFetchIdRef.current += 1;
+            clearHintLoading();
             currentInputRef.current = "";
             setCmdHints([]);
             setHintVisible(false);
@@ -5871,6 +6165,8 @@ export function TerminalModule({
             // 关键修复：↑ 调历史后 shell 显示 `docker logs -f`，但 currentInputRef 已失效，
             // 必须从 buffer 读取真实内容，否则后续输入容器名时会被误判为命令阶段。
             // 先关闭当前提示（避免重建前显示错位），延迟从 buffer 重建
+            pathFetchIdRef.current += 1;
+            clearHintLoading();
             setCmdHints([]);
             setHintVisible(false);
             // 用当前终端实例重建（普通模式与迁移模式都已注册到 xtermInstances）
@@ -6549,9 +6845,15 @@ export function TerminalModule({
         window.clearTimeout(rebuildTimerRef.current);
         rebuildTimerRef.current = null;
       }
+      if (hintLoadingTimerRef.current !== null) {
+        window.clearTimeout(hintLoadingTimerRef.current);
+        hintLoadingTimerRef.current = null;
+      }
+      pathFetchIdRef.current += 1;
       // eslint-disable-next-line react-hooks/exhaustive-deps
       outputWriteQueuesRef.current.clear();
       outputWriteInFlightRef.current.clear();
+      outputWriteTokenRef.current.clear();
       xtermPendingCharsRef.current.clear();
 
       // H3 修复：清理所有 resize 节流定时器，防止卸载后向已关闭的 session 发送 resizeShell
@@ -8292,6 +8594,130 @@ export function TerminalModule({
   const serialConnected =
     !!activeTermId && terminals.get(activeTermId)?.status === "connected";
 
+  // U5：稳定传给子组件的回调引用，配合子组件的 React.memo，避免搜索输入等高频
+  // state 变化导致无关子组件（右键菜单 / 划词工具条等）无谓重渲染。
+  const closeCtxMenu = useCallback(() => setCtxMenu(null), []);
+  const handleCopyAllOutput = useCallback(() => {
+    void copyAllOutput();
+  }, [copyAllOutput]);
+  const openLogFile = useCallback(() => {
+    void handleOpenLogFile();
+  }, [handleOpenLogFile]);
+  const openLogFolder = useCallback(() => {
+    void handleOpenLogFolder();
+  }, [handleOpenLogFolder]);
+  const chooseLogDirectory = useCallback(() => {
+    void handleChooseLogDirectory();
+  }, [handleChooseLogDirectory]);
+  const closeSelectionToolbar = useCallback(() => setSelectionToolbar(null), []);
+  const handleSelectionContextMenu = useCallback((x: number, y: number) => {
+    setSelectionToolbar(null);
+    setCtxMenu({ x, y, hasSelection: true });
+  }, []);
+  const handleHoverHint = useCallback(
+    (i: number) => {
+      hintIndexRef.current = i;
+      setHintIndex(i);
+    },
+    [hintIndexRef],
+  );
+  const handleSelectHint = useCallback(
+    (hint: HintItem) => {
+      const termId = activeTermIdRef.current;
+      const session = termId ? terminalsRef.current.get(termId) : undefined;
+      if (session?.sessionId) {
+        const { insertText, newInput, cursorBack } = applyHint(
+          currentInputRef.current,
+          hint,
+        );
+        if (insertText) {
+          const trimmedInsert = insertText.replace(/\s+$/, "");
+          const trimmedInput = newInput.replace(/\s+$/, "");
+          if (trimmedInsert) {
+            const moveLeft =
+              cursorBack && cursorBack > 0 ? "\x1b[D".repeat(cursorBack) : "";
+            broadcastToShells(session.sessionId, trimmedInsert + moveLeft);
+            currentInputRef.current =
+              cursorBack && cursorBack > 0 && trimmedInput.length >= cursorBack
+                ? trimmedInput.slice(0, -cursorBack)
+                : trimmedInput;
+            playSound(SoundType.Complete);
+          }
+        }
+      }
+      setCmdHints([]);
+      setHintVisible(false);
+    },
+    [activeTermIdRef, broadcastToShells],
+  );
+  const searchTextLatestRef = useLatestRef(searchText);
+  const handleSearchTextChange = useCallback(
+    (val: string) => {
+      setSearchText(val);
+      doSearch(val, "next", false);
+    },
+    [doSearch],
+  );
+  const handleToggleRegex = useCallback(() => {
+    const next = !searchRegexRef.current;
+    searchRegexRef.current = next;
+    setSearchRegex(next);
+    if (searchTextLatestRef.current) {
+      doSearch(searchTextLatestRef.current, "next", true);
+    }
+  }, [doSearch, searchRegexRef, searchTextLatestRef]);
+  const handleToggleCaseSensitive = useCallback(() => {
+    const next = !searchCaseSensitiveRef.current;
+    searchCaseSensitiveRef.current = next;
+    setSearchCaseSensitive(next);
+    if (searchTextLatestRef.current) {
+      doSearch(searchTextLatestRef.current, "next", true);
+    }
+  }, [doSearch, searchCaseSensitiveRef, searchTextLatestRef]);
+  const handleToggleWholeWord = useCallback(() => {
+    const next = !searchWholeWordRef.current;
+    searchWholeWordRef.current = next;
+    setSearchWholeWord(next);
+    if (searchTextLatestRef.current) {
+      doSearch(searchTextLatestRef.current, "next", true);
+    }
+  }, [doSearch, searchTextLatestRef, searchWholeWordRef]);
+  const handleSearchBarKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        e.stopPropagation();
+        e.currentTarget.select();
+        return;
+      }
+      if (e.key === "F3" && !e.nativeEvent.isComposing) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.shiftKey) {
+          handleFindPrev();
+        } else {
+          handleFindNext();
+        }
+      }
+    },
+    [handleFindNext, handleFindPrev],
+  );
+  const pendingPasteLatestRef = useLatestRef(pendingPaste);
+  const handleClosePasteConfirm = useCallback(() => setPendingPaste(null), []);
+  const handleConfirmPaste = useCallback(
+    (dontAskAgain: boolean) => {
+      if (dontAskAgain) {
+        setTerminalPasteWarnEnabled(false);
+      }
+      const currentPaste = pendingPasteLatestRef.current;
+      if (currentPaste) {
+        writePasteText(currentPaste.text, currentPaste.sessionId);
+      }
+      setPendingPaste(null);
+    },
+    [pendingPasteLatestRef, setTerminalPasteWarnEnabled, writePasteText],
+  );
+
   return (
     <div
       className={cn(
@@ -8594,45 +9020,22 @@ export function TerminalModule({
           </div>
         )}
 
+        {hintLoading && !hintVisible && (
+          <div className="pointer-events-none absolute right-3 top-3 z-30 flex items-center gap-1 text-[10px] text-muted-foreground/70">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            <span>{t("hint_loading")}</span>
+          </div>
+        )}
+
         <TerminalHintPanel
           visible={hintVisible}
           hints={cmdHints}
           hintIndex={hintIndex}
           isLightTerminal={activeTheme?.type === "light"}
+          activeUsage={hintResultRef.current?.usage}
           style={hintPanelStyle}
-          onHoverHint={(i) => {
-            hintIndexRef.current = i;
-            setHintIndex(i);
-          }}
-          onSelectHint={(hint) => {
-            const session = terminals.get(activeTermId!);
-            if (session?.sessionId) {
-              const { insertText, newInput } = applyHint(
-                currentInputRef.current,
-                hint,
-              );
-              if (insertText) {
-                const trimmedInsert = insertText.replace(/\s+$/, "");
-                const trimmedInput = newInput.replace(/\s+$/, "");
-                if (trimmedInsert) {
-                  broadcastToShells(session.sessionId, trimmedInsert);
-                  currentInputRef.current = trimmedInput;
-                  playSound(SoundType.Complete);
-                  setCmdHints([]);
-                  setHintVisible(false);
-                } else {
-                  setCmdHints([]);
-                  setHintVisible(false);
-                }
-              } else {
-                setCmdHints([]);
-                setHintVisible(false);
-              }
-            } else {
-              setCmdHints([]);
-              setHintVisible(false);
-            }
-          }}
+          onHoverHint={handleHoverHint}
+          onSelectHint={handleSelectHint}
         />
 
         {terminals.size === 0 && (
@@ -8651,51 +9054,15 @@ export function TerminalModule({
         <TerminalSearchBar
           open={showSearch}
           searchText={searchText}
-          onSearchTextChange={(val) => {
-            setSearchText(val);
-            doSearch(val, "next", false);
-          }}
+          onSearchTextChange={handleSearchTextChange}
           searchState={searchState}
           searchRegex={searchRegex}
-          onToggleRegex={() => {
-            const next = !searchRegex;
-            searchRegexRef.current = next;
-            setSearchRegex(next);
-            if (searchText) {
-              doSearch(searchText, "next", true);
-            }
-          }}
+          onToggleRegex={handleToggleRegex}
           searchCaseSensitive={searchCaseSensitive}
-          onToggleCaseSensitive={() => {
-            const next = !searchCaseSensitive;
-            searchCaseSensitiveRef.current = next;
-            setSearchCaseSensitive(next);
-            if (searchText) doSearch(searchText, "next", true);
-          }}
+          onToggleCaseSensitive={handleToggleCaseSensitive}
           searchWholeWord={searchWholeWord}
-          onToggleWholeWord={() => {
-            const next = !searchWholeWord;
-            searchWholeWordRef.current = next;
-            setSearchWholeWord(next);
-            if (searchText) doSearch(searchText, "next", true);
-          }}
-          onKeyDown={(e) => {
-            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
-              e.preventDefault();
-              e.stopPropagation();
-              e.currentTarget.select();
-              return;
-            }
-            if (e.key === "F3" && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              e.stopPropagation();
-              if (e.shiftKey) {
-                handleFindPrev();
-              } else {
-                handleFindNext();
-              }
-            }
-          }}
+          onToggleWholeWord={handleToggleWholeWord}
+          onKeyDown={handleSearchBarKeyDown}
           onFindPrev={handleFindPrev}
           onFindNext={handleFindNext}
           onClose={closeSearch}
@@ -8781,9 +9148,9 @@ export function TerminalModule({
       <TerminalContextMenu
         ctxMenu={ctxMenu}
         isLightTerminal={activeTheme?.type === "light"}
-        onClose={() => setCtxMenu(null)}
+        onClose={closeCtxMenu}
         onCopy={handleCopy}
-        onCopyAll={() => void copyAllOutput()}
+        onCopyAll={handleCopyAllOutput}
         onPaste={handlePaste}
         onPasteSelection={handlePasteSelection}
         onSearch={handleSearch}
@@ -8793,9 +9160,9 @@ export function TerminalModule({
         onToggleRecording={handleToggleRecordingMenu}
         onPauseRecording={handlePauseRecordingMenu}
         onResumeRecording={handleResumeRecordingMenu}
-        onOpenLogFile={() => void handleOpenLogFile()}
-        onOpenLogFolder={() => void handleOpenLogFolder()}
-        onChooseLogDirectory={() => void handleChooseLogDirectory()}
+        onOpenLogFile={openLogFile}
+        onOpenLogFolder={openLogFolder}
+        onChooseLogDirectory={chooseLogDirectory}
         activeTermId={activeTermId}
         recordingTermIds={recordingTermIds}
         recordingPausedIds={recordingPausedIds}
@@ -8812,29 +9179,17 @@ export function TerminalModule({
         y={selectionToolbar?.y ?? 0}
         selectedText={selectionToolbar?.text ?? ""}
         isLightTerminal={activeTheme?.type === "light"}
-        onClose={() => setSelectionToolbar(null)}
+        onClose={closeSelectionToolbar}
         onCopy={handleCopy}
         onPasteSelection={handlePasteSelection}
         onSearch={handleSearch}
-        onContextMenu={(x, y) => {
-          // 右键落在划词工具条上：关闭工具条并在同一坐标打开终端右键菜单
-          setSelectionToolbar(null);
-          setCtxMenu({ x, y, hasSelection: true });
-        }}
+        onContextMenu={handleSelectionContextMenu}
       />
 
       <TerminalPasteConfirmDialog
         pendingPaste={pendingPaste}
-        onClose={() => setPendingPaste(null)}
-        onConfirm={(dontAskAgain) => {
-          if (dontAskAgain) {
-            setTerminalPasteWarnEnabled(false);
-          }
-          if (pendingPaste) {
-            writePasteText(pendingPaste.text, pendingPaste.sessionId);
-          }
-          setPendingPaste(null);
-        }}
+        onClose={handleClosePasteConfirm}
+        onConfirm={handleConfirmPaste}
       />
     </div>
   );

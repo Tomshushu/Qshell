@@ -1,4 +1,4 @@
-import React from "react";
+import { memo } from "react";
 import { Play, Pause, FileText, Square, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "@/i18n";
@@ -14,7 +14,7 @@ export interface TerminalRecordingBadgeProps {
   onStopRecording: () => void;
 }
 
-export function TerminalRecordingBadge({
+export const TerminalRecordingBadge = memo(function TerminalRecordingBadge({
   activeTermId,
   recordingTermIds,
   recordingPausedIds,
@@ -88,4 +88,4 @@ export function TerminalRecordingBadge({
       </button>
     </div>
   );
-}
+});

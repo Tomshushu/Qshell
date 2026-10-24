@@ -16,14 +16,6 @@ import {
   ContextMenuShortcut
 } from '@/components/ui/context-menu'
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import {
   mkdir as mkdirLocal,
   rename as renameLocal,
   remove as removeLocal,
@@ -42,10 +34,6 @@ import {
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubTrigger,
-  DropdownMenuSubContent,
 } from '@/components/ui/dropdown-menu'
 import {
   ArrowUp,
@@ -86,16 +74,8 @@ import {
   Ban,
   AlertCircle,
   Eye,
-  EyeOff,
-  FolderPlus,
-  FilePlus,
-  CheckSquare,
   Save,
   Pencil,
-  LayoutGrid,
-  List,
-  Grid2X2,
-  Grid3X3,
   WifiOff,
   FileSpreadsheet,
   Braces,
@@ -111,7 +91,6 @@ import { reconnectManager, useReconnectState } from '@/services/reconnect-manage
 import { useAppStore } from '@/store'
 import { useFileExplorerPreferences } from '@/hooks/use-file-explorer-preferences'
 import { useTranslation } from '@/i18n'
-import type { Server as ServerModel, ServerGroup } from '@/types'
 import type { LocalFileEntry, FileEntry, TransferProgressData, SftpDiagnostics } from '@/services/api/types'
 import { getPathUtils } from '@/targets'
 import {
@@ -122,16 +101,7 @@ import {
   readLastLocalPath,
   writeLastLocalPath,
   getFileTypeLabel,
-  BINARY_EXT_SET,
-  DOCX_EXT_SET,
-  DOC_LEGACY_EXT_SET,
-  SPREADSHEET_EXT_SET,
   HTML_EXT_SET,
-  TEXT_EXT_SET,
-  UNIVERSAL_PREVIEW_EXTS,
-  ARCHIVE_EXT,
-  isUniversalPreviewSupported,
-  isLogFileName,
   isBinaryContent,
 } from '@/components/workspace/modules/local-file-picker-utils'
 import {
@@ -155,32 +125,18 @@ import { SftpBreadcrumbBar } from '@/components/layout/sftp-breadcrumb-bar'
 import {
   type SftpViewMode,
   type ConflictAction,
-  type PendingConflict,
-  type PendingOverwrite,
-  type PendingExtractConflict,
-  type PendingToolInstall,
-  type DeleteProgressState,
   type TransferRecordItem,
   type TransferChildRecord,
   type SearchResult,
-  type PreviewKind,
   type FileViewerState,
-  type PermissionsState,
   type RightTab,
-  type FilePropertiesTooltipProps,
 } from '@/components/sftp/sftp-types'
 export type { SftpViewMode }
 import {
   CLIPBOARD_FEEDBACK_MS,
   RATE_SMOOTHING_ALPHA,
   TRANSFER_REFRESH_INTERVAL_MS,
-  REMOTE_PREVIEW_MAX_SIZE,
   MAX_RIGHT_TABS,
-  UNGROUPED_FILTER,
-  IMAGE_EXT_SET,
-  PDF_EXT_SET,
-  VIDEO_EXT_SET,
-  AUDIO_EXT_SET,
   INITIAL_VIEWER_STATE,
   createEmptyRightTab,
   getErrorMessage,
@@ -208,7 +164,7 @@ import {
   runWithConcurrency,
 } from '@/components/sftp/sftp-utils'
 import { SftpDeleteDialog } from '@/components/sftp/sftp-delete-dialog'
-import { SftpPermissionsDialog, Switch } from '@/components/sftp/sftp-permissions-dialog'
+import { SftpPermissionsDialog } from '@/components/sftp/sftp-permissions-dialog'
 import { SftpConflictDialog } from '@/components/sftp/sftp-conflict-dialog'
 import { SftpExtractionProgressDialog } from '@/components/sftp/sftp-extraction-progress-dialog'
 import { SftpExtractConflictDialog } from '@/components/sftp/sftp-extract-conflict-dialog'
@@ -219,7 +175,6 @@ import { FilePropertiesTooltip } from '@/components/sftp/file-properties-tooltip
 import {
   GroupFilterChip,
   useServerFilterList,
-  ViewModeDropdown,
   SftpActionsDropdown,
   SftpBookmarkDropdown,
 } from '@/components/sftp/sftp-dropdowns'
@@ -859,7 +814,6 @@ export function SftpPanel() {
 
   // === 路径书签/收藏管理（按服务器隔离，对齐工作台文件模块 file-bookmarks-${baseServerId}）===
   // 1. 远程路径书签：跟随 active tab / selectedServerId 自动隔离切换
-  const baseSelectedServerId = toBaseServerId(selectedServerId)
 
   // 统一偏好与路径收藏管理（左右独立，云端双向漫游）
   const leftPrefs = useFileExplorerPreferences({
@@ -1422,8 +1376,6 @@ export function SftpPanel() {
   // SFTP 排序持久化：从 useFileExplorerPreferences 统一获取
   const localSortField = leftPrefs.sortField as 'name' | 'size' | 'modified'
   const localSortOrder = leftPrefs.sortOrder
-  const setLocalSortField = leftPrefs.setSortField
-  const setLocalSortOrder = leftPrefs.setSortOrder
   const handleLocalSort = leftPrefs.handleSort
 
   const remoteSortField = rightPrefs.sortField as 'name' | 'size' | 'modified'
@@ -3334,7 +3286,7 @@ export function SftpPanel() {
       directoryTransferIdsRef.current.delete(id)
       transferTopNameRef.current.delete(id)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [transferRecords])
 
   // 传输记录操作：清空已完成和已跳过，保留 failed/canceled 以支持断点续传
@@ -6632,7 +6584,7 @@ export function SftpPanel() {
               </div>
             ) : (
               <div className="flex items-center gap-1 overflow-x-auto flex-1 min-w-0 py-1">
-                {rightTabs.map((tab, idx) => {
+                {rightTabs.map((tab) => {
                   const isActive = tab.id === activeRightTabId
                   const isConnecting = !!tab.connectingId
                   const isLoading = tab.loading

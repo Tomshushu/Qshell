@@ -17,6 +17,8 @@ import { sshService } from "@/services/ssh-service";
 import { playSound, SoundType } from "@/lib/sound";
 import { recordConnection } from "@/lib/recent-connections";
 import { clearRemotePathCache } from "@/lib/command-intelligence/remote-path-completion";
+import { clearDynamicCache } from "@/lib/command-intelligence/dynamic-completion";
+import { clearUserAliases } from "@/lib/command-intelligence/alias-map";
 import {
   getSerialPortName,
   loadWorkspaceSession,
@@ -328,6 +330,8 @@ export const createWorkspaceSlice: StateCreator<
         !state.tabs.some((t) => t.id !== tabId && t.serverId === tabToClose.serverId)
       ) {
         clearRemotePathCache(tabToClose.serverId);
+        clearDynamicCache(tabToClose.serverId);
+        clearUserAliases(tabToClose.serverId);
       }
 
       const newTabs = state.tabs.filter((t) => t.id !== tabId);
@@ -472,6 +476,8 @@ export const createWorkspaceSlice: StateCreator<
       for (const t of closingTabs) {
         if (!newTabs.some((nt) => nt.serverId === t.serverId)) {
           clearRemotePathCache(t.serverId);
+          clearDynamicCache(t.serverId);
+          clearUserAliases(t.serverId);
         }
       }
       const nextConnected = { ...state.connectedServers };
@@ -539,6 +545,8 @@ export const createWorkspaceSlice: StateCreator<
       for (const t of closingTabs) {
         if (!newTabs.some((nt) => nt.serverId === t.serverId)) {
           clearRemotePathCache(t.serverId);
+          clearDynamicCache(t.serverId);
+          clearUserAliases(t.serverId);
         }
       }
 
@@ -594,6 +602,8 @@ export const createWorkspaceSlice: StateCreator<
       for (const t of closingTabs) {
         if (!newTabs.some((nt) => nt.serverId === t.serverId)) {
           clearRemotePathCache(t.serverId);
+          clearDynamicCache(t.serverId);
+          clearUserAliases(t.serverId);
         }
       }
       const nextConnected = { ...state.connectedServers };
@@ -989,6 +999,8 @@ export const createWorkspaceSlice: StateCreator<
       for (const t of closingTabs) {
         if (!newTabs.some((nt) => nt.serverId === t.serverId)) {
           clearRemotePathCache(t.serverId);
+          clearDynamicCache(t.serverId);
+          clearUserAliases(t.serverId);
         }
       }
 
@@ -1112,6 +1124,8 @@ export const createWorkspaceSlice: StateCreator<
       for (const t of closingTabs) {
         if (!newTabs.some((nt) => nt.serverId === t.serverId)) {
           clearRemotePathCache(t.serverId);
+          clearDynamicCache(t.serverId);
+          clearUserAliases(t.serverId);
         }
       }
 

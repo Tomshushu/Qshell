@@ -64,6 +64,7 @@ export const useAppStore = create<AppState>()(
         terminalDrawBoldInBrightColors: state.terminalDrawBoldInBrightColors,
         terminalHintEnabled: state.terminalHintEnabled,
         terminalScrollbackLines: state.terminalScrollbackLines,
+        terminalWindowSizeKb: state.terminalWindowSizeKb,
         terminalRecordingDirectory: state.terminalRecordingDirectory,
         terminalEncoding: state.terminalEncoding,
         terminalRecordingMaxSizeMb: state.terminalRecordingMaxSizeMb,

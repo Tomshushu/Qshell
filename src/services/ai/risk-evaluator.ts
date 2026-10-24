@@ -5,7 +5,7 @@
  * 在前端端侧做静态分析，任何由 AI 生成或推荐的命令必须先过此安全护栏
  */
 
-import type { CommandRiskAnalysis, CommandRiskLevel } from '@/types/ai'
+import type { CommandRiskAnalysis } from '@/types/ai'
 
 // 绝对毁灭性黑名单：无论 AI 如何包装，一律硬阻断（isBlocked: true）
 const HARD_BLOCK_PATTERNS: Array<{ regex: RegExp; reason: string }> = [

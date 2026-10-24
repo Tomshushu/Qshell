@@ -1,10 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   verifyGiteeToken,
-  ensureBackupRepo,
-  uploadBackupFile,
   downloadBackupFile,
-  getBackupHistory,
 } from '../gitee-sync-adapter'
 
 describe('Gitee Sync Adapter', () => {

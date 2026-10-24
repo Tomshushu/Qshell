@@ -24,7 +24,6 @@ import {
   Zap,
   Clock3,
   Bell,
-  Gauge,
 } from "lucide-react";
 import {
   AreaChart,

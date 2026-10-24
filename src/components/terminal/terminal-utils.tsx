@@ -1,4 +1,4 @@
-import React, { useRef, useLayoutEffect } from "react";
+import { useRef, useLayoutEffect } from "react";
 import type { Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 import {
@@ -58,12 +58,21 @@ export const discardPendingXtermWrites = (term: Terminal): number => {
 
   const dropped = writeBuffer._writeBuffer.length;
   writeBuffer._writeBuffer.length = 0;
-  if (Array.isArray(writeBuffer._callbacks)) writeBuffer._callbacks.length = 0;
+  const callbacks = Array.isArray(writeBuffer._callbacks)
+    ? writeBuffer._callbacks.splice(0, writeBuffer._callbacks.length)
+    : [];
   writeBuffer._pendingData = 0;
   writeBuffer._bufferOffset = 0;
   // 不伪造 _didUserInput：那会让 Ctrl+C 后到达的第一块日志同步解析，
   // 反而可能把大块输出再次压在 UI 线程上。
   writeBuffer._didUserInput = false;
+  for (const cb of callbacks) {
+    try {
+      cb?.();
+    } catch {
+      // 忽略回调异常，防止中断清理流程被打断
+    }
+  }
   return dropped;
 };
 
@@ -136,13 +145,13 @@ export const writeMotdIfMissing = (
   motd: string,
   history: string,
   serverInfo?: { osType?: string; osInfo?: string; host?: string; name?: string },
-) => {
+  shouldCancel?: () => boolean,
+): Promise<void> => {
   const expandedMotd = expandIssueBanner(motd, serverInfo);
   const safeMotd = stripUnsafeEscapes(expandedMotd);
   const safeHistory = stripUnsafeEscapes(history);
   if (!safeMotd || !safeMotd.trim()) {
-    termInstance.write(safeHistory);
-    return;
+    return writeChunked(termInstance, safeHistory, 64 * 1024, undefined, shouldCancel);
   }
 
   const cleanText = (str: string) =>
@@ -160,8 +169,59 @@ export const writeMotdIfMissing = (
     const normalizedMotd = safeMotd.replace(/\r?\n/g, "\r\n");
     termInstance.write(normalizedMotd + "\r\n");
   }
-  termInstance.write(safeHistory);
+  return writeChunked(termInstance, safeHistory, 64 * 1024, undefined, shouldCancel);
 };
+
+/**
+ * 分块写入终端：超过 chunkSize 的数据切成多块逐块 write，块间让出宏任务，
+ * 避免单次大块（如历史回放 256KB）在 xterm 的 rAF 解析中长时间占用主线程
+ * 导致键盘输入饥饿。与实时输出洪峰期的拆分写（U1）思路一致。
+ */
+export function writeChunked(
+  term: Terminal,
+  data: string,
+  chunkSize = 64 * 1024,
+  onDone?: () => void,
+  shouldCancel?: () => boolean,
+): Promise<void> {
+  const isTermDisposed = () =>
+    Boolean((getXtermCore(term) as any)?._isDisposed) || Boolean(shouldCancel?.());
+
+  if (!data || isTermDisposed()) {
+    onDone?.();
+    return Promise.resolve();
+  }
+  if (data.length <= chunkSize) {
+    return new Promise<void>((resolve) => {
+      term.write(data, () => {
+        onDone?.();
+        resolve();
+      });
+    });
+  }
+  return new Promise<void>((resolve) => {
+    let offset = 0;
+    const writeNext = () => {
+      if (offset >= data.length || isTermDisposed()) {
+        onDone?.();
+        resolve();
+        return;
+      }
+      const chunk = data.slice(offset, offset + chunkSize);
+      offset += chunkSize;
+      term.write(chunk, () => {
+        if (offset >= data.length || isTermDisposed()) {
+          onDone?.();
+          resolve();
+          return;
+        }
+        // 块间让出宏任务，让键盘事件 / rAF 及时执行
+        setTimeout(writeNext, 0);
+      });
+    };
+    writeNext();
+  });
+}
 
 // pendingBuffer 最大长度上限，防止历史加载期间缓冲区无限增长（C6）
 export const BYTES_PER_MB = 1024 * 1024;

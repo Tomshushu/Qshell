@@ -6,6 +6,9 @@ import {
   predictNextMarkovCommands,
   getMarkovHintItems,
   clearMarkovHistory,
+  analyzeOutputForSmartFixes,
+  updateSessionEntities,
+  boostHintsWithRecentEntities,
 } from '../markov-chain'
 
 describe('markov-chain transition model', () => {
@@ -121,6 +124,51 @@ describe('markov-chain transition model', () => {
       expect(topHint.label).toBe('git commit -m ""')
       expect(topHint.desc).toContain('连招推荐')
       expect(topHint.score).toBeGreaterThan(2000)
+      expect(topHint.cursorBack).toBe(1)
+    })
+  })
+
+  describe('Output-Driven Smart Fix & Session Entity Memory', () => {
+    it('suggests git push --set-upstream when git push fails with no upstream', () => {
+      const fixes = analyzeOutputForSmartFixes(
+        'git push',
+        'fatal: The current branch feat/ai has no upstream branch.\nTo push the current branch and set the remote as upstream, use\n    git push --set-upstream origin feat/ai',
+      )
+      expect(fixes.length).toBeGreaterThan(0)
+      expect(fixes[0].command).toBe('git push --set-upstream origin feat/ai')
+      expect(fixes[0].source).toBe('diagnostic')
+    })
+
+    it('suggests chmod +x and sudo when local script fails with Permission denied', () => {
+      const fixes = analyzeOutputForSmartFixes(
+        './deploy.sh',
+        'bash: ./deploy.sh: Permission denied',
+      )
+      expect(fixes.map((f) => f.command)).toContain('chmod +x ./deploy.sh && ./deploy.sh')
+      expect(fixes.map((f) => f.command)).toContain('sudo ./deploy.sh')
+    })
+
+    it('suggests lsof -i :<port> when Address already in use occurs', () => {
+      const fixes = analyzeOutputForSmartFixes(
+        'npm run dev',
+        'Error: listen EADDRINUSE: address already in use :::8080',
+      )
+      expect(fixes.length).toBeGreaterThan(0)
+      expect(fixes[0].command).toBe('lsof -i :8080')
+    })
+
+    it('boosts dynamic hints that match recently touched entities in session memory', () => {
+      updateSessionEntities('systemctl restart redis.service', 'srv-1')
+      const boosted = boostHintsWithRecentEntities(
+        [
+          { kind: 'dynamic', label: 'nginx.service', desc: '服务', insertText: 'nginx.service' },
+          { kind: 'dynamic', label: 'redis.service', desc: '服务', insertText: 'redis.service' },
+        ],
+        ['systemctl', 'status'],
+        'srv-1',
+      )
+      expect(boosted[0].label).toBe('redis.service')
+      expect(boosted[0].badge).toBe('最近操作')
     })
   })
 })

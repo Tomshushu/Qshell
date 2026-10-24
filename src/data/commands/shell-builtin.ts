@@ -8,7 +8,7 @@ export const shellBuiltinCommands: CommandSpec[] = [
     desc: '切换目录',
     category: 'shell-builtin',
     platforms: ['universal'],
-    positional: [{ name: '<dir>', desc: '目标目录', type: 'path' }],
+    positional: [{ name: '<dir>', desc: '目标目录', type: 'dir' }],
     examples: [
       { cmd: 'cd /tmp', desc: '进入/tmp' },
       { cmd: 'cd ..', desc: '返回上级' },

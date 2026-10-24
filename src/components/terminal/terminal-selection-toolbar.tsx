@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, memo } from "react";
 import { Copy, ClipboardPaste, Search, Globe, Check, Sparkles, Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "@/i18n";
@@ -64,7 +64,7 @@ function clampToolbarPosition(x: number, y: number, width = 148, height = 205) {
   return { left, top };
 }
 
-export function TerminalSelectionToolbar({
+export const TerminalSelectionToolbar = memo(function TerminalSelectionToolbar({
   visible,
   x,
   y,
@@ -293,4 +293,4 @@ export function TerminalSelectionToolbar({
       </button>
     </div>
   );
-}
+});

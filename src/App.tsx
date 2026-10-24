@@ -76,6 +76,12 @@ function AppContent() {
     return () => window.removeEventListener("open-app-lock-setup", handleOpenSetup);
   }, []);
 
+  // 终端 SSH 接收窗口大小：启动 / 变更时同步到后端（后端全局配置，新连接生效）
+  const terminalWindowSizeKb = useAppStore((s) => s.terminalWindowSizeKb);
+  useEffect(() => {
+    sshService.setTerminalWindowSize(terminalWindowSizeKb);
+  }, [terminalWindowSizeKb]);
+
   // 退出应用二次确认状态
   const [showExitConfirm, setShowExitConfirm] = useState(false)
   const [isExiting, setIsExiting] = useState(false)

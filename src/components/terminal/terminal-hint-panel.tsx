@@ -1,4 +1,4 @@
-import React from "react";
+import React, { memo } from "react";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "@/i18n";
 import type { HintItem } from "@/lib/command-intelligence/completion-engine";
@@ -9,16 +9,18 @@ export interface TerminalHintPanelProps {
   hints: HintItem[];
   hintIndex: number;
   isLightTerminal: boolean;
+  activeUsage?: string;
   style?: React.CSSProperties;
   onSelectHint: (hint: HintItem) => void;
   onHoverHint: (index: number) => void;
 }
 
-export function TerminalHintPanel({
+export const TerminalHintPanel = memo(function TerminalHintPanel({
   visible,
   hints,
   hintIndex,
   isLightTerminal,
+  activeUsage,
   style,
   onSelectHint,
   onHoverHint,
@@ -27,21 +29,28 @@ export function TerminalHintPanel({
 
   if (!visible || hints.length === 0) return null;
 
+  const selectedHint = hints[Math.min(Math.max(0, hintIndex), hints.length - 1)];
+  const usageText =
+    selectedHint?.usage ||
+    activeUsage ||
+    selectedHint?.examples?.[0]?.cmd;
+
   return (
     <div
       className={cn(
-        "absolute z-30 flex flex-col w-[340px] max-w-[calc(100vw-32px)] rounded-xl overflow-hidden select-none transition-all duration-150 animate-in fade-in zoom-in-95 p-1",
+        "absolute z-30 flex flex-col w-[360px] max-w-[calc(100vw-32px)] rounded-xl overflow-hidden select-none transition-all duration-150 animate-in fade-in zoom-in-95 p-1",
         isLightTerminal
-          ? "bg-white/90 text-slate-800 border border-slate-200/80 shadow-[0_12px_32px_-6px_rgba(0,0,0,0.18),0_0_0_1px_rgba(0,0,0,0.04)] backdrop-blur-xl"
-          : "bg-[#13141f]/92 text-slate-100 border border-white/10 shadow-[0_16px_36px_-8px_rgba(0,0,0,0.7),0_0_0_1px_rgba(255,255,255,0.06)] backdrop-blur-xl",
+          ? "bg-white/92 text-slate-800 border border-slate-200/80 shadow-[0_12px_32px_-6px_rgba(0,0,0,0.18),0_0_0_1px_rgba(0,0,0,0.04)] backdrop-blur-xl"
+          : "bg-[#13141f]/94 text-slate-100 border border-white/10 shadow-[0_16px_36px_-8px_rgba(0,0,0,0.7),0_0_0_1px_rgba(255,255,255,0.06)] backdrop-blur-xl",
       )}
       style={style}
     >
       <div className="flex-1 min-h-0 overflow-y-auto max-h-[inherit] py-0.5 space-y-0.5 scrollbar-thin scrollbar-thumb-white/20 scrollbar-track-transparent">
         {hints.map((hint, i) => {
           const prevKind = i > 0 ? hints[i - 1].kind : null;
-          const showHistDivider =
-            prevKind === "history" && hint.kind !== "history";
+          const isPrevPredictive = prevKind === "history" || prevKind === "markov";
+          const isCurPredictive = hint.kind === "history" || hint.kind === "markov";
+          const showHistDivider = isPrevPredictive && !isCurPredictive;
           const isSelected = i === hintIndex;
 
           return (
@@ -76,13 +85,16 @@ export function TerminalHintPanel({
                   if (hint.disabled) return;
                   onSelectHint(hint);
                 }}
-                onMouseEnter={() => onHoverHint(i)}
+                onMouseEnter={() => {
+                  if (hint.disabled) return;
+                  onHoverHint(i);
+                }}
               >
                 {/* 语义图标 */}
                 {renderHintItemIcon(hint)}
 
-                {/* 候选主词条 */}
-                <span className="truncate shrink-0 max-w-[65%] tracking-tight">
+                {/* 候选主词条：自适应伸缩并在超长时优雅省略，确保右侧频次/说明永远有展示空间 */}
+                <span className="truncate min-w-0 flex-1 tracking-tight">
                   {hint.label}
                 </span>
 
@@ -100,11 +112,33 @@ export function TerminalHintPanel({
                   </span>
                 )}
 
-                {/* 说明描述（靠右淡色展示，不喧宾夺主） */}
+                {/* 语义徽标（报错修复 / 最近操作 / 当前目录 / 连招） */}
+                {hint.badge && (
+                  <span
+                    className={cn(
+                      "text-[9.5px] px-1.5 py-0.2 rounded font-sans shrink-0 leading-4",
+                      hint.badge === "报错修复"
+                        ? isLightTerminal
+                          ? "bg-amber-500/15 text-amber-700"
+                          : "bg-amber-500/20 text-amber-300"
+                        : hint.badge === "最近操作" || hint.badge === "当前目录"
+                          ? isLightTerminal
+                            ? "bg-emerald-500/15 text-emerald-700"
+                            : "bg-emerald-500/20 text-emerald-300"
+                          : isLightTerminal
+                            ? "bg-indigo-500/12 text-indigo-700"
+                            : "bg-indigo-500/20 text-indigo-300",
+                    )}
+                  >
+                    {hint.badge}
+                  </span>
+                )}
+
+                {/* 说明描述（已有 badge 时自动剥离重复的前缀词，超过 99 次封顶显示 99+ 次） */}
                 {(hint.desc || hint.aliasOf) && (
                   <span
                     className={cn(
-                      "text-[10.5px] truncate flex-1 text-right ml-1 font-sans select-none",
+                      "text-[10.5px] truncate shrink-0 max-w-[42%] text-right ml-1 font-sans select-none",
                       isSelected
                         ? isLightTerminal
                           ? "text-slate-600"
@@ -118,7 +152,12 @@ export function TerminalHintPanel({
                       ? `alias → ${hint.aliasOf}`
                       : hint.disabled && hint.disabledReason
                         ? hint.disabledReason
-                        : hint.desc}
+                        : hint.badge
+                          ? hint.desc.replace(
+                              /^(?:报错修复|连招推荐|习惯连招|最近操作|当前目录|同主机)\s*·\s*/,
+                              "",
+                            )
+                          : hint.desc}
                   </span>
                 )}
               </div>
@@ -126,6 +165,23 @@ export function TerminalHintPanel({
           );
         })}
       </div>
+
+      {/* 底部 Usage 签名与快捷键轻量提示栏 */}
+      <div
+        className={cn(
+          "flex items-center justify-between gap-2 px-2.5 py-1 mt-0.5 border-t text-[10px] select-none",
+          isLightTerminal
+            ? "border-slate-200/70 text-slate-500"
+            : "border-white/8 text-slate-400/75",
+        )}
+      >
+        <span className="truncate font-mono flex-1 min-w-0">
+          {usageText ? `用法: ${usageText}` : selectedHint?.desc || ""}
+        </span>
+        <span className="shrink-0 font-sans opacity-75">
+          Tab 补全 · Esc 关闭
+        </span>
+      </div>
     </div>
   );
-}
+});

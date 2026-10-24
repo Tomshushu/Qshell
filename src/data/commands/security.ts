@@ -141,7 +141,7 @@ export const securityCommands: CommandSpec[] = [
       { cmd: 'dgst', desc: '摘要计算', params: [
         { name: '-sha256', desc: 'SHA256', type: 'flag' },
         { name: '-md5', desc: 'MD5', type: 'flag' },
-      ], positional: [{ name: '<file>', desc: '文件', type: 'path' }] },
+      ], positional: [{ name: '<file>', desc: '文件', type: 'file' }] },
       { cmd: 's_client', desc: 'SSL 客户端', params: [
         { name: '-connect', desc: '连接', requiresValue: true, valueHint: '<host>:<port>' },
         { name: '-showcerts', desc: '显示证书链', type: 'flag' },
@@ -176,14 +176,14 @@ export const securityCommands: CommandSpec[] = [
         { name: '-r', desc: '收件人', requiresValue: true, valueHint: '<uid>' },
         { name: '-o', desc: '输出文件', requiresValue: true, valueHint: '<file>', type: 'file' },
         { name: '-a', desc: 'ASCII 输出', type: 'flag' },
-      ], positional: [{ name: '<file>', desc: '文件', type: 'path' }] },
+      ], positional: [{ name: '<file>', desc: '文件', type: 'file' }] },
       { cmd: '--decrypt', desc: '解密', params: [
         { name: '-o', desc: '输出文件', requiresValue: true, valueHint: '<file>', type: 'file' },
-      ], positional: [{ name: '<file>', desc: '文件', type: 'path' }] },
+      ], positional: [{ name: '<file>', desc: '文件', type: 'file' }] },
       { cmd: '--sign', desc: '签名', params: [
         { name: '-o', desc: '输出文件', requiresValue: true, valueHint: '<file>', type: 'file' },
         { name: '-a', desc: 'ASCII 输出', type: 'flag' },
-      ], positional: [{ name: '<file>', desc: '文件', type: 'path' }] },
+      ], positional: [{ name: '<file>', desc: '文件', type: 'file' }] },
       { cmd: '--verify', desc: '验证签名', positional: [{ name: '<file>', desc: '签名文件', type: 'path' }] },
       { cmd: '--list-keys', desc: '列出公钥', params: [] },
       { cmd: '--gen-key', desc: '生成密钥对', params: [] },
@@ -401,23 +401,6 @@ export const securityCommands: CommandSpec[] = [
     ],
     examples: [
       { cmd: 'setsebool -P httpd_can_network_connect on', desc: '永久开启网络连接' },
-    ],
-  },
-  {
-    cmd: 'chcon',
-    desc: '修改 SELinux 上下文',
-    category: 'security',
-    platforms: ['redhat'],
-    params: [
-      { name: '-R', desc: '递归', type: 'flag' },
-      { name: '-t', desc: '类型', requiresValue: true, valueHint: '<type>' },
-      { name: '-u', desc: '用户', requiresValue: true, valueHint: '<user>' },
-      { name: '-r', desc: '角色', requiresValue: true, valueHint: '<role>' },
-    ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path' }],
-    examples: [
-      { cmd: 'chcon -t httpd_sys_content_t /var/www/html', desc: '修改上下文类型' },
-      { cmd: 'chcon -R -t httpd_sys_content_t /var/www', desc: '递归修改' },
     ],
   },
   {

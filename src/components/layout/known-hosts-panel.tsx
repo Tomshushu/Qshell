@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import {
   ShieldCheck,
   ShieldAlert,
@@ -8,10 +8,8 @@ import {
   Check,
   RotateCcw,
   Loader2,
-  KeyRound,
   Server,
   AlertTriangle,
-  Info,
   Clock,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";

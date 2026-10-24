@@ -691,6 +691,15 @@ pub async fn connect_server_entry(server: &db::Server, conn_id: &str) -> Result<
 /// 5. 异步获取 OS 信息并更新
 /// 6. 通过 `ssh:connected` 事件通知前端（兼容旧前端）
 ///
+/// 设置终端 SSH 接收窗口大小（KB），用于平衡「Ctrl+C 中断速度」与「日志吞吐」。
+///
+/// 该值是 SSH 连接级配置，修改后对**新建连接**生效；已建立的连接需重连（重建 PTY）。
+/// 范围 256KB ~ 16MB，超出自动 clamp。SFTP 走独立连接（固定 64MB），不受此影响。
+#[tauri::command]
+pub fn ssh_set_terminal_window_size(size_kb: u32) {
+    crate::ssh::connection::set_terminal_window_size_kb(size_kb);
+}
+
 /// 状态变更通过 `ssh:state-changed` 事件由 SshManager 推送
 #[tauri::command]
 pub async fn ssh_connect(

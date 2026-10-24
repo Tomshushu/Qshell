@@ -652,7 +652,7 @@ export const packageManagerCommands: CommandSpec[] = [
         { cmd: 'download', desc: '下载依赖', params: [] },
       ]},
       { cmd: 'build', desc: '构建', params: [] },
-      { cmd: 'run', desc: '运行', positional: [{ name: '<file>', desc: '文件', type: 'path' }] },
+      { cmd: 'run', desc: '运行', positional: [{ name: '<file>', desc: '文件', type: 'file' }] },
       { cmd: 'test', desc: '测试', params: [] },
       { cmd: 'install', desc: '安装', positional: [{ name: '<pkg>', desc: '包路径', type: 'value' }] },
       { cmd: 'get', desc: '获取依赖', positional: [{ name: '<pkg>', desc: '包路径', type: 'value' }] },

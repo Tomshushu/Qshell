@@ -116,7 +116,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-m', desc: '设置权限', requiresValue: true, valueHint: '<mode>' },
       { name: '-v', desc: '显示创建过程', type: 'flag' },
     ],
-    positional: [{ name: '<dir>', desc: '目录名', type: 'path', repeatable: true }],
+    positional: [{ name: '<dir>', desc: '目录名', type: 'dir', repeatable: true }],
     examples: [
       { cmd: 'mkdir -p src/components', desc: '递归创建多级目录' },
       { cmd: 'mkdir -m 700 secrets', desc: '创建权限 700 的目录' },
@@ -133,7 +133,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-v', desc: '显示过程', type: 'flag' },
       { name: '--ignore-fail-on-non-empty', desc: '忽略非空目录错误', type: 'flag' },
     ],
-    positional: [{ name: '<dir>', desc: '空目录名', type: 'path', repeatable: true }],
+    positional: [{ name: '<dir>', desc: '空目录名', type: 'dir', repeatable: true }],
     examples: [
       { cmd: 'rmdir empty_dir', desc: '删除空目录' },
       { cmd: 'rmdir -p a/b/c', desc: '递归删除空目录链' },
@@ -153,7 +153,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-r', desc: '参考文件时间', requiresValue: true, valueHint: '<ref>' },
       { name: '-c', desc: '不创建文件', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'touch newfile.txt', desc: '创建空文件' },
       { cmd: 'touch -t 202401010000 file', desc: '设置指定时间' },
@@ -217,7 +217,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-r', desc: '原始输出（不转义）', type: 'flag' },
       { name: '-k', desc: '继续检测直到有结果', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'file image.png', desc: '识别图片类型' },
       { cmd: 'file -i doc.pdf', desc: '显示 MIME 类型' },
@@ -236,7 +236,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-c', desc: '不创建文件', type: 'flag' },
       { name: '--no-create', desc: '不创建文件', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'truncate -s 1G bigfile', desc: '创建 1G 稀疏文件' },
       { cmd: 'truncate -s 0 log.txt', desc: '清空文件内容' },
@@ -256,7 +256,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-f', desc: '强制改权限', type: 'flag' },
       { name: '-x', desc: '精确大小（不四舍五入）', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'shred -u secret.txt', desc: '安全删除并移除文件' },
       { cmd: 'shred -n 5 -z data.bin', desc: '5 次覆盖后用 0 填充' },
@@ -405,7 +405,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-x', desc: '使用 FALLOC_FL_ZERO_RANGE', type: 'flag' },
       { name: '-d', desc: '释放空间（打洞）', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path' }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file' }],
     examples: [
       { cmd: 'fallocate -l 2G bigfile.bin', desc: '预分配 2G 空间' },
       { cmd: 'fallocate -d -l 100M sparse.img', desc: '在文件中打洞释放空间' },
@@ -425,7 +425,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-b', desc: '分隔符前附着', type: 'flag' },
       { name: '-a', desc: '分隔符后附着', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'tac log.txt', desc: '反向输出日志' },
       { cmd: 'tac -s "," data.csv', desc: '按逗号分隔反向' },
@@ -438,7 +438,7 @@ export const fileCommands: CommandSpec[] = [
     platforms: ['universal'],
     usage: 'rev [OPTION]... [FILE]...',
     params: [],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'echo "hello" | rev', desc: '输出 olleh' },
       { cmd: 'rev file.txt', desc: '反转每行字符' },
@@ -457,7 +457,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-s', desc: '行号后分隔符', requiresValue: true, valueHint: '<sep>' },
       { name: '-v', desc: '起始编号', requiresValue: true, valueHint: '<n>' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'nl -ba file.txt', desc: '所有行编号' },
       { cmd: 'nl -w 3 -nrz file.txt', desc: '右对齐补零宽度 3' },
@@ -477,7 +477,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-w', desc: '每行宽度', requiresValue: true, valueHint: '<n>' },
       { name: '-v', desc: '不省略重复', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path' }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file' }],
     examples: [
       { cmd: 'od -c file.bin', desc: '字符格式转储' },
       { cmd: 'od -A x -t x1z binary', desc: '十六进制地址+内容' },
@@ -498,7 +498,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-n', desc: '读取字节数', requiresValue: true, valueHint: '<n>' },
       { name: '-s', desc: '跳过字节数', requiresValue: true, valueHint: '<n>' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path' }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file' }],
     examples: [
       { cmd: 'hexdump -C file.bin', desc: '十六进制+ASCII 显示' },
       { cmd: 'hexdump -n 64 image.iso', desc: '查看前 64 字节' },
@@ -519,7 +519,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-g', desc: '分组字节数', requiresValue: true, valueHint: '<n>' },
       { name: '-b', desc: '二进制转储', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path' }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file' }],
     examples: [
       { cmd: 'xxd file.bin', desc: '十六进制转储' },
       { cmd: 'xxd -r hex.txt orig.bin', desc: '从十六进制还原' },
@@ -539,7 +539,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-e', desc: '字符编码', requiresValue: true, valueHint: 's|S|b|l|B|L' },
       { name: '-t', desc: '输出偏移', requiresValue: true, valueHint: 'd|o|x' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'strings -n 6 binary', desc: '提取长度≥6的字符串' },
       { cmd: 'strings -d /usr/bin/ls | grep GLIBC', desc: '查看动态段符号' },
@@ -556,7 +556,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-b', desc: '按字节计数', type: 'flag' },
       { name: '-s', desc: '在空格处折行', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'fold -w 80 long.txt', desc: '折行到 80 列' },
       { cmd: 'fold -s -w 120 doc.md', desc: '在空格处折行' },
@@ -576,7 +576,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-u', desc: '统一空格', type: 'flag' },
       { name: '-p', desc: '仅格式化以指定前缀开头的行', requiresValue: true, valueHint: '<prefix>' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'fmt -w 72 notes.txt', desc: '格式化到 72 列' },
       { cmd: 'fmt -u -w 80 doc.txt', desc: '统一空格并限宽 80' },
@@ -597,7 +597,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-d', desc: '双倍行距', type: 'flag' },
       { name: '-o', desc: '左缩进', requiresValue: true, valueHint: '<n>' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'pr -t -n file.txt', desc: '无页脚加行号' },
       { cmd: 'pr -l 50 -h "Report" data.txt', desc: '自定义页眉每页 50 行' },
@@ -617,7 +617,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-x', desc: '先填行再填列', type: 'flag' },
       { name: '-R', desc: '右对齐列', requiresValue: true, valueHint: '<cols>' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path' }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file' }],
     examples: [
       { cmd: 'column -t -s, data.csv', desc: '按逗号分隔对齐' },
       { cmd: 'mount | column -t', desc: '表格显示挂载信息' },
@@ -634,7 +634,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-s', desc: '横向合并（行变列）', type: 'flag' },
       { name: '-z', desc: 'NUL 行分隔', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'paste -d, file1 file2', desc: '逗号分隔合并' },
       { cmd: 'paste -s names.txt', desc: '将多行合并为一行' },
@@ -674,7 +674,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-t', desc: '制表符宽度', requiresValue: true, valueHint: '<n>' },
       { name: '-i', desc: '仅行首转换', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'expand -t 4 file.py', desc: 'Tab 转 4 空格' },
       { cmd: 'expand -i Makefile', desc: '仅行首 Tab 转空格' },
@@ -691,7 +691,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-a', desc: '转换所有空格（非仅行首）', type: 'flag' },
       { name: '--first-only', desc: '仅转换行首（默认）', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'unexpand -a -t 4 file.py', desc: '4 空格转 Tab' },
       { cmd: 'unexpand -t 8 spaces.txt', desc: '8 空格转 Tab' },
@@ -1157,7 +1157,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-a', desc: '取消仅追加', type: 'flag' },
       { name: '+A', desc: '不更新 atime', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'sudo chattr +i /etc/resolv.conf', desc: '设为不可变防修改' },
       { cmd: 'chattr +A largefile', desc: '禁止更新访问时间' },
@@ -1175,7 +1175,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-d', desc: '只显示目录自身', type: 'flag' },
       { name: '-v', desc: '显示版本号', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'lsattr /etc/passwd', desc: '查看文件属性' },
       { cmd: 'lsattr -R /home', desc: '递归查看家目录属性' },
@@ -1196,7 +1196,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '--reference', desc: '参考文件', requiresValue: true, valueHint: '<ref>' },
     ],
     positional: [
-      { name: '<file>', desc: '文件', type: 'path', repeatable: true },
+      { name: '<file>', desc: '文件', type: 'file', repeatable: true },
     ],
     examples: [
       { cmd: 'chcon -t httpd_sys_content_t /var/www/html', desc: '设置 web 内容类型' },
@@ -1291,7 +1291,7 @@ export const fileCommands: CommandSpec[] = [
     params: [
       { name: '-n', desc: '不切换仅压栈', type: 'flag' },
     ],
-    positional: [{ name: '<dir>', desc: '目标目录', type: 'path' }],
+    positional: [{ name: '<dir>', desc: '目标目录', type: 'dir' }],
     examples: [
       { cmd: 'pushd /var/log', desc: '切换到 /var/log 并压栈' },
       { cmd: 'pushd +1', desc: '旋转到栈中第 1 项' },
@@ -1424,7 +1424,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-o', desc: '旧 Mac 换行（CR）', type: 'flag' },
       { name: '-c', desc: '转换模式 unix/mac/dos', requiresValue: true, valueHint: '<mode>' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'dos2unix script.sh', desc: '转换脚本换行' },
       { cmd: 'dos2unix -n old.txt new.txt', desc: '输出到新文件' },
@@ -1441,7 +1441,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-n', desc: '写到新文件', requiresValue: true, valueHint: '<newfile>' },
       { name: '-q', desc: '静默', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'unix2dos readme.txt', desc: '转换为 Windows 换行' },
       { cmd: 'unix2dos -n unix.txt dos.txt', desc: '输出到新文件' },
@@ -1459,7 +1459,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-e', desc: '仅显示编码', type: 'flag' },
       { name: '-g', desc: '仅猜测', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path' }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file' }],
     examples: [
       { cmd: 'enca -L zh file.txt', desc: '检测中文编码' },
       { cmd: 'enca -L zh -x UTF-8 file.txt', desc: '转为 UTF-8' },
@@ -1479,7 +1479,7 @@ export const fileCommands: CommandSpec[] = [
     ],
     positional: [
       { name: '<spec>', desc: '如 UTF-8..GBK', type: 'value' },
-      { name: '<file>', desc: '文件', type: 'path' },
+      { name: '<file>', desc: '文件', type: 'file' },
     ],
     examples: [
       { cmd: 'recode UTF-8..GBK file.txt', desc: 'UTF-8 转 GBK' },
@@ -1573,7 +1573,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-b', desc: '二进制模式', type: 'flag' },
       { name: '-z', desc: 'NUL 行分隔', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'sha256sum ubuntu.iso', desc: '计算 ISO 校验和' },
       { cmd: 'sha256sum -c checksums.txt', desc: '校验文件完整性' },
@@ -1591,7 +1591,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '--tag', desc: 'BSD 风格', type: 'flag' },
       { name: '-b', desc: '二进制模式', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'md5sum file.txt', desc: '计算 MD5' },
       { cmd: 'md5sum -c md5.txt', desc: '校验 MD5' },
@@ -1608,7 +1608,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '--status', desc: '静默', type: 'flag' },
       { name: '-b', desc: '二进制模式', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'sha1sum archive.zip', desc: '计算 SHA-1' },
       { cmd: 'sha1sum -c sha1.txt', desc: '校验 SHA-1' },
@@ -1625,7 +1625,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '--status', desc: '静默', type: 'flag' },
       { name: '-b', desc: '二进制模式', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'sha512sum largefile.bin', desc: '计算 SHA-512' },
       { cmd: 'sha512sum -c sha512.txt', desc: '校验完整性' },
@@ -1641,7 +1641,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '--tag', desc: 'BSD 风格输出', type: 'flag' },
       { name: '-a', desc: '指定算法', requiresValue: true, valueHint: '<algo>' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'cksum data.bin', desc: '计算 CRC 校验' },
       { cmd: 'cksum *.txt', desc: '批量计算' },
@@ -1685,7 +1685,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-s', desc: '静默', type: 'flag' },
     ],
     positional: [
-      { name: '<file>', desc: '文件', type: 'path' },
+      { name: '<file>', desc: '文件', type: 'file' },
       { name: '<pattern>', desc: '分隔模式如 /PATTERN/', type: 'value', repeatable: true },
     ],
     examples: [
@@ -1704,7 +1704,7 @@ export const fileCommands: CommandSpec[] = [
       { name: '-i', desc: '忽略非字母字符', type: 'flag' },
       { name: '-w', desc: '每行宽度（0=不换行）', requiresValue: true, valueHint: '<n>' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path' }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file' }],
     examples: [
       { cmd: 'base64 image.png > img.b64', desc: '编码图片' },
       { cmd: 'base64 -d img.b64 > image.png', desc: '解码还原' },
@@ -1721,90 +1721,10 @@ export const fileCommands: CommandSpec[] = [
       { name: '-i', desc: '忽略非字母字符', type: 'flag' },
       { name: '-w', desc: '每行宽度', requiresValue: true, valueHint: '<n>' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path' }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file' }],
     examples: [
       { cmd: 'base32 data.bin', desc: 'Base32 编码' },
       { cmd: 'base32 -d data.b32', desc: 'Base32 解码' },
-    ],
-  },
-
-  // ========== 压缩文件查看（不重复 archive.ts 中的 tar/gzip/zip/zcat） ==========
-  {
-    cmd: 'zless',
-    desc: '分页查看 gzip 压缩文件',
-    category: 'file',
-    platforms: ['universal'],
-    usage: 'zless [FILE]...',
-    params: [],
-    positional: [{ name: '<file>', desc: 'gzip 压缩文件', type: 'path', repeatable: true }],
-    examples: [
-      { cmd: 'zless file.gz', desc: '分页查看 gzip 文件' },
-      { cmd: 'zless /usr/share/man/man1/ls.1.gz', desc: '查看 man 源文件' },
-    ],
-  },
-  {
-    cmd: 'zgrep',
-    desc: '在 gzip 压缩文件中搜索',
-    category: 'file',
-    platforms: ['universal'],
-    usage: 'zgrep [GREP_OPTIONS] PATTERN [FILE]...',
-    params: [
-      { name: '-n', desc: '显示行号', type: 'flag' },
-      { name: '-i', desc: '忽略大小写', type: 'flag' },
-      { name: '-r', desc: '递归', type: 'flag' },
-      { name: '-l', desc: '只显示文件名', type: 'flag' },
-    ],
-    positional: [
-      { name: '<pattern>', desc: '搜索模式', type: 'value' },
-      { name: '<file>', desc: '压缩文件', type: 'path', repeatable: true },
-    ],
-    examples: [
-      { cmd: 'zgrep "error" log.gz', desc: '在 gzip 文件中搜索' },
-      { cmd: 'zgrep -n "TODO" *.gz', desc: '在多个压缩文件中搜索' },
-    ],
-  },
-  {
-    cmd: 'zdiff',
-    desc: '比较 gzip 压缩文件',
-    category: 'file',
-    platforms: ['universal'],
-    usage: 'zdiff [OPTION]... FILE1 [FILE2]',
-    params: [
-      { name: '-q', desc: '只报告是否不同', type: 'flag' },
-    ],
-    positional: [
-      { name: '<file1>', desc: '文件1（可为 .gz）', type: 'path' },
-      { name: '<file2>', desc: '文件2（可省略，解压比较）', type: 'path' },
-    ],
-    examples: [
-      { cmd: 'zdiff a.gz b.gz', desc: '比较两个 gzip 文件' },
-      { cmd: 'zdiff file.gz file.txt', desc: '比较压缩与未压缩文件' },
-    ],
-  },
-  {
-    cmd: 'bzcat',
-    desc: '查看 bzip2 压缩文件内容',
-    category: 'file',
-    platforms: ['universal'],
-    usage: 'bzcat [FILE]...',
-    params: [],
-    positional: [{ name: '<file>', desc: 'bzip2 压缩文件', type: 'path', repeatable: true }],
-    examples: [
-      { cmd: 'bzcat file.bz2', desc: '查看 bzip2 文件' },
-      { cmd: 'bzcat log.bz2 | grep ERROR', desc: '搜索 bzip2 日志' },
-    ],
-  },
-  {
-    cmd: 'xzcat',
-    desc: '查看 xz 压缩文件内容',
-    category: 'file',
-    platforms: ['universal'],
-    usage: 'xzcat [FILE]...',
-    params: [],
-    positional: [{ name: '<file>', desc: 'xz 压缩文件', type: 'path', repeatable: true }],
-    examples: [
-      { cmd: 'xzcat file.xz', desc: '查看 xz 文件' },
-      { cmd: 'xzcat data.xz > data.txt', desc: '解压 xz 到文件' },
     ],
   },
 ]

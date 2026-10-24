@@ -25,6 +25,7 @@ logs
 # Temporary notes
 *.txt
 _*.cjs
+vitest-result.json
 !LICENSE.txt
 !NOTICE.txt
 

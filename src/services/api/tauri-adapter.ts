@@ -672,6 +672,10 @@ export const tauriAdapter: BackendAdapter = {
       await ensureSshConnectionListener();
       return safeInvoke<ConnectResult>("ssh_connect", { serverId });
     },
+    setTerminalWindowSize(sizeKb): void {
+      // 全局配置：后端保存，新连接建立时读取；失败静默（不影响主流程）
+      void safeInvoke<void>("ssh_set_terminal_window_size", { sizeKb }).catch(() => {});
+    },
     async disconnect(serverId): Promise<OperationResult> {
       return safeInvoke<OperationResult>("ssh_disconnect", { serverId });
     },

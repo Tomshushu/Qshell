@@ -121,7 +121,8 @@ export const createTerminalSlice: StateCreator<
     })),
 
   // New Terminal Settings Defaults & Setters
-  terminalAutoReconnect: false,
+  // 自动重连默认开启：网络抖动/短暂断线后自动重建 TCP + PTY，用户可在设置面板关闭。
+  terminalAutoReconnect: true,
   setTerminalAutoReconnect: (enabled) =>
     set({ terminalAutoReconnect: enabled }),
   terminalAntiIdleEnabled: false,
@@ -157,13 +158,23 @@ export const createTerminalSlice: StateCreator<
   terminalHintEnabled: true,
   setTerminalHintEnabled: (enabled) =>
     set({ terminalHintEnabled: enabled }),
-  // 日志内存限制：默认 5000 行轻量低内存，范围 1000~128000 行。
-  terminalScrollbackLines: 5000,
+  // 日志内存限制：默认 10000 行（对齐后端 history 2MB），范围 1000~128000 行。
+  terminalScrollbackLines: 10000,
   setTerminalScrollbackLines: (lines) =>
     set({
       terminalScrollbackLines: Math.max(
         1000,
-        Math.min(128000, Math.floor(lines) || 5000),
+        Math.min(128000, Math.floor(lines) || 10000),
+      ),
+    }),
+  // 终端 SSH 接收窗口大小：默认 1MB，范围 256KB~16MB。
+  // 越小 Ctrl+C 中断越快（通道在途数据少），越大高 RTT 下吞吐越好；修改后需重连生效。
+  terminalWindowSizeKb: 1024,
+  setTerminalWindowSizeKb: (kb) =>
+    set({
+      terminalWindowSizeKb: Math.max(
+        256,
+        Math.min(16384, Math.floor(kb) || 1024),
       ),
     }),
   terminalRecordingDirectory: "",

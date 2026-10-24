@@ -7,7 +7,6 @@ import {
   Route,
   Globe,
   Compass,
-  RefreshCw,
   Share2,
   CheckCircle2,
   AlertCircle,
@@ -30,8 +29,6 @@ export function RoutesDnsTab({
   routeView,
   dnsConfig,
   neighbors,
-  loading,
-  onRefresh,
 }: RoutesDnsTabProps) {
   const { t } = useTranslation()
   const [testTarget, setTestTarget] = useState('')

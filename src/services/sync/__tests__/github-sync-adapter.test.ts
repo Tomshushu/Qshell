@@ -1,10 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   verifyGitHubToken,
-  ensureBackupRepo,
-  uploadBackupFile,
   downloadBackupFile,
-  getBackupHistory,
 } from '../github-sync-adapter'
 
 describe('GitHub Sync Adapter', () => {

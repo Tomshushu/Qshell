@@ -258,6 +258,12 @@ export interface TerminalSlice {
   /** 每个终端的 xterm scrollback 行数，影响可回看日志量和内存占用 */
   terminalScrollbackLines: number;
   setTerminalScrollbackLines: (lines: number) => void;
+  /**
+   * 终端 SSH 接收窗口大小（KB），范围 256~16384。
+   * 越小 Ctrl+C 中断越快（在途数据少），越大高 RTT 下吞吐越好；修改后需重连生效。
+   */
+  terminalWindowSizeKb: number;
+  setTerminalWindowSizeKb: (kb: number) => void;
   /** 终端录制文件的默认保存目录；为空时首次录制会要求选择目录 */
   terminalRecordingDirectory: string;
   setTerminalRecordingDirectory: (path: string) => void;

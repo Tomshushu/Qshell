@@ -15,7 +15,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
-import { useSyncStore, type SyncProvider } from '@/store/sync-store'
+import { useSyncStore } from '@/store/sync-store'
 import { useToast } from '@/components/ui/toast'
 import { UserAvatar } from '@/components/ui/user-avatar'
 import { useTranslation } from '@/i18n'
@@ -42,8 +42,6 @@ import {
   Check,
   GitBranch,
   Globe,
-  Sparkles,
-  Info,
   RefreshCw,
   ChevronDown,
   ChevronUp,

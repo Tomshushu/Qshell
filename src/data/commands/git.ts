@@ -105,7 +105,7 @@ export const gitCommands: CommandSpec[] = [
           { name: '--no-edit', desc: '不编辑信息', type: 'flag' },
           { name: '--allow-empty', desc: '允许空提交', type: 'flag' },
         ],
-        positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+        positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
         examples: [
           { cmd: 'git commit -m "feat: add x"', desc: '提交' },
           { cmd: 'git commit --amend --no-edit', desc: '并入上次提交' },
@@ -120,7 +120,7 @@ export const gitCommands: CommandSpec[] = [
           { name: '--source', desc: '来源', requiresValue: true, valueHint: '<commit>' },
           { name: '-p', desc: '交互分块', type: 'flag' },
         ],
-        positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+        positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
         examples: [
           { cmd: 'git restore --staged file.txt', desc: '取消暂存' },
           { cmd: 'git restore --source=HEAD~1 file.txt', desc: '恢复到旧版本' },
@@ -135,7 +135,7 @@ export const gitCommands: CommandSpec[] = [
           { name: '--cached', desc: '仅从索引删除', type: 'flag' },
           { name: '-n', desc: '干运行', type: 'flag' },
         ],
-        positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+        positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
         examples: [
           { cmd: 'git rm --cached file.txt', desc: '停止跟踪' },
           { cmd: 'git rm -r olddir', desc: '删除目录' },
@@ -383,7 +383,7 @@ export const gitCommands: CommandSpec[] = [
         ],
         positional: [
           { name: '<commit>', desc: '提交', type: 'value' },
-          { name: '<file>', desc: '文件', type: 'path', repeatable: true },
+          { name: '<file>', desc: '文件', type: 'file', repeatable: true },
         ],
         examples: [{ cmd: 'git checkout HEAD -- file.txt', desc: '恢复文件到 HEAD' }],
       },
@@ -419,7 +419,7 @@ export const gitCommands: CommandSpec[] = [
           { name: '-t', desc: '指定工具', requiresValue: true, valueHint: '<tool>' },
           { name: '-y', desc: '不提示', type: 'flag' },
         ],
-        positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+        positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
         examples: [{ cmd: 'git mergetool', desc: '解决冲突' }],
       },
       {
@@ -911,7 +911,7 @@ export const gitCommands: CommandSpec[] = [
         cmd: 'log --follow',
         desc: '跟踪文件完整历史',
         params: [{ name: '--oneline', desc: '单行', type: 'flag' }],
-        positional: [{ name: '<file>', desc: '文件', type: 'path' }],
+        positional: [{ name: '<file>', desc: '文件', type: 'file' }],
         examples: [{ cmd: 'git log --follow file.txt', desc: '含改名的文件历史' }],
       },
       {
@@ -962,7 +962,7 @@ export const gitCommands: CommandSpec[] = [
           { name: '-w', desc: '忽略空白', type: 'flag' },
           { name: '-e', desc: '显示邮箱', type: 'flag' },
         ],
-        positional: [{ name: '<file>', desc: '文件', type: 'path' }],
+        positional: [{ name: '<file>', desc: '文件', type: 'file' }],
         examples: [{ cmd: 'git blame -L 10,20 file.txt', desc: '查看10-20行作者' }],
       },
       {
@@ -971,7 +971,7 @@ export const gitCommands: CommandSpec[] = [
         params: [
           { name: '-L', desc: '行范围', requiresValue: true, valueHint: '<start>,<end>' },
         ],
-        positional: [{ name: '<file>', desc: '文件', type: 'path' }],
+        positional: [{ name: '<file>', desc: '文件', type: 'file' }],
         examples: [{ cmd: 'git annotate file.txt', desc: '标注文件' }],
       },
       {
@@ -1071,7 +1071,7 @@ export const gitCommands: CommandSpec[] = [
         cmd: 'diff HEAD',
         desc: '与 HEAD 比较',
         params: [{ name: '--stat', desc: '统计', type: 'flag' }],
-        positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+        positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
         examples: [{ cmd: 'git diff HEAD', desc: '工作区与 HEAD 差异' }],
       },
       {
@@ -1105,7 +1105,7 @@ export const gitCommands: CommandSpec[] = [
         cmd: 'diff --word-diff',
         desc: '词级差异',
         params: [{ name: '--color-words', desc: '着色', type: 'flag' }],
-        positional: [{ name: '<file>', desc: '文件', type: 'path' }],
+        positional: [{ name: '<file>', desc: '文件', type: 'file' }],
         examples: [{ cmd: 'git diff --word-diff', desc: '词级查看' }],
       },
       {
@@ -1383,7 +1383,7 @@ export const gitCommands: CommandSpec[] = [
           { name: '--all', desc: '全部', type: 'flag' },
           { name: '--progress', desc: '进度', type: 'flag' },
         ],
-        positional: [{ name: '<file>', desc: '文件', type: 'path' }],
+        positional: [{ name: '<file>', desc: '文件', type: 'file' }],
         examples: [{ cmd: 'git bundle create repo.bundle --all', desc: '创建 bundle' }],
       },
       {
@@ -1526,7 +1526,7 @@ export const gitCommands: CommandSpec[] = [
           { name: '--modified', desc: '已修改', type: 'flag' },
           { name: '--deleted', desc: '已删除', type: 'flag' },
         ],
-        positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+        positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
         examples: [{ cmd: 'git ls-files --others --exclude-standard', desc: '未跟踪文件' }],
       },
       {

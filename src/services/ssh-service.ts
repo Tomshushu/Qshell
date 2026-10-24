@@ -703,6 +703,14 @@ export const sshService = {
     return backend.ssh.interruptShell(sessionId);
   },
 
+  /**
+   * 设置终端 SSH 接收窗口大小（KB），影响 Ctrl+C 中断速度与日志吞吐。
+   * 该值为后端全局配置，修改后对**新建连接**生效（已连接的终端需重连）。
+   */
+  setTerminalWindowSize(sizeKb: number): void {
+    backend?.ssh.setTerminalWindowSize(sizeKb);
+  },
+
   /** 暂停/恢复高频日志读取，用于前端高水位背压。 */
   pauseShell(sessionId: string): void {
     if (!backend) return;

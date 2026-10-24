@@ -1317,9 +1317,9 @@ export const networkCommands: CommandSpec[] = [
     category: 'network',
     platforms: ['universal'],
     subcommands: [
-      { cmd: 'encrypt', desc: '加密', params: [], positional: [{ name: '<file>', desc: '文件', type: 'path' }] },
-      { cmd: 'decrypt', desc: '解密', params: [], positional: [{ name: '<file>', desc: '文件', type: 'path' }] },
-      { cmd: 'view', desc: '查看', params: [], positional: [{ name: '<file>', desc: '文件', type: 'path' }] },
+      { cmd: 'encrypt', desc: '加密', params: [], positional: [{ name: '<file>', desc: '文件', type: 'file' }] },
+      { cmd: 'decrypt', desc: '解密', params: [], positional: [{ name: '<file>', desc: '文件', type: 'file' }] },
+      { cmd: 'view', desc: '查看', params: [], positional: [{ name: '<file>', desc: '文件', type: 'file' }] },
     ],
     params: [
       { name: '-u', desc: '用户', requiresValue: true, valueHint: '<user>' },

@@ -9,7 +9,7 @@
  */
 
 /** 参数类型 */
-export type ParamType = 'flag' | 'value' | 'path' | 'file' | 'choice' | 'vararg'
+export type ParamType = 'flag' | 'value' | 'path' | 'file' | 'dir' | 'choice' | 'vararg'
 
 /**
  * 命令适用的平台/发行版标签。
@@ -135,6 +135,11 @@ export interface DynamicCompletionProvider {
   /** Provider 唯一标识 */
   id: string
   /**
+   * 可选的细分缓存键生成函数（当同一 Provider 在不同子阶段/资源类型下返回不同列表时使用，
+   * 例如 kubectl get 在资源类型阶段与具体资源阶段返回不同列表）。
+   */
+  cacheKey?: (commandChain: string[], tokens: string[], cwd?: string) => string
+  /**
    * 判断当前输入是否应该触发此 provider。
    *
    * @param commandChain 命令链（如 ['docker','exec']）
@@ -154,6 +159,7 @@ export interface DynamicCompletionProvider {
    * @param commandChain 命令链
    * @param tokens 输入行 tokens
    * @param currentToken 当前 token
+   * @param cwd 当前终端工作目录（可选，供 git / npm / docker-compose 等目录相关命令定位）
    * @returns 候选项列表
    */
   fetch(
@@ -161,6 +167,7 @@ export interface DynamicCompletionProvider {
     commandChain: string[],
     tokens: string[],
     currentToken: string,
+    cwd?: string,
   ): Promise<DynamicSuggestion[]>
 }
 
@@ -206,6 +213,13 @@ export interface HintItem {
   aliasOf?: string
   /** 是否为「Did you mean」纠错建议项 */
   isCorrection?: boolean
+  /**
+   * 补全上屏后光标需要向左回退的字符数（如 `git commit -m ""` 回退 1 格落入双引号内，
+   * 或 `docker exec -it  bash` 回退 5 格落在容器名槽位处）。
+   */
+  cursorBack?: number
+  /** UI 语义徽标（如 '报错修复' / '连招' / '最近操作' / '当前目录'） */
+  badge?: string
 }
 
 /** 引擎匹配结果 */
@@ -224,6 +238,15 @@ export interface HintResult {
   activeSpec?: CommandSpec
   /** 是否处于位置参数阶段（用于触发路径补全） */
   expectingPath?: boolean
+  /**
+   * 路径补全的过滤模式（仅 phase === 'path' 时有意义）：
+   * - `dir`：当前位置参数是目录（如 `cd <dir>`），只补目录
+   * - `file`：当前位置参数是文件（如 `cat <file>`），只补文件
+   * - `all`：其他（如 `ls <path>`、`cp <src>`），目录 + 文件
+   *
+   * 由「当前正在填的位置参数的 type」推导，天然支持 grep/chmod 这类多位置命令。
+   */
+  pathFilterMode?: 'all' | 'dir' | 'file'
   /** 原始输入 */
   input: string
   /**

@@ -92,7 +92,6 @@ export function TabStrip({ tabs, className }: TabStripProps) {
   const setTabColor = useAppStore((s) => s.setTabColor);
   const connectedServers = useAppStore((s) => s.connectedServers);
   const serverStates = useAppStore((s) => s.serverStates);
-  const groups = useAppStore((s) => s.groups);
   const layout = useAppStore((s) => s.layout);
   const workspaces = useAppStore((s) => s.workspaces);
   const splitTab = useAppStore((s) => s.splitTab);
@@ -1240,13 +1239,8 @@ export function TabStrip({ tabs, className }: TabStripProps) {
               return;
             }
 
-            // isActive = 焦点窗格正在显示的 tab（全局活跃）；
-            // isPaneShown = 某个窗格正在显示的 tab（分屏时可能多个同时成立，仅焦点窗格的主高亮）
-            const groupActiveId = tab.groupId
-              ? groups[tab.groupId]?.activeTabId
-              : null;
+            // isActive = 焦点窗格正在显示的 tab（全局活跃）
             const isActive = tab.id === activeTabId;
-            const isPaneShown = tab.id === groupActiveId;
             const isRenaming = renamingTabId === tab.id;
             const displayTitle = getCleanTabTitle(tab);
             const isDraggingThis = dragTabId === tab.id && dragging;

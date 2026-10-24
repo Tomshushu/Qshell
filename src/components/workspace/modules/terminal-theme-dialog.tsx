@@ -33,18 +33,14 @@ import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialo
 import { writeTextFile, readTextFile } from '@tauri-apps/plugin-fs'
 import {
   isVideoFile,
-  isImageFile,
   saveVideoBackground,
   deleteVideoBackground,
-  animatedImageToDataUrl,
   getVideoSrc,
   getUserImageSrc,
   saveImageBackground,
   listUserBackgrounds,
   deleteUserBackground,
   type UserBackground,
-  MAX_IMAGE_UPLOAD_SIZE,
-  MAX_VIDEO_UPLOAD_SIZE,
 } from '@/lib/terminal-background'
 import {
   PRESET_BACKGROUNDS,
@@ -56,61 +52,6 @@ import {
 interface TerminalThemeDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-}
-
-/**
- * 压缩图片文件到指定大小以下，返回 base64 data URL。
- * @param file 原始图片文件
- * @param maxEdge 最大边长（px），超过则等比缩小
- * @param quality 初始 jpeg 质量 0-1
- * @param maxBytes 目标最大字节数，超过则逐步降低质量
- */
-async function compressImage(
-  file: File,
-  maxEdge: number,
-  quality: number,
-  maxBytes: number,
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const img = new Image()
-      img.onload = () => {
-        // 等比缩放到 maxEdge
-        let { width, height } = img
-        if (width > maxEdge || height > maxEdge) {
-          if (width >= height) {
-            height = Math.round((height * maxEdge) / width)
-            width = maxEdge
-          } else {
-            width = Math.round((width * maxEdge) / height)
-            height = maxEdge
-          }
-        }
-        const canvas = document.createElement('canvas')
-        canvas.width = width
-        canvas.height = height
-        const ctx = canvas.getContext('2d')
-        if (!ctx) {
-          reject(new Error('canvas 2d context unavailable'))
-          return
-        }
-        ctx.drawImage(img, 0, 0, width, height)
-        // 逐步降低质量直到满足大小限制
-        let q = quality
-        let dataUrl = canvas.toDataURL('image/jpeg', q)
-        while (dataUrl.length > maxBytes * 1.37 && q > 0.3) {
-          q -= 0.1
-          dataUrl = canvas.toDataURL('image/jpeg', q)
-        }
-        resolve(dataUrl)
-      }
-      img.onerror = () => reject(new Error('image load failed'))
-      img.src = reader.result as string
-    }
-    reader.onerror = () => reject(reader.error)
-    reader.readAsDataURL(file)
-  })
 }
 
 /**

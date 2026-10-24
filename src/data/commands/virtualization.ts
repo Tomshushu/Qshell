@@ -181,7 +181,7 @@ export const virtualizationCommands: CommandSpec[] = [
       { cmd: 'file', desc: '文件操作', subcommands: [
         { cmd: 'push', desc: '推送', positional: [{ name: '<source>', desc: '源', type: 'file' }, { name: '<target>', desc: '目标' }] },
         { cmd: 'pull', desc: '拉取', positional: [{ name: '<source>', desc: '源' }, { name: '<target>', desc: '目标', type: 'file' }] },
-        { cmd: 'edit', desc: '编辑', positional: [{ name: '<file>', desc: '文件' }] },
+        { cmd: 'edit', desc: '编辑', positional: [{ name: '<file>', desc: '文件', type: 'file' }] },
       ] },
       { cmd: 'config', desc: '配置', subcommands: [
         { cmd: 'show', desc: '显示', positional: [{ name: '<name>', desc: '容器名' }] },

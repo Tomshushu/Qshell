@@ -1,5 +1,5 @@
 import { sshService } from "@/services/ssh-service";
-import type { LocalFileEntry, FileEntry } from "@/services/api/types";
+import type { LocalFileEntry } from "@/services/api/types";
 import type { SftpViewMode } from "@/types";
 import {
   BINARY_EXT_SET,

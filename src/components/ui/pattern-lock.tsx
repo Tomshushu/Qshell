@@ -42,7 +42,6 @@ const DOT_COORDS: PointCoord[] = [
 const HIT_RADIUS = 36; // 命中判定的半径范围（viewBox 坐标系内）
 
 export function PatternLock({
-  minPoints = 4,
   onComplete,
   onStart,
   status = "normal",

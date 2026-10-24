@@ -5,6 +5,8 @@ import { systemCommands } from './system'
 import { networkCommands } from './network'
 import { dockerCommands } from './docker'
 import { gitCommands } from './git'
+import { gitPlatformCommands } from './git-platform'
+import { k8sEcosystemCommands } from './k8s-ecosystem'
 import { archiveCommands } from './archive'
 import { packageCommands } from './package'
 import { miscCommands } from './misc'
@@ -45,7 +47,9 @@ export const ALL_COMMANDS: CommandSpec[] = [
   ...securityCommands,
   ...dockerCommands,
   ...gitCommands,
+  ...gitPlatformCommands,
   ...devopsCommands,
+  ...k8sEcosystemCommands,
   ...databaseCommands,
   ...archiveCommands,
   ...packageCommands,
@@ -58,9 +62,14 @@ export const ALL_COMMANDS: CommandSpec[] = [
   ...virtualizationCommands,
 ]
 
-/** 按命令名建索引，加速一级命令查找 */
+/** 按命令名建索引，加速一级命令查找（Linux/Unix 命令优先，避免网络设备同名命令覆盖） */
 export const COMMAND_BY_NAME = new Map<string, CommandSpec>(
   ALL_COMMANDS.map((c) => [c.cmd, c]),
+)
+
+/** 网络设备（华为 VRP / H3C Comware 等）专用命令索引 */
+export const NETWORK_COMMAND_BY_NAME = new Map<string, CommandSpec>(
+  routerCommands.map((c) => [c.cmd, c]),
 )
 
 /** 分类元信息 */
@@ -86,4 +95,6 @@ export const CATEGORY_META: CategoryMeta[] = [
   { id: 'language-toolchains', label: '语言工具链' },
   { id: 'cloud', label: '云平台 CLI' },
   { id: 'virtualization', label: '虚拟化与容器' },
+  { id: 'router', label: '网络设备' },
+  { id: 'k8s', label: 'Kubernetes 生态' },
 ]

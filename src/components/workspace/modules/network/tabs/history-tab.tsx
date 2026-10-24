@@ -7,7 +7,6 @@ import {
   GitCompare,
   Trash2,
   Download,
-  RefreshCw,
   Activity,
 } from 'lucide-react'
 import { useTranslation } from '@/i18n'
@@ -25,7 +24,6 @@ interface HistoryTabProps {
 
 export function HistoryTab({
   runs,
-  loading,
   onRefresh,
 }: HistoryTabProps) {
   const { t } = useTranslation()

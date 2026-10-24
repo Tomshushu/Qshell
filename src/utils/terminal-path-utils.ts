@@ -29,6 +29,10 @@ export function resolveRelativePath(base: string, relative: string): string {
     return trimmed.replace(/\\/g, '/')
   }
 
+  // `~` 基准（home 尚未解析为绝对路径时的占位）：`~` 当作普通段拼接，保留 `~` 前缀。
+  // 例：'~' + 'deploy' → '~/deploy'；'~/deploy' + 'iot-gateway' → '~/deploy/iot-gateway'。
+  // 补全侧 toShellPath 会把 `~/x` 转成 "$HOME/x" 交给远端 shell 展开。
+  const isTildeBase = base === '~' || base.startsWith('~/')
   const isWindows = /^[a-zA-Z]:[\\/]/.test(base)
   const normalizedBase = base.replace(/\\/g, '/')
   const baseParts = normalizedBase.split('/').filter(Boolean)
@@ -37,7 +41,8 @@ export function resolveRelativePath(base: string, relative: string): string {
   for (const part of relParts) {
     if (part === '.') continue
     if (part === '..') {
-      if (baseParts.length > 0) {
+      // `~` 段不可被 `../..` 越界（cd 到 home 之上仍停在 ~）
+      if (baseParts.length > (isTildeBase ? 1 : 0)) {
         baseParts.pop()
       }
     } else {
@@ -51,6 +56,9 @@ export function resolveRelativePath(base: string, relative: string): string {
     return `${drive}\\${baseParts.slice(1).join('\\')}`
   }
 
+  if (isTildeBase) {
+    return baseParts.length > 0 ? baseParts.join('/') : '~'
+  }
   return '/' + baseParts.join('/')
 }
 

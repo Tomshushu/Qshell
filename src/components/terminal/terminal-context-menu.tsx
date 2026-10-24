@@ -1,4 +1,4 @@
-import React from "react";
+import { memo } from "react";
 import {
   Copy,
   Clipboard,
@@ -44,7 +44,7 @@ export interface TerminalContextMenuProps {
   isOpening: boolean;
 }
 
-export function TerminalContextMenu({
+export const TerminalContextMenu = memo(function TerminalContextMenu({
   ctxMenu,
   isLightTerminal = false,
   onClose,
@@ -469,4 +469,4 @@ export function TerminalContextMenu({
       </div>
     </div>
   );
-}
+});

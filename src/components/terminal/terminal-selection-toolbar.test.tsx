@@ -1,6 +1,5 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
-import React from "react";
 import { TerminalSelectionToolbar } from "./terminal-selection-toolbar";
 import { useAIStore } from "@/store/ai-store";
 

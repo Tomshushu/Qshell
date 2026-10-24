@@ -29,7 +29,6 @@ import {
   DOCX_EXT_SET,
   DOC_LEGACY_EXT_SET,
   SPREADSHEET_EXT_SET,
-  HTML_EXT_SET,
   TEXT_EXT_SET,
   UNIVERSAL_PREVIEW_EXTS,
   isUniversalPreviewSupported,
@@ -40,7 +39,6 @@ import { UniversalFileViewer } from '@/components/ui/universal-file-viewer'
 import { ResizablePreviewDialog } from '@/components/ui/resizable-preview-dialog'
 import { useShortcutStore } from '@/store/shortcut-store'
 import { CodeEditor } from '@/components/ui/code-editor'
-import { ArchiveFileIcon } from '@/components/ui/file-icons'
 import { sshService } from '@/services/ssh-service'
 import { FilePermissionsModal } from './file-permissions-modal'
 import { ErrorDialog } from '@/components/ui/error-dialog'
@@ -232,7 +230,7 @@ export function FilesModule({
   // state 供编辑器工具栏展示，refs 供异步保存逻辑读取最新值
   const [editFileEncoding, setEditFileEncoding] = useState('utf-8')
   const [editFileEol, setEditFileEol] = useState<TextEol>(null)
-  const [editFileHasBom, setEditFileHasBom] = useState(false)
+  const [, setEditFileHasBom] = useState(false)
   const editFileEncodingRef = useRef('utf-8')
   const editFileEolRef = useRef<TextEol>(null)
   const editFileHasBomRef = useRef(false)

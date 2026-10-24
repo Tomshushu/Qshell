@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState, memo } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,7 +17,7 @@ export interface TerminalPasteConfirmDialogProps {
   onConfirm: (dontAskAgain?: boolean) => void;
 }
 
-export function TerminalPasteConfirmDialog({
+export const TerminalPasteConfirmDialog = memo(function TerminalPasteConfirmDialog({
   pendingPaste,
   onClose,
   onConfirm,
@@ -83,4 +83,4 @@ export function TerminalPasteConfirmDialog({
       </DialogContent>
     </Dialog>
   );
-}
+});

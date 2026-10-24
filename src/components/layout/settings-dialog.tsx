@@ -47,7 +47,6 @@ import {
   Check,
   Plus,
   X,
-  User,
   FileDown,
   Clock,
   Keyboard,
@@ -1055,6 +1054,8 @@ function SettingsPanel({
     setTerminalHintEnabled,
     terminalScrollbackLines,
     setTerminalScrollbackLines,
+    terminalWindowSizeKb,
+    setTerminalWindowSizeKb,
     terminalRecordingDirectory,
     setTerminalRecordingDirectory,
     terminalRecordingMaxSizeMb,
@@ -1065,8 +1066,6 @@ function SettingsPanel({
     setSftpTransferConcurrency,
     transferRateLimit,
     setTransferRateLimit,
-    sftpDefaultViewMode,
-    setSftpDefaultViewMode,
     sftpLocalViewMode,
     setSftpLocalViewMode,
     sftpRemoteViewMode,
@@ -1846,6 +1845,33 @@ function SettingsPanel({
                         ))}
                       </div>
                     </div>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <SettingLabelWithHint
+                      label={t("term_window_size_title")}
+                      desc={t("term_window_size_desc")}
+                      className="text-muted-foreground font-normal"
+                    />
+                    <div className="flex flex-wrap items-center gap-2">
+                      {[512, 1024, 2048, 4096, 8192].map((preset) => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => setTerminalWindowSizeKb(preset)}
+                          className={cn(
+                            "px-2 py-1 rounded-md border text-xs font-medium transition-colors",
+                            terminalWindowSizeKb === preset
+                              ? "bg-primary text-primary-foreground border-primary shadow-xs"
+                              : "bg-muted/50 hover:bg-muted text-muted-foreground border-border/60"
+                          )}
+                        >
+                          {preset >= 1024 ? `${preset / 1024}MB` : `${preset}KB`}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="text-[11px] text-muted-foreground">
+                      {t("term_window_size_hint")}
+                    </span>
                   </div>
                   <div className="flex flex-col gap-1.5">
                     <SettingLabelWithHint

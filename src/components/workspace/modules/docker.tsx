@@ -2,18 +2,16 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Button } from '@/components/ui/button'
-import { CodeEditor } from '@/components/ui/code-editor'
 import { Input } from '@/components/ui/input'
 import {
   RefreshCw, Play, Square, RotateCcw, FileText, BarChart3, Terminal,
   Search, Info, Container, MoreVertical, List, LayoutGrid, X,
-  Cpu, MemoryStick, Network, HardDrive, Copy, Check,
+  Cpu, Network, HardDrive, Check,
   Trash2, Package, Layers, Pencil, Loader2, Save, Download, Pause, ExternalLink, Plus, Cable, Unplug,
-  Upload, Folder, File as FileIcon, ChevronLeft, Hammer, GitCompare, ChevronDown, ChevronRight, FolderInput, Sparkles,
+  Upload, Folder, File as FileIcon, ChevronLeft, Hammer, ChevronDown, ChevronRight, FolderInput, Sparkles,
 } from 'lucide-react'
 import { TerminalModule } from '@/components/workspace/modules/terminal'
 import { RemoteFilePicker } from '@/components/workspace/modules/remote-file-picker'
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Tooltip as RechartsTooltip } from 'recharts'
 import { sshService } from '@/services/ssh-service'
 import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog'
 import { listen } from '@tauri-apps/api/event'
@@ -38,25 +36,17 @@ import {
   MAX_LOG_SIZE,
   LOG_POLL_FAIL_THRESHOLD,
   type DockerModuleProps,
-  type ViewType,
   type StatsData,
-  type CgroupResult,
   type ContainerStatRow,
   type ComposeProject,
   type ComposeService,
   type ComposeImportPreview,
   type MenuItem,
   type PillTone,
-  parseSizeToMiB,
-  parseSizeToKB,
-  extractStats,
   parseStats,
   buildCgroupCmd,
   parseCgroup,
-  parseProcNetDev,
   stripAnsi,
-  ANSI_FG_COLORS,
-  renderAnsiLine,
   formatSize,
   parseHostPorts,
   isComposeUnhealthy,
@@ -65,25 +55,17 @@ import {
   defaultContainerName,
   dockerErrorHint,
   parseStatsAll,
-  isSensitiveEnvKey,
   OverviewCard,
-  PILL_TONES,
   StatusPill,
   EmptyState,
   ListSkeleton,
   CardsSkeleton,
-  InspectSection,
-  InspectKV,
-  ENV_MASK,
   utf8ToBase64,
-  StructuredInspect,
   deriveComposeDir,
   expandComposeProjects,
   shellQuote,
-  lineDiff,
   parseComposeServices,
   parseComposeFileStatus,
-  yamlScalar,
   dockerRunToCompose,
   DockerComposeImportDialog,
   DockerComposeConvertDialog,
@@ -97,7 +79,6 @@ import { parseContainerExitCode } from "@/services/ai/docker-diagnoser";
 
 export function DockerModule({ serverId, initialView, initialSearchQuery }: DockerModuleProps) {
   const baseServerId = extractBaseServerId(serverId)
-  const serverName = useAppStore((s) => s.servers.find((x) => x.id === baseServerId)?.name || serverId)
   // 服务器主机地址：端口"浏览器打开"用
   const serverHost = useAppStore((s) => s.servers.find((x) => x.id === baseServerId)?.host || 'localhost')
   // 连接就绪标记：必须在所有使用它的 effect 之前声明（TDZ）

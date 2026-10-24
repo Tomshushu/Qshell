@@ -51,6 +51,83 @@ export const STATIC_VALUES: Record<string, ValueSuggestion[]> = {
 }
 
 /**
+ * 参数值快捷补全（针对 --since/--until 这类「时间参数」的值）。
+ *
+ * key 规则：`命令链 参数名`，如 'docker logs --since'、'journalctl --until'。
+ * value：该时间参数的快捷取值（无需用户手敲精确时间戳）。
+ */
+export const PARAM_STATIC_VALUES: Record<string, ValueSuggestion[]> = {
+  // docker logs 的 --since/--until：Go duration 语法（h/m/s，不支持 d）
+  'docker logs --since': [
+    { insertText: '1h', desc: '最近 1 小时' },
+    { insertText: '6h', desc: '最近 6 小时' },
+    { insertText: '12h', desc: '最近 12 小时' },
+    { insertText: '24h', desc: '最近 24 小时' },
+    { insertText: '72h', desc: '最近 3 天' },
+    { insertText: '168h', desc: '最近 7 天' },
+  ],
+  'docker logs --until': [
+    { insertText: '1h', desc: '截至 1 小时前' },
+    { insertText: '24h', desc: '截至 24 小时前' },
+    { insertText: '72h', desc: '截至 3 天前' },
+    { insertText: '168h', desc: '截至 7 天前' },
+  ],
+  // journalctl 的 --since/--until：systemd time 语法（today/yesterday/相对时间）
+  'journalctl --since': [
+    { insertText: 'today', desc: '今天 00:00 起' },
+    { insertText: 'yesterday', desc: '昨天 00:00 起' },
+    { insertText: '-1h', desc: '最近 1 小时' },
+    { insertText: '-24h', desc: '最近 24 小时' },
+    { insertText: '-7d', desc: '最近 7 天' },
+    { insertText: '-30d', desc: '最近 30 天' },
+  ],
+  'journalctl --until': [
+    { insertText: 'today', desc: '截至今天 00:00' },
+    { insertText: 'yesterday', desc: '截至昨天 00:00' },
+    { insertText: '-24h', desc: '截至 24 小时前' },
+    { insertText: '-7d', desc: '截至 7 天前' },
+  ],
+  // kill -s 的信号名（kill -s TERM <pid>）
+  'kill -s': [
+    { insertText: 'TERM', desc: 'SIGTERM · 优雅终止（默认）' },
+    { insertText: 'KILL', desc: 'SIGKILL · 强制终止' },
+    { insertText: 'HUP', desc: 'SIGHUP · 重载配置' },
+    { insertText: 'INT', desc: 'SIGINT · 中断（Ctrl+C）' },
+    { insertText: 'QUIT', desc: 'SIGQUIT · 退出并核心转储' },
+    { insertText: 'USR1', desc: 'SIGUSR1 · 用户自定义（如 nginx 重开日志）' },
+    { insertText: 'USR2', desc: 'SIGUSR2 · 用户自定义（如 nginx 平滑重启）' },
+    { insertText: 'STOP', desc: 'SIGSTOP · 暂停进程' },
+    { insertText: 'CONT', desc: 'SIGCONT · 恢复进程' },
+  ],
+}
+
+/**
+ * 取「参数值阶段」的静态快捷值（如 --since 的快捷时间）。
+ *
+ * 判定：当前输入的前一个 token 是已知时间参数（如 --since / --until）。
+ *
+ * @param chainNames 命令链（如 ['docker','logs']）
+ * @param tokens 完整输入 tokens（含尾部空串，用于取「上一个 token」）
+ * @param currentToken 当前正在输入的 token（用于前缀过滤，空串则返回全部）
+ */
+export function getParamStaticValues(
+  chainNames: string[],
+  tokens: string[],
+  currentToken: string,
+): ValueSuggestion[] | null {
+  if (tokens.length < 3) return null
+  const prev = tokens[tokens.length - 2]
+  if (!prev || !prev.startsWith('-')) return null
+  const key = `${chainNames.join(' ')} ${prev}`
+  const vals = PARAM_STATIC_VALUES[key]
+  if (!vals) return null
+  const lower = currentToken.toLowerCase()
+  return lower
+    ? vals.filter((v) => v.insertText.toLowerCase().startsWith(lower))
+    : vals
+}
+
+/**
  * 取命令链对应的静态值补全。
  *
  * @param cmdChain 命令链（如 ['chmod'] 或 ['git','config']）

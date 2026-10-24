@@ -7,7 +7,6 @@ import {
   ArrowDownUp,
   AlertCircle,
   Cpu,
-  RefreshCw,
 } from 'lucide-react'
 import { useTranslation } from '@/i18n'
 import type { InterfaceInfo, EthtoolInfo } from '@/types/network'
@@ -24,8 +23,6 @@ interface InterfacesTabProps {
 export function InterfacesTab({
   serverId,
   interfaces,
-  loading,
-  onRefresh,
 }: InterfacesTabProps) {
   const { t } = useTranslation()
   const [selectedEthtool, setSelectedEthtool] = useState<EthtoolInfo | null>(null)

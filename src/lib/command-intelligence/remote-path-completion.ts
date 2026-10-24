@@ -17,9 +17,22 @@
 import { sshService } from '@/services/ssh-service'
 import type { HintItem } from './types'
 
+/** 目录列表结果 */
+export interface DirListResult {
+  /** 目录条目 */
+  entries: PathEntry[]
+  /**
+   * 目录是否有效（远端 `cd` 是否成功）。
+   * - true：目录存在（可能为空目录，此时 entries=[]）
+   * - false：目录不存在 / 无权限 / 路径无效
+   *
+   * 用于区分「空目录」与「cwd 失效」，避免空目录被误判成 cwd 错误而回退 home。
+   */
+  ok: boolean
+}
+
 /** 缓存条目 */
-interface CacheEntry {
-  items: PathEntry[]
+interface CacheEntry extends DirListResult {
   ts: number
 }
 
@@ -31,6 +44,8 @@ export interface PathEntry {
   insertText: string
   /** 是否目录 */
   isDir: boolean
+  /** 是否隐藏项（`.` 开头）——排序时沉底，普通用户极少用到 */
+  hidden: boolean
 }
 
 /** 缓存 TTL（毫秒） */
@@ -43,7 +58,7 @@ const MAX_CACHE_ENTRIES_PER_SERVER = 60
 const cache = new Map<string, Map<string, CacheEntry>>()
 
 /** 进行中的请求：key=`${serverId}\0${dirPath}` → Promise */
-const inflight = new Map<string, Promise<PathEntry[]>>()
+const inflight = new Map<string, Promise<DirListResult>>()
 
 /**
  * 把用户输入的路径片段拆分为「目录部分」+「前缀部分」。
@@ -101,46 +116,115 @@ export function splitPathInput(input: string): {
 }
 
 /**
- * 远程执行 ls 获取目录条目（内部实现，不带节流）。
+ * 把远端路径转成安全的 shell 参数：
+ * - `~` / `~/x` → `"$HOME"` / `"$HOME/x"`（双引号内 `$HOME` 仍展开，且空格不会被拆词）
+ * - 其他 → 单引号包裹，内部 `'` 用 `'\''` 转义
  *
- * 命令选择 `ls -F -A`：
- * - -F：目录追加 /，可执行追加 *，符号链接追加 @
- * - -A：列出除 . 和 .. 之外的所有条目（含隐藏文件）
- *
- * 路径使用单引号包裹；路径内的单引号用 '\'' 转义。
+ * 用 `$HOME` 而不是裸 `~`，是为了同时满足「展开 home」和「路径含空格」两个需求。
  */
-async function fetchDirEntries(serverId: string, dir: string): Promise<PathEntry[]> {
-  // ~ 开头时不能加单引号（否则 shell 不展开 ~）；其余路径加单引号防注入
-  const safeDir = dir.replace(/'/g, `'\\''`)
-  const pathArg = dir.startsWith('~') ? safeDir : `'${safeDir}'`
-  // 使用 ls -F -A；若目录不存在或无权限，返回空数组
-  const cmd = `ls -F -A ${pathArg} 2>/dev/null`
-  const result = await sshService.execute(serverId, cmd)
-  // exitCode 非 0 也可能是空目录或权限问题，统一按 stdout 解析
-  const out = (result?.stdout ?? '').trim()
-  if (!out) return []
+function toShellPath(dir: string): string {
+  if (dir === '~') return '"$HOME"'
+  if (dir.startsWith('~/')) {
+    // 双引号内需要转义 " \ $ ` 以保留字面量
+    const rest = dir.slice(2).replace(/(["\\$`])/g, '\\$1')
+    return `"$HOME/${rest}"`
+  }
+  return `'${dir.replace(/'/g, `'\\''`)}'`
+}
 
+/** 解析主命令输出：目录带尾随 '/'，其余为文件 */
+function parsePlainEntries(out: string): PathEntry[] {
   const entries: PathEntry[] = []
   for (const line of out.split('\n')) {
-    const trimmed = line.trim()
+    const trimmed = line.replace(/\r$/, '').trim()
     if (!trimmed) continue
-    // -F 追加的符号：/ * @ = |（目录/可执行/链接/套接字/管道）
     const isDir = trimmed.endsWith('/')
-    // 去掉尾部类型符号得到真实名称
-    const name = trimmed.replace(/[*@=|/]$/, '')
-    if (!name) continue
+    const name = isDir ? trimmed.slice(0, -1) : trimmed
+    if (!name || name === '.' || name === '..') continue
     entries.push({
       name,
       insertText: isDir ? `${name}/` : name,
       isDir,
+      hidden: name.startsWith('.'),
     })
   }
-  // 目录优先，再按名称排序
-  entries.sort((a, b) => {
-    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
-    return a.name.localeCompare(b.name)
-  })
   return entries
+}
+
+/** 解析 `ls -F -A -t` 输出（降级路径）：去掉尾部类型符号（/ * @ = |） */
+function parseLsFEntries(out: string): PathEntry[] {
+  const entries: PathEntry[] = []
+  for (const line of out.split('\n')) {
+    const trimmed = line.replace(/\r$/, '').trim()
+    if (!trimmed) continue
+    const isDir = trimmed.endsWith('/')
+    const name = trimmed.replace(/[*@=|/]$/, '')
+    if (!name || name === '.' || name === '..') continue
+    entries.push({
+      name,
+      insertText: isDir ? `${name}/` : name,
+      isDir,
+      hidden: name.startsWith('.'),
+    })
+  }
+  return entries
+}
+
+/**
+ * 排序：隐藏项（`.` 开头）沉底，组内**保持 `ls -t` 的时间倒序**。
+ *
+ * 用稳定排序（ES2019+ 保证）只做「隐藏 / 非隐藏」分区，不重排组内顺序，
+ * 从而保留 shell 端 `ls -t` 已按 mtime 降序排好的结果（近期修改的在前）。
+ */
+function sortEntries(entries: PathEntry[]): PathEntry[] {
+  entries.sort((a, b) => Number(a.hidden) - Number(b.hidden))
+  return entries
+}
+
+/**
+ * 远程执行 ls 获取目录条目（内部实现，不带节流）。
+ *
+ * 类型判定用 shell 的 `[ -d ]`（会跟随符号链接），而不是 `ls -F` 的尾部标记：
+ * - `ls -F` 对「指向目录的符号链接」只加 `@`（不加 `/`），会被误判为文件，
+ *   导致 `cd`（只补目录）时这类链接目录（venv / conda env / 软链）完全不出现；
+ * - `-1At`：一行一个名字（含空格安全），`-t` 按 mtime 降序（最近修改的在前）。
+ *
+ * 失败时降级为单命令 `ls -F -A -t`：fish / csh 等不支持 `while ... read` 语法的 shell
+ * 仍能拿到基本列表（代价是链接目录会被当成文件）。
+ *
+ * `container`：非空时在容器内执行（`docker exec <name> sh -c '...'`）。
+ */
+async function fetchDirEntries(
+  serverId: string,
+  dir: string,
+  container?: string,
+): Promise<DirListResult> {
+  const pathArg = toShellPath(dir)
+  const wrap = (inner: string) =>
+    container
+      ? `docker exec ${toShellPath(container)} sh -c ${toShellPath(inner)}`
+      : inner
+
+  // 主命令：`cd ... || exit 1` 让「目录无效」体现为 exitCode != 0，
+  // 从而与「目录存在但为空」（exitCode 0、stdout 空）区分开。
+  // `-t`：按 mtime 降序（最近修改的在前），补全更符合直觉。
+  const mainCmd = wrap(
+    `cd ${pathArg} 2>/dev/null || exit 1; ` +
+      `ls -1At | while IFS= read -r f; do ` +
+      `[ -d "$f" ] && printf '%s/\\n' "$f" || printf '%s\\n' "$f"; done 2>/dev/null`,
+  )
+  const r1 = await sshService.execute(serverId, mainCmd)
+  if ((r1?.exitCode ?? 0) === 0) {
+    const out = (r1?.stdout ?? '').trim()
+    return { entries: sortEntries(parsePlainEntries(out)), ok: true }
+  }
+
+  // 降级：shell 语法不兼容（fish/csh）或目录无效 → 用单命令再确认一次
+  const fallbackCmd = wrap(`ls -F -A -t ${pathArg} 2>/dev/null`)
+  const r2 = await sshService.execute(serverId, fallbackCmd)
+  const ok = (r2?.exitCode ?? 0) === 0
+  const out2 = (r2?.stdout ?? '').trim()
+  return { entries: sortEntries(parseLsFEntries(out2)), ok }
 }
 
 /**
@@ -150,22 +234,27 @@ async function fetchDirEntries(serverId: string, dir: string): Promise<PathEntry
  * - 已有 inflight → 复用同一 Promise
  * - 否则发起请求，完成后写入缓存
  */
-export function listRemoteDir(serverId: string, dir: string): Promise<PathEntry[]> {
-  const key = `${serverId}\0${dir}`
+export function listRemoteDir(
+  serverId: string,
+  dir: string,
+  container?: string,
+): Promise<DirListResult> {
+  // 缓存/inflight key 带上容器名：同一路径在宿主机与不同容器内是不同目录
+  const key = `${serverId}\0${container ?? ''}\0${dir}`
 
   // 1. 命中缓存
   const bucket = cache.get(serverId)
   if (bucket) {
-    const entry = bucket.get(dir)
+    const entry = bucket.get(key)
     if (entry) {
       if (Date.now() - entry.ts < CACHE_TTL_MS) {
         // 刷新 LRU 位置（重新插入至末尾）
-        bucket.delete(dir)
-        bucket.set(dir, entry)
-        return Promise.resolve(entry.items)
+        bucket.delete(key)
+        bucket.set(key, entry)
+        return Promise.resolve({ entries: entry.entries, ok: entry.ok })
       } else {
         // 已过期主动移除，防止死条目堆积
-        bucket.delete(dir)
+        bucket.delete(key)
       }
     }
   }
@@ -175,16 +264,16 @@ export function listRemoteDir(serverId: string, dir: string): Promise<PathEntry[
   if (existing) return existing
 
   // 3. 发起新请求
-  const p = fetchDirEntries(serverId, dir)
-    .then((items) => {
+  const p = fetchDirEntries(serverId, dir, container)
+    .then((result) => {
       // 写入缓存并实施 LRU 容量控制
       let b = cache.get(serverId)
       if (!b) {
         b = new Map()
         cache.set(serverId, b)
       }
-      if (b.has(dir)) {
-        b.delete(dir)
+      if (b.has(key)) {
+        b.delete(key)
       } else if (b.size >= MAX_CACHE_ENTRIES_PER_SERVER) {
         // 先清理超时的无用条目
         const now = Date.now()
@@ -203,13 +292,13 @@ export function listRemoteDir(serverId: string, dir: string): Promise<PathEntry[
           }
         }
       }
-      b.set(dir, { items, ts: Date.now() })
-      return items
+      b.set(key, { entries: result.entries, ok: result.ok, ts: Date.now() })
+      return result
     })
     .catch((err) => {
-      // 出错时不写缓存，返回空数组，避免污染后续请求
+      // 出错时不写缓存；ok=false 表示目录不可用（区别于空目录）
       console.warn('[remote-path-completion] fetch failed:', err)
-      return [] as PathEntry[]
+      return { entries: [], ok: false } as DirListResult
     })
     .finally(() => {
       inflight.delete(key)
@@ -244,34 +333,93 @@ function joinPath(dir: string, entryInsert: string, prefixTag = ''): string {
 }
 
 /**
+ * 把相对目录按终端当前工作目录解析为绝对路径，供远端 `ls` 使用。
+ *
+ * 关键背景：`sshService.execute` 走的是**独立 exec 通道**，其 cwd 是登录目录（home），
+ * 并非交互式 shell 的当前目录。因此相对路径补全必须显式拼上终端 cwd，
+ * 否则会出现「已在 ~/vector 里，补全却列出 home 的内容」。
+ *
+ * - cwd 缺失 → 原样返回（降级为旧行为，由 exec 通道的 home 决定）
+ * - 绝对路径 / `~` 开头 → 原样（不拼 cwd）
+ * - `.` → cwd
+ * - 其他相对路径 → cwd + '/' + dir
+ */
+export function resolveDirAgainstCwd(dir: string, cwd?: string): string {
+  if (!cwd || !dir) return dir
+  if (dir.startsWith('/') || dir.startsWith('~')) return dir
+  if (dir === '.') return cwd
+  return `${cwd.replace(/\/+$/, '')}/${dir}`
+}
+
+/** 路径补全的过滤模式：只补全目录 / 只补全文件 / 全部 */
+export type PathFilterMode = 'all' | 'dir' | 'file'
+
+/**
  * 按前缀过滤目录条目，返回 HintItem[]（供 UI 直接渲染）。
  *
  * @param serverId 远程服务器 ID
  * @param input 用户当前输入的路径片段（如 '/usr/l' 或 'web:/app/l'，即命令行最后一个 token）
  * @param maxItems 最大返回条数
+ * @param cwd 终端当前工作目录（绝对路径）；用于把相对路径补全解析到正确目录。
+ *            容器/远程路径（web:/app）不受影响。
+ * @param filterMode 过滤模式：`cd` 只补目录、`cat`/`vi` 只补文件、其余全部（见 inferPathFilterMode）
  */
 export async function matchRemotePath(
   serverId: string,
   input: string,
   maxItems = 20,
+  cwd?: string,
+  filterMode: PathFilterMode = 'all',
+  containerMode = false,
 ): Promise<HintItem[]> {
   const { dir, prefix, prefixTag } = splitPathInput(input)
-  const entries = await listRemoteDir(serverId, dir)
+  // 容器路径（如 `docker cp web:/app/l`）：在容器内执行 ls，且不拼本地 cwd。
+  // 仅在调用方确认是 docker 命令时启用（containerMode），避免把 `host:/path` 误当容器。
+  const container =
+    containerMode && prefixTag ? prefixTag.slice(0, -1) : undefined
+  // 容器/远程路径（web:/app）相对容器根，不拼终端 cwd；
+  // 普通路径按终端当前目录解析，供远端 ls 用绝对路径执行（缓存 key 也随之区分目录）
+  const resolvedDir = prefixTag ? dir : resolveDirAgainstCwd(dir, cwd)
+  const first = await listRemoteDir(serverId, resolvedDir, container)
+  // ok=false（目录不存在/无权限，通常是跟踪到的 cwd 失准）→ 保持空列表、面板隐藏。
+  // **不回退 home**：把「cwd 错」伪装成「你在 home」列出无关内容，比「不提示」更误导。
+  // 用户可直接输入绝对路径补全（绝对路径不依赖 cwd，始终可用）。
+  const entries = first.entries
 
   const lower = prefix.toLowerCase()
   // 前缀匹配；返回的条目名均以 prefix 开头，保证 insertText（完整路径）
   // 以用户已输入的 lastToken 为前缀，applyHint 仅需追加后缀
-  const filtered = prefix
+  let filtered = prefix
     ? entries.filter((e) => e.name.toLowerCase().startsWith(lower))
     : entries
+  // 按命令语义过滤：cd 只留目录、cat/vi 只留文件，避免误导
+  if (filterMode === 'dir') {
+    filtered = filtered.filter((e) => e.isDir)
+  } else if (filterMode === 'file') {
+    filtered = filtered.filter((e) => !e.isDir)
+  }
 
   return filtered.slice(0, maxItems).map((e) => ({
     kind: 'path' as const,
     // label 显示短名（不带 prefixTag，避免视觉冗余），insertText 用完整路径以便正确补全
     label: e.insertText,
     desc: e.isDir ? '目录' : '文件',
+    // 插入文本仍基于用户输入的原始 dir（相对形态），保证 applyHint 追加后缀正确
     insertText: joinPath(dir, e.insertText, prefixTag),
   }))
+}
+
+/**
+ * 同步读取已缓存的目录条目文件名集合（供项目特征嗅探与连招加权零开销复用）。
+ */
+export function getCachedDirEntryNames(serverId?: string, cwd?: string | null): Set<string> {
+  if (!serverId) return new Set()
+  const bucket = cache.get(serverId)
+  if (!bucket) return new Set()
+  const dirKey = `${serverId}\0\0${cwd || '.'}`
+  const entry = bucket.get(dirKey)
+  if (!entry || !entry.ok) return new Set()
+  return new Set(entry.entries.map((e) => e.name))
 }
 
 /**

@@ -92,13 +92,30 @@ struct ShellSession {
     output_sequence: Arc<std::sync::atomic::AtomicU64>,
 }
 
-/// 历史缓存最大字节数（256KB）
-const HISTORY_MAX_BYTES: usize = 256 * 1024;
+/// 历史缓存最大字节数。
+///
+/// 用于跨窗口迁移 / 断线重连时恢复终端 scrollback。旧值 256KB 只能回放约
+/// 1000~2000 行，明显小于前端 xterm 的 scrollback 默认 5000 行（范围 1000~128000），
+/// 导致迁移/重连后历史恢复不完整。参考市面成熟产品（Windows Terminal 默认 9001 行、
+/// iTerm2 无上限、VS Code 1000 行），并覆盖本项目前端默认 5000 行（含 ANSI 后约
+/// 1~2MB），放宽到 2MB。每 session 一份内存，10 个会话约 20MB，可接受。
+const HISTORY_MAX_BYTES: usize = 2 * 1024 * 1024;
 // xterm.js 的 WriteBuffer 会把单个数据块交给 InputHandler 同步解析。
 // 单块过大时（尤其是带大量 ANSI/换行的 docker 日志），WebView 主线程会被
 // 一个解析任务长期占用，键盘事件也无法及时抢占。把 IPC 输出切成 64 KiB
 // 小块，让 xterm 在块与块之间回到事件循环，同时仍保持较低的事件数量。
 const SHELL_OUTPUT_CHUNK_BYTES: usize = 64 * 1024;
+// Zmodem 合批阈值：协议字节累积到 64KB 时合批 flush，配合 4ms 定时 flush，
+// 避免 rz/sz 高速传输时每个 SSH 数据包都 base64 + emit 一次 IPC 事件造成事件洪流。
+const ZMODEM_FLUSH_BYTES: usize = 64 * 1024;
+// Ctrl+C 后在途旧日志排空的兜底丢弃上限不再用固定常量，改为动态 = 2 × 终端窗口大小
+// （覆盖 rekey pending 上限）。窗口可在设置面板调整（256KB~16MB，见 connection.rs 的
+// terminal_window_size_bytes），兜底必须随之变化，否则窗口调大后兜底不足、在途数据
+// 没丢完就被强制停止丢弃，旧问题（中断后又刷）会回归。见 ch.wait 分支里的动态计算。
+// 中断丢弃状态的「静默超时」（毫秒）：中断后若连续这么久没有新数据到达（且未处于
+// 背压暂停），说明远端进程已停、在途旧日志已读完，立即停止丢弃恢复正常渲染。
+// 避免小命令中断后因未扫描到 ^C/Prompt 标记而永久停留在丢弃状态（界面卡住）。
+const SIGINT_DRAIN_IDLE_MS: u64 = 300;
 
 /// 扫描字节流中的中断响应标志（^C、\x03、Readline Bracketed Paste off、OSC Title 等）
 fn find_interrupt_marker(bytes: &[u8]) -> Option<usize> {
@@ -166,6 +183,21 @@ fn emit_shell_output(
         });
         start = end;
     }
+}
+
+/// 合批冲刷 Zmodem 待发协议字节。rz/sz 高速传输时若每个 SSH 数据包都单独
+/// base64 + emit，会在 WebView IPC 队列中制造大量小事件；这里按 4ms 定时或
+/// 64KB 阈值合并成一次 `ssh:shell-zmodem-data` 事件，降低事件数量与 IPC 开销。
+fn flush_zmodem_pending(app: &AppHandle, session_id: &str, pending: &mut Vec<u8>) {
+    if pending.is_empty() {
+        return;
+    }
+    let b64 = base64::engine::general_purpose::STANDARD.encode(pending.as_slice());
+    pending.clear();
+    let _ = app.emit("ssh:shell-zmodem-data", ShellZmodemData {
+        session_id: session_id.to_string(),
+        data: b64,
+    });
 }
 
 /// Global shell sessions map (session_id -> sender).
@@ -315,7 +347,10 @@ pub async fn shell_create(
         let mut buffer = Vec::new();
         let mut terminal_codec = TerminalCodec::new(&normalized_encoding)
             .unwrap_or_else(|_| TerminalCodec::utf8());
-        let mut flush_interval = tokio::time::interval(std::time::Duration::from_millis(16));
+        // 4ms 定时冲刷：旧值 16ms 会让中低频日志（如 docker logs -f，每秒几百行）
+        // 被合并成「每 16ms 蹦一批」，对比 Xshell/MobaXterm 的逐包直渲显得一顿一顿。
+        // 缩短到 4ms 后中低频日志接近逐行流动；高频日志仍由 64KB 阈值立即冲刷，不受影响。
+        let mut flush_interval = tokio::time::interval(std::time::Duration::from_millis(4));
         flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut paused = false;
         let mut pause_deadline: Option<tokio::time::Instant> = None;
@@ -327,12 +362,21 @@ pub async fn shell_create(
         let mut zmodem_mode = false;
         // Zmodem 残留缓存：跨数据块扫描起始序列用（避免序列被切到两块之间漏检）
         let mut zmodem_tail: Vec<u8> = Vec::new();
+        // Zmodem 合批缓冲：待发协议字节先累积，4ms 定时或 64KB 阈值时合批 emit，
+        // 避免高速传输时每个 SSH 数据包触发一次 IPC 事件造成事件洪流。
+        let mut zmodem_pending: Vec<u8> = Vec::new();
         // 记录最近一次触发 SIGINT 的时间戳。中断后 1.5 秒内严禁重新进入 Pause 挂起状态，
         // 保证远端进程被杀后的 exit 状态和 prompt 提示符能够以零延迟直通前端。
         let mut last_sigint_at: Option<tokio::time::Instant> = None;
-        // 中断后在途旧日志排空窗口：在此窗口内，Rust 端直接丢弃在途旧数据，直到检测到 ^C / Prompt
-        let mut sigint_drain_until: Option<tokio::time::Instant> = None;
+        // 中断后在途旧日志排空：进入该状态后，Rust 端直接丢弃在途旧数据，直到检测到
+        // ^C / Prompt 标记；Some(n) 表示已丢弃 n 字节（用于「2×窗口」字节兜底）。
+        let mut sigint_drain_bytes: Option<usize> = None;
         let mut sigint_drain_tail: Vec<u8> = Vec::new();
+        // 最近一次收到 SSH 数据的时刻：用于判断「中断后数据是否已静默」（见 SIGINT_DRAIN_IDLE_MS）。
+        let mut last_data_at: Option<tokio::time::Instant> = None;
+        // 任务本地重放队列：在 Resize 合并或 Ctrl+C 排空 rx 时暂存未消费的非目标命令，
+        // 严格保持 FIFO 顺序（避免通过 tx.try_send 回塞到队尾导致并发 Write 乱序或自持 Sender 泄漏）。
+        let mut replay_queue: VecDeque<ShellCmd> = VecDeque::new();
 
         let res: Result<(), String> = async {
             loop {
@@ -356,27 +400,39 @@ pub async fn shell_create(
                         paused = false;
                         pause_deadline = None;
                         buffer.clear();
-                        // 启动最多 800ms 的在途旧日志本地排空丢弃窗口
-                        sigint_drain_until = Some(tokio::time::Instant::now() + Duration::from_millis(800));
+                        // 启动在途旧日志排空丢弃（字节数兜底，动态 = 2×终端窗口大小）
+                        sigint_drain_bytes = Some(0);
                         sigint_drain_tail.clear();
+                        last_data_at = Some(tokio::time::Instant::now());
 
-                        // 核心：清空在中断发出前因并发已经排在 rx 队列里的旧 Pause 指令，
+                        // 核心：清空在中断发出前因并发已经排在队列里的旧 Pause 指令，
                         // 彻底杜绝“刚中断又被旧 Pause 再次挂起 3 秒”的致命假死死锁。
-                        let mut pending_cmds = Vec::new();
-                        while let Ok(cmd) = rx.try_recv() {
+                        let mut last_resize: Option<(u32, u32)> = None;
+                        let mut should_close = false;
+                        let mut kept_cmds: VecDeque<ShellCmd> = VecDeque::new();
+                        for cmd in replay_queue.drain(..).chain(std::iter::from_fn(|| rx.try_recv().ok())) {
                             match cmd {
-                                ShellCmd::Pause | ShellCmd::Resume => {}
-                                other => pending_cmds.push(other),
+                                ShellCmd::Pause | ShellCmd::Resume | ShellCmd::Write(_) => {}
+                                ShellCmd::SetEncoding(_) | ShellCmd::ZmodemWrite(_) | ShellCmd::ZmodemEnd => {
+                                    kept_cmds.push_back(cmd);
+                                }
+                                ShellCmd::Resize { cols, rows } => {
+                                    last_resize = Some((cols, rows));
+                                }
+                                ShellCmd::Close => {
+                                    should_close = true;
+                                }
                             }
                         }
-                        for cmd in pending_cmds {
-                            match cmd {
-                                ShellCmd::Resize { cols, rows } => {
-                                    let _ = ch.window_change(cols, rows, 0, 0).await;
-                                }
-                                ShellCmd::Close => return Ok(()),
-                                _ => {}
-                            }
+                        replay_queue = kept_cmds;
+                        if should_close {
+                            return Ok(());
+                        }
+                        if let Some((cols, rows)) = last_resize {
+                            let _ = tokio::time::timeout(
+                                Duration::from_secs(5),
+                                ch.window_change(cols, rows, 0, 0),
+                            ).await;
                         }
 
                         // 交互式 PTY 的标准做法是写入 VINTR（^C）字节。
@@ -391,7 +447,13 @@ pub async fn shell_create(
                         }
                     },
 
-                    cmd = rx.recv() => match cmd {
+                    cmd = async {
+                        if let Some(c) = replay_queue.pop_front() {
+                            Some(c)
+                        } else {
+                            rx.recv().await
+                        }
+                    } => match cmd {
                         Some(ShellCmd::Pause) => {
                             // 中断后 1.5 秒冷却保护窗口内严禁暂停 SSH 读取，确保 prompt 及退出状态零延迟直通
                             let in_sigint_cooldown = last_sigint_at
@@ -414,13 +476,14 @@ pub async fn shell_create(
                                 paused = false;
                                 pause_deadline = None;
                                 buffer.clear();
-                                sigint_drain_until = Some(tokio::time::Instant::now() + Duration::from_millis(800));
+                                sigint_drain_bytes = Some(0);
                                 sigint_drain_tail.clear();
-                            } else {
-                                // 用户正常交互输入，立即取消排空丢弃状态
-                                sigint_drain_until = None;
-                                sigint_drain_tail.clear();
+                                last_data_at = Some(tokio::time::Instant::now());
                             }
+                            // 注意：普通输入（如回车）不在这里取消丢弃状态。丢弃只由
+                            // 「扫描到 ^C / Prompt 标记」或「2×窗口 字节兜底」停止。
+                            // 否则拉取海量日志时，用户 Ctrl+C 后按回车会把 SSH 通道里还没读完的
+                            // 在途旧日志又放出来渲染，出现「回车后又刷屏、再 Ctrl+C 也停不下来」。
                             let data = match terminal_codec.encode(&text) {
                                 Ok(data) => data,
                                 Err(error) => {
@@ -512,7 +575,8 @@ pub async fn shell_create(
                             }
                         }
                         Some(ShellCmd::ZmodemEnd) => {
-                            // 前端通知 Zmodem 传输结束：退出 passthrough，恢复正常终端输出
+                            // 前端通知 Zmodem 传输结束：先冲刷残余协议字节，再退出 passthrough
+                            flush_zmodem_pending(&app_clone, &sid, &mut zmodem_pending);
                             zmodem_mode = false;
                             zmodem_tail.clear();
                             let _ = app_clone.emit("ssh:shell-zmodem-end", ShellZmodemDetected {
@@ -523,56 +587,77 @@ pub async fn shell_create(
                         Some(ShellCmd::Resize { cols, rows }) => {
                             // 合并积压的 Resize：拖动窗口会产生高频 window_change 请求，
                             // 逐条执行既造成 SSH 请求洪流又会挤占用户输入，这里只取最新一条。
+                            // 把非 Resize 命令按原始顺序保留在本地 replay_queue 中，保证输入不丢失且不乱序。
                             let mut last_cols = cols;
                             let mut last_rows = rows;
-                            while let Ok(ShellCmd::Resize { cols: c, rows: r }) = rx.try_recv() {
-                                last_cols = c;
-                                last_rows = r;
+                            let mut kept: VecDeque<ShellCmd> = VecDeque::new();
+                            for item in replay_queue.drain(..).chain(std::iter::from_fn(|| rx.try_recv().ok())) {
+                                match item {
+                                    ShellCmd::Resize { cols: c, rows: r } => {
+                                        last_cols = c;
+                                        last_rows = r;
+                                    }
+                                    other => kept.push_back(other),
+                                }
                             }
-                            let _ = ch.window_change(last_cols, last_rows, 0, 0).await;
+                            replay_queue = kept;
+                            let _ = tokio::time::timeout(
+                                Duration::from_secs(5),
+                                ch.window_change(last_cols, last_rows, 0, 0),
+                            ).await;
                         }
                         Some(ShellCmd::Close) | None => break,
                     },
                     msg = ch.wait(), if !paused => match msg {
                         Some(ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. }) => {
+                            // 记录数据到达时刻，供中断丢弃状态的静默超时判断使用
+                            last_data_at = Some(tokio::time::Instant::now());
                             if !zmodem_mode {
-                                if let Some(deadline) = sigint_drain_until {
-                                    if tokio::time::Instant::now() >= deadline {
-                                        sigint_drain_until = None;
+                                if let Some(mut drained) = sigint_drain_bytes {
+                                    sigint_drain_tail.extend_from_slice(&data);
+                                    if let Some(pos) = find_interrupt_marker(&sigint_drain_tail) {
+                                        // 检测到 ^C / Prompt 标记：停止丢弃，保留标记之后的字节
+                                        sigint_drain_bytes = None;
+                                        let keep_bytes = sigint_drain_tail[pos..].to_vec();
+                                        sigint_drain_tail.clear();
+
+                                        if !keep_bytes.is_empty() {
+                                            let mut hist = history_clone
+                                                .lock()
+                                                .unwrap_or_else(|e| e.into_inner());
+                                            hist.extend(keep_bytes.iter().copied());
+                                            if hist.len() > HISTORY_MAX_BYTES {
+                                                let drain = hist.len() - HISTORY_MAX_BYTES;
+                                                hist.drain(..drain);
+                                            }
+                                            drop(hist);
+
+                                            buffer.extend_from_slice(&keep_bytes);
+                                            let text = terminal_codec.decode(&buffer, false);
+                                            emit_shell_output(&app_clone, &sid, &text, &output_sequence_for_task);
+                                            buffer.clear();
+                                        }
+                                        continue;
+                                    }
+
+                                    // 未检测到标记：丢弃在途旧日志，累计丢弃字节数
+                                    drained += data.len();
+                                    if sigint_drain_tail.len() > 8 {
+                                        let drain = sigint_drain_tail.len() - 8;
+                                        sigint_drain_tail.drain(..drain);
+                                    }
+                                    // 兜底上限动态 = 2 × 终端窗口大小（覆盖 rekey pending）
+                                    let drain_max =
+                                        (crate::ssh::connection::terminal_window_size_bytes() as usize) * 2;
+                                    if drained >= drain_max {
+                                        // 兜底：丢弃超 2×窗口仍未检测到标记（远端未回显 prompt），
+                                        // 强制停止丢弃，让后续数据正常渲染，避免无限丢弃吞掉正常输出。
+                                        sigint_drain_bytes = None;
                                         sigint_drain_tail.clear();
                                     } else {
-                                        sigint_drain_tail.extend_from_slice(&data);
-                                        if let Some(pos) = find_interrupt_marker(&sigint_drain_tail) {
-                                            sigint_drain_until = None;
-                                            let keep_bytes = sigint_drain_tail[pos..].to_vec();
-                                            sigint_drain_tail.clear();
-
-                                            if !keep_bytes.is_empty() {
-                                                let mut hist = history_clone
-                                                    .lock()
-                                                    .unwrap_or_else(|e| e.into_inner());
-                                                hist.extend(keep_bytes.iter().copied());
-                                                if hist.len() > HISTORY_MAX_BYTES {
-                                                    let drain = hist.len() - HISTORY_MAX_BYTES;
-                                                    hist.drain(..drain);
-                                                }
-                                                drop(hist);
-
-                                                buffer.extend_from_slice(&keep_bytes);
-                                                let text = terminal_codec.decode(&buffer, false);
-                                                emit_shell_output(&app_clone, &sid, &text, &output_sequence_for_task);
-                                                buffer.clear();
-                                            }
-                                            continue;
-                                        } else {
-                                            // 未发现中断回显/Prompt，直接在 Rust 端丢弃在途旧日志
-                                            if sigint_drain_tail.len() > 8 {
-                                                let drain = sigint_drain_tail.len() - 8;
-                                                sigint_drain_tail.drain(..drain);
-                                            }
-                                            continue;
-                                        }
+                                        sigint_drain_bytes = Some(drained);
                                     }
+                                    continue;
                                 }
                             }
 
@@ -594,12 +679,12 @@ pub async fn shell_create(
                             }
 
                             if zmodem_mode {
-                                // Zmodem passthrough：直接 base64 emit，不走终端文本通道
-                                let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
-                                let _ = app_clone.emit("ssh:shell-zmodem-data", ShellZmodemData {
-                                    session_id: sid.clone(),
-                                    data: b64,
-                                });
+                                // Zmodem passthrough：累积到缓冲，4ms 或 64KB 阈值时合批 emit，
+                                // 避免每个 SSH 数据包都 base64 + emit 造成 IPC 事件洪流。
+                                zmodem_pending.extend_from_slice(&data);
+                                if zmodem_pending.len() >= ZMODEM_FLUSH_BYTES {
+                                    flush_zmodem_pending(&app_clone, &sid, &mut zmodem_pending);
+                                }
                             } else {
                                 // 扫描 Zmodem 起始序列
                                 // 拼接 tail + data 形成完整扫描缓冲区
@@ -659,7 +744,7 @@ pub async fn shell_create(
                         Some(ChannelMsg::Eof | ChannelMsg::Close) | None => break,
                         _ => {}
                     },
-                    // 每 16ms（60Hz 帧率）定时刷新数据到前端，兼顾低延迟交互与吞吐性能
+                    // 每 4ms 定时刷新数据到前端，兼顾低延迟交互与吞吐性能
                     _ = flush_interval.tick() => {
                         if paused {
                             if let Some(deadline) = pause_deadline {
@@ -669,10 +754,27 @@ pub async fn shell_create(
                                 }
                             }
                         }
+                        // 中断丢弃状态静默超时：连续 SIGINT_DRAIN_IDLE_MS 没有新数据到达，
+                        // 说明远端进程已停、在途旧日志已读完，停止丢弃恢复渲染，避免永久卡住。
+                        // 注意排除 paused（背压暂停读取）：暂停期间不读数据不代表远端进程已停，
+                        // 若据此提前结束丢弃，恢复读取后剩余的旧日志会重新刷出来。
+                        if !paused && sigint_drain_bytes.is_some() {
+                            let idle = last_data_at.map_or(true, |t| {
+                                t.elapsed() >= Duration::from_millis(SIGINT_DRAIN_IDLE_MS)
+                            });
+                            if idle {
+                                sigint_drain_bytes = None;
+                                sigint_drain_tail.clear();
+                            }
+                        }
                         if !zmodem_mode && !buffer.is_empty() {
                             let text = terminal_codec.decode(&buffer, false);
                             emit_shell_output(&app_clone, &sid, &text, &output_sequence_for_task);
                             buffer.clear();
+                        }
+                        // 4ms 定时冲刷 Zmodem 合批缓冲，保证低延迟下协议字节不滞留
+                        if zmodem_mode && !zmodem_pending.is_empty() {
+                            flush_zmodem_pending(&app_clone, &sid, &mut zmodem_pending);
                         }
                         if last_active_touch.elapsed() >= Duration::from_secs(10) {
                             SshManager::global().touch_last_active(&server_id_for_task);
@@ -690,6 +792,8 @@ pub async fn shell_create(
                 let text = terminal_codec.decode(&buffer, true);
                 emit_shell_output(&app_clone, &sid, &text, &output_sequence_for_task);
             }
+            // 退出前冲刷残余 Zmodem 协议字节（避免最后一段丢失）
+            flush_zmodem_pending(&app_clone, &sid, &mut zmodem_pending);
             // 若 Zmodem 传输中会话异常退出，通知前端关闭 zmodem UI
             if zmodem_mode {
                 let _ = app_clone.emit("ssh:shell-zmodem-end", ShellZmodemDetected {
@@ -953,8 +1057,13 @@ pub async fn shell_close(
 /// Get the cached output history for a shell session.
 /// Used when migrating a terminal across windows to restore the scrollback buffer.
 pub async fn shell_get_history(session_id: String) -> Result<String, String> {
-    let sessions = sessions().lock().await;
-    match sessions.get(&session_id) {
+    // 先 clone session 释放全局 sessions 锁，再锁 history 解码：解码虽快，
+    // 但持锁期间会阻塞其他 shell 的 write/resize/close（与 shell_resize 等保持一致）
+    let sess = {
+        let sessions = sessions().lock().await;
+        sessions.get(&session_id).cloned()
+    };
+    match sess {
         Some(s) => {
             // poison 容错：reader task panic 会毒化 mutex，迁移窗口恢复历史不应跟着失败
             let hist = s.history.lock().unwrap_or_else(|e| e.into_inner());

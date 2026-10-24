@@ -112,7 +112,7 @@ export function ServicesModule({ serverId, onNavigate, initialSearchQuery }: Ser
     } finally {
       setLoadingResources(false)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [serverId, t])
 
   const fetchServices = useCallback(async () => {
@@ -129,7 +129,7 @@ export function ServicesModule({ serverId, onNavigate, initialSearchQuery }: Ser
     } finally {
       setLoading(false)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [serverId, showResources, loadResources, t])
 
   useEffect(() => {

@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from "react";
+import React, { useRef, useEffect, memo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Search, Loader2, Regex, ArrowUp, ArrowDown, X } from "lucide-react";
@@ -24,7 +24,7 @@ export interface TerminalSearchBarProps {
   onClose: () => void;
 }
 
-export function TerminalSearchBar({
+export const TerminalSearchBar = memo(function TerminalSearchBar({
   open,
   searchText,
   onSearchTextChange,
@@ -207,4 +207,4 @@ export function TerminalSearchBar({
       </Button>
     </div>
   );
-}
+});

@@ -7,8 +7,6 @@ import {
   loadSavedAssistantSessions,
   autoSyncCurrentSession,
   useAIStore,
-  DEFAULT_MAX_ASSISTANT_SESSIONS,
-  DEFAULT_MAX_MESSAGES_PER_SESSION,
   MAX_EXECUTION_CARD_OUTPUT_LENGTH,
 } from '@/store/ai-store'
 import type { AIAssistantSession, AIAssistantMessage } from '@/types/ai'
@@ -179,7 +177,7 @@ describe('AI Store - Storage Limit & Rolling Retention (滚动存储与数量限
     it('falls back to emergency pruning when LocalStorage Quota is exceeded', () => {
       const setItemSpy = vi.spyOn(Storage.prototype, 'setItem')
       let callCount = 0
-      setItemSpy.mockImplementation((key, val) => {
+      setItemSpy.mockImplementation((_key, _val) => {
         callCount++
         if (callCount === 1) {
           throw new DOMException('QuotaExceededError', 'QuotaExceededError')

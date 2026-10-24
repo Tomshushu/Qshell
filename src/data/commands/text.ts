@@ -38,7 +38,7 @@ export const textCommands: CommandSpec[] = [
     ],
     positional: [
       { name: '<pattern>', desc: '搜索模式', type: 'value' },
-      { name: '<file>', desc: '文件', type: 'path', repeatable: true },
+      { name: '<file>', desc: '文件', type: 'file', repeatable: true },
     ],
     examples: [
       { cmd: 'grep -rn "TODO" src/', desc: '递归搜索含行号' },
@@ -62,7 +62,7 @@ export const textCommands: CommandSpec[] = [
     ],
     positional: [
       { name: '<pattern>', desc: '扩展正则', type: 'value' },
-      { name: '<file>', desc: '文件', type: 'path', repeatable: true },
+      { name: '<file>', desc: '文件', type: 'file', repeatable: true },
     ],
     examples: [
       { cmd: 'egrep "foo|bar" file.txt', desc: '匹配多个模式' },
@@ -84,7 +84,7 @@ export const textCommands: CommandSpec[] = [
     ],
     positional: [
       { name: '<string>', desc: '固定字符串', type: 'value' },
-      { name: '<file>', desc: '文件', type: 'path', repeatable: true },
+      { name: '<file>', desc: '文件', type: 'file', repeatable: true },
     ],
     examples: [
       { cmd: 'fgrep "error" log.txt', desc: '快速字符串搜索' },
@@ -202,28 +202,6 @@ export const textCommands: CommandSpec[] = [
     ],
   },
   {
-    cmd: 'bzgrep',
-    desc: '在 bzip2 压缩文件中搜索',
-    category: 'text',
-    platforms: ['universal'],
-    usage: 'bzgrep [GREP_OPTIONS] PATTERN [FILE]...',
-    params: [
-      { name: '-n', desc: '显示行号', type: 'flag' },
-      { name: '-i', desc: '忽略大小写', type: 'flag' },
-      { name: '-v', desc: '反向匹配', type: 'flag' },
-      { name: '-c', desc: '统计匹配数', type: 'flag' },
-      { name: '-l', desc: '只显示文件名', type: 'flag' },
-    ],
-    positional: [
-      { name: '<pattern>', desc: '搜索模式', type: 'value' },
-      { name: '<file>', desc: 'bzip2 压缩文件', type: 'path', repeatable: true },
-    ],
-    examples: [
-      { cmd: 'bzgrep "error" log.bz2', desc: '在 bz2 文件中搜索' },
-      { cmd: 'bzgrep -n "TODO" *.bz2', desc: '搜索并显示行号' },
-    ],
-  },
-  {
     cmd: 'zipgrep',
     desc: '在 zip 压缩包中搜索文本',
     category: 'text',
@@ -262,7 +240,7 @@ export const textCommands: CommandSpec[] = [
     ],
     positional: [
       { name: '<pattern>', desc: '搜索模式', type: 'value' },
-      { name: '<file>', desc: '文件', type: 'path', repeatable: true },
+      { name: '<file>', desc: '文件', type: 'file', repeatable: true },
     ],
     examples: [
       { cmd: 'agrep -2 "recieve" doc.txt', desc: '容错 2 字符搜索' },
@@ -290,7 +268,7 @@ export const textCommands: CommandSpec[] = [
     ],
     positional: [
       { name: '<script>', desc: '如 s/old/new/g', type: 'value' },
-      { name: '<file>', desc: '文件', type: 'path', repeatable: true },
+      { name: '<file>', desc: '文件', type: 'file', repeatable: true },
     ],
     examples: [
       { cmd: 'sed -i "s/foo/bar/g" file.txt', desc: '原地替换' },
@@ -312,7 +290,7 @@ export const textCommands: CommandSpec[] = [
     ],
     positional: [
       { name: '<program>', desc: 'awk 程序', type: 'value' },
-      { name: '<file>', desc: '文件', type: 'path', repeatable: true },
+      { name: '<file>', desc: '文件', type: 'file', repeatable: true },
     ],
     examples: [
       { cmd: "awk -F: '{print $1}' /etc/passwd", desc: '打印用户名' },
@@ -335,7 +313,7 @@ export const textCommands: CommandSpec[] = [
     ],
     positional: [
       { name: '<program>', desc: 'gawk 程序', type: 'value' },
-      { name: '<file>', desc: '文件', type: 'path', repeatable: true },
+      { name: '<file>', desc: '文件', type: 'file', repeatable: true },
     ],
     examples: [
       { cmd: "gawk -F, '{print $2}' data.csv", desc: '处理 CSV' },
@@ -356,7 +334,7 @@ export const textCommands: CommandSpec[] = [
     ],
     positional: [
       { name: '<program>', desc: 'mawk 程序', type: 'value' },
-      { name: '<file>', desc: '文件', type: 'path', repeatable: true },
+      { name: '<file>', desc: '文件', type: 'file', repeatable: true },
     ],
     examples: [
       { cmd: "mawk '{print $1}' log.txt", desc: '快速提取首列' },
@@ -381,7 +359,7 @@ export const textCommands: CommandSpec[] = [
     ],
     positional: [
       { name: '<program>', desc: 'Perl 代码', type: 'value' },
-      { name: '<file>', desc: '文件', type: 'path', repeatable: true },
+      { name: '<file>', desc: '文件', type: 'file', repeatable: true },
     ],
     examples: [
       { cmd: "perl -pe 's/foo/bar/g' file.txt", desc: '替换文本' },
@@ -399,7 +377,7 @@ export const textCommands: CommandSpec[] = [
       { name: '-s', desc: '静默模式', type: 'flag' },
       { name: '-p', desc: '提示符', requiresValue: true, valueHint: '<prompt>' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path' }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file' }],
     examples: [
       { cmd: "ed -s file.txt <<< $',s/old/new/g\\nw'", desc: '脚本化编辑' },
       { cmd: 'ed file.txt', desc: '进入交互编辑' },
@@ -415,7 +393,7 @@ export const textCommands: CommandSpec[] = [
       { name: '-s', desc: '静默模式', type: 'flag' },
       { name: '-c', desc: '执行命令', requiresValue: true, valueHint: '<command>' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path' }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file' }],
     examples: [
       { cmd: "ex -sc '%s/foo/bar/g|x' file.txt", desc: '替换并保存退出' },
       { cmd: "ex -sc '1,5d|x' file.txt", desc: '删除 1-5 行' },
@@ -460,7 +438,7 @@ export const textCommands: CommandSpec[] = [
       { name: '-s', desc: '不输出无分隔符行', type: 'flag' },
       { name: '--complement', desc: '取补集', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'cut -d: -f1 /etc/passwd', desc: '取第一列' },
       { cmd: 'cut -c1-10 file.txt', desc: '取每行前 10 字符' },
@@ -481,7 +459,7 @@ export const textCommands: CommandSpec[] = [
       { name: '-E', desc: '行尾显示 $', type: 'flag' },
       { name: '-T', desc: 'Tab 显示为 ^I', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'cat -n file.txt', desc: '显示行号' },
       { cmd: 'cat a.txt b.txt > merged.txt', desc: '拼接文件' },
@@ -531,7 +509,7 @@ export const textCommands: CommandSpec[] = [
       { name: '-', desc: '不输出下划线', type: 'flag' },
       { name: '-2', desc: '双倍行距', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path' }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file' }],
     examples: [
       { cmd: 'nroff -man file | colcrt -', desc: '去除下划线' },
       { cmd: 'colcrt -2 file.txt', desc: '双倍行距输出' },
@@ -599,7 +577,7 @@ export const textCommands: CommandSpec[] = [
       { name: '-s', desc: '稳定排序', type: 'flag' },
       { name: '-o', desc: '输出到文件', requiresValue: true, valueHint: '<file>' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'sort -n -k2 data.txt', desc: '按第 2 列数值排序' },
       { cmd: 'sort -u names.txt', desc: '排序并去重' },
@@ -680,7 +658,7 @@ export const textCommands: CommandSpec[] = [
       { name: '-v', desc: '显示文件名头', type: 'flag' },
       { name: '-z', desc: 'NUL 行分隔', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'head -n 20 file.txt', desc: '查看前 20 行' },
       { cmd: 'head -c 1000 binary.bin', desc: '查看前 1000 字节' },
@@ -703,7 +681,7 @@ export const textCommands: CommandSpec[] = [
       { name: '--pid', desc: '进程退出后停止', requiresValue: true, valueHint: '<pid>' },
       { name: '-s', desc: '轮询间隔秒数', requiresValue: true, valueHint: '<n>' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'tail -f /var/log/syslog', desc: '实时追踪日志' },
       { cmd: 'tail -n 100 error.log', desc: '查看最后 100 行' },
@@ -895,7 +873,7 @@ export const textCommands: CommandSpec[] = [
       { name: '-L', desc: '最长行长度', type: 'flag' },
       { name: '--files0-from', desc: '从 NUL 分隔文件读取', requiresValue: true, valueHint: '<file>' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'wc -l file.txt', desc: '统计行数' },
       { cmd: 'wc -w essay.txt', desc: '统计字数' },
@@ -1342,7 +1320,7 @@ export const textCommands: CommandSpec[] = [
       { name: '--color', desc: '颜色模式', requiresValue: true, valueHint: 'auto|always|never' },
       { name: '--paging', desc: '分页模式', requiresValue: true, valueHint: 'auto|always|never' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'bat README.md', desc: '高亮显示文件' },
       { cmd: 'bat -l json -p data.json', desc: '按 JSON 高亮纯文本输出' },
@@ -1561,7 +1539,7 @@ export const textCommands: CommandSpec[] = [
       { name: '-X', desc: '不清屏', type: 'flag' },
       { name: '-e', desc: '第二次到尾退出', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'less -N file.txt', desc: '带行号分页查看' },
       { cmd: 'less +F log.txt', desc: '类似 tail -f 的追踪' },
@@ -1580,7 +1558,7 @@ export const textCommands: CommandSpec[] = [
       { name: '-c', desc: '不滚动清屏', type: 'flag' },
       { name: '-N', desc: '每页行数', requiresValue: true, valueHint: '<n>' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'more file.txt', desc: '分页查看' },
       { cmd: 'ls -la | more', desc: '分页查看输出' },

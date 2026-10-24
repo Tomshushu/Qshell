@@ -7,7 +7,7 @@
  * 3. 内置 4.5 秒生命周期自动眨眼系统与悬浮呼吸微动
  */
 
-import React, { useEffect, useState, useId } from 'react'
+import { useEffect, useState, useId } from 'react'
 import type { AIMascotMood } from '@/types/ai'
 import { cn } from '@/lib/utils'
 

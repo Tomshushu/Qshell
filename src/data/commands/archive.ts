@@ -37,7 +37,7 @@ export const archiveCommands: CommandSpec[] = [
       { name: '--no-same-owner', desc: '解压时不还原属主', type: 'flag' },
       { name: '--no-same-permissions', desc: '解压时用 umask 权限', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'tar -czvf archive.tar.gz dir/', desc: '创建 gzip 压缩包' },
       { cmd: 'tar -xzvf archive.tar.gz -C /tmp', desc: '解压到 /tmp 目录' },
@@ -72,7 +72,7 @@ export const archiveCommands: CommandSpec[] = [
       { name: '-S', desc: '自定义后缀', requiresValue: true, valueHint: '<suffix>' },
       { name: '-N', desc: '保存原文件名/时间', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'gzip file.txt', desc: '压缩为 file.txt.gz' },
       { cmd: 'gzip -k -9 file.txt', desc: '最大压缩并保留原文件' },
@@ -224,7 +224,7 @@ export const archiveCommands: CommandSpec[] = [
     category: 'archive',
     platforms: ['universal'],
     params: [{ name: '-v', desc: '详细输出', type: 'flag' }],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'zforce file', desc: '重命名为 file.gz' },
       { cmd: 'zforce -v file*', desc: '批量添加后缀' },
@@ -249,7 +249,7 @@ export const archiveCommands: CommandSpec[] = [
       { name: '-9', desc: '最大压缩（块 900k）', type: 'flag' },
       { name: '-z', desc: '强制压缩（覆盖后缀）', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'bzip2 file.txt', desc: '压缩为 file.txt.bz2' },
       { cmd: 'bzip2 -k -9 file.txt', desc: '最大压缩并保留原文件' },
@@ -374,7 +374,7 @@ export const archiveCommands: CommandSpec[] = [
       { name: '-T', desc: '线程数', requiresValue: true, valueHint: '<n>' },
       { name: '-F', desc: '指定格式', requiresValue: true, valueHint: '<format>' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'xz file.txt', desc: '压缩为 file.txt.xz' },
       { cmd: 'xz -k -9 -e file.txt', desc: '极限压缩并保留原文件' },
@@ -430,7 +430,7 @@ export const archiveCommands: CommandSpec[] = [
       { name: '-z', desc: '强制压缩', type: 'flag' },
       { name: '-9', desc: '最大压缩', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'lzma file.txt', desc: '压缩为 file.txt.lzma' },
       { cmd: 'lzma -d file.lzma', desc: '解压' },
@@ -495,7 +495,7 @@ export const archiveCommands: CommandSpec[] = [
     ],
     positional: [
       { name: '<archive>', desc: '压缩包', type: 'path' },
-      { name: '<file>', desc: '文件', type: 'path', repeatable: true },
+      { name: '<file>', desc: '文件', type: 'file', repeatable: true },
     ],
     examples: [
       { cmd: 'zip -r archive.zip dir/', desc: '递归压缩目录' },
@@ -651,7 +651,7 @@ export const archiveCommands: CommandSpec[] = [
     ],
     positional: [
       { name: '<archive>', desc: '压缩包', type: 'path' },
-      { name: '<file>', desc: '文件', type: 'path', repeatable: true },
+      { name: '<file>', desc: '文件', type: 'file', repeatable: true },
     ],
     examples: [
       { cmd: '7z a -t7z archive.7z dir/', desc: '创建 7z 归档' },
@@ -675,7 +675,7 @@ export const archiveCommands: CommandSpec[] = [
     ],
     positional: [
       { name: '<archive>', desc: '压缩包', type: 'path' },
-      { name: '<file>', desc: '文件', type: 'path', repeatable: true },
+      { name: '<file>', desc: '文件', type: 'file', repeatable: true },
     ],
     examples: [
       { cmd: '7za a archive.7z dir/', desc: '压缩' },
@@ -696,7 +696,7 @@ export const archiveCommands: CommandSpec[] = [
     ],
     positional: [
       { name: '<archive>', desc: '压缩包', type: 'path' },
-      { name: '<file>', desc: '文件', type: 'path', repeatable: true },
+      { name: '<file>', desc: '文件', type: 'file', repeatable: true },
     ],
     examples: [
       { cmd: '7zr a archive.7z dir/', desc: '压缩' },
@@ -727,7 +727,7 @@ export const archiveCommands: CommandSpec[] = [
     ],
     positional: [
       { name: '<archive>', desc: '压缩包', type: 'path' },
-      { name: '<file>', desc: '文件', type: 'path', repeatable: true },
+      { name: '<file>', desc: '文件', type: 'file', repeatable: true },
     ],
     examples: [
       { cmd: 'rar a -r archive.rar dir/', desc: '递归压缩目录' },
@@ -779,7 +779,7 @@ export const archiveCommands: CommandSpec[] = [
       { name: '-v', desc: '显示压缩率', type: 'flag' },
       { name: '-b', desc: '位长度', requiresValue: true, valueHint: '<n>' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'compress file.txt', desc: '压缩为 file.txt.Z' },
       { cmd: 'compress -d file.Z', desc: '解压（等同 uncompress）' },
@@ -849,7 +849,7 @@ export const archiveCommands: CommandSpec[] = [
       { name: '-p', desc: '指定路径', requiresValue: true, valueHint: '<dir>' },
       { name: '-S', desc: '后缀', requiresValue: true, valueHint: '<suffix>' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'lzop file.txt', desc: '压缩为 file.txt.lzo' },
       { cmd: 'lzop -d file.lzo', desc: '解压' },
@@ -879,7 +879,7 @@ export const archiveCommands: CommandSpec[] = [
       { name: '--rm', desc: '压缩后删除原文件', type: 'flag' },
       { name: '--adapt', desc: '自适应压缩率', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'zstd file.txt', desc: '压缩为 file.txt.zst' },
       { cmd: 'zstd -d file.zst', desc: '解压（等同 unzstd）' },
@@ -909,7 +909,7 @@ export const archiveCommands: CommandSpec[] = [
       { name: '-o', desc: '输出文件', requiresValue: true, valueHint: '<file>' },
       { name: '-j', desc: '并行线程数', requiresValue: true, valueHint: '<n>' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'brotli file.txt', desc: '压缩为 file.txt.br' },
       { cmd: 'brotli -d file.br', desc: '解压 brotli 文件' },
@@ -935,7 +935,7 @@ export const archiveCommands: CommandSpec[] = [
       { name: '-r', desc: '递归', type: 'flag' },
       { name: '-l', desc: '列出信息', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'pigz file.txt', desc: '并行压缩为 file.txt.gz' },
       { cmd: 'pigz -d file.txt.gz', desc: '并行解压' },
@@ -961,7 +961,7 @@ export const archiveCommands: CommandSpec[] = [
       { name: '-m', desc: '最大内存', requiresValue: true, valueHint: '<n>' },
       { name: '-r', desc: '逐个处理', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'pbzip2 file.txt', desc: '并行压缩为 file.txt.bz2' },
       { cmd: 'pbzip2 -d file.txt.bz2', desc: '并行解压' },
@@ -981,7 +981,7 @@ export const archiveCommands: CommandSpec[] = [
       { name: '-r', desc: '使用 BSD 算法（默认 SysV）', type: 'flag' },
       { name: '-s', desc: '显示整个目录的合计', type: 'flag' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'sum file.txt', desc: '计算 SysV 校验和' },
       { cmd: 'sum -r file.txt', desc: '使用 BSD 算法' },
@@ -1002,7 +1002,7 @@ export const archiveCommands: CommandSpec[] = [
       { name: '--status', desc: '不输出（仅返回码）', type: 'flag' },
       { name: '-l', desc: '摘要长度（位数）', requiresValue: true, valueHint: '<n>' },
     ],
-    positional: [{ name: '<file>', desc: '文件', type: 'path', repeatable: true }],
+    positional: [{ name: '<file>', desc: '文件', type: 'file', repeatable: true }],
     examples: [
       { cmd: 'b2sum file.txt', desc: '计算 BLAKE2b 校验和' },
       { cmd: 'b2sum -c checksums.txt', desc: '校验文件完整性' },

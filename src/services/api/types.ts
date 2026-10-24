@@ -921,6 +921,8 @@ export interface BackendAdapter {
     onProbeProgress: (
       callback: (data: ServerProbeProgress) => void,
     ) => () => void;
+    /** 设置终端 SSH 接收窗口大小（KB），影响 Ctrl+C 中断速度与吞吐；修改后对新建连接生效 */
+    setTerminalWindowSize: (sizeKb: number) => void;
     // 交互式 Shell
     createShell: (
       serverId: string,

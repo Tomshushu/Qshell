@@ -213,6 +213,7 @@ pub fn run() {
             commands::server_import::servers_import_external,
             // SSH 连接
             commands::ssh::ssh_connect,
+            commands::ssh::ssh_set_terminal_window_size,
             commands::ssh::ssh_disconnect,
             commands::ssh::ssh_execute,
             commands::ssh::ssh_is_connected,

@@ -5,7 +5,7 @@
  * 为划选的教程命令、代码块或消息提供快捷「复制」、「在当前终端执行」、「填入当前终端」兜底操作
  */
 
-import React, { useEffect, useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { Copy, Play, Terminal } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTranslation } from '@/i18n'

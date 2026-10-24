@@ -280,18 +280,6 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     const savedGiteeSyncTime = getSavedItem(GITEE_LAST_SYNC_STORAGE_KEY) || null
     const savedGitHubSyncTime = getSavedItem(GITHUB_LAST_SYNC_STORAGE_KEY) || null
     const savedMasterPassword = getSavedItem(MASTER_PASSWORD_STORAGE_KEY)
-    let savedSyncPasswords = true
-    try {
-      savedSyncPasswords = localStorage.getItem(SYNC_INCLUDE_CREDENTIALS_STORAGE_KEY) !== 'false'
-    } catch {
-      /* ignore */
-    }
-    let savedSyncBackgrounds = true
-    try {
-      savedSyncBackgrounds = localStorage.getItem(SYNC_TERMINAL_BACKGROUNDS_STORAGE_KEY) !== 'false'
-    } catch {
-      /* ignore */
-    }
     let savedAutoSync = true
     try {
       const a = localStorage.getItem(AUTO_SYNC_STORAGE_KEY)
@@ -683,6 +671,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         terminalDrawBoldInBrightColors: appState.terminalDrawBoldInBrightColors,
         terminalHintEnabled: appState.terminalHintEnabled,
         terminalScrollbackLines: appState.terminalScrollbackLines,
+        terminalWindowSizeKb: appState.terminalWindowSizeKb,
         terminalRecordingDirectory: appState.terminalRecordingDirectory,
         terminalEncoding: appState.terminalEncoding,
         terminalRecordingMaxSizeMb: appState.terminalRecordingMaxSizeMb,
@@ -1065,6 +1054,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
           terminalDrawBoldInBrightColors: (prefs.terminalDrawBoldInBrightColors as boolean) ?? prev.terminalDrawBoldInBrightColors,
           terminalHintEnabled: (prefs.terminalHintEnabled as boolean) ?? prev.terminalHintEnabled,
           terminalScrollbackLines: (prefs.terminalScrollbackLines as number) ?? prev.terminalScrollbackLines,
+          terminalWindowSizeKb: (prefs.terminalWindowSizeKb as number) ?? prev.terminalWindowSizeKb,
           terminalRecordingDirectory: (prefs.terminalRecordingDirectory as string) ?? prev.terminalRecordingDirectory,
           terminalEncoding: (prefs.terminalEncoding as string) ?? prev.terminalEncoding,
           terminalRecordingMaxSizeMb: (prefs.terminalRecordingMaxSizeMb as number) ?? prev.terminalRecordingMaxSizeMb,

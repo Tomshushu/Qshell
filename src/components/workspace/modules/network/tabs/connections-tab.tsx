@@ -5,7 +5,6 @@ import { Input } from '@/components/ui/input'
 import {
   Radio,
   Search,
-  RefreshCw,
   ExternalLink,
   Skull,
 } from 'lucide-react'
@@ -34,7 +33,6 @@ function formatEndpoint(address: string, port: number | string): string {
 export function ConnectionsTab({
   serverId,
   connPage,
-  loading,
   onRefresh,
   onNavigate,
 }: ConnectionsTabProps) {

@@ -3,6 +3,8 @@ import { sshService } from "@/services/ssh-service";
 import { HOST_GROUP_ID } from "@/lib/server-groups";
 import { isReady as isStateReady } from "@/services/ssh-connection-state";
 import { clearRemotePathCache } from "@/lib/command-intelligence/remote-path-completion";
+import { clearDynamicCache } from "@/lib/command-intelligence/dynamic-completion";
+import { clearUserAliases } from "@/lib/command-intelligence/alias-map";
 import { clearProcessSnapshotStore } from "@/components/workspace/modules/process-store";
 import { pruneWorkspaces } from "../workspace-helpers";
 import type { AppState, ServerSlice, ServerStateEntry } from "../types";
@@ -47,6 +49,8 @@ export const createServerSlice: StateCreator<AppState, [], [], ServerSlice> = (
     }),
   deleteServer: (id) => {
     clearRemotePathCache(id);
+    clearDynamicCache(id);
+    clearUserAliases(id);
     clearProcessSnapshotStore(id);
     set((state) => {
       const tabsToDelete = state.tabs.filter((t) => t.serverId === id);
@@ -91,6 +95,8 @@ export const createServerSlice: StateCreator<AppState, [], [], ServerSlice> = (
   deleteServers: (ids) => {
     for (const id of ids) {
       clearRemotePathCache(id);
+      clearDynamicCache(id);
+      clearUserAliases(id);
       clearProcessSnapshotStore(id);
     }
     set((state) => {

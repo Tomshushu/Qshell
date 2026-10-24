@@ -11,8 +11,6 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useTranslation } from '@/i18n'
-import { useAppStore } from '@/store'
-import { extractBaseServerId } from '@/services/ssh-connection-state'
 import { cn } from '@/lib/utils'
 import { sshService } from '@/services/ssh-service'
 import type {
@@ -50,10 +48,6 @@ export interface NetworkModuleProps {
 export function NetworkModule({ serverId, onNavigate }: NetworkModuleProps) {
   const { t } = useTranslation()
   const [activeTab, setActiveTab] = useState<NetworkTabId>('overview')
-
-  const baseServerId = extractBaseServerId(serverId)
-  const server = useAppStore((s) => s.servers.find((sv) => sv.id === baseServerId))
-  const serverName = server?.name || server?.host || t('module_network')
 
   // Global facts
   const [overview, setOverview] = useState<NetOverview | null>(null)

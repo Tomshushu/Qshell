@@ -43,7 +43,7 @@ export const cloudCommands: CommandSpec[] = [
         { cmd: 'ls', desc: '列出桶/对象', params: [{ name: '--recursive', desc: '递归', type: 'flag' }, { name: '--human-readable', desc: '易读大小', type: 'flag' }] },
         { cmd: 'cp', desc: '复制对象', positional: [{ name: '<source>', desc: '源' }, { name: '<dest>', desc: '目标' }], params: [{ name: '--recursive', desc: '递归', type: 'flag' }, { name: '--exclude', desc: '排除', requiresValue: true }, { name: '--include', desc: '包含', requiresValue: true }] },
         { cmd: 'mv', desc: '移动对象', positional: [{ name: '<source>', desc: '源' }, { name: '<dest>', desc: '目标' }] },
-        { cmd: 'rm', desc: '删除对象', positional: [{ name: '<path>', desc: '路径' }], params: [{ name: '--recursive', desc: '递归', type: 'flag' }, { name: '--force', desc: '不确认', type: 'flag' }] },
+        { cmd: 'rm', desc: '删除对象', positional: [{ name: '<path>', desc: '路径', type: 'path' }], params: [{ name: '--recursive', desc: '递归', type: 'flag' }, { name: '--force', desc: '不确认', type: 'flag' }] },
         { cmd: 'sync', desc: '同步目录', positional: [{ name: '<source>', desc: '源' }, { name: '<dest>', desc: '目标' }], params: [{ name: '--delete', desc: '删除目标多余文件', type: 'flag' }, { name: '--dryrun', desc: '试运行', type: 'flag' }] },
         { cmd: 'mb', desc: '创建桶', positional: [{ name: '<bucket>', desc: '桶名' }] },
         { cmd: 'rb', desc: '删除桶', positional: [{ name: '<bucket>', desc: '桶名' }], params: [{ name: '--force', desc: '非空也删', type: 'flag' }] },
@@ -177,12 +177,12 @@ export const cloudCommands: CommandSpec[] = [
       { cmd: 'webapp', desc: 'Web App', subcommands: [
         { cmd: 'create', desc: '创建', params: [{ name: '--resource-group', desc: '资源组', requiresValue: true }, { name: '--name', desc: '名称', requiresValue: true }, { name: '--plan', desc: '应用服务计划', requiresValue: true }] },
         { cmd: 'list', desc: '列出', params: [] },
-        { cmd: 'up', desc: '快速部署', positional: [{ name: '<path>', desc: '代码目录' }] },
+        { cmd: 'up', desc: '快速部署', positional: [{ name: '<path>', desc: '代码目录', type: 'dir' }] },
       ] },
       { cmd: 'acr', desc: '容器仓库', subcommands: [
         { cmd: 'create', desc: '创建', params: [{ name: '--resource-group', desc: '资源组', requiresValue: true }, { name: '--name', desc: '名称', requiresValue: true }, { name: '--sku', desc: 'SKU', requiresValue: true, valueHint: 'Basic|Standard|Premium' }] },
         { cmd: 'list', desc: '列出', params: [] },
-        { cmd: 'build', desc: '构建镜像', positional: [{ name: '<registry>', desc: '仓库名' }, { name: '<path>', desc: '代码目录' }] },
+        { cmd: 'build', desc: '构建镜像', positional: [{ name: '<registry>', desc: '仓库名' }, { name: '<path>', desc: '代码目录', type: 'dir' }] },
       ] },
     ],
     examples: [
@@ -269,7 +269,7 @@ export const cloudCommands: CommandSpec[] = [
         { cmd: 'delete', desc: '删除', positional: [{ name: '<name>', desc: '函数名' }] },
       ] },
       { cmd: 'app', desc: 'App Engine', subcommands: [
-        { cmd: 'deploy', desc: '部署', positional: [{ name: '<path>', desc: 'app.yaml' }] },
+        { cmd: 'deploy', desc: '部署', positional: [{ name: '<path>', desc: 'app.yaml', type: 'file' }] },
         { cmd: 'logs', desc: '日志', subcommands: [{ cmd: 'tail', desc: '实时', params: [] }] },
         { cmd: 'instances', desc: '实例', subcommands: [{ cmd: 'list', desc: '列出', params: [] }] },
       ] },

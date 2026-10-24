@@ -1,4 +1,3 @@
-import React from 'react'
 import { ServerFormDialog } from './server-form-dialog'
 
 export interface EditServerDialogProps {

@@ -74,13 +74,36 @@ export function clearDynamicCache(serverId?: string): void {
 }
 
 /**
+ * 将字符串转为安全的 POSIX 单引号参数，防止目录名含 $() / 反引号 / 空格时引发命令注入。
+ */
+function shellSingleQuote(val: string): string {
+  if (val === '~') return '"$HOME"'
+  if (val.startsWith('~/')) {
+    const rest = val.slice(2).replace(/(["\\$`])/g, '\\$1')
+    return `"$HOME/${rest}"`
+  }
+  return `'${val.replace(/'/g, `'\\''`)}'`
+}
+
+/**
+ * 若提供了终端当前工作目录 cwd，先安全 cd 到该目录再执行命令。
+ * 原因：sshService.execute 走独立 exec 通道，默认在 $HOME 执行，
+ * 若不切入 cwd，用户在子目录执行 git checkout / docker-compose / npm run 时无法读取仓库上下文。
+ */
+function wrapWithCwd(cmd: string, cwd?: string): string {
+  const clean = cwd?.trim()
+  if (!clean) return cmd
+  return `cd -- ${shellSingleQuote(clean)} 2>/dev/null && ${cmd}`
+}
+
+/**
  * 在远程服务器执行命令并返回 stdout 行数组。
  *
  * 封装了错误处理：出错时返回空数组，不抛异常。
  */
-async function execLines(serverId: string, cmd: string): Promise<string[]> {
+async function execLines(serverId: string, cmd: string, cwd?: string): Promise<string[]> {
   try {
-    const result = await sshService.execute(serverId, cmd)
+    const result = await sshService.execute(serverId, wrapWithCwd(cmd, cwd))
     const out = (result?.stdout ?? '').trim()
     if (!out) return []
     return out.split('\n').map((l) => l.trim()).filter(Boolean)
@@ -101,25 +124,87 @@ function toHintItems(suggestions: DynamicSuggestion[]): HintItem[] {
 
 // ==================== 内置 Provider ====================
 
+/** 常见带值选项集合：当这些选项紧邻当前 token 时，当前位置为选项值而非位置参数 */
+const COMMON_VALUE_FLAGS = new Set([
+  '-u', '--user',
+  '-w', '--workdir',
+  '-e', '--env', '--env-file',
+  '--name',
+  '-p', '--publish',
+  '-v', '--volume', '--mount',
+  '--network', '--entrypoint',
+  '-l', '--label', '--selector',
+  '--tail', '--since', '--until',
+  '-n', '--namespace',
+  '-o', '--output',
+  '-f', '--file', '--format', '--filter',
+  '-i', '--identity',
+  '-P', '-F', '-J',
+  '-c', '-m', '--message',
+  '-b', '-B', '-C',
+  '-X', '--request',
+  '-H', '--header',
+  '-d', '--data',
+  '-A', '--user-agent',
+  '-T', '--profile', '--project-name', '--scale', '--rmi',
+  '-t', '--timeout',
+  '-s', '--signal',
+])
+
+/** 判断当前正在输入的 token 是否紧跟在带值选项之后（即正在输入选项的值） */
+function isPrecededByValueFlag(tokens: string[], chainLength: number): boolean {
+  const prevIdx = tokens.length - 2
+  if (prevIdx < chainLength) return false
+  return COMMON_VALUE_FLAGS.has(tokens[prevIdx])
+}
+
+/**
+ * 计算命令链之后「已完成」的位置参数个数（不含当前正在输入的 token）。
+ *
+ * 用于区分第一/第二位置参数：例如 git push <remote> <branch>，
+ * 当已完成位置参数为 0 时补 remote，为 1 时补 branch；
+ * 同时跳过已知带值选项及其参数值（如 docker exec -u root <container>）。
+ */
+function countCompletedPositionals(tokens: string[], chainLength: number): number {
+  let count = 0
+  for (let i = chainLength; i < tokens.length - 1; i++) {
+    const t = tokens[i]
+    if (!t) continue
+    if (t.startsWith('-')) {
+      if (COMMON_VALUE_FLAGS.has(t) && i + 1 < tokens.length - 1) {
+        i++ // 跳过带值选项的参数值
+      }
+      continue
+    }
+    count++
+  }
+  return count
+}
+
 /**
  * Docker 容器名补全
  * 触发：docker exec / docker stop / docker start / docker rm / docker logs / docker restart / docker kill / docker pause / docker unpause / docker inspect / docker top / docker stats / docker wait / docker port / docker attach / docker commit / docker cp
  */
 const dockerContainerProvider: DynamicCompletionProvider = {
   id: 'docker-containers',
-  match(chain, _tokens, currentToken) {
+  match(chain, tokens, currentToken) {
     const dockerSubcmds = new Set([
       'exec', 'stop', 'start', 'restart', 'kill', 'rm',
       'logs', 'pause', 'unpause', 'inspect', 'top', 'stats',
       'wait', 'port', 'attach', 'commit', 'cp', 'rename',
     ])
+    const singleTargetSubcmds = new Set([
+      'exec', 'logs', 'top', 'port', 'attach', 'commit', 'rename',
+    ])
     if (chain.length < 2) return false
     if (chain[0] !== 'docker') return false
-    // docker exec 需要容器名作为第一个位置参数
-    if (dockerSubcmds.has(chain[1]) && !currentToken.startsWith('-')) {
-      return true
-    }
-    return false
+    const sub = chain[1]
+    if (!dockerSubcmds.has(sub) || currentToken.startsWith('-')) return false
+    if (isPrecededByValueFlag(tokens, chain.length)) return false
+    const done = countCompletedPositionals(tokens, chain.length)
+    if (singleTargetSubcmds.has(sub)) return done === 0
+    if (sub === 'cp') return done < 2
+    return true
   },
   async fetch(serverId) {
     // 只列出运行中的容器（-a 会包含停止的，exec 只能操作运行中的）
@@ -140,14 +225,17 @@ const dockerContainerProvider: DynamicCompletionProvider = {
  */
 const dockerImageProvider: DynamicCompletionProvider = {
   id: 'docker-images',
-  match(chain, _tokens, currentToken) {
+  match(chain, tokens, currentToken) {
     const imageSubcmds = new Set(['run', 'rmi', 'history', 'save', 'tag', 'push'])
+    const singleImageSubcmds = new Set(['run', 'history', 'tag', 'push'])
     if (chain.length < 2) return false
     if (chain[0] !== 'docker') return false
-    if (imageSubcmds.has(chain[1]) && !currentToken.startsWith('-')) {
-      return true
-    }
-    return false
+    const sub = chain[1]
+    if (!imageSubcmds.has(sub) || currentToken.startsWith('-')) return false
+    if (isPrecededByValueFlag(tokens, chain.length)) return false
+    const done = countCompletedPositionals(tokens, chain.length)
+    if (singleImageSubcmds.has(sub)) return done === 0
+    return true
   },
   async fetch(serverId) {
     const lines = await execLines(
@@ -167,7 +255,7 @@ const dockerImageProvider: DynamicCompletionProvider = {
  */
 const systemdProvider: DynamicCompletionProvider = {
   id: 'systemd-units',
-  match(chain, _tokens, currentToken) {
+  match(chain, tokens, currentToken) {
     const systemdSubcmds = new Set([
       'start', 'stop', 'restart', 'reload', 'status',
       'enable', 'disable', 'mask', 'unmask',
@@ -175,10 +263,9 @@ const systemdProvider: DynamicCompletionProvider = {
     ])
     if (chain.length < 2) return false
     if (chain[0] !== 'systemctl') return false
-    if (systemdSubcmds.has(chain[1]) && !currentToken.startsWith('-')) {
-      return true
-    }
-    return false
+    if (!systemdSubcmds.has(chain[1]) || currentToken.startsWith('-')) return false
+    if (isPrecededByValueFlag(tokens, chain.length)) return false
+    return countCompletedPositionals(tokens, chain.length) === 0
   },
   async fetch(serverId) {
     // 列出所有 service 单元（含状态）
@@ -199,24 +286,28 @@ const systemdProvider: DynamicCompletionProvider = {
  */
 const gitBranchProvider: DynamicCompletionProvider = {
   id: 'git-branches',
-  match(chain, _tokens, currentToken) {
+  cacheKey(_chain, _tokens, cwd) {
+    return cwd ? `git-branches:${cwd}` : 'git-branches'
+  },
+  match(chain, tokens, currentToken) {
     const gitBranchCmds = new Set([
       'checkout', 'switch', 'merge', 'rebase',
       'cherry-pick', 'reset', 'log', 'diff', 'branch',
     ])
     if (chain.length < 2) return false
     if (chain[0] !== 'git') return false
-    if (gitBranchCmds.has(chain[1]) && !currentToken.startsWith('-')) {
-      return true
-    }
-    return false
+    if (!gitBranchCmds.has(chain[1]) || currentToken.startsWith('-')) return false
+    if (isPrecededByValueFlag(tokens, chain.length)) return false
+    const done = countCompletedPositionals(tokens, chain.length)
+    if (['switch', 'merge', 'rebase'].includes(chain[1])) return done === 0
+    return done <= 1
   },
-  async fetch(serverId) {
+  async fetch(serverId, _chain, _tokens, _currentToken, cwd) {
     // 列出本地分支（当前分支带 *）；同时附带 tag，因为 checkout/switch
     // 同样接受 tag 作为目标（满足「git checkout 除了 branch 还补 v1.0」）
     const [branchLines, tagLines] = await Promise.all([
-      execLines(serverId, 'git branch --format="%(refname:short)" 2>/dev/null'),
-      execLines(serverId, 'git tag --list 2>/dev/null'),
+      execLines(serverId, 'git branch --format="%(refname:short)" 2>/dev/null', cwd),
+      execLines(serverId, 'git tag --list 2>/dev/null', cwd),
     ])
     const branches = branchLines.map((name) => ({ insertText: name, desc: '分支' }))
     const tags = tagLines.map((name) => ({ insertText: name, desc: '标签' }))
@@ -225,39 +316,26 @@ const gitBranchProvider: DynamicCompletionProvider = {
 }
 
 /**
- * 计算命令链之后「已完成」的位置参数个数（不含当前正在输入的 token）。
- *
- * 用于区分第一/第二位置参数：例如 git push <remote> <branch>，
- * 当已完成位置参数为 0 时补 remote，为 1 时补 branch。
- *
- * 注意：此为简化判定，不解析带值选项的值；对常见场景足够。
- */
-function countCompletedPositionals(tokens: string[], chainLength: number): number {
-  let count = 0
-  for (let i = chainLength; i < tokens.length - 1; i++) {
-    const t = tokens[i]
-    if (t && !t.startsWith('-')) count++
-  }
-  return count
-}
-
-/**
  * Git Remote 名补全
  * 触发：git push / git pull / git fetch（第一个位置参数为 remote）
  */
 const gitRemoteProvider: DynamicCompletionProvider = {
   id: 'git-remotes',
+  cacheKey(_chain, _tokens, cwd) {
+    return cwd ? `git-remotes:${cwd}` : 'git-remotes'
+  },
   match(chain, tokens, currentToken) {
     const gitRemoteCmds = new Set(['push', 'pull', 'fetch'])
     if (chain.length < 2) return false
     if (chain[0] !== 'git') return false
     if (!gitRemoteCmds.has(chain[1])) return false
     if (currentToken.startsWith('-')) return false
+    if (isPrecededByValueFlag(tokens, chain.length)) return false
     // 仅在第一个位置参数阶段触发（push <remote>），避免 push origin <branch> 时仍弹 remote
     return countCompletedPositionals(tokens, chain.length) === 0
   },
-  async fetch(serverId) {
-    const lines = await execLines(serverId, 'git remote 2>/dev/null')
+  async fetch(serverId, _chain, _tokens, _currentToken, cwd) {
+    const lines = await execLines(serverId, 'git remote 2>/dev/null', cwd)
     return lines.map((name) => ({ insertText: name, desc: '远程仓库' }))
   },
 }
@@ -268,20 +346,24 @@ const gitRemoteProvider: DynamicCompletionProvider = {
  */
 const gitTagProvider: DynamicCompletionProvider = {
   id: 'git-tags',
+  cacheKey(_chain, _tokens, cwd) {
+    return cwd ? `git-tags:${cwd}` : 'git-tags'
+  },
   match(chain, tokens, currentToken) {
     if (chain.length < 2) return false
     if (chain[0] !== 'git') return false
     if (currentToken.startsWith('-')) return false
+    if (isPrecededByValueFlag(tokens, chain.length)) return false
     // git tag <Tab> → 已有标签（用于 git tag -d / git tag -l）
-    if (chain[1] === 'tag') return true
+    if (chain[1] === 'tag') return countCompletedPositionals(tokens, chain.length) === 0
     // git push <remote> <refspec>：第二位置参数阶段补 tag/branch
     if (chain[1] === 'push' && countCompletedPositionals(tokens, chain.length) === 1) {
       return true
     }
     return false
   },
-  async fetch(serverId) {
-    const lines = await execLines(serverId, 'git tag --list 2>/dev/null')
+  async fetch(serverId, _chain, _tokens, _currentToken, cwd) {
+    const lines = await execLines(serverId, 'git tag --list 2>/dev/null', cwd)
     return lines.map((name) => ({ insertText: name, desc: '标签' }))
   },
 }
@@ -292,13 +374,15 @@ const gitTagProvider: DynamicCompletionProvider = {
  */
 const sshHostProvider: DynamicCompletionProvider = {
   id: 'ssh-hosts',
-  match(chain, _tokens, currentToken) {
+  match(chain, tokens, currentToken) {
     if (chain.length < 1) return false
     if (!['ssh', 'scp', 'sftp', 'rsync'].includes(chain[0])) return false
-    // 仅在第一个位置参数阶段触发（ssh <host>），避免 ssh user@host ls 仍弹 host
     if (currentToken.startsWith('-')) return false
-    // ssh 的第一位置参数形如 user@host，允许触发
-    return true
+    if (isPrecededByValueFlag(tokens, chain.length)) return false
+    // 仅在第一个位置参数阶段触发（ssh <host>），避免 ssh user@host ls 仍弹 host
+    const done = countCompletedPositionals(tokens, chain.length)
+    if (chain[0] === 'ssh' || chain[0] === 'sftp') return done === 0
+    return done < 2
   },
   async fetch(serverId) {
     const lines = await execLines(
@@ -319,6 +403,7 @@ const usernameProvider: DynamicCompletionProvider = {
     if (chain.length < 1) return false
     if (!['su', 'passwd', 'usermod', 'userdel', 'chage', 'chsh'].includes(chain[0])) return false
     if (currentToken.startsWith('-')) return false
+    if (isPrecededByValueFlag(tokens, chain.length)) return false
     // su / passwd 的第一位置参数为用户名
     return countCompletedPositionals(tokens, chain.length) === 0
   },
@@ -341,6 +426,7 @@ const processProvider: DynamicCompletionProvider = {
     if (chain.length < 1) return false
     if (!['kill', 'killall', 'renice'].includes(chain[0])) return false
     if (currentToken.startsWith('-')) return false
+    if (isPrecededByValueFlag(tokens, chain.length)) return false
     // kill 的第一位置参数为 PID；renice 的优先级在前、PID 在后，这里宽松触发第一位置
     return countCompletedPositionals(tokens, chain.length) === 0
   },
@@ -389,11 +475,12 @@ const journalctlProvider: DynamicCompletionProvider = {
  */
 const networkHostProvider: DynamicCompletionProvider = {
   id: 'network-hosts',
-  match(chain, _tokens, currentToken) {
+  match(chain, tokens, currentToken) {
     if (chain.length < 1) return false
     if (!['ping', 'telnet', 'curl', 'wget', 'traceroute', 'nc', 'nmap'].includes(chain[0])) return false
     if (currentToken.startsWith('-')) return false
-    return true
+    if (isPrecededByValueFlag(tokens, chain.length)) return false
+    return countCompletedPositionals(tokens, chain.length) === 0
   },
   async fetch(serverId) {
     const [known, hosts] = await Promise.all([
@@ -418,28 +505,63 @@ const networkHostProvider: DynamicCompletionProvider = {
   },
 }
 
+const KUBECTL_TYPE_MAP: Record<string, string> = {
+  po: 'pods', pods: 'pods',
+  deploy: 'deployments', deployments: 'deployments',
+  svc: 'services', services: 'services',
+  ns: 'namespaces', namespaces: 'namespaces',
+  no: 'nodes', nodes: 'nodes',
+  cm: 'configmaps', configmaps: 'configmaps',
+  sts: 'statefulsets', statefulsets: 'statefulsets',
+  ds: 'daemonsets', daemonsets: 'daemonsets',
+}
+
+/** 提取 kubectl get 之后已完成的位置参数（跳过带值选项及其值） */
+function extractKubectlPositionals(tokens: string[], chainLength: number): string[] {
+  const result: string[] = []
+  for (let i = chainLength; i < tokens.length - 1; i++) {
+    const t = tokens[i]
+    if (!t) continue
+    if (t.startsWith('-')) {
+      if (COMMON_VALUE_FLAGS.has(t) && i + 1 < tokens.length - 1) {
+        i++
+      }
+      continue
+    }
+    result.push(t)
+  }
+  return result
+}
+
 /**
  * kubectl 资源名补全
  * 触发：kubectl get <resource> → 补全资源类型；kubectl get pods → 补全 Pod 名
  */
 const kubectlProvider: DynamicCompletionProvider = {
   id: 'kubectl-resources',
+  cacheKey(chain, tokens) {
+    const completed = extractKubectlPositionals(tokens, chain.length)
+    if (completed.length === 0) return 'kubectl-resources:types'
+    const resourceType = completed[0]
+    const actualType = KUBECTL_TYPE_MAP[resourceType] || resourceType
+    return `kubectl-resources:res:${actualType}`
+  },
   match(chain, tokens, currentToken) {
     if (chain.length < 2) return false
     if (chain[0] !== 'kubectl') return false
     if (chain[1] !== 'get') return false
-    // kubectl get <Tab> → 资源类型
-    // kubectl get pods <Tab> → Pod 名
-    if (!currentToken.startsWith('-')) return true
-    return false
+    if (currentToken.startsWith('-')) return false
+    if (isPrecededByValueFlag(tokens, chain.length)) return false
+    // 阶段 0：资源类型（kubectl get <Tab>）；阶段 1：资源实例名（kubectl get pods <Tab>）
+    return countCompletedPositionals(tokens, chain.length) <= 1
   },
-  async fetch(serverId, _chain, tokens, currentToken) {
-    // 如果当前 token 是资源类型阶段（tokens 中 get 之后只有一个正在输入的词）
-    const afterGet = tokens.slice(tokens.indexOf('get') + 1)
-    const isResourceTypePhase = afterGet.length <= 1
+  async fetch(serverId, chain, tokens) {
+    const completed = extractKubectlPositionals(tokens, chain.length)
+    const isResourceTypePhase = completed.length === 0
 
     if (isResourceTypePhase) {
-      // 返回常用资源类型
+      // 返回完整资源类型列表（不在此处按 currentToken 过滤，避免残缺结果写入缓存；
+      // 前缀过滤统一由 fetchDynamicHints 在读取缓存后完成）
       const resourceTypes = [
         'pods', 'po', 'deployments', 'deploy', 'services', 'svc',
         'namespaces', 'ns', 'nodes', 'no', 'configmaps', 'cm',
@@ -448,24 +570,16 @@ const kubectlProvider: DynamicCompletionProvider = {
         'roles', 'clusterroles', 'statefulsets', 'sts', 'daemonsets', 'ds',
         'jobs', 'cronjobs', 'cj', 'replicasets', 'rs',
       ]
-      return resourceTypes
-        .filter((t) => t.startsWith(currentToken.toLowerCase()))
-        .map((t) => ({ insertText: t, desc: '资源类型' }))
+      return resourceTypes.map((t) => ({ insertText: t, desc: '资源类型' }))
     }
 
     // 资源名阶段：根据已输入的资源类型获取对应资源
-    const resourceType = afterGet[0]
-    const typeMap: Record<string, string> = {
-      po: 'pods', pods: 'pods',
-      deploy: 'deployments', deployments: 'deployments',
-      svc: 'services', services: 'services',
-      ns: 'namespaces', namespaces: 'namespaces',
-      no: 'nodes', nodes: 'nodes',
-      cm: 'configmaps', configmaps: 'configmaps',
-      sts: 'statefulsets', statefulsets: 'statefulsets',
-      ds: 'daemonsets', daemonsets: 'daemonsets',
+    const resourceType = completed[0]
+    const actualType = KUBECTL_TYPE_MAP[resourceType] || resourceType
+    // 安全校验：防止非法字符拼接进远程命令造成命令注入
+    if (!/^[a-zA-Z0-9._-]+$/.test(actualType)) {
+      return []
     }
-    const actualType = typeMap[resourceType] || resourceType
     const lines = await execLines(
       serverId,
       `kubectl get ${actualType} -o name 2>/dev/null | sed 's|.*/||'`,
@@ -479,28 +593,81 @@ const kubectlProvider: DynamicCompletionProvider = {
 
 /**
  * Docker Compose 服务名补全
- * 触发：docker-compose up / docker-compose stop / docker-compose start / docker-compose restart / docker-compose logs
+ * 触发：docker-compose up/stop/start/restart/logs 或 docker compose up/stop/start/restart/logs
  */
 const dockerComposeProvider: DynamicCompletionProvider = {
   id: 'docker-compose-services',
-  match(chain, _tokens, currentToken) {
-    const composeSubcmds = new Set(['up', 'stop', 'start', 'restart', 'logs', 'exec', 'run', 'scale', 'rm'])
-    if (chain.length < 2) return false
-    if (chain[0] !== 'docker-compose') return false
-    if (composeSubcmds.has(chain[1]) && !currentToken.startsWith('-')) {
-      return true
-    }
-    return false
+  cacheKey(_chain, _tokens, cwd) {
+    return cwd ? `docker-compose-services:${cwd}` : 'docker-compose-services'
   },
-  async fetch(serverId) {
+  match(chain, tokens, currentToken) {
+    const composeSubcmds = new Set(['up', 'stop', 'start', 'restart', 'logs', 'exec', 'run', 'scale', 'rm'])
+    if (currentToken.startsWith('-')) return false
+    if (isPrecededByValueFlag(tokens, chain.length)) return false
+
+    let sub = ''
+    if (chain.length >= 2 && chain[0] === 'docker-compose') {
+      sub = chain[1]
+    } else if (chain.length >= 3 && chain[0] === 'docker' && chain[1] === 'compose') {
+      sub = chain[2]
+    } else {
+      return false
+    }
+
+    if (!composeSubcmds.has(sub)) return false
+    if (sub === 'exec' || sub === 'run') {
+      return countCompletedPositionals(tokens, chain.length) === 0
+    }
+    return true
+  },
+  async fetch(serverId, _chain, _tokens, _currentToken, cwd) {
     const lines = await execLines(
       serverId,
-      'docker-compose config --services 2>/dev/null',
+      '(docker compose config --services 2>/dev/null || docker-compose config --services 2>/dev/null)',
+      cwd,
     )
     return lines.map((name) => ({
       insertText: name,
-      desc: '服务',
+      desc: 'Compose 服务',
     }))
+  },
+}
+
+/**
+ * Package.json Scripts 动态补全
+ * 触发：npm run <script> / pnpm run <script> / yarn run <script>
+ */
+const npmScriptsProvider: DynamicCompletionProvider = {
+  id: 'npm-scripts',
+  cacheKey(_chain, _tokens, cwd) {
+    return cwd ? `npm-scripts:${cwd}` : 'npm-scripts'
+  },
+  match(chain, tokens, currentToken) {
+    if (chain.length < 2) return false
+    if (!['npm', 'pnpm', 'yarn'].includes(chain[0])) return false
+    if (chain[1] !== 'run') return false
+    if (currentToken.startsWith('-')) return false
+    if (isPrecededByValueFlag(tokens, chain.length)) return false
+    return countCompletedPositionals(tokens, chain.length) === 0
+  },
+  async fetch(serverId, _chain, _tokens, _currentToken, cwd) {
+    // 优先使用 node / python3 精确解析 package.json scripts，回退到 sed/awk
+    const cmd =
+      `[ -f package.json ] && (` +
+      `node -e 'try{const s=require("./package.json").scripts||{};for(const[k,v]of Object.entries(s))console.log(k+"\\t"+String(v))}catch{}' 2>/dev/null || ` +
+      `python3 -c 'import json;s=json.load(open("package.json")).get("scripts",{});print("\\n".join(f"{k}\\t{v}" for k,v in s.items()))' 2>/dev/null` +
+      `)`
+    const lines = await execLines(serverId, cmd, cwd)
+    return lines.map((line) => {
+      const tabIdx = line.indexOf('\t')
+      if (tabIdx > 0) {
+        return {
+          insertText: line.slice(0, tabIdx).trim(),
+          desc: line.slice(tabIdx + 1).trim(),
+        }
+      }
+      return { insertText: line.trim(), desc: '脚本' }
+    })
   },
 }
 
@@ -519,6 +686,7 @@ const providers: DynamicCompletionProvider[] = [
   networkHostProvider,
   kubectlProvider,
   dockerComposeProvider,
+  npmScriptsProvider,
 ]
 
 /** Provider 注册表（允许外部扩展） */
@@ -560,6 +728,7 @@ export function findProvider(
  * @param commandChain 命令链
  * @param tokens tokens
  * @param currentToken 当前 token
+ * @param cwd 当前终端工作目录（可选）
  * @returns HintItem[]
  */
 export async function fetchDynamicHints(
@@ -568,9 +737,14 @@ export async function fetchDynamicHints(
   commandChain: string[],
   tokens: string[],
   currentToken: string,
+  cwd?: string,
 ): Promise<HintItem[]> {
+  const cacheKey = provider.cacheKey
+    ? provider.cacheKey(commandChain, tokens, cwd)
+    : provider.id
+
   // 1. 查缓存
-  const cached = getCache(provider.id, serverId)
+  const cached = getCache(cacheKey, serverId)
   if (cached) {
     // 缓存结果按当前 token 前缀过滤
     const lower = currentToken.toLowerCase()
@@ -580,14 +754,14 @@ export async function fetchDynamicHints(
     return toHintItems(filtered)
   }
 
-  // 2. inflight 去重：相同 provider+serverId 的并发请求复用同一 Promise
-  const inflightKey = `${provider.id}\0${serverId}`
+  // 2. inflight 去重：相同 cacheKey+serverId 的并发请求复用同一 Promise
+  const inflightKey = `${cacheKey}\0${serverId}`
   const existing = inflight.get(inflightKey)
   let suggestions: DynamicSuggestion[]
   if (existing) {
     suggestions = await existing
   } else {
-    const p = provider.fetch(serverId, commandChain, tokens, currentToken)
+    const p = provider.fetch(serverId, commandChain, tokens, currentToken, cwd)
       .finally(() => {
         inflight.delete(inflightKey)
       })
@@ -596,7 +770,7 @@ export async function fetchDynamicHints(
   }
 
   // 3. 写缓存（即使为空也写，避免空结果重复请求）
-  setCache(provider.id, serverId, suggestions)
+  setCache(cacheKey, serverId, suggestions)
 
   // 4. 按前缀过滤并转换
   const lower = currentToken.toLowerCase()
