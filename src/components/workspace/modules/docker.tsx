@@ -2984,7 +2984,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
           />
         ) : viewMode === 'list' ? (
           /* === 列表视图 === */
-          <div className="my-2 rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden">
+          <div className="my-2 rounded-xl border border-border/70 bg-card dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_1px_3px_rgba(0,0,0,0.35)] shadow-xs overflow-hidden">
             {/* 批量操作工具栏：有选中项时出现 */}
             {selectedIds.size > 0 && (
               <div className="flex items-center gap-2 px-4 py-2 border-b border-border/40 bg-accent/30 flex-wrap">
@@ -3148,7 +3148,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
                 <div
                   key={c.id}
                   className={cn(
-                    "relative rounded-xl border bg-card p-3.5 shadow-sm hover:shadow-md transition-all duration-300 cursor-default group flex flex-col justify-between h-[112px]",
+                    "relative rounded-xl border border-border/70 bg-card dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_1px_3px_rgba(0,0,0,0.35)] p-3.5 shadow-xs hover:shadow-md transition-all duration-300 cursor-default group flex flex-col justify-between h-[112px]",
                     isRunning
                       ? "border-emerald-500/20 hover:border-emerald-500/40 hover:bg-emerald-500/[0.01]"
                       : "border-border/60 hover:border-muted-foreground/20 hover:bg-muted/[0.01]"
@@ -3236,7 +3236,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
               )}
             />
           ) : (
-            <div className="my-2 rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden">
+            <div className="my-2 rounded-xl border border-border/70 bg-card dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_1px_3px_rgba(0,0,0,0.35)] shadow-xs overflow-hidden">
             <div className="overflow-x-auto">
             <table className="w-full text-xs min-w-[760px]">
               <thead className="workspace-table-head">
@@ -3341,7 +3341,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
           ) : networks.length === 0 ? (
             <EmptyState icon={<Network className="h-6 w-6" />} title={t('docker_no_networks')} />
           ) : (
-            <div className="my-2 rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden">
+            <div className="my-2 rounded-xl border border-border/70 bg-card dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_1px_3px_rgba(0,0,0,0.35)] shadow-xs overflow-hidden">
             <div className="overflow-x-auto">
             <table className="w-full text-xs min-w-[560px]">
               <thead className="workspace-table-head">
@@ -3397,7 +3397,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
           ) : volumes.length === 0 ? (
             <EmptyState icon={<HardDrive className="h-6 w-6" />} title={t('docker_no_volumes')} />
           ) : (
-            <div className="my-2 rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden">
+            <div className="my-2 rounded-xl border border-border/70 bg-card dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_1px_3px_rgba(0,0,0,0.35)] shadow-xs overflow-hidden">
             <div className="overflow-x-auto">
             <table className="w-full text-xs min-w-[560px]">
               <thead className="workspace-table-head">

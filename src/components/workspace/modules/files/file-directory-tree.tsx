@@ -35,7 +35,7 @@ export function FileDirectoryTree({
     <>
       {/* Directory tree */}
       <div
-        className="bg-card/95 rounded-xl border border-border/70 shadow-sm flex flex-col overflow-hidden shrink-0"
+        className="bg-card/95 rounded-xl border border-border/70 dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_1px_3px_rgba(0,0,0,0.35)] shadow-xs flex flex-col overflow-hidden shrink-0"
         style={{ width: `${treeWidth}px` }}
       >
         <div className="flex items-center justify-between px-2 py-1 border-b">
@@ -59,7 +59,7 @@ export function FileDirectoryTree({
                   key={node.path}
                   className={cn(
                     'flex items-center gap-1.5 py-1 pr-2 rounded-md cursor-pointer hover:bg-accent/80 dark:hover:bg-accent/70',
-                    isActive && 'bg-primary/20 dark:bg-primary/25 font-semibold text-foreground'
+                    isActive && 'bg-primary/15 text-primary font-medium border border-primary/25 shadow-2xs'
                   )}
                   style={{ paddingLeft: `${depth * 14 + 6}px` }}
                   onMouseDown={(e) => {

@@ -25,6 +25,7 @@ import {
 } from '@tauri-apps/plugin-fs'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Kbd } from '@/components/ui/kbd'
 import { CodeEditor } from '@/components/ui/code-editor'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -6031,12 +6032,12 @@ export function SftpPanel() {
                   {/* 本地列表表头（仅列表模式展示） */}
                   {leftViewMode === 'list' && (
                     <div className={cn(
-                      "grid px-4 border-b bg-muted/10 text-[10px] text-muted-foreground font-bold select-none items-stretch h-8 flex-shrink-0",
+                      "grid px-4 border-b border-border/50 bg-muted/20 text-[10px] text-muted-foreground/80 font-semibold select-none items-stretch h-7 flex-shrink-0 tracking-wider uppercase",
                       leftSideType === 'remote' ? "grid-cols-[2.5fr_0.8fr_1fr_1.5fr_1.2fr_1fr]" : "grid-cols-[2.5fr_1fr_1.2fr_1.8fr]"
                     )}>
                       <button 
                         onClick={() => handleLocalSort('name')}
-                        className="flex items-center gap-1 hover:text-foreground text-left cursor-pointer font-bold border-r border-border/20 pr-3 h-full"
+                        className="flex items-center gap-1 hover:text-foreground text-left cursor-pointer font-medium tracking-wider pr-3 h-full transition-colors"
                       >
                         <span>{t('sftp_col_name')}</span>
                         {localSortField === 'name' && (
@@ -6045,20 +6046,17 @@ export function SftpPanel() {
                       </button>
                       <button 
                         onClick={() => handleLocalSort('size')}
-                        className="flex items-center justify-start gap-1 hover:text-foreground text-left cursor-pointer font-bold border-r border-border/20 pl-3 pr-3 h-full"
+                        className="flex items-center justify-start gap-1 hover:text-foreground text-left cursor-pointer font-medium tracking-wider pl-3 pr-3 h-full transition-colors"
                       >
                         <span>{t('sftp_col_size')}</span>
                         {localSortField === 'size' && (
                           localSortOrder === 'asc' ? <ArrowUp className="h-3 w-3 text-primary" /> : <ArrowDown className="h-3 w-3 text-primary" />
                         )}
                       </button>
-                      <span className="text-left border-r border-border/20 pl-3 pr-3 h-full flex items-center justify-start">{t('sftp_col_type') || 'Type'}</span>
+                      <span className="text-left pl-3 pr-3 h-full flex items-center justify-start font-medium tracking-wider">{t('sftp_col_type') || 'Type'}</span>
                       <button 
                         onClick={() => handleLocalSort('modified')}
-                        className={cn(
-                          "flex items-center justify-start gap-1 hover:text-foreground text-left cursor-pointer font-bold pl-3 h-full",
-                          leftSideType === 'remote' && "border-r border-border/20 pr-3"
-                        )}
+                        className="flex items-center justify-start gap-1 hover:text-foreground text-left cursor-pointer font-medium tracking-wider pl-3 h-full transition-colors"
                       >
                         <span>{t('sftp_col_modified')}</span>
                         {localSortField === 'modified' && (
@@ -6067,8 +6065,8 @@ export function SftpPanel() {
                       </button>
                       {leftSideType === 'remote' && (
                         <>
-                          <span className="text-left border-r border-border/20 pl-3 pr-3 h-full flex items-center justify-start">{t('sftp_col_permissions')}</span>
-                          <span className="text-left pl-3 pr-3 h-full flex items-center justify-start">{t('sftp_col_owner') || 'Owner'}</span>
+                          <span className="text-left pl-3 pr-3 h-full flex items-center justify-start font-medium tracking-wider">{t('sftp_col_permissions')}</span>
+                          <span className="text-left pl-3 pr-3 h-full flex items-center justify-start font-medium tracking-wider">{t('sftp_col_owner') || 'Owner'}</span>
                         </>
                       )}
                     </div>
@@ -6258,32 +6256,56 @@ export function SftpPanel() {
                                     setLocalContextMenuFile(file)
                                   }}
                                   className={cn(
-                                    "workspace-table-row grid px-4 h-10 text-xs items-center cursor-pointer select-none",
+                                    "workspace-table-row group grid px-4 h-9 text-xs items-center cursor-pointer select-none",
                                     leftSideType === 'remote' ? "grid-cols-[2.5fr_0.8fr_1fr_1.5fr_1.2fr_1fr]" : "grid-cols-[2.5fr_1fr_1.2fr_1.8fr]",
                                     getCompareRowBgClass(file.path, 'local', isSelected)
                                   )}
                                 >
                                   <div className="flex items-center overflow-hidden pr-2">
-                                    <div className="inline-flex items-center gap-2.5 max-w-full overflow-hidden" data-drag-handle="true">
-                                      {openingLocalPath === file.path ? (
-                                        <Loader2 className="h-5 w-5 animate-spin text-primary shrink-0" />
+                                    <div className="inline-flex items-center gap-2 max-w-full overflow-hidden" data-drag-handle="true">
+                                      {file.name === '..' ? (
+                                        <div className="flex items-center gap-2 text-muted-foreground/90 font-medium">
+                                          <div className="flex h-5 w-5 items-center justify-center rounded bg-muted/60 text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary transition-colors">
+                                            <FolderUp className="h-3.5 w-3.5" />
+                                          </div>
+                                          <span className="font-mono text-xs font-semibold tracking-wide">..</span>
+                                          <span className="text-[11px] text-muted-foreground/60 hidden sm:inline font-normal">({t('fp_parent_dir')})</span>
+                                        </div>
                                       ) : (
-                                        renderFileIcon(file, "h-6 w-6")
-                                      )}
-                                      {renameTarget && renameTarget.path === file.path ? (
-                                        <InlineRenameInput
-                                          value={renameValue}
-                                          onChange={setRenameValue}
-                                          onCommit={() => { if (renameSide === 'local') void handleRenameLocal(); else void handleRenameRemote(); }}
-                                          onCancel={() => { setRenameTarget(null); setRenameValue('') }}
-                                        />
-                                      ) : (
-                                        <span className={cn("truncate", !file.isDirectory && !isSelected && "text-foreground/90", isSelected && "font-medium text-foreground")}>{file.name}</span>
+                                        <>
+                                          {openingLocalPath === file.path ? (
+                                            <Loader2 className="h-4 w-4 animate-spin text-primary shrink-0" />
+                                          ) : (
+                                            renderFileIcon(file, "h-4.5 w-4.5")
+                                          )}
+                                          {renameTarget && renameTarget.path === file.path ? (
+                                            <InlineRenameInput
+                                              value={renameValue}
+                                              onChange={setRenameValue}
+                                              onCommit={() => { if (renameSide === 'local') void handleRenameLocal(); else void handleRenameRemote(); }}
+                                              onCancel={() => { setRenameTarget(null); setRenameValue('') }}
+                                            />
+                                          ) : (
+                                            <span className={cn(
+                                              "truncate tracking-tight",
+                                              file.isDirectory
+                                                ? "font-medium text-foreground"
+                                                : !isSelected && "text-foreground/80",
+                                              isSelected && "font-semibold text-foreground"
+                                            )}>
+                                              {file.name}
+                                            </span>
+                                          )}
+                                        </>
                                       )}
                                     </div>
                                   </div>
-                                  <span className="truncate text-left text-[11px] text-muted-foreground font-mono pl-3">
-                                    {file.name === '..' ? '' : (file.isDirectory ? '-' : formatFileSize(file.size))}
+                                  <span className="truncate text-left text-[11px] text-muted-foreground font-mono tabular-nums pl-3">
+                                    {file.name === '..' ? (
+                                      <span className="opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <Kbd size="xs">Alt+↑</Kbd>
+                                      </span>
+                                    ) : (file.isDirectory ? <span className="text-[10px] text-muted-foreground/40 font-sans uppercase">dir</span> : formatFileSize(file.size))}
                                   </span>
                                   <span className="text-left text-[11px] text-muted-foreground font-mono truncate pl-3">
                                     {file.name === '..' ? '' : t(getFileTypeLabel(file))}
@@ -7353,10 +7375,10 @@ export function SftpPanel() {
                   <div className={cn("flex-1 flex flex-col overflow-hidden", isRemoteDisconnected && "opacity-85")}>
                     {/* 表头（仅列表模式展示） */}
                     {rightViewMode === 'list' && (
-                      <div className="grid grid-cols-[2.5fr_0.8fr_1fr_1.5fr_1.2fr_1fr] px-4 border-b bg-muted/10 text-[10px] text-muted-foreground font-bold select-none items-stretch h-8 flex-shrink-0">
+                      <div className="grid grid-cols-[2.5fr_0.8fr_1fr_1.5fr_1.2fr_1fr] px-4 border-b border-border/50 bg-muted/20 text-[10px] text-muted-foreground/80 font-semibold select-none items-stretch h-7 flex-shrink-0 tracking-wider uppercase">
                         <button 
                           onClick={() => handleRemoteSort('name')}
-                          className="flex items-center gap-1 hover:text-foreground text-left cursor-pointer font-bold border-r border-border/20 pr-3 h-full"
+                          className="flex items-center gap-1 hover:text-foreground text-left cursor-pointer font-medium tracking-wider pr-3 h-full transition-colors"
                         >
                           <span>{t('sftp_col_name')}</span>
                           {remoteSortField === 'name' && (
@@ -7365,25 +7387,25 @@ export function SftpPanel() {
                         </button>
                         <button 
                           onClick={() => handleRemoteSort('size')}
-                          className="flex items-center justify-start gap-1 hover:text-foreground text-left cursor-pointer font-bold border-r border-border/20 pl-3 pr-3 h-full"
+                          className="flex items-center justify-start gap-1 hover:text-foreground text-left cursor-pointer font-medium tracking-wider pl-3 pr-3 h-full transition-colors"
                         >
                           <span>{t('sftp_col_size')}</span>
                           {remoteSortField === 'size' && (
                             remoteSortOrder === 'asc' ? <ArrowUp className="h-3 w-3 text-primary" /> : <ArrowDown className="h-3 w-3 text-primary" />
                           )}
                         </button>
-                        <span className="text-left border-r border-border/20 pl-3 pr-3 h-full flex items-center justify-start">{t('sftp_col_type') || 'Type'}</span>
+                        <span className="text-left pl-3 pr-3 h-full flex items-center justify-start font-medium tracking-wider">{t('sftp_col_type') || 'Type'}</span>
                         <button 
                           onClick={() => handleRemoteSort('modified')}
-                          className="flex items-center justify-start gap-1 hover:text-foreground text-left cursor-pointer font-bold border-r border-border/20 pl-3 pr-3 h-full"
+                          className="flex items-center justify-start gap-1 hover:text-foreground text-left cursor-pointer font-medium tracking-wider pl-3 pr-3 h-full transition-colors"
                         >
                           <span>{t('sftp_col_modified')}</span>
                           {remoteSortField === 'modified' && (
                             remoteSortOrder === 'asc' ? <ArrowUp className="h-3 w-3 text-primary" /> : <ArrowDown className="h-3 w-3 text-primary" />
                           )}
                         </button>
-                        <span className="text-left border-r border-border/20 pl-3 pr-3 h-full flex items-center justify-start">{t('sftp_col_permissions')}</span>
-                        <span className="text-left pl-3 pr-3 h-full flex items-center justify-start">{t('sftp_col_owner') || 'Owner'}</span>
+                        <span className="text-left pl-3 pr-3 h-full flex items-center justify-start font-medium tracking-wider">{t('sftp_col_permissions')}</span>
+                        <span className="text-left pl-3 pr-3 h-full flex items-center justify-start font-medium tracking-wider">{t('sftp_col_owner') || 'Owner'}</span>
                       </div>
                     )}
 
@@ -7564,31 +7586,55 @@ export function SftpPanel() {
                                     setRemoteContextMenuFile(file)
                                   }}
                                   className={cn(
-                                    "workspace-table-row grid grid-cols-[2.5fr_0.8fr_1fr_1.5fr_1.2fr_1fr] px-4 h-10 text-xs items-center cursor-pointer select-none",
+                                    "workspace-table-row group grid grid-cols-[2.5fr_0.8fr_1fr_1.5fr_1.2fr_1fr] px-4 h-9 text-xs items-center cursor-pointer select-none",
                                     getCompareRowBgClass(file.path, 'remote', isSelected)
                                   )}
                                 >
                                   <div className="flex items-center overflow-hidden pr-2">
-                                    <div className="inline-flex items-center gap-2.5 max-w-full overflow-hidden" data-drag-handle="true">
-                                      {openingRemotePath === file.path ? (
-                                        <Loader2 className="h-5 w-5 animate-spin text-primary shrink-0" />
+                                    <div className="inline-flex items-center gap-2 max-w-full overflow-hidden" data-drag-handle="true">
+                                      {file.name === '..' ? (
+                                        <div className="flex items-center gap-2 text-muted-foreground/90 font-medium">
+                                          <div className="flex h-5 w-5 items-center justify-center rounded bg-muted/60 text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary transition-colors">
+                                            <FolderUp className="h-3.5 w-3.5" />
+                                          </div>
+                                          <span className="font-mono text-xs font-semibold tracking-wide">..</span>
+                                          <span className="text-[11px] text-muted-foreground/60 hidden sm:inline font-normal">({t('fp_parent_dir')})</span>
+                                        </div>
                                       ) : (
-                                        renderFileIcon(file, "h-6 w-6")
-                                      )}
-                                      {renameTarget && renameTarget.path === file.path ? (
-                                        <InlineRenameInput
-                                          value={renameValue}
-                                          onChange={setRenameValue}
-                                          onCommit={() => { if (renameSide === 'local') void handleRenameLocal(); else void handleRenameRemote(); }}
-                                          onCancel={() => { setRenameTarget(null); setRenameValue('') }}
-                                        />
-                                      ) : (
-                                        <span className={cn("truncate", !file.isDirectory && !isSelected && "text-foreground/90", isSelected && "font-medium text-foreground")}>{file.name}</span>
+                                        <>
+                                          {openingRemotePath === file.path ? (
+                                            <Loader2 className="h-4 w-4 animate-spin text-primary shrink-0" />
+                                          ) : (
+                                            renderFileIcon(file, "h-4.5 w-4.5")
+                                          )}
+                                          {renameTarget && renameTarget.path === file.path ? (
+                                            <InlineRenameInput
+                                              value={renameValue}
+                                              onChange={setRenameValue}
+                                              onCommit={() => { if (renameSide === 'local') void handleRenameLocal(); else void handleRenameRemote(); }}
+                                              onCancel={() => { setRenameTarget(null); setRenameValue('') }}
+                                            />
+                                          ) : (
+                                            <span className={cn(
+                                              "truncate tracking-tight",
+                                              file.isDirectory
+                                                ? "font-medium text-foreground"
+                                                : !isSelected && "text-foreground/80",
+                                              isSelected && "font-semibold text-foreground"
+                                            )}>
+                                              {file.name}
+                                            </span>
+                                          )}
+                                        </>
                                       )}
                                     </div>
                                   </div>
-                                  <span className="truncate text-left text-[11px] text-muted-foreground font-mono pl-3">
-                                    {file.name === '..' ? '' : (file.isDirectory ? '-' : formatFileSize(file.size))}
+                                  <span className="truncate text-left text-[11px] text-muted-foreground font-mono tabular-nums pl-3">
+                                    {file.name === '..' ? (
+                                      <span className="opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <Kbd size="xs">Alt+↑</Kbd>
+                                      </span>
+                                    ) : (file.isDirectory ? <span className="text-[10px] text-muted-foreground/40 font-sans uppercase">dir</span> : formatFileSize(file.size))}
                                   </span>
                                   <span className="text-left text-[11px] text-muted-foreground font-mono truncate pl-3">
                                     {file.name === '..' ? '' : t(getFileTypeLabel(file))}

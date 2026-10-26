@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { RefreshCw, Search, Skull, ArrowLeftRight, Network } from 'lucide-react'
 import { sshService } from '@/services/ssh-service'
@@ -161,7 +162,7 @@ export function PortsModule({ serverId, initialSearchQuery, initialSubTab = 'lis
               </div>
             ) : (
               <div className="p-3">
-                <div className="rounded-xl border border-border/70 bg-card shadow-xs overflow-hidden">
+                <div className="rounded-xl border border-border/70 bg-card dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_1px_3px_rgba(0,0,0,0.35)] shadow-xs overflow-hidden">
                   <table className="w-full text-xs">
                   <thead className="workspace-table-head">
                     <tr className="text-left text-muted-foreground">
@@ -178,19 +179,20 @@ export function PortsModule({ serverId, initialSearchQuery, initialSubTab = 'lis
                     {filteredPorts.map((port, i) => (
                       <tr key={`${port.protocol}-${port.port}-${i}`} className="border-b hover:bg-accent/30 cursor-pointer" onClick={() => setExpandedPort(expandedPort === i ? null : i)}>
                         <td className="px-3 py-1.5">
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${port.protocol === 'tcp' ? 'bg-blue-500/10 text-blue-500' : 'bg-purple-500/10 text-purple-500'}`}>
+                          <Badge variant={port.protocol === 'tcp' ? 'soft-info' : 'soft'} className="px-1.5 py-0 text-[10px] font-mono font-normal">
                             {port.protocol.toUpperCase()}
-                          </span>
+                          </Badge>
                         </td>
-                        <td className="px-3 py-1.5 font-mono text-muted-foreground">{port.localAddress}</td>
-                        <td className="px-3 py-1.5 font-mono font-medium text-primary">{port.port}</td>
-                        <td className="px-3 py-1.5">{port.processName}</td>
-                        <td className="px-3 py-1.5 font-mono">{port.pid}</td>
+                        <td className="px-3 py-1.5 font-mono tabular-nums text-muted-foreground">{port.localAddress}</td>
+                        <td className="px-3 py-1.5 font-mono tabular-nums font-semibold text-primary">{port.port}</td>
+                        <td className="px-3 py-1.5 font-medium">{port.processName}</td>
+                        <td className="px-3 py-1.5 font-mono tabular-nums text-muted-foreground">{port.pid}</td>
                         <td className="px-3 py-1.5">
                           {port.state && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-500">
+                            <Badge variant={port.state.toUpperCase().includes('LISTEN') ? 'soft-success' : 'soft'} className="gap-1.5 px-1.5 py-0 text-[10px] font-mono font-normal tracking-wide">
+                              {port.state.toUpperCase().includes('LISTEN') && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 status-dot-pulse" />}
                               {port.state}
-                            </span>
+                            </Badge>
                           )}
                         </td>
                         <td className="px-3 py-1.5">

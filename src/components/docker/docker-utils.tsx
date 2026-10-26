@@ -528,11 +528,11 @@ export function StatusPill({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium tracking-wide border whitespace-nowrap",
+        "inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10.5px] font-medium tracking-wide border whitespace-nowrap shadow-2xs",
         c.bg,
       )}
     >
-      <span className={cn("w-1.5 h-1.5 rounded-full", c.dot, pulse && "animate-pulse")} />
+      <span className={cn("w-1.5 h-1.5 rounded-full", c.dot, pulse && "status-dot-pulse")} />
       {label}
       {extra}
     </span>
