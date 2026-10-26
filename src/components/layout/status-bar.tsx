@@ -210,7 +210,7 @@ export function StatusBar() {
 
       {isSerialServer && (
         <span
-          className="hidden items-center gap-2 font-mono text-[10px] sm:flex"
+          className="hidden items-center gap-2 font-mono tabular-nums text-[10px] sm:flex"
           title={`${t('serial_rx_total')}: ${formatSerialBytes(serialStats.rxBytes)} · ${t('serial_tx_total')}: ${formatSerialBytes(serialStats.txBytes)}`}
         >
           <span className={serialStats.rxRate > 0 ? 'text-emerald-500' : 'text-muted-foreground/55'}>
@@ -223,7 +223,7 @@ export function StatusBar() {
       )}
 
       {/* Workspace mode */}
-      <span className="text-muted-foreground/50 flex-shrink-0 font-mono">
+      <span className="text-muted-foreground/70 flex-shrink-0 font-mono text-[10px] uppercase tracking-wider bg-muted/40 border border-border/40 px-1.5 py-0.5 rounded shadow-2xs">
         {isSftpTab
           ? 'SFTP'
           : isBmcServer

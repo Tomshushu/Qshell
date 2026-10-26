@@ -25,6 +25,7 @@ import { UI_STYLES } from '@/styles/themes/registry'
 import { ServerFormDialog } from '@/components/server/server-form-dialog'
 import { SettingsDialog } from '@/components/layout/settings-dialog'
 import { useShortcutStore } from '@/store/shortcut-store'
+import { Kbd } from '@/components/ui/kbd'
 
 interface CommandItem {
   id: string
@@ -226,7 +227,7 @@ export function CommandPalette() {
         <DialogPrimitive.Portal>
           <DialogPrimitive.Overlay className="fixed inset-0 z-[100] bg-black/40 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
           <DialogPrimitive.Content
-            className="fixed left-1/2 top-[15%] z-[101] -translate-x-1/2 w-[calc(100vw-2rem)] max-w-xl rounded-2xl border border-border/60 bg-card shadow-2xl overflow-hidden focus:outline-none"
+            className="fixed left-1/2 top-[15%] z-[101] -translate-x-1/2 w-[calc(100vw-2rem)] max-w-xl rounded-2xl border border-border/60 glass-strong shadow-2xl dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08),0_24px_48px_-12px_rgba(0,0,0,0.7)] ring-1 ring-white/5 overflow-hidden focus:outline-none"
             onCloseAutoFocus={(e) => {
               if (!e.defaultPrevented) {
                 window.dispatchEvent(new CustomEvent('focus-active-terminal'))
@@ -249,9 +250,7 @@ export function CommandPalette() {
                 placeholder="搜索命令、服务器、分组…"
                 className="h-12 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
               />
-              <kbd className="hidden sm:inline-flex items-center rounded border border-border/60 bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                ESC
-              </kbd>
+              <Kbd size="xs" className="hidden sm:inline-flex">ESC</Kbd>
             </div>
             <div className="max-h-80 overflow-y-auto p-2">
               {filtered.length === 0 && (

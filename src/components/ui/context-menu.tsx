@@ -36,7 +36,7 @@ const ContextMenuSubContent = React.forwardRef<
       ref={ref}
       sideOffset={4}
       className={cn(
-        "z-50 min-w-[8rem] overflow-hidden rounded-xl border border-border/60 glass-strong p-1.5 text-popover-foreground shadow-lg animate-in fade-in-0 zoom-in-95 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
+        "z-50 min-w-[8rem] overflow-hidden rounded-xl border border-border/60 glass-strong p-1.5 text-popover-foreground shadow-xl dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08),0_12px_32px_-4px_rgba(0,0,0,0.6)] ring-1 ring-white/5 animate-in fade-in-0 zoom-in-95 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
         className
       )}
       {...props}
@@ -53,7 +53,7 @@ const ContextMenuContent = React.forwardRef<
     <ContextMenuPrimitive.Content
       ref={ref}
       className={cn(
-        "z-50 min-w-[8rem] overflow-hidden rounded-xl border border-border/60 glass-strong p-1.5 text-popover-foreground shadow-lg animate-in fade-in-0 zoom-in-95 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
+        "z-50 min-w-[8rem] overflow-hidden rounded-xl border border-border/60 glass-strong p-1.5 text-popover-foreground shadow-xl dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08),0_12px_32px_-4px_rgba(0,0,0,0.6)] ring-1 ring-white/5 animate-in fade-in-0 zoom-in-95 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
         className
       )}
       {...props}
@@ -109,7 +109,7 @@ const ContextMenuShortcut = ({
   return (
     <span
       className={cn(
-        "ml-auto text-[10px] font-mono tracking-widest text-muted-foreground/60",
+        "ml-auto text-[10px] font-mono tracking-wider text-muted-foreground/80 bg-muted/50 border border-border/40 px-1 py-0.2 rounded shadow-2xs",
         className
       )}
       {...props}

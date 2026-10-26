@@ -1,6 +1,8 @@
 import { cn } from '@/lib/utils'
 import {
   HardDrive,
+  FolderOpen,
+  ChevronRight,
   RefreshCw,
   Upload,
   FolderInput,
@@ -63,13 +65,19 @@ export function FileToolbar({
       {/* Toolbar */}
       <div className="flex items-center gap-1.5 px-2 py-1 border-b bg-card flex-wrap">
         {/* 面包屑导航 */}
-        <div className="flex items-center gap-0.5 text-sm font-mono flex-1 min-w-0 overflow-hidden">
+        <div className="flex items-center gap-0.5 text-xs font-mono flex-1 min-w-0 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden py-0.5 select-none">
           <button
             onClick={() => onNavigateTo('/')}
-            className="text-muted-foreground hover:text-foreground transition-colors px-1 rounded hover:bg-accent flex items-center"
+            className={cn(
+              "px-1.5 py-0.5 rounded-md transition-all flex items-center gap-1 text-xs cursor-pointer select-none shrink-0",
+              currentPath === '/'
+                ? "bg-primary/10 text-primary font-medium border border-primary/20 shadow-2xs"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
+            )}
             title="/"
           >
-            <HardDrive className="h-3.5 w-3.5" />
+            <HardDrive className="h-3 w-3 shrink-0 opacity-70" />
+            {currentPath === '/' && <span>/</span>}
           </button>
           {currentPath !== '/' &&
             currentPath
@@ -77,15 +85,22 @@ export function FileToolbar({
               .filter(Boolean)
               .map((seg, idx, arr) => {
                 const path = '/' + arr.slice(0, idx + 1).join('/')
+                const isLast = idx === arr.length - 1
                 return (
-                  <span key={path} className="flex items-center gap-0.5 min-w-0">
-                    <span className="text-muted-foreground/40">/</span>
+                  <span key={path} className="flex items-center gap-0.5 min-w-0 shrink-0">
+                    <ChevronRight className="h-3 w-3 mx-0.5 text-muted-foreground/40 shrink-0" />
                     <button
                       onClick={() => onNavigateTo(path)}
-                      className="text-muted-foreground hover:text-foreground transition-colors px-1 rounded hover:bg-accent truncate max-w-[120px]"
+                      className={cn(
+                        "flex items-center gap-1 px-1.5 py-0.5 rounded-md text-xs transition-all cursor-pointer select-none max-w-[140px] truncate text-left",
+                        isLast
+                          ? "bg-primary/10 text-primary font-medium border border-primary/20 shadow-2xs"
+                          : "text-muted-foreground hover:text-foreground hover:bg-muted/60 active:scale-[0.98]"
+                      )}
                       title={path}
                     >
-                      {seg}
+                      {isLast && <FolderOpen className="h-3 w-3 shrink-0 text-primary" />}
+                      <span className="truncate">{seg}</span>
                     </button>
                   </span>
                 )

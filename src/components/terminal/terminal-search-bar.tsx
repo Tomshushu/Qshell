@@ -67,7 +67,7 @@ export const TerminalSearchBar = memo(function TerminalSearchBar({
 
   return (
     <div
-      className="absolute top-2 right-2 z-10 flex items-center gap-1 bg-card border rounded-xl shadow-lg p-1.5 terminal-search-bar"
+      className="absolute top-2 right-2 z-10 flex items-center gap-1 bg-card border rounded-xl shadow-lg dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08),0_12px_28px_-4px_rgba(0,0,0,0.7)] ring-1 ring-white/5 backdrop-blur-md p-1.5 terminal-search-bar"
       data-terminal-search="true"
       onMouseDown={(e) => {
         e.stopPropagation();
@@ -116,7 +116,7 @@ export const TerminalSearchBar = memo(function TerminalSearchBar({
         autoFocus
       />
       {searchText && (
-        <span className="text-[10px] text-muted-foreground whitespace-nowrap min-w-[40px] text-center flex items-center justify-center gap-1">
+        <span className="text-[10px] font-mono tabular-nums text-muted-foreground whitespace-nowrap min-w-[40px] text-center flex items-center justify-center gap-1">
           {searchState.isSearching && (
             <Loader2 className="h-2.5 w-2.5 animate-spin text-primary shrink-0" />
           )}
