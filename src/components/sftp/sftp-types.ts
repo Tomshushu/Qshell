@@ -68,6 +68,7 @@ export interface TransferRecordItem {
   lastRateTime?: number;
   lastRateBytes?: number;
   rate: number;
+  finalRate?: number;
   elapsedMs: number;
   error?: string;
   skipReason?: string;

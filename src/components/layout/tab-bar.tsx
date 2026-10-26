@@ -26,6 +26,7 @@ import {
 import { SettingsDialog } from '@/components/layout/settings-dialog'
 import { TabStrip } from '@/components/layout/tab-strip'
 import { UserAvatar } from '@/components/ui/user-avatar'
+import { QshellLoader } from '@/components/ui/qshell-loader'
 import { cn } from '@/lib/utils'
 import { isTauri } from '@/services/api'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
@@ -212,13 +213,7 @@ export function TabBar() {
           >
             {isSyncing ? (
               <div className="flex items-center gap-1.5 text-primary">
-                <Loader2
-                  className={cn(
-                    'h-3.5 w-3.5 animate-spin',
-                    provider === 'gitee' ? 'text-red-500' : 'text-primary',
-                  )}
-                />
-                <span className="text-[10px] hidden sm:inline font-medium">{t('sync_syncing')}</span>
+                <QshellLoader size="xs" text={<span className="text-[10px] hidden sm:inline font-medium">{t('sync_syncing')}</span>} />
               </div>
             ) : isConfigured && currentUser ? (
               <div className="flex items-center gap-1.5">
@@ -333,7 +328,7 @@ export function TabBar() {
                 <CloudUpload className="h-3.5 w-3.5 text-primary shrink-0" />
                 <div className="flex-1 flex items-center justify-between">
                   <span>{t('sync_quick_backup')}</span>
-                  {isSyncing && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
+                  {isSyncing && <QshellLoader size="xs" />}
                 </div>
               </DropdownMenuItem>
             )}

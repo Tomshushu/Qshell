@@ -306,7 +306,7 @@ export interface SftpSlice {
   /** SFTP 文件图标主题：'precision' 现代几何 | 'yaru' Ubuntu 官方经典暖橙 | 'developer' 开发者代码 | 'minimal' 极简纯线条 */
   sftpFileIconTheme: "precision" | "yaru" | "developer" | "minimal";
   setSftpFileIconTheme: (theme: "precision" | "yaru" | "developer" | "minimal") => void;
-  /** SFTP 传输并发量（1-10），控制同时进行上传/下载的文件数 */
+  /** SFTP 传输并发量（1-8），控制同时进行上传/下载的文件数 */
   sftpTransferConcurrency: number;
   setSftpTransferConcurrency: (n: number) => void;
   /** SFTP 传输限速（KB/s），0=不限速；后端用 AtomicU64 存储，应用启动时同步一次 */

@@ -29,6 +29,7 @@ import {
 import { sshService } from '@/services/ssh-service'
 import { useTranslation, translate } from '@/i18n'
 import { useToast } from '@/components/ui/toast'
+import { QshellLoader } from '@/components/ui/qshell-loader'
 import { useAppStore } from '@/store'
 import { extractBaseServerId } from '@/services/ssh-connection-state'
 import type { ProcessInfo, PortInfo, WorkspaceModule, NavigationContext } from '@/types'
@@ -512,8 +513,8 @@ export function ProcessesModule({ serverId, onNavigate }: ProcessesModuleProps) 
       <div className="flex-1 overflow-auto">
         {loading && processes.length === 0 ? (
           <div className="flex items-center justify-center py-16 text-muted-foreground">
-            <RefreshCw className="h-5 w-5 animate-spin mr-2" />
-            <span className="text-sm">{t('proc_loading')}</span>
+            <QshellLoader size="md" text={t('proc_loading')} />
+
           </div>
         ) : processes.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">

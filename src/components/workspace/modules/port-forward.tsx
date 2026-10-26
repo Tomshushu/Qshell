@@ -30,6 +30,7 @@ import {
 } from 'lucide-react'
 import type { ForwardInfo, OperationResult } from '@/services/api/types'
 import { cn } from '@/lib/utils'
+import { QshellLoader } from '@/components/ui/qshell-loader'
 
 interface PortForwardModuleProps {
   serverId: string
@@ -240,9 +241,9 @@ function ForwardRow({
       case 'active':
         return { icon: <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />, label: t('pf_state_active'), color: 'text-emerald-500' }
       case 'starting':
-        return { icon: <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-500" />, label: t('pf_state_starting'), color: 'text-amber-500' }
+        return { icon: <QshellLoader size="xs" />, label: t('pf_state_starting'), color: 'text-amber-500' }
       case 'stopping':
-        return { icon: <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />, label: t('pf_state_stopping'), color: 'text-muted-foreground' }
+        return { icon: <QshellLoader size="xs" />, label: t('pf_state_stopping'), color: 'text-muted-foreground' }
       case 'failed':
         return { icon: <XCircle className="h-3.5 w-3.5 text-red-500" />, label: t('pf_state_failed'), color: 'text-red-500' }
       case 'stopped':

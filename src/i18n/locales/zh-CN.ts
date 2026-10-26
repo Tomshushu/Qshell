@@ -2650,7 +2650,7 @@ export default {
   sftp_settings_transfer: "传输设置",
   sftp_concurrency_label: "传输并发量",
   sftp_concurrency_desc:
-    "同时进行上传/下载的文件数（1-10）。值越大传输越快，但会占用更多系统资源和网络带宽。注意：过高的值可能触发服务器 MaxSessions 限制导致传输失败，建议保持 3-5。",
+    "同时进行上传/下载的文件数（1-8）。值越大传输越快，但会占用更多系统资源和网络带宽。注意：过高的值可能触发服务器 MaxSessions 限制导致传输失败，建议保持 3-5。",
   sftp_transfer_to_target: "传输到目标目录",
   sftp_transfer_to_all_right: "上传到右侧所有会话",
   sftp_transfer_selected: "传输选中项 ({n})",
@@ -2723,6 +2723,7 @@ export default {
   sftp_transfer_partial: "部分成功",
   sftp_transfer_retry_skip: "重试（跳过已完成文件）",
   sftp_transfer_preflight: "正在检查…",
+  sftp_transfer_waiting: "排队中",
   sftp_transfer_transferring: "传输中",
   sftp_transfer_upload: "上传",
   sftp_transfer_download: "下载",

@@ -7,6 +7,7 @@ import type { ServiceInfo, ServiceCapabilities, ServiceResource, ServiceResource
 import { useTranslation } from '@/i18n'
 import { ServiceDetailDialog } from './service-detail-dialog'
 import { useToast } from '@/components/ui/toast'
+import { QshellLoader } from '@/components/ui/qshell-loader'
 
 /** 批量操作对应的 i18n key（默认不提供批量 Mask，风险过高） */
 const BATCH_LABEL_KEY: Record<'start' | 'stop' | 'restart' | 'enable' | 'disable', string> = {
@@ -394,8 +395,8 @@ export function ServicesModule({ serverId, onNavigate, initialSearchQuery }: Ser
       <div className="flex-1 overflow-auto">
         {loading && services.length === 0 ? (
           <div className="flex items-center justify-center py-16 text-muted-foreground">
-            <RefreshCw className="h-5 w-5 animate-spin mr-2" />
-            <span className="text-sm">{t('svc_loading')}</span>
+            <QshellLoader size="md" text={t('svc_loading')} />
+
           </div>
         ) : services.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">

@@ -1444,7 +1444,7 @@ export default {
     sftp_download_to_local: 'Download to Local ({n})',
     sftp_settings_transfer: 'Transfer Settings',
     sftp_concurrency_label: 'Transfer Concurrency',
-    sftp_concurrency_desc: 'Number of files to upload/download simultaneously (1-10). Higher values are faster but use more system resources and bandwidth. Note: values too high may trigger server MaxSessions limits causing transfer failures; 3-5 is recommended.',
+    sftp_concurrency_desc: 'Number of files to upload/download simultaneously (1-8). Higher values are faster but use more system resources and bandwidth. Note: values too high may trigger server MaxSessions limits causing transfer failures; 3-5 is recommended.',
     sftp_transfer_to_target: 'Transfer to target folder',
     sftp_transfer_selected: 'Transfer selected ({n})',
     sftp_delete_selected: 'Delete selected ({n})',

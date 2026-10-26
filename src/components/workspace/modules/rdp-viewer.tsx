@@ -12,6 +12,7 @@ import { useAppStore } from '@/store'
 import { backend } from '@/services/api'
 import { useTranslation } from '@/i18n'
 import { Button } from '@/components/ui/button'
+import { QshellLoader } from '@/components/ui/qshell-loader'
 import { Monitor, Loader2, Play, AlertCircle, CheckCircle2, Maximize2, Globe } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { SelectPopover } from '@/components/ui/select-popover'
@@ -178,7 +179,7 @@ export function RdpViewerModule({ serverId }: RdpViewerModuleProps) {
           size="lg"
         >
           {launching ? (
-            <><Loader2 className="h-4 w-4 animate-spin" /> {t('rdp_launching')}</>
+            <><QshellLoader size="xs" /> {t('rdp_launching')}</>
           ) : (
             <><Play className="h-4 w-4" /> {t('rdp_btn_launch')}</>
           )}

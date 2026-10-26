@@ -1,3 +1,4 @@
+import { cn } from '@/lib/utils'
 import {
   HardDrive,
   RefreshCw,
@@ -21,6 +22,7 @@ interface FileToolbarProps {
   showHidden?: boolean
   onToggleShowHidden?: () => void
   onRefresh: () => void
+  loading?: boolean
   transferLoading: string | null
   onNativeUpload: (isFolder: boolean) => void
   searchQuery: string
@@ -43,6 +45,7 @@ export function FileToolbar({
   showHidden = true,
   onToggleShowHidden,
   onRefresh,
+  loading = false,
   transferLoading,
   onNativeUpload,
   searchQuery,
@@ -106,7 +109,7 @@ export function FileToolbar({
           onClick={onRefresh}
           title={`${t('fs_refresh')} (F5)`}
         >
-          <RefreshCw className="h-3.5 w-3.5" />
+          <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
         </Button>
 
         {onToggleShowHidden && (

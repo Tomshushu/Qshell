@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useAuthStore } from '@/store/auth-store'
 import { testSupabaseConnection } from '@/lib/supabase'
+import { QshellLoader } from '@/components/ui/qshell-loader'
 import {
   Mail,
   Lock,
@@ -678,7 +679,7 @@ export function AuthDialog() {
                     className="w-full h-8 text-xs font-semibold rounded-lg shadow-sm"
                     disabled={isUpdatingPassword || !newPasswordInput}
                   >
-                    {isUpdatingPassword ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : '保存密码'}
+                    {isUpdatingPassword ? <QshellLoader size="xs" /> : '保存密码'}
                   </Button>
                 </form>
               )}
@@ -922,7 +923,7 @@ export function AuthDialog() {
                       className="w-full text-xs h-10 mt-1 font-semibold rounded-xl shadow-md bg-primary text-primary-foreground hover:bg-primary/95 transition-all"
                       disabled={isSubmitting || !isConfigured}
                     >
-                      {isSubmitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : '登 录'}
+                      {isSubmitting ? <QshellLoader size="xs" /> : '登 录'}
                     </Button>
                   </form>
                 ) : (
@@ -968,7 +969,7 @@ export function AuthDialog() {
                           disabled={isSubmitting || !isConfigured}
                         >
                           {isSubmitting ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            <QshellLoader size="xs" />
                           ) : (
                             '获取 8 位数字验证码'
                           )}
@@ -1037,7 +1038,7 @@ export function AuthDialog() {
                           onClick={() => void handleVerifyOtp()}
                         >
                           {isSubmitting ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            <QshellLoader size="xs" />
                           ) : (
                             '核验并登录'
                           )}
@@ -1175,7 +1176,7 @@ export function AuthDialog() {
                   className="w-full text-xs h-10 mt-1 font-semibold rounded-xl shadow-md bg-primary text-primary-foreground hover:bg-primary/95 transition-all"
                   disabled={isSubmitting || !isConfigured || (confirmPassword.length > 0 && confirmPassword !== password)}
                 >
-                  {isSubmitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : '立即创建账号'}
+                  {isSubmitting ? <QshellLoader size="xs" /> : '立即创建账号'}
                 </Button>
 
                 <div className="text-center pt-2 border-t border-border/40">
@@ -1250,7 +1251,7 @@ export function AuthDialog() {
                   onClick={() => void handleVerifySignupOtp()}
                 >
                   {isSubmitting ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <QshellLoader size="xs" />
                   ) : (
                     '立即核验并完成注册'
                   )}
@@ -1319,7 +1320,7 @@ export function AuthDialog() {
                   disabled={isSubmitting || !isConfigured || resendCountdown > 0}
                 >
                   {isSubmitting ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <QshellLoader size="xs" />
                   ) : resendCountdown > 0 ? (
                     `${resendCountdown}s 后可重发`
                   ) : (
@@ -1379,7 +1380,7 @@ export function AuthDialog() {
                   disabled={isTestingConfig}
                   onClick={handleSaveCustomConfig}
                 >
-                  {isTestingConfig ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+                  {isTestingConfig ? <QshellLoader size="xs" /> : <CheckCircle2 className="h-3 w-3" />}
                   测试连接并保存
                 </Button>
               </div>

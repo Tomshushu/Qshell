@@ -122,6 +122,8 @@ import { ResizablePreviewDialog } from '@/components/ui/resizable-preview-dialog
 import { ArchiveFileIcon } from '@/components/ui/file-icons'
 import { OsIcon } from '@/pages/dashboard'
 import { SftpBreadcrumbBar } from '@/components/layout/sftp-breadcrumb-bar'
+import { QshellLoader } from '@/components/ui/qshell-loader'
+import { FileSkeletonList } from '@/components/sftp/file-skeleton-list'
 import {
   type SftpViewMode,
   type ConflictAction,
@@ -229,25 +231,29 @@ const TransferChildList = memo(function TransferChildList({
     return (
       <div
         key={child.path}
-        className="grid h-6 grid-cols-[minmax(0,1fr)_80px_110px] items-center gap-2 border-b border-border/20 px-2 text-[10px] last:border-b-0"
+        className="grid h-6 grid-cols-[minmax(0,1fr)_minmax(100px,200px)_110px] items-center gap-2 border-b border-border/20 px-2 text-[10px] last:border-b-0 overflow-hidden"
       >
-        <span className="truncate font-mono" title={child.path}>{displayPath}</span>
-        <span className={cn(
-          child.status === 'completed' ? 'text-green-600' :
-          child.status === 'failed' ? 'text-red-500' :
-          child.status === 'canceled' ? 'text-amber-500' :
-          child.status === 'transferring' ? 'text-primary' : 'text-muted-foreground'
-        )}>
+        <span className="truncate min-w-0 font-mono" title={child.path}>{displayPath}</span>
+        <span
+          className={cn(
+            'truncate min-w-0 font-medium',
+            child.status === 'completed' ? 'text-green-600' :
+            child.status === 'failed' ? 'text-red-500' :
+            child.status === 'canceled' ? 'text-amber-500' :
+            child.status === 'transferring' ? 'text-primary' : 'text-muted-foreground'
+          )}
+          title={child.status === 'failed' ? (child.error || t('sftp_transfer_failed')) : undefined}
+        >
           {child.status === 'completed' ? t('sftp_transfer_completed') :
             child.status === 'failed' ? (child.error || t('sftp_transfer_failed')) :
             child.status === 'canceled' ? t('sftp_transfer_canceled') :
-            child.status === 'transferring' ? t('sftp_transfer_transferring') : '…'}
+            child.status === 'transferring' ? t('sftp_transfer_transferring') : (t('sftp_transfer_waiting') || '排队中')}
         </span>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 min-w-0">
           <div className="h-1 flex-1 overflow-hidden rounded bg-muted">
             <div className={cn('h-full', child.status === 'failed' ? 'bg-red-500' : child.status === 'completed' ? 'bg-green-500' : 'bg-primary')} style={{ width: `${Math.min(100, Math.max(0, childPercent))}%` }} />
           </div>
-          <span className="w-7 text-right font-mono">{childPercent}%</span>
+          <span className="w-7 text-right font-mono shrink-0">{childPercent}%</span>
         </div>
       </div>
     )
@@ -312,7 +318,7 @@ export function SftpPanel() {
   const toastRef = useRef(toast)
   toastRef.current = toast
   const { servers, serverGroups } = useAppStore()
-  // 传输并发量（1-10），从全局 store 读取，运行时变更立即生效（每次传输读取最新值）
+  // 传输并发量（1-8），从全局 store 读取，运行时变更立即生效（每次传输读取最新值）
   const sftpTransferConcurrency = useAppStore((s) => s.sftpTransferConcurrency)
   // 传输限速（KB/s）：从 store 读取（持久化），变更时同步到后端
   const transferRateLimit = useAppStore((s) => s.transferRateLimit)
@@ -388,8 +394,8 @@ export function SftpPanel() {
   // 用 ref 跟踪最新 remotePath，上传完成刷新时对比，避免刷新到已离开的目录
   const remotePathRef = useRef<string>('')
   // loadRemoteDirectory / loadLocalDirectory 的 ref 包装，供空依赖 useEffect 内调用最新版本
-  const loadRemoteDirectoryRef = useRef<(serverId: string, path: string) => void>(() => {})
-  const loadLocalDirectoryRef = useRef<(path: string) => void>(() => {})
+  const loadRemoteDirectoryRef = useRef<(serverId: string, path: string) => Promise<void> | void>(() => {})
+  const loadLocalDirectoryRef = useRef<(path: string, overrideSideType?: 'local' | 'remote', overrideServerId?: string) => Promise<void> | void>(() => {})
   remotePathRef.current = remotePath
   const [remoteFiles, setRemoteFiles] = useState<FileEntry[]>([])
   // 用 ref 跟踪最新 remoteFiles，供 pasteFilesFromClipboard 等空依赖 useCallback 读取，避免闭包陷阱
@@ -712,20 +718,45 @@ export function SftpPanel() {
   // 目录任务的子文件明细独立存储，避免大目录把主记录数组撑爆。
   const [transferChildren, setTransferChildren] = useState<Record<string, TransferChildRecord[]>>({})
   // 每批子记录变化只汇总一次，渲染每一列时直接读取，避免对大目录重复 reduce。
+  const directoryRateTrackerRef = useRef<Map<string, { lastBytes: number; lastTime: number; smoothedRate: number }>>(new Map())
+  // 每批子记录变化只汇总一次，渲染每一列时直接读取，避免对大目录重复 reduce。
   const directoryTransferSummaries = useMemo(() => {
     const summaries: Record<string, { totalBytes: number; currentBytes: number; activeRate: number }> = {}
+    const now = Date.now()
     for (const [transferId, children] of Object.entries(transferChildren)) {
       let totalBytes = 0
       let currentBytes = 0
-      let activeRate = 0
+      let activeChildrenRate = 0
       for (const child of children) {
         const childTotal = Math.max(0, child.total || child.size)
         totalBytes += childTotal
         currentBytes += child.status === 'completed'
           ? childTotal
           : Math.min(childTotal, Math.max(0, child.current))
-        if (child.status === 'transferring') activeRate += child.rate ?? 0
+        if (child.status === 'transferring') activeChildrenRate += child.rate ?? 0
       }
+
+      // 目录级别跨多文件/多并发 Worker 的综合网络吞吐率测算（解决海量小文件瞬间完成 child.rate 归零导致目录速率为 0 的问题）
+      let tracker = directoryRateTrackerRef.current.get(transferId)
+      if (!tracker) {
+        tracker = { lastBytes: currentBytes, lastTime: now, smoothedRate: 0 }
+        directoryRateTrackerRef.current.set(transferId, tracker)
+      } else {
+        const dt = (now - tracker.lastTime) / 1000
+        const dBytes = currentBytes - tracker.lastBytes
+        if (dt >= 0.25 || (tracker.smoothedRate === 0 && dBytes > 0 && dt >= 0.05)) {
+          if (dt > 0 && dBytes >= 0) {
+            const instantRate = dBytes / dt
+            tracker.smoothedRate = tracker.smoothedRate > 0
+              ? tracker.smoothedRate * RATE_SMOOTHING_ALPHA + instantRate * (1 - RATE_SMOOTHING_ALPHA)
+              : instantRate
+          }
+          tracker.lastTime = now
+          tracker.lastBytes = currentBytes
+        }
+      }
+
+      const activeRate = Math.max(activeChildrenRate, tracker.smoothedRate)
       summaries[transferId] = { totalBytes, currentBytes, activeRate }
     }
     return summaries
@@ -1384,22 +1415,25 @@ export function SftpPanel() {
   const setRemoteSortOrder = rightPrefs.setSortOrder
   const handleRemoteSort = rightPrefs.handleSort
 
-  const loadLocalDirectory = async (pathString: string, overrideSideType?: 'local' | 'remote', overrideServerId?: string) => {
+  const loadLocalDirectory = async (
+    pathString: string,
+    overrideSideType?: 'local' | 'remote',
+    overrideServerId?: string,
+  ) => {
     if (!backend) return
     const prevPath = localPathRef.current
     // 递增请求序号：响应返回时校验，丢弃过期响应（用户已切换到其他目录）
     const reqId = ++localDirReqIdRef.current
+
+    const activeSideType = overrideSideType !== undefined ? overrideSideType : leftSideType
+    const activeServerId = overrideServerId !== undefined ? overrideServerId : leftServerId
+
     setLocalLoading(true)
     setLocalError(null)
-    setOpeningLocalPath(pathString)
-    // 乐观更新路径：0ms 立即切换路径显示与面包屑
     setLocalPath(pathString)
-    // 切换目录/刷新后旧选中项可能已不存在，统一清理（覆盖所有调用路径：面包屑/后退/刷新/快捷键等）
     setSelectedLocalPaths(new Set())
-    try {
-      const activeSideType = overrideSideType !== undefined ? overrideSideType : leftSideType
-      const activeServerId = overrideServerId !== undefined ? overrideServerId : leftServerId
 
+    try {
       let resFiles: (FileEntry | LocalFileEntry)[]
       if (activeSideType === 'remote' && activeServerId) {
         resFiles = await backend.files.list(activeServerId, pathString)
@@ -1466,13 +1500,12 @@ export function SftpPanel() {
     if (!backend || !serverId) return
     const prevPath = remotePathRef.current
     const reqId = ++remoteDirReqIdRef.current
+
     setRemoteLoading(true)
     setRemoteError(null)
-    setOpeningRemotePath(pathString)
-    // 乐观更新路径：0ms 立即切换路径显示与面包屑
     setRemotePath(pathString)
-    // 切换目录/刷新后旧选中项可能已不存在，统一清理（覆盖所有调用路径：面包屑/后退/刷新/快捷键等）
     setSelectedRemotePaths(new Set())
+
     try {
       const files = await backend.files.list(serverId, pathString)
       if (!mountedRef.current || remoteDirReqIdRef.current !== reqId) return // 过期响应/组件已卸载，丢弃
@@ -1521,6 +1554,7 @@ export function SftpPanel() {
       }
     }
   }
+
   // 更新 ref，供空依赖的 useEffect（如进度事件监听）调用最新版本
   loadRemoteDirectoryRef.current = loadRemoteDirectory
   loadLocalDirectoryRef.current = loadLocalDirectory
@@ -2007,7 +2041,7 @@ export function SftpPanel() {
       ))
 
       // 原地刷新目录！
-      await loadRemoteDirectoryRef.current(targetServerId, targetPath)
+      loadRemoteDirectoryRef.current(targetServerId, targetPath)
 
       playSound(SoundType.CONNECTED)
       toastRef.current.success(tRef.current('sftp_reconnect_success'))
@@ -2550,8 +2584,13 @@ export function SftpPanel() {
               const next = { ...prev }
               for (const [id, items] of batches) {
                 const existing = new Map((next[id] || []).map(item => [item.path, item]))
-                for (const item of items) existing.set(item.path, item)
-                next[id] = Array.from(existing.values())
+                for (const item of items) {
+                  const prevChild = existing.get(item.path)
+                  if (!prevChild || prevChild.status === 'waiting') {
+                    existing.set(item.path, item)
+                  }
+                }
+                next[id] = Array.from(existing.values()).slice(0, 5000)
               }
               return next
             })
@@ -2803,6 +2842,11 @@ export function SftpPanel() {
                   // 跟踪最后一次已知已传输字节数（用于断点续传 offset）
                   lastOffset: newCurrent,
                   rate: done ? 0 : rate,
+                  finalRate: (done || isDoneSignal)
+                    ? (rate > 0
+                        ? rate
+                        : (t.finalRate ?? (t.rate > 0 ? t.rate : ((now - t.startTime > 0 && newTotal > 0 && !isDirectoryRecord) ? Math.round(newTotal / ((now - t.startTime) / 1000)) : undefined))))
+                    : (rate > 0 ? rate : t.finalRate),
                   elapsedMs: done ? t.elapsedMs : now - t.startTime,
                   completedAt: done ? now : t.completedAt,
                   // 成功完成时清除 resumable；resuming 状态在 done 时也清除
@@ -3113,6 +3157,14 @@ export function SftpPanel() {
         }
         return { ...t, rate, lastRateTime, lastRateBytes, elapsedMs: now - t.startTime }
       }))
+      for (const [, tracker] of directoryRateTrackerRef.current.entries()) {
+        const idle = (now - tracker.lastTime) / 1000
+        if (idle >= 2.0) {
+          tracker.smoothedRate = 0
+        } else if (idle >= 1.0) {
+          tracker.smoothedRate = Math.round(tracker.smoothedRate * 0.5)
+        }
+      }
       setTransferChildren(prev => {
         let changed = false
         const next = { ...prev }
@@ -3285,6 +3337,7 @@ export function SftpPanel() {
     for (const id of removed) {
       directoryTransferIdsRef.current.delete(id)
       transferTopNameRef.current.delete(id)
+      directoryRateTrackerRef.current.delete(id)
     }
      
   }, [transferRecords])
@@ -3314,6 +3367,7 @@ export function SftpPanel() {
     setExpandedTransfers(new Set())
     directoryTransferIdsRef.current.clear()
     transferTopNameRef.current.clear()
+    directoryRateTrackerRef.current.clear()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -3333,6 +3387,7 @@ export function SftpPanel() {
     })
     directoryTransferIdsRef.current.delete(id)
     transferTopNameRef.current.delete(id)
+    directoryRateTrackerRef.current.delete(id)
   }, [])
 
   /**
@@ -4124,7 +4179,7 @@ export function SftpPanel() {
       await renameLocal(renameTarget.path, newPathString)
       setRenameTarget(null)
       setRenameValue('')
-      loadLocalDirectory(localPath)
+      loadLocalDirectory(localPath, undefined, undefined, { isRefresh: true })
     } catch (err: unknown) {
       console.error('Failed to rename local file:', err)
       setLocalError(getErrorMessage(err, String(err)))
@@ -4160,7 +4215,7 @@ export function SftpPanel() {
       setLocalError(t('sftp_delete_partial_failed').replace('{failures}', failures.join('\n')))
     }
     setSelectedLocalPaths(new Set())
-    loadLocalDirectory(localPath)
+    loadLocalDirectory(localPath, undefined, undefined, { isRefresh: true })
   }
 
   // 3. 本地创建文件夹
@@ -4178,7 +4233,7 @@ export function SftpPanel() {
       await mkdirLocal(pathString)
       setShowCreateFolder(false)
       setNewFolderName('')
-      loadLocalDirectory(localPath)
+      loadLocalDirectory(localPath, undefined, undefined, { isRefresh: true })
     } catch (err: unknown) {
       console.error('Failed to create local directory:', err)
       setLocalError(getErrorMessage(err, String(err)))
@@ -4203,7 +4258,7 @@ export function SftpPanel() {
       await writeLocal(pathString, '')
       setShowCreateFile(false)
       setNewFileName('')
-      loadLocalDirectory(localPath)
+      loadLocalDirectory(localPath, undefined, undefined, { isRefresh: true })
     } catch (err: unknown) {
       console.error('Failed to create local file:', err)
       setLocalError(getErrorMessage(err, String(err)))
@@ -5260,10 +5315,10 @@ export function SftpPanel() {
         // 刷新后旧选中项可能已不存在，清理选中状态
         if (panel === 'local') {
           setSelectedLocalPaths(new Set())
-          actions.loadLocalDirectory(localPathRef.current)
+          actions.loadLocalDirectory(localPathRef.current, undefined, undefined, { isRefresh: true })
         } else if (selectedServerIdRef.current) {
           setSelectedRemotePaths(new Set())
-          actions.loadRemoteDirectory(selectedServerIdRef.current, remotePathRef.current)
+          actions.loadRemoteDirectory(selectedServerIdRef.current, remotePathRef.current, { isRefresh: true })
         }
       } else if (key === 'Backspace') {
         // 上级目录：进入新目录后旧选中项不再有效，清理
@@ -5810,8 +5865,8 @@ export function SftpPanel() {
             renderServerSelectionList('left')
           ) : leftSideType === 'remote' && !leftServerId && connectingLeftServerId ? (
             <div className="flex-1 flex flex-col items-center justify-center bg-transparent p-6 select-none">
-              <Loader2 className="h-10 w-10 animate-spin text-primary mb-3" />
-              <div className="text-xs text-muted-foreground font-medium animate-pulse">{t('sftp_connecting') || 'Connecting...'}</div>
+              <QshellLoader size="lg" text={t('sftp_connecting') || 'Connecting...'} />
+
             </div>
           ) : (
             <>
@@ -5903,7 +5958,7 @@ export function SftpPanel() {
                 onViewModeChange={handleSetLeftViewMode}
                 showHidden={leftShowHidden}
                 onToggleShowHidden={() => setLeftShowHidden(v => !v)}
-                onRefresh={() => loadLocalDirectory(localPath)}
+                onRefresh={() => loadLocalDirectory(localPath, undefined, undefined, { isRefresh: true })}
                 onNewFolder={() => {
                   setCreateFolderSide('local')
                   setNewFolderName('')
@@ -5943,7 +5998,7 @@ export function SftpPanel() {
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={() => loadLocalDirectory(localPath)}
+                onClick={() => loadLocalDirectory(localPath, undefined, undefined, { isRefresh: true })}
                 disabled={localLoading}
                 className="h-7 w-7 flex-shrink-0"
                 aria-label={t('sftp_refresh') || 'Refresh'}
@@ -5960,9 +6015,8 @@ export function SftpPanel() {
             {/* 本地主列?*/}
             <div className="flex-1 flex flex-col h-full overflow-hidden relative">
               {localLoading && localFiles.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-                  <Loader2 className="h-8 w-8 animate-spin mb-2 text-primary" />
-                  <p className="text-xs">{t('sftp_loading_local')}</p>
+                <div className="flex-1 overflow-hidden p-2">
+                  <FileSkeletonList viewMode={leftViewMode} count={8} />
                 </div>
               ) : localError ? (
                 <div className="flex flex-col items-center justify-center h-full p-4 text-center">
@@ -6040,7 +6094,7 @@ export function SftpPanel() {
                           "flex-1 overflow-auto transition-all duration-200 outline-none",
                           isDraggingOverLocal && "bg-primary/5 ring-2 ring-primary/40 ring-dashed",
                           activePanel === 'local' && !isDraggingOverLocal && "ring-1 ring-primary/20",
-                          localLoading && "opacity-60 pointer-events-none"
+                          ""
                         )}
                         onMouseDown={(e) => {
                           const target = e.target as HTMLElement
@@ -6513,7 +6567,7 @@ export function SftpPanel() {
                           <ContextMenuSeparator />
                         </>
                       ) : null}
-                      <ContextMenuItem onClick={() => loadLocalDirectory(localPath)}>
+                      <ContextMenuItem onClick={() => loadLocalDirectory(localPath, undefined, undefined, { isRefresh: true })}>
                         <RefreshCw className="mr-2 h-4 w-4 text-muted-foreground" />
                         <span>{t('sftp_refresh')}</span>
                         <ContextMenuShortcut>F5</ContextMenuShortcut>
@@ -6879,8 +6933,8 @@ export function SftpPanel() {
           {/* 情况 B：正在连接加载服务器（仅在尚未进入服务器工作区时显示） */}
           {!selectedServerId && connectingServerId && (
             <div className="flex-1 flex flex-col items-center justify-center bg-transparent p-6 select-none">
-              <Loader2 className="h-10 w-10 animate-spin text-primary mb-3" />
-              <p className="text-xs font-medium mb-1">{t('sftp_connecting')}</p>
+              <QshellLoader size="lg" text={t('sftp_connecting') || 'Connecting...'} />
+
               <p className="text-[10px] text-muted-foreground font-mono">
                 {servers.find(s => s.id === toBaseServerId(connectingServerId))?.name}
               </p>
@@ -7284,9 +7338,8 @@ export function SftpPanel() {
               {/* 远程文件列表 */}
               <div className="flex-1 flex flex-col h-full overflow-hidden relative">
                 {remoteLoading && remoteFiles.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
-                    <Loader2 className="h-8 w-8 animate-spin mb-2 text-primary" />
-                    <p className="text-xs">{t('sftp_loading_remote')}</p>
+                  <div className="flex-1 overflow-hidden p-2">
+                    <FileSkeletonList viewMode={rightViewMode} count={8} />
                   </div>
                 ) : remoteError && !isRemoteDisconnected && remoteFiles.length === 0 ? (
                   <div className="flex flex-col items-center justify-center h-full p-4 text-center">
@@ -7354,7 +7407,7 @@ export function SftpPanel() {
                           "flex-1 overflow-auto transition-all duration-200 outline-none",
                           isDraggingOverRemote && "bg-primary/5 ring-2 ring-primary/40 ring-dashed",
                           activePanel === 'remote' && !isDraggingOverRemote && "ring-1 ring-primary/20",
-                          remoteLoading && "opacity-60 pointer-events-none"
+                          ""
                         )}
                         onMouseDown={(e) => {
                           const target = e.target as HTMLElement
@@ -8035,14 +8088,14 @@ export function SftpPanel() {
               <table className="w-full text-[11px] table-fixed">
                 <colgroup>
                   <col className="w-6" />
-                  <col className="w-[16%]" />
-                  <col className="w-20" />
-                  <col className="w-28" />
+                  <col className="w-[18%]" />
                   <col className="w-16" />
-                  <col className="w-[25%]" />
-                  <col className="w-[25%]" />
-                  <col className="w-32" />
-                  <col className="w-28" />
+                  <col className="w-24" />
+                  <col className="w-16" />
+                  <col className="w-[18%]" />
+                  <col className="w-[18%]" />
+                  <col className="w-20" />
+                  <col className="w-48" />
                   <col className="w-12" />
                 </colgroup>
                 <thead className="workspace-table-head">
@@ -8108,7 +8161,13 @@ export function SftpPanel() {
                       }
                       return item.percent
                     })()
-                    const displayRate = isDirectoryTask ? (directorySummary?.activeRate ?? 0) : item.rate
+                    const displayRate = isDirectoryTask
+                      ? (item.status === 'completed'
+                          ? (item.finalRate || directorySummary?.activeRate || 0)
+                          : (directorySummary?.activeRate || item.rate || 0))
+                      : (item.status === 'completed'
+                          ? (item.finalRate || item.rate || 0)
+                          : item.rate)
                     const hasDeterminateProgress = isDirectoryTask ? (isFileCount ? item.total > 0 : directoryTotalBytes > 0) : item.total > 0
                     // 源/目标路径：远端显示「服务器名: 路径」，本地侧显示「本地: 路径」；过长由 CSS 省略
                     const sourceLabel = item.sourceServerName
@@ -8266,17 +8325,19 @@ export function SftpPanel() {
                                   />
                                 )}
                               </div>
-                              <span className="font-mono text-[10px] w-8 text-right">
+                              <span className="font-mono text-[10px] w-8 text-right shrink-0">
                                 {/* total=0 时显示已传输字节数而非百分比 */}
                                 {!hasDeterminateProgress && item.status === 'transferring'
                                   ? formatTransferSize(item.current)
                                   : `${displayPercent}%`}
                               </span>
-                              {item.status === 'transferring' && (
-                                <span className="font-mono text-[9px] text-muted-foreground/70 w-14 text-right">
-                                  {formatTransferRate(displayRate)}
-                                </span>
-                              )}
+                              <span className="font-mono text-[9px] text-muted-foreground/70 shrink-0 whitespace-nowrap min-w-[58px] text-right">
+                                {item.status === 'transferring'
+                                  ? formatTransferRate(displayRate)
+                                  : item.status === 'completed'
+                                    ? (displayRate > 0 ? formatTransferRate(displayRate) : '—')
+                                    : '—'}
+                              </span>
                             </div>
                           )}
                         </td>
@@ -8340,8 +8401,8 @@ export function SftpPanel() {
                             </div>
                           ) : (
                             <div className="flex items-center gap-2">
-                              {/* 目录记录失败/取消后：重试并跳过目标端已存在且大小一致的文件 */}
-                              {(item.status === 'failed' || item.status === 'canceled')
+                              {/* 目录记录失败/部分成功后：重试并跳过目标端已存在且大小一致的文件 */}
+                              {(item.status === 'failed' || item.status === 'partial')
                                 && item.type !== 's2s'
                                 && item.sourcePath
                                 && item.targetPath && (
@@ -8559,7 +8620,7 @@ export function SftpPanel() {
                   title={t('sftp_viewer_save')}
                 >
                   {viewer.saving ? (
-                    <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                    <QshellLoader size="xs" className="mr-1.5" />
                   ) : (
                     <Save className="h-3.5 w-3.5 mr-1" />
                   )}
@@ -8572,7 +8633,7 @@ export function SftpPanel() {
       >
         {viewer.loading ? (
           <div className="flex-1 flex items-center justify-center min-h-64">
-            <Loader2 className="h-6 w-6 animate-spin text-primary" />
+            <QshellLoader size="md" text={t('common_loading') || 'Loading...'} />
           </div>
         ) : viewer.error ? (
           <div className="flex-1 flex flex-col items-center justify-center min-h-64 gap-2 px-6 text-center">

@@ -1770,26 +1770,38 @@ impl<'a> FileManager<'a> {
         match self.create_sftp_session_inner().await {
             Ok(sftp) => Ok(sftp),
             Err(first_err) => {
-                // 首次失败，判断是否为超时类错误
+                // 首次失败，判断是否为超时类错误或通道争用/释放延迟瞬态错误
                 let err_msg = first_err.to_string();
                 let is_timeout = err_msg.contains("Timeout") || err_msg.contains("timeout");
-                if !is_timeout {
+                let is_channel_open = matches!(first_err, SshError::ChannelOpenFailed(_))
+                    || err_msg.contains("Channel open failure")
+                    || err_msg.contains("ConnectFailed");
+                if !is_timeout && !is_channel_open {
                     return Err(first_err);
                 }
-                // 超时后重试一次（偶发性超时可能第二次成功）
+                // 通道争用或服务端刚关闭通道尚在清理：等待片刻退避重试（350ms）
+                if is_channel_open {
+                    tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+                }
                 match self.create_sftp_session_inner().await {
                     Ok(sftp) => Ok(sftp),
                     Err(retry_err) => {
-                        // 重试也失败，返回带诊断信息的错误
                         let retry_msg = retry_err.to_string();
+                        let is_channel_open_2 = matches!(retry_err, SshError::ChannelOpenFailed(_))
+                            || retry_msg.contains("Channel open failure")
+                            || retry_msg.contains("ConnectFailed");
+                        if is_channel_open_2 {
+                            // 二次退避重试（600ms），给予服务端充分时间回收断开会话的 MaxSessions 槽位
+                            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+                            if let Ok(sftp) = self.create_sftp_session_inner().await {
+                                return Ok(sftp);
+                            }
+                        }
+                        // 重试也失败，返回带诊断信息的错误
                         if let Ok(server) = crate::commands::ssh::load_server_config(self.transport.server_id()).await {
                             if server.target_type.eq_ignore_ascii_case("windows") {
                                 return Err(SshError::SftpFailed(format!(
-                                    "SFTP session init failed after retry: {}. \
-                                    This is a common issue when connecting to Windows OpenSSH Server \
-                                    with DefaultShell set to PowerShell or Bash, where startup profiles \
-                                    print banners/prompts/outputs. Please configure your profile ($PROFILE) \
-                                    to exit early on non-interactive/SFTP sessions, or reset DefaultShell to cmd.exe.",
+                                    "SFTP session init failed after retry: {}.                                     This is a common issue when connecting to Windows OpenSSH Server                                     with DefaultShell set to PowerShell or Bash, where startup profiles                                     print banners/prompts/outputs. Please configure your profile ($PROFILE)                                     to exit early on non-interactive/SFTP sessions, or reset DefaultShell to cmd.exe.",
                                     retry_msg
                                 )));
                             }
@@ -2041,7 +2053,7 @@ impl SshConnection {
 
     /// Execute a command on the remote server (async).
     pub async fn execute(&self, command: &str, timeout_secs: u64) -> SshResult<CommandOutput> {
-        self.wait_for_first_shell(1000).await;
+        self.wait_for_first_shell(150).await;
         ExecManager::new(&self.transport).execute(command, timeout_secs).await
     }
 
@@ -2052,7 +2064,7 @@ impl SshConnection {
         stdin_data: &[u8],
         timeout_secs: u64,
     ) -> SshResult<CommandOutput> {
-        self.wait_for_first_shell(1000).await;
+        self.wait_for_first_shell(150).await;
         ExecManager::new(&self.transport).execute_with_stdin(command, stdin_data, timeout_secs).await
     }
 
@@ -2174,13 +2186,16 @@ impl SshConnection {
     /// 所有 SFTP 方法都是 `&self`，`Arc<SftpSession>` 可安全共享。
     /// 避免每次操作都新建 channel + SftpSession（解决 session 竞争导致的超时）。
     pub async fn create_sftp_session(&self) -> SshResult<std::sync::Arc<russh_sftp::client::SftpSession>> {
-        self.wait_for_first_shell(1000).await;
-        // 先检查缓存
+        // 先检查缓存：命中时 0ms 瞬间返回，绝不等待任何锁或超时
         {
             let cache = self.sftp_cache.lock().await;
             if let Some(ref sftp) = *cache {
                 return Ok(std::sync::Arc::clone(sftp));
             }
+        }
+        // 缓存为空需首次建连时，非 sftp 专属连接才做短时避让
+        if !self.server_id().starts_with("sftp:") {
+            self.wait_for_first_shell(200).await;
         }
         // 缓存为空，创建新 session（带超时、专用连接健康检查及主连接回退）
         let sftp = self.open_sftp_session_with_fallback().await?;
@@ -2198,7 +2213,9 @@ impl SshConnection {
     /// 传输使用独立 session 可与目录浏览操作互不干扰。
     /// session 用完自动 drop 时关闭 channel。
     pub async fn create_dedicated_sftp_session(&self) -> SshResult<russh_sftp::client::SftpSession> {
-        self.wait_for_first_shell(1000).await;
+        if !self.server_id().starts_with("sftp:") {
+            self.wait_for_first_shell(200).await;
+        }
         // 走 SFTP 专用连接（64MB 大窗口），失败时自动检查健康度或回退主连接
         self.open_sftp_session_with_fallback().await
     }

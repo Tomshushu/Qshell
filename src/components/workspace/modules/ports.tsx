@@ -4,6 +4,7 @@ import { Input } from '@/components/ui/input'
 import { RefreshCw, Search, Skull, ArrowLeftRight, Network } from 'lucide-react'
 import { sshService } from '@/services/ssh-service'
 import { useTranslation } from '@/i18n'
+import { QshellLoader } from '@/components/ui/qshell-loader'
 import type { PortInfo } from '@/types'
 import { cn } from '@/lib/utils'
 import { PortForwardModule } from './port-forward'
@@ -150,8 +151,8 @@ export function PortsModule({ serverId, initialSearchQuery, initialSubTab = 'lis
           <div className="flex-1 overflow-auto">
             {loading && ports.length === 0 ? (
               <div className="flex items-center justify-center py-16 text-muted-foreground">
-                <RefreshCw className="h-5 w-5 animate-spin mr-2" />
-                <span className="text-sm">{t('prts_loading')}</span>
+                <QshellLoader size="md" text={t('prts_loading')} />
+
               </div>
             ) : ports.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">

@@ -1,6 +1,7 @@
 import React from "react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { QshellLoader } from "@/components/ui/qshell-loader";
 import { Input } from "@/components/ui/input";
 import {
   X,
@@ -706,7 +707,7 @@ export function DockerContainerDetailModal({
             <div className="flex-1 overflow-auto">
               {filesLoading ? (
                 <div className="flex items-center justify-center h-full text-muted-foreground text-sm gap-2">
-                  <RefreshCw className="h-4 w-4 animate-spin" /> {t("dk_loading")}
+                  <QshellLoader size="md" text={t("dk_loading")} />
                 </div>
               ) : filesError ? (
                 <div className="flex items-center justify-center h-full text-destructive text-sm px-4 text-center">

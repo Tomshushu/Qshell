@@ -34,6 +34,7 @@ import { UpdateDialog } from '@/components/layout/update-dialog'
 import { useToast } from '@/components/ui/toast'
 import { FloatingAIAssistant } from '@/components/ai/floating-ai-assistant'
 
+
 function AppContent() {
   const { t } = useTranslation()
   const syncConnectionState = useAppStore((s) => s.syncConnectionState)
@@ -81,6 +82,23 @@ function AppContent() {
   useEffect(() => {
     sshService.setTerminalWindowSize(terminalWindowSizeKb);
   }, [terminalWindowSizeKb]);
+
+  // 原生启动屏平滑解散：等待双帧渲染（Layout + Paint 双缓冲就绪）后平滑淡出，彻底杜绝白闪
+  useEffect(() => {
+    let timer: number | null = null
+    const frame1 = requestAnimationFrame(() => {
+      const frame2 = requestAnimationFrame(() => {
+        timer = window.setTimeout(() => {
+          (window as any).__dismissSplash?.()
+        }, 180)
+      })
+      return () => cancelAnimationFrame(frame2)
+    })
+    return () => {
+      cancelAnimationFrame(frame1)
+      if (timer !== null) window.clearTimeout(timer)
+    }
+  }, [])
 
   // 退出应用二次确认状态
   const [showExitConfirm, setShowExitConfirm] = useState(false)
@@ -550,6 +568,7 @@ function AppContent() {
 
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden bg-background">
+
       {/* Non-desktop warning banner */}
       {!isDesktop && (
         <div className="flex items-center justify-between gap-2 px-4 py-1.5 bg-warning/10 border-b border-warning/20 text-warning text-xs">

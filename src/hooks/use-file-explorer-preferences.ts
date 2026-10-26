@@ -32,10 +32,16 @@ export function useFileExplorerPreferences({
   const addPathBookmarkAction = useAppStore((s) => s.addPathBookmark)
   const removePathBookmarkAction = useAppStore((s) => s.removePathBookmark)
 
-  // Scope Bookmarks
+  // Scope Bookmarks: 针对同一服务器，工作台文件与SFTP远程面板收藏路径互通
   const bookmarks = useMemo(() => {
-    return pathBookmarks[scopeKey] || []
-  }, [pathBookmarks, scopeKey])
+    if (scope === 'sftp-local') {
+      return pathBookmarks['sftp:local'] || []
+    }
+    if (!baseServerId) return []
+    const sftpList = pathBookmarks[`sftp:${baseServerId}`] || []
+    const wsList = pathBookmarks[`workspace:${baseServerId}`] || []
+    return Array.from(new Set([...sftpList, ...wsList]))
+  }, [scope, pathBookmarks, baseServerId])
 
   const isBookmarked = useCallback(
     (path: string) => {
@@ -53,6 +59,7 @@ export function useFileExplorerPreferences({
         onToast?.warning?.(customMsgs?.maxLimitMsg || 'Maximum 50 bookmarks allowed')
         return false
       }
+      // 远程服务器：addPathBookmark 内部已打通 sibling 同步，此处传入当前 scopeKey
       const ok = addPathBookmarkAction(scopeKey, path)
       if (ok) {
         onToast?.success?.(customMsgs?.successMsg || 'Bookmark added')
@@ -65,6 +72,7 @@ export function useFileExplorerPreferences({
   const removeBookmark = useCallback(
     (path: string, customMsgs?: { infoMsg?: string }) => {
       if (!path) return
+      // 远程服务器：removePathBookmark 内部已打通 sibling 同步，此处传入当前 scopeKey
       removePathBookmarkAction(scopeKey, path)
       onToast?.info?.(customMsgs?.infoMsg || 'Bookmark removed')
     },

@@ -2,8 +2,9 @@ import { useState } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Eye, EyeOff, KeyRound, Loader2 } from 'lucide-react'
+import { Eye, EyeOff, KeyRound } from 'lucide-react'
 import { useTranslation } from '@/i18n'
+import { QshellLoader } from '@/components/ui/qshell-loader'
 
 interface SshCredentialDialogProps {
   open: boolean
@@ -49,7 +50,7 @@ export function SshCredentialDialog({
       </div>
 
       <div className="flex items-center justify-end gap-2 border-t border-border/60 bg-muted/20 px-5 py-2.5">
-        <Button size="sm" className="h-7 px-5 text-xs font-semibold" disabled={submitting || !username.trim() || !password} onClick={submit}>{submitting ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}{submitting ? t('ssh_credential_verifying') : t('ssh_credential_connect')}</Button>
+        <Button size="sm" className="h-7 px-5 text-xs font-semibold gap-1.5" disabled={submitting || !username.trim() || !password} onClick={submit}>{submitting ? <QshellLoader size="xs" /> : null}{submitting ? t('ssh_credential_verifying') : t('ssh_credential_connect')}</Button>
         <Button variant="outline" size="sm" className="h-7 px-4 text-xs" disabled={submitting} onClick={onCancel}>{t('common_cancel')}</Button>
       </div>
     </DialogContent>

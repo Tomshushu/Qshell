@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Search, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "@/i18n";
+import { QshellLoader } from "@/components/ui/qshell-loader";
 import { StatusPill } from "../docker-utils";
 import type { ComposeImportPreview } from "../docker-types";
 
@@ -81,7 +82,7 @@ export function DockerComposeImportDialog({
               }
             >
               {importDialog.scanning ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
+                <QshellLoader size="xs" />
               ) : (
                 <Search className="h-3 w-3" />
               )}

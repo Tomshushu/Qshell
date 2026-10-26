@@ -22,6 +22,8 @@ import {
   Braces,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { QshellLoader } from '@/components/ui/qshell-loader'
+import { FileSkeletonList } from '@/components/sftp/file-skeleton-list'
 import {
   renderFileIcon,
   type LocalFile,
@@ -209,7 +211,7 @@ export function FilesModule({
   useEffect(() => { toastRef.current = toast }, [toast])
   const baseServerId = extractBaseServerId(serverId)
   const server = useAppStore((s) => s.servers.find((sv) => sv.id === baseServerId))
-  // 用户设置里的 SFTP 并发数（1-10）：本模块此前写死 3，导致设置不生效且内外层并发相乘
+  // 用户设置里的 SFTP 并发数（1-8）：本模块此前写死 3，导致设置不生效且内外层并发相乘
   const sftpTransferConcurrency = useAppStore((s) => Number(s.sftpTransferConcurrency) || 3)
   const isWindows = server?.targetType === 'windows'
   const isTelnet = server?.protocol === 'telnet'
@@ -415,9 +417,7 @@ export function FilesModule({
     if (!isActive) setCtxMenu(null)
   }, [isActive])
 
-  const fetchFiles = useCallback(async (path: string) => {
-    // C2.1 修复：请求序号机制，快速切目录时丢弃过期响应，
-    // 防止旧响应覆盖新响应（对齐 sftp-panel 的 localDirReqIdRef 范式）
+  const fetchFiles = useCallback(async (path: string, _options?: { isRefresh?: boolean }) => {
     const reqId = ++fetchFilesReqIdRef.current
     setLoading(true)
     // D3: 切换目录时不立即清空 files,保留旧数据直到新数据到达,避免白屏闪烁
@@ -902,7 +902,7 @@ export function FilesModule({
           // E6: 上传完成 toast 提示
           toastRef.current.success(`上传完成,共 ${successCount} 个文件`)
         }
-        fetchFiles(currentPath)
+        fetchFiles(currentPath, { isRefresh: true })
         if (expandedPaths.has(currentPath)) {
           loadNodeChildren(currentPath, true)
         }
@@ -1335,7 +1335,7 @@ export function FilesModule({
       }
       setShowNewItem(false)
       setNewItemName('')
-      fetchFiles(currentPath)
+      fetchFiles(currentPath, { isRefresh: true })
       if (expandedPaths.has(currentPath)) {
         loadNodeChildren(currentPath, true)
       } else if (currentPath === '/') {
@@ -1364,7 +1364,7 @@ export function FilesModule({
       if (result.exitCode !== 0) {
         setError(`${t('fs_err_rename')}: ${result.stderr || t('common_unknown_error')}`)
       } else {
-        fetchFiles(currentPath)
+        fetchFiles(currentPath, { isRefresh: true })
         if (expandedPaths.has(parentPath)) {
           loadNodeChildren(parentPath, true)
         }
@@ -1468,7 +1468,7 @@ export function FilesModule({
     } else {
       // 否则，直接刷新当前目录列表
       console.log('[ConfirmDelete] Refreshing current folder:', currentPath)
-      fetchFiles(currentPath)
+      fetchFiles(currentPath, { isRefresh: true })
     }
 
     // 刷新涉及的父目录（去重）
@@ -1651,7 +1651,7 @@ export function FilesModule({
 
   // 刷新
   const handleRefresh = useCallback(() => {
-    fetchFiles(currentPath)
+    fetchFiles(currentPath, { isRefresh: true })
     if (expandedPaths.has(currentPath)) {
       loadNodeChildren(currentPath, true)
     }
@@ -1766,6 +1766,7 @@ export function FilesModule({
           showHidden={showHidden}
           onToggleShowHidden={toggleShowHidden}
           onRefresh={handleRefresh}
+          loading={loading}
           transferLoading={transferLoading}
           onNativeUpload={handleNativeUpload}
           searchQuery={searchQuery}
@@ -1808,10 +1809,15 @@ export function FilesModule({
             setCtxMenu({ x: e.clientX, y: e.clientY, file: null })
           }}
         >
-          {loading && files.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
-              <Loader2 className="h-8 w-8 animate-spin mb-3" />
-              <span className="text-sm">{t('fs_loading_list')}</span>
+          {!isConnected && files.length === 0 && !loading ? (
+            <div className="flex flex-col items-center justify-center py-20 text-muted-foreground select-none">
+              <FolderOpen className="h-12 w-12 mb-3 opacity-20" />
+              <p className="text-sm font-medium">{t('ws_not_connected') || '未连接服务器'}</p>
+              <p className="text-xs mt-1 text-muted-foreground/70">{t('ws_not_connected_desc') || '连接服务器后即可浏览与传输远程文件'}</p>
+            </div>
+          ) : loading && files.length === 0 ? (
+            <div className="p-3">
+              <FileSkeletonList viewMode="list" count={8} />
             </div>
           ) : files.length === 0 && !error ? (
             <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
@@ -1845,7 +1851,7 @@ export function FilesModule({
                   <div className="h-full bg-primary animate-pulse w-full" />
                 </div>
               )}
-            <table className={cn("w-full text-sm transition-opacity duration-150", loading && "opacity-60 pointer-events-none")}>
+            <table className="w-full text-sm">
               <thead className="workspace-table-head">
                 <tr className="text-left text-muted-foreground border-b">
                   <th
@@ -2056,7 +2062,7 @@ export function FilesModule({
           open={!!permissionsFile}
           onClose={() => {
             setPermissionsFile(null)
-            fetchFiles(currentPath)
+            fetchFiles(currentPath, { isRefresh: true })
           }}
           serverId={serverId}
           filePath={permissionsFile.path}

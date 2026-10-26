@@ -44,6 +44,7 @@ import { useAppStore } from "@/store";
 import { ConnectionState } from "@/services/ssh-connection-state";
 import { reconnectManager } from "@/services/reconnect-manager";
 import { useTranslation } from "@/i18n";
+import { QshellLoader } from "@/components/ui/qshell-loader";
 import {
   matchHints,
   applyHint,
@@ -148,7 +149,9 @@ import {
   SerialQuickSendEditor,
   normalizeShellCommandText,
   formatTerminalPasteData,
+  TerminalConnectionOverlay,
 } from "@/components/terminal";
+import { EditServerDialog } from "@/components/server/edit-server-dialog";
 import { useAIStore } from "@/store/ai-store";
 import {
   extractPathFromShellTitle,
@@ -250,6 +253,8 @@ export function TerminalModule({
   );
   const [activeTermId, setActiveTermId] = useState<string | null>(null);
   const activeTermIdRef = useRef(activeTermId);
+  const [peekRawTerminals, setPeekRawTerminals] = useState<Set<string>>(new Set());
+  const [editServerOpen, setEditServerOpen] = useState(false);
   useEffect(() => {
     activeTermIdRef.current = activeTermId;
   }, [activeTermId]);
@@ -8950,7 +8955,7 @@ export function TerminalModule({
             覆盖整个区域；.xterm 透明叠加其上，canvas 完全透明只画文字。
             这样无论 canvas 高度是否填满容器，整个区域都是统一的"背景图+压暗色"，
             彻底消除边缘留白和色差。详见上方 useEffect。 */}
-        {Array.from(terminals.entries()).map(([termId]) => (
+        {Array.from(terminals.entries()).map(([termId, inst]) => (
           <div
             key={termId}
             className={cn(
@@ -8967,6 +8972,24 @@ export function TerminalModule({
                 }
               }}
               className="term-host absolute inset-0"
+            />
+            <TerminalConnectionOverlay
+              status={inst.status}
+              error={inst.error}
+              reconnectAttempt={inst.reconnectAttempt}
+              server={server}
+              termName={inst.name}
+              isPeekRaw={peekRawTerminals.has(termId)}
+              onTogglePeekRaw={() => {
+                setPeekRawTerminals((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(termId)) next.delete(termId);
+                  else next.add(termId);
+                  return next;
+                });
+              }}
+              onReconnect={() => reconnectTerminal(termId)}
+              onEditServer={baseServerId ? () => setEditServerOpen(true) : undefined}
             />
           </div>
         ))}
@@ -9022,8 +9045,8 @@ export function TerminalModule({
 
         {hintLoading && !hintVisible && (
           <div className="pointer-events-none absolute right-3 top-3 z-30 flex items-center gap-1 text-[10px] text-muted-foreground/70">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            <span>{t("hint_loading")}</span>
+            <QshellLoader size="xs" text={t("hint_loading")} />
+
           </div>
         )}
 
@@ -9191,6 +9214,19 @@ export function TerminalModule({
         onClose={handleClosePasteConfirm}
         onConfirm={handleConfirmPaste}
       />
+
+      {baseServerId && editServerOpen && (
+        <EditServerDialog
+          open={editServerOpen}
+          onClose={() => setEditServerOpen(false)}
+          serverId={baseServerId}
+          onSaved={() => {
+            if (activeTermId) {
+              void reconnectTerminal(activeTermId);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

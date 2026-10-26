@@ -13,6 +13,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { sshService } from '@/services/ssh-service'
+import { QshellLoader } from '@/components/ui/qshell-loader'
 import { cn } from '@/lib/utils'
 import { useTranslation } from '@/i18n'
 
@@ -537,7 +538,7 @@ function TransferRow({
 
       {isActive && (
         <div className="absolute top-2 right-7">
-          <Loader2 className="h-3 w-3 text-primary animate-spin opacity-50" />
+          <QshellLoader size="xs" />
         </div>
       )}
     </div>

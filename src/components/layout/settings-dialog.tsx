@@ -29,6 +29,7 @@ import { TerminalThemePreview } from "@/components/workspace/modules/terminal-th
 import { backend } from "@/services/api";
 import type { AuditLog } from "@/services/api/types";
 import { Card, CardContent } from "@/components/ui/card";
+import { QshellLoader } from "@/components/ui/qshell-loader";
 import { Switch } from "@/components/ui/switch";
 import { playSound, SoundType } from "@/lib/sound";
 import { SelectPopover } from '@/components/ui/select-popover'
@@ -737,7 +738,7 @@ interface SmoothConcurrencySliderProps {
 function SmoothConcurrencySlider({
   value,
   min = 1,
-  max = 10,
+  max = 8,
   onChange,
 }: SmoothConcurrencySliderProps) {
   const trackRef = useRef<HTMLDivElement>(null);
@@ -2289,11 +2290,11 @@ function SettingsPanel({
                         size="icon"
                         className="h-6 w-6 text-muted-foreground hover:text-foreground cursor-pointer"
                         onClick={() => {
-                          const nextVal = Math.min(10, sftpTransferConcurrency + 1);
+                          const nextVal = Math.min(8, sftpTransferConcurrency + 1);
                           setSftpTransferConcurrency(nextVal);
                           playSound(SoundType.CLICK);
                         }}
-                        disabled={sftpTransferConcurrency >= 10}
+                        disabled={sftpTransferConcurrency >= 8}
                       >
                         <Plus className="h-3 w-3" />
                       </Button>
@@ -2304,7 +2305,7 @@ function SettingsPanel({
                   <SmoothConcurrencySlider
                     value={sftpTransferConcurrency}
                     min={1}
-                    max={10}
+                    max={8}
                     onChange={setSftpTransferConcurrency}
                   />
                 </div>
@@ -2958,8 +2959,8 @@ function AuditLogsPanel() {
                       colSpan={4}
                       className="py-12 text-center text-muted-foreground"
                     >
-                      <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2 text-primary" />
-                      {t("logs_loading")}
+                      <QshellLoader size="md" text={t("logs_loading")} />
+
                     </td>
                   </tr>
                 ) : logs.length === 0 ? (

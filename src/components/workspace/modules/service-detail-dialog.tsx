@@ -7,6 +7,7 @@ import { listen } from '@tauri-apps/api/event'
 import { useTranslation } from '@/i18n'
 import type { ServiceInfo, ServiceProps, ServiceDependencies, WorkspaceModule } from '@/types'
 import { useToast } from '@/components/ui/toast'
+import { QshellLoader } from '@/components/ui/qshell-loader'
 import {
   Loader2, RefreshCw, Play, Square, RotateCcw, X, Copy, Download, Search, Pause,
   Info, BarChart3, Network, Settings2, Cpu, Plug, Folder, FileText,
@@ -494,8 +495,8 @@ export function ServiceDetailDialog({
         <div className="flex-1 min-h-0 flex flex-col px-5 py-4 overflow-hidden">
           {loadingProps && !props.Id && !props.MainPID ? (
             <div className="flex items-center justify-center py-12 text-muted-foreground">
-              <Loader2 className="h-5 w-5 animate-spin mr-2" />
-              <span className="text-sm">{t('svc_detail_loading')}</span>
+              <QshellLoader size="md" text={t('svc_detail_loading')} />
+
             </div>
           ) : tab === 'overview' ? (
             <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pr-1">

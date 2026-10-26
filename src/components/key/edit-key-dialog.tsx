@@ -6,6 +6,7 @@ import { useTranslation } from '@/i18n'
 import { useAppStore } from '@/store'
 import { backend } from '@/services/api'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
+import { QshellLoader } from '@/components/ui/qshell-loader'
 import { Loader2, Key as KeyIcon, FolderOpen, Eye, EyeOff, Award } from 'lucide-react'
 import type { SshKey, SshKeyInput } from '@/types'
 
@@ -454,7 +455,7 @@ export function EditKeyDialog({ open, onClose, keyId, initialKeyType = 'private'
               取消
             </Button>
             <Button size="sm" onClick={handleSave} disabled={saving} className="h-8 text-xs min-w-[70px]">
-              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}
+              {saving ? <QshellLoader size="xs" className="mr-1.5" /> : null}
               保存密钥
             </Button>
           </div>

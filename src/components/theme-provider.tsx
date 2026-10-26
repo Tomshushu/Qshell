@@ -43,34 +43,38 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   useLayoutEffect(() => {
     const root = document.documentElement
-    root.classList.remove('light', 'dark')
 
     // 同步系统原生窗口主题（影响 Windows 标题栏颜色、滚动条等）
-    const syncTauriWindowTheme = () => {
+    const syncTauriWindowTheme = (effectiveTheme: 'light' | 'dark') => {
       if (!isTauri) return
-      // 'system' 传 null 让窗口跟随系统；否则传 'light' | 'dark'
-      const winTheme = theme === 'system' ? null : theme
+      const winTheme = theme === 'system' ? null : effectiveTheme
       getCurrentWebviewWindow()
         .setTheme(winTheme)
         .catch((err) => console.error('[theme] setTheme failed:', err))
     }
 
+    // 原子化切换主题 class：先 add 新主题再 remove 旧主题，杜绝中间出现既没有 .light 也没有 .dark 导致的白屏闪烁
+    const applyTheme = (targetTheme: 'light' | 'dark') => {
+      if (targetTheme === 'dark') {
+        root.classList.add('dark')
+        root.classList.remove('light')
+      } else {
+        root.classList.add('light')
+        root.classList.remove('dark')
+      }
+      syncTauriWindowTheme(targetTheme)
+    }
+
     if (theme === 'system') {
       const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
-
       const applySystemTheme = () => {
-        root.classList.remove('light', 'dark')
-        root.classList.add(mediaQuery.matches ? 'dark' : 'light')
-        syncTauriWindowTheme()
+        applyTheme(mediaQuery.matches ? 'dark' : 'light')
       }
-
       applySystemTheme()
-
       mediaQuery.addEventListener('change', applySystemTheme)
       return () => mediaQuery.removeEventListener('change', applySystemTheme)
     } else {
-      root.classList.add(theme)
-      syncTauriWindowTheme()
+      applyTheme(theme)
     }
   }, [theme])
 

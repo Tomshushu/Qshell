@@ -13,6 +13,7 @@ import {
 import { cn } from '@/lib/utils'
 import { sshService } from '@/services/ssh-service'
 import { useTranslation } from '@/i18n'
+import { QshellLoader } from '@/components/ui/qshell-loader'
 
 /** 服务器（宿主机）文件选择对话框：浏览远端目录，选择文件/目录后回调其绝对路径 */
 export interface RemoteFilePickerProps {
@@ -154,7 +155,7 @@ export function RemoteFilePicker({
         <div className="flex-1 overflow-auto">
           {loading ? (
             <div className="flex items-center justify-center h-full text-muted-foreground text-sm gap-2">
-              <Loader2 className="h-4 w-4 animate-spin" /> {t('dk_loading')}
+              <QshellLoader size="md" text={t('dk_loading')} />
             </div>
           ) : error ? (
             <div className="flex items-center justify-center h-full text-destructive text-sm px-4 text-center">{error}</div>

@@ -442,7 +442,7 @@ export async function runWithConcurrency<T, R>(
   worker: (item: T, index: number) => Promise<R>,
   isCancelled?: () => boolean,
 ): Promise<{ ok: boolean; value?: R; error?: unknown; index: number }[]> {
-  const concurrency = Math.max(1, Math.min(10, Math.floor(limit) || 1));
+  const concurrency = Math.max(1, Math.min(8, Math.floor(limit) || 1));
   const results: { ok: boolean; value?: R; error?: unknown; index: number }[] =
     new Array(items.length);
   let cursor = 0;

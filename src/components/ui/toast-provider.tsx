@@ -75,7 +75,8 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   return (
     <ToastContext.Provider value={{ toast }}>
       {children}
-      <div className="fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none">
+      {/* 提示通知容器：下移至终端与主内容区域顶部高度（避开顶部 TabBar 36px 与 ModuleTabs 32px 导航栏，与终端内容区对齐） */}
+      <div className="fixed top-[76px] right-4 z-[9999] flex flex-col gap-2 pointer-events-none">
         {toasts.map(t => (
           <ToastCard key={t.id} item={t} onClose={() => remove(t.id)} />
         ))}

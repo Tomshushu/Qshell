@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { Award, KeyRound, Loader2, Plus, ShieldCheck } from 'lucide-react'
+import { Award, KeyRound, Plus, ShieldCheck } from 'lucide-react'
+import { QshellLoader } from '@/components/ui/qshell-loader'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -143,7 +144,7 @@ export function SshKeyCredentialDialog({
 
         <div className="flex items-center justify-end gap-2 border-t border-border/60 bg-muted/20 px-5 py-2.5">
           <Button size="sm" className="h-7 px-5 text-xs font-semibold" disabled={submitting || !username.trim() || !selectedKey} onClick={submit}>
-            {submitting ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+            {submitting ? <QshellLoader size="xs" className="mr-1.5" /> : null}
             {submitting ? t('ssh_credential_verifying') : t('ssh_credential_connect')}
           </Button>
           <Button variant="outline" size="sm" className="h-7 px-4 text-xs" disabled={submitting} onClick={onCancel}>{t('common_cancel')}</Button>

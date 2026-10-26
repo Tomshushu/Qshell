@@ -7,6 +7,7 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
+import { QshellLoader } from '@/components/ui/qshell-loader'
 import { useUpdaterStore } from '@/store/updater-store'
 import { isTauri } from '@/services/api'
 
@@ -211,8 +212,8 @@ export function UpdateDialog() {
           {/* 状态 1: 正在检查 */}
           {isChecking && (
             <div className="py-8 text-center space-y-3">
-              <RotateCw className="h-8 w-8 text-primary animate-spin mx-auto" />
-              <p className="text-xs text-muted-foreground">{t('ota_checking_signatures')}</p>
+              <QshellLoader size="md" text={t('ota_checking_signatures')} />
+
             </div>
           )}
 

@@ -5783,3 +5783,114 @@ button.ofv-toolbar-icon-button[title*="下载"] {
 
 
 
+
+
+/* ==========================================================================
+   Qshell Kawaii Chromatic Bouncy Mascot Loader Animations
+   ========================================================================== */
+
+/* 亮色模式：明亮奶油白 (palette-light-cream) */
+:root,
+.light {
+  --qshell-c-q: #0284c7;
+  --qshell-c-s: #ea580c;
+  --qshell-c-h: #059669;
+  --qshell-c-e: #e11d48;
+  --qshell-c-l1: #7c3aed;
+  --qshell-c-l2: #d97706;
+
+  --qshell-glow-q: rgba(2, 132, 199, 0.35);
+  --qshell-glow-s: rgba(234, 88, 12, 0.35);
+  --qshell-glow-h: rgba(5, 150, 105, 0.35);
+  --qshell-glow-e: rgba(225, 29, 72, 0.35);
+  --qshell-glow-l1: rgba(124, 58, 237, 0.35);
+  --qshell-glow-l2: rgba(217, 119, 6, 0.35);
+
+  --qshell-belly-fill: rgba(2, 132, 199, 0.10);
+  --qshell-ground-shadow: rgba(0, 0, 0, 0.14);
+}
+
+/* 暗色模式：甜心彩虹色 (sweet-rainbow) */
+.dark {
+  --qshell-c-q: #38bdf8;
+  --qshell-c-s: #fb923c;
+  --qshell-c-h: #34d399;
+  --qshell-c-e: #fb7185;
+  --qshell-c-l1: #c084fc;
+  --qshell-c-l2: #facc15;
+
+  --qshell-glow-q: rgba(56, 189, 248, 0.75);
+  --qshell-glow-s: rgba(251, 146, 60, 0.75);
+  --qshell-glow-h: rgba(52, 211, 153, 0.75);
+  --qshell-glow-e: rgba(251, 113, 133, 0.75);
+  --qshell-glow-l1: rgba(192, 132, 252, 0.75);
+  --qshell-glow-l2: rgba(250, 204, 21, 0.75);
+
+  --qshell-belly-fill: rgba(56, 189, 248, 0.16);
+  --qshell-ground-shadow: rgba(0, 0, 0, 0.45);
+}
+
+@keyframes qshell-ultra-cute-jump {
+  0%, 100% {
+    transform: translateY(0) scale(1, 1) rotate(0deg);
+    filter: drop-shadow(0 0 0 transparent);
+  }
+  16% {
+    transform: translateY(var(--q-squash-y, 4px)) scale(1.30, 0.72) rotate(0deg);
+  }
+  38% {
+    transform: translateY(var(--q-jump-y, -20px)) scale(0.84, 1.26) rotate(var(--tilt, 0deg));
+    filter: drop-shadow(0 var(--q-glow-blur, 10px) var(--q-glow-spread, 16px) var(--char-glow));
+  }
+  65% {
+    transform: translateY(var(--q-land-y, 2px)) scale(1.18, 0.86) rotate(0deg);
+  }
+  82% {
+    transform: translateY(var(--q-rebound-y, -4px)) scale(0.94, 1.06) rotate(calc(var(--tilt, 0deg) * -0.6));
+  }
+}
+
+@keyframes qshell-ear-wiggle-left {
+  0%, 100% { transform: rotate(-8deg); }
+  50% { transform: rotate(-24deg); }
+}
+
+@keyframes qshell-ear-wiggle-right {
+  0%, 100% { transform: rotate(8deg); }
+  50% { transform: rotate(24deg); }
+}
+
+@keyframes qshell-kawaii-blink {
+  0%, 40%, 46%, 100% { transform: scaleY(1); }
+  43% { transform: scaleY(0.08); }
+}
+
+@keyframes qshell-cute-tail-wag {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-25deg); }
+  75% { transform: rotate(25deg); }
+}
+
+@keyframes qshell-antenna-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.8; }
+  50% { transform: scale(1.35); opacity: 1; filter: drop-shadow(0 0 6px var(--qshell-c-h)); }
+}
+
+@keyframes qshell-sparkle-float {
+  0% { opacity: 0; transform: translateY(0) scale(0.4) rotate(0deg); }
+  50% { opacity: 1; transform: translateY(-16px) scale(1.2) rotate(45deg); filter: drop-shadow(0 0 6px #f43f5e); }
+  100% { opacity: 0; transform: translateY(-26px) scale(0.8) rotate(90deg); }
+}
+
+@keyframes qshell-shadow-bounce {
+  0%, 100% { transform: scale(1); opacity: 0.35; }
+  16% { transform: scale(1.4, 0.7); opacity: 0.55; }
+  38% { transform: scale(0.3, 0.3); opacity: 0.08; }
+  65% { transform: scale(1.2, 0.85); opacity: 0.45; }
+  82% { transform: scale(0.75, 0.75); opacity: 0.22; }
+}
+
+@keyframes qshell-fade-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}

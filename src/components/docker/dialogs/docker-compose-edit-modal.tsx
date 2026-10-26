@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
 import { Pencil, Loader2, X, GitCompare, Check, Save } from "lucide-react";
 import { useTranslation } from "@/i18n";
+import { QshellLoader } from "@/components/ui/qshell-loader";
 import { lineDiff } from "../docker-utils";
 
 export interface ComposeDiffViewProps {
@@ -135,8 +136,8 @@ export function DockerComposeEditModal({
         {/* 内容区 */}
         {composeEditModal.loading ? (
           <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm gap-2">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            {t("dk_loading")}
+            <QshellLoader size="md" text={t("dk_loading")} />
+
           </div>
         ) : composeEditModal.error ? (
           <div className="flex-1 flex flex-col items-center justify-center gap-3 p-6 text-center">
@@ -218,7 +219,7 @@ export function DockerComposeEditModal({
                   }
                 >
                   {composeValidating ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <QshellLoader size="xs" />
                   ) : (
                     <Check className="h-3.5 w-3.5" />
                   )}
@@ -235,7 +236,7 @@ export function DockerComposeEditModal({
                   }
                 >
                   {composeEditModal.saving ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <QshellLoader size="xs" />
                   ) : (
                     <Save className="h-3.5 w-3.5" />
                   )}

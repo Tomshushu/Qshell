@@ -22,6 +22,7 @@ import {
 } from '@/utils/terminal-themes'
 import type { HighlightRule } from '@/utils/terminal-highlighter'
 import { useToast } from '@/components/ui/toast'
+import { QshellLoader } from '@/components/ui/qshell-loader'
 import { Plus, Trash2, Copy, Check, Info, AlertTriangle, Download, Upload, Monitor, Loader2, RotateCcw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { TerminalThemePreview } from './terminal-theme-preview'
@@ -1383,7 +1384,7 @@ export function TerminalThemeDialog({ open, onOpenChange }: TerminalThemeDialogP
                           </div>
                           {userBgLoading ? (
                             <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-                              <Loader2 className="h-3 w-3 animate-spin" />{t('thm_bg_library_loading')}
+                              <QshellLoader size="xs" text={t('thm_bg_library_loading')} />
                             </div>
                           ) : userBgList.length === 0 ? (
                             <span className="text-[10px] text-muted-foreground">{t('thm_bg_library_empty')}</span>

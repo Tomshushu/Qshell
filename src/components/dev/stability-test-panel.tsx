@@ -27,6 +27,7 @@ import { sshService } from '@/services/ssh-service'
 import { ConnectionState } from '@/services/ssh-connection-state'
 import { Play, CheckCircle2, XCircle, Loader2, AlertTriangle, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { QshellLoader } from '@/components/ui/qshell-loader'
 
 // ============================================================================
 // 类型定义
@@ -673,7 +674,7 @@ export function StabilityTestPanel() {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             SSH 连接稳定性测试
-            {running && <Loader2 className="h-4 w-4 animate-spin" />}
+            {running && <QshellLoader size="xs" />}
           </DialogTitle>
         </DialogHeader>
 
@@ -696,7 +697,7 @@ export function StabilityTestPanel() {
             disabled={!selectedServerId || running}
             size="sm"
           >
-            {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+            {running ? <QshellLoader size="xs" /> : <Play className="h-4 w-4" />}
             运行所有测试
           </Button>
 
@@ -729,7 +730,7 @@ export function StabilityTestPanel() {
                   <div className="flex items-center gap-3">
                     {/* 状态图标 */}
                     <div className="shrink-0">
-                      {result?.status === 'running' && <Loader2 className="h-5 w-5 animate-spin text-blue-500" />}
+                      {result?.status === 'running' && <QshellLoader size="xs" />}
                       {result?.status === 'passed' && <CheckCircle2 className="h-5 w-5 text-green-500" />}
                       {result?.status === 'failed' && <XCircle className="h-5 w-5 text-red-500" />}
                       {result?.status === 'skipped' && <AlertTriangle className="h-5 w-5 text-yellow-500" />}

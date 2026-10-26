@@ -31,10 +31,18 @@ lazy_static::lazy_static! {
 
 /// 单服务器可同时占用的传输 channel 数。OpenSSH 默认 MaxSessions=10，
 /// 预留 2 个给目录浏览 / fast_count 等短命令，避免 "channel open failure"。
-const TRANSFER_CHANNELS_PER_SERVER: usize = 8;
+pub const TRANSFER_CHANNELS_PER_SERVER: usize = 6;
 
 /// 获取某服务器的传输通道租约；持有期间占用一个名额，drop 即归还。
 pub async fn acquire_transfer_channel(server_id: &str) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    acquire_transfer_channel_with_cancel(server_id, None).await
+}
+
+/// 获取某服务器的传输通道租约（支持外部取消打断）。持有期间占用一个名额，drop 即归还。
+pub async fn acquire_transfer_channel_with_cancel(
+    server_id: &str,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Option<tokio::sync::OwnedSemaphorePermit> {
     let semaphore = {
         let mut map = TRANSFER_CHANNEL_LIMITERS
             .lock()
@@ -43,7 +51,27 @@ pub async fn acquire_transfer_channel(server_id: &str) -> Option<tokio::sync::Ow
             .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(TRANSFER_CHANNELS_PER_SERVER)))
             .clone()
     };
-    semaphore.acquire_owned().await.ok()
+
+    if let Some(c) = cancel {
+        if c.load(std::sync::atomic::Ordering::Relaxed) {
+            return None;
+        }
+    }
+
+    loop {
+        tokio::select! {
+            permit = semaphore.clone().acquire_owned() => {
+                return permit.ok();
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => {
+                if let Some(c) = cancel {
+                    if c.load(std::sync::atomic::Ordering::Relaxed) {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Set the global AppHandle (called once during app setup)
@@ -2761,27 +2789,32 @@ pub async fn sftp_read_dir(server_id: &str, path: &str) -> Result<Vec<SftpDirEnt
                 gid: e.metadata().gid,
             })
             .collect();
-        // 检查并补全尚未解析的数字所有者/所属组
-        let needs_resolve = entries.iter().any(|e| {
-            e.user.as_deref().map_or(true, |u| u.is_empty() || u.chars().all(|c| c.is_ascii_digit()))
-        });
-        if needs_resolve {
-            ensure_uid_cache(server_id).await;
-            for e in &mut entries {
-                let is_unresolved_user = e.user.as_deref().map_or(true, |u| u.is_empty() || u.chars().all(|c| c.is_ascii_digit()));
-                if is_unresolved_user {
-                    if let Some(uid) = e.uid {
-                        if let Some(name) = resolve_uid(server_id, uid).await {
-                            e.user = Some(name);
-                        }
+        // 检查并补全尚未解析的数字所有者/所属组（优先使用内存快照，绝不阻塞当前目录返回）
+        {
+            let r = UID_CACHE.read().await;
+            let has_cache = r.get(server_id).map_or(false, |m| !m.is_empty());
+            drop(r);
+            if !has_cache {
+                let sid = server_id.to_string();
+                tokio::spawn(async move {
+                    ensure_uid_cache(&sid).await;
+                });
+            }
+        }
+        for e in &mut entries {
+            let is_unresolved_user = e.user.as_deref().map_or(true, |u| u.is_empty() || u.chars().all(|c| c.is_ascii_digit()));
+            if is_unresolved_user {
+                if let Some(uid) = e.uid {
+                    if let Some(name) = resolve_uid(server_id, uid).await {
+                        e.user = Some(name);
                     }
                 }
-                let is_unresolved_group = e.group.as_deref().map_or(true, |g| g.is_empty() || g.chars().all(|c| c.is_ascii_digit()));
-                if is_unresolved_group {
-                    if let Some(gid) = e.gid {
-                        if let Some(name) = resolve_gid(server_id, gid).await {
-                            e.group = Some(name);
-                        }
+            }
+            let is_unresolved_group = e.group.as_deref().map_or(true, |g| g.is_empty() || g.chars().all(|c| c.is_ascii_digit()));
+            if is_unresolved_group {
+                if let Some(gid) = e.gid {
+                    if let Some(name) = resolve_gid(server_id, gid).await {
+                        e.group = Some(name);
                     }
                 }
             }

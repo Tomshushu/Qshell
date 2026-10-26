@@ -17,6 +17,20 @@ export const legacyKeyToScopeKey = (legacyKey: string): string | null => {
   return null;
 };
 
+/**
+ * 获取同一服务器在另一模块对应的 scopeKey：
+ * sftp:serverId <-> workspace:serverId 互通，sftp:local 独立保持无 sibling
+ */
+export const getSiblingScopeKey = (scopeKey: string): string | null => {
+  if (scopeKey.startsWith('sftp:') && scopeKey !== 'sftp:local') {
+    return `workspace:${scopeKey.slice(5)}`;
+  }
+  if (scopeKey.startsWith('workspace:')) {
+    return `sftp:${scopeKey.slice(10)}`;
+  }
+  return null;
+};
+
 export const loadLegacyBookmarks = (): Record<string, string[]> => {
   const result: Record<string, string[]> = {};
   if (typeof window === 'undefined' || !window.localStorage) return result;
@@ -36,6 +50,24 @@ export const loadLegacyBookmarks = (): Record<string, string[]> => {
           }
         } catch {}
       }
+    }
+    // 同一服务器的历史书签相互互通合并（SFTP 与工作台）
+    const serverIds = new Set<string>();
+    for (const key of Object.keys(result)) {
+      if (key.startsWith('sftp:') && key !== 'sftp:local') {
+        serverIds.add(key.slice(5));
+      } else if (key.startsWith('workspace:')) {
+        serverIds.add(key.slice(10));
+      }
+    }
+    for (const sid of serverIds) {
+      const sftpKey = `sftp:${sid}`;
+      const wsKey = `workspace:${sid}`;
+      const sftpList = result[sftpKey] || [];
+      const wsList = result[wsKey] || [];
+      const merged = Array.from(new Set([...sftpList, ...wsList]));
+      result[sftpKey] = merged;
+      result[wsKey] = merged;
     }
   } catch {}
   return result;
@@ -136,13 +168,13 @@ export const createSftpSlice: StateCreator<AppState, [], [], SftpSlice> = (
   // SFTP 文件图标主题：默认 'developer'
   sftpFileIconTheme: "developer",
   setSftpFileIconTheme: (theme) => set({ sftpFileIconTheme: theme }),
-  // SFTP 传输并发量（1-10）：默认 3
+  // SFTP 传输并发量（1-8）：默认 3
   sftpTransferConcurrency: 3,
   setSftpTransferConcurrency: (n) =>
     set({
       sftpTransferConcurrency: Math.max(
         1,
-        Math.min(10, Math.floor(n) || 1),
+        Math.min(8, Math.floor(n) || 1),
       ),
     }),
   // 传输限速（KB/s）：默认 0=不限速；负值归一化为 0
@@ -187,17 +219,27 @@ export const createSftpSlice: StateCreator<AppState, [], [], SftpSlice> = (
       });
   },
 
-  // 路径收藏统一管理
+  // 路径收藏统一管理：针对同一服务器，工作台文件与SFTP远程面板双向互通共享
   pathBookmarks: loadLegacyBookmarks(),
   setPathBookmarks: (scopeKey, bookmarks) => {
+    const siblingKey = getSiblingScopeKey(scopeKey);
+    const updates: Record<string, string[]> = {
+      [scopeKey]: bookmarks,
+    };
+    if (siblingKey) {
+      updates[siblingKey] = bookmarks;
+    }
     set((prev) => ({
       pathBookmarks: {
         ...prev.pathBookmarks,
-        [scopeKey]: bookmarks,
+        ...updates,
       },
     }));
     try {
       localStorage.setItem(scopeKeyToLegacyKey(scopeKey), JSON.stringify(bookmarks));
+      if (siblingKey) {
+        localStorage.setItem(scopeKeyToLegacyKey(siblingKey), JSON.stringify(bookmarks));
+      }
     } catch {}
   },
   setAllPathBookmarks: (all) => {
@@ -217,33 +259,57 @@ export const createSftpSlice: StateCreator<AppState, [], [], SftpSlice> = (
   },
   addPathBookmark: (scopeKey, path) => {
     if (!path) return false;
+    const siblingKey = getSiblingScopeKey(scopeKey);
     const current = get().pathBookmarks[scopeKey] || [];
-    if (current.includes(path)) return false;
-    if (current.length >= 50) return false;
-    const next = [...current, path];
+    const siblingCurrent = siblingKey ? (get().pathBookmarks[siblingKey] || []) : [];
+    const unified = Array.from(new Set([...current, ...siblingCurrent]));
+    if (unified.includes(path)) return false;
+    if (unified.length >= 50) return false;
+    const next = [...unified, path];
+    const updates: Record<string, string[]> = {
+      [scopeKey]: next,
+    };
+    if (siblingKey) {
+      updates[siblingKey] = next;
+    }
     set((prev) => ({
       pathBookmarks: {
         ...prev.pathBookmarks,
-        [scopeKey]: next,
+        ...updates,
       },
     }));
     try {
       localStorage.setItem(scopeKeyToLegacyKey(scopeKey), JSON.stringify(next));
+      if (siblingKey) {
+        localStorage.setItem(scopeKeyToLegacyKey(siblingKey), JSON.stringify(next));
+      }
     } catch {}
     return true;
   },
   removePathBookmark: (scopeKey, path) => {
     if (!path) return;
+    const siblingKey = getSiblingScopeKey(scopeKey);
     const current = get().pathBookmarks[scopeKey] || [];
-    const next = current.filter((p) => p !== path);
+    const siblingCurrent = siblingKey ? (get().pathBookmarks[siblingKey] || []) : [];
+    const unified = Array.from(new Set([...current, ...siblingCurrent]));
+    const next = unified.filter((p) => p !== path);
+    const updates: Record<string, string[]> = {
+      [scopeKey]: next,
+    };
+    if (siblingKey) {
+      updates[siblingKey] = next;
+    }
     set((prev) => ({
       pathBookmarks: {
         ...prev.pathBookmarks,
-        [scopeKey]: next,
+        ...updates,
       },
     }));
     try {
       localStorage.setItem(scopeKeyToLegacyKey(scopeKey), JSON.stringify(next));
+      if (siblingKey) {
+        localStorage.setItem(scopeKeyToLegacyKey(siblingKey), JSON.stringify(next));
+      }
     } catch {}
   },
 

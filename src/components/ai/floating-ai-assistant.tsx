@@ -47,6 +47,7 @@ import {
   CheckCircle2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { QshellLoader } from '@/components/ui/qshell-loader'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useToast } from '@/components/ui/toast'
 import { cn } from '@/lib/utils'
@@ -395,7 +396,7 @@ function AgentDecisionsAccordion({
             {t('ai_agent_decisions_title') || 'Agent 智能决策调用'}
           </span>
           <span className="px-1.5 py-0.2 rounded-full text-[9.5px] bg-sky-500/15 text-sky-400 border border-sky-500/25 shrink-0 inline-flex items-center gap-1">
-            {isStreaming && <Loader2 className="w-2.5 h-2.5 animate-spin" />}
+            {isStreaming && <QshellLoader size="xs" />}
             共 {decisions.length} 步调用{isStreaming ? ' · 远程探针执行中' : ''}
           </span>
           {isStreaming && (
@@ -693,7 +694,7 @@ function CommandExecutionCard({
           ) : isExecuted ? (
             <ShieldCheck className="h-4 w-4 text-emerald-500 shrink-0" />
           ) : isExecuting ? (
-            <Loader2 className="h-4 w-4 animate-spin text-amber-500 shrink-0" />
+            <QshellLoader size="xs" />
           ) : isRejected ? (
             <ShieldAlert className="h-4 w-4 text-muted-foreground shrink-0" />
           ) : (

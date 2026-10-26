@@ -13,6 +13,7 @@ import {
   Clock,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { QshellLoader } from "@/components/ui/qshell-loader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useTranslation } from "@/i18n";
@@ -210,8 +211,8 @@ export function KnownHostsPanel() {
         <CardContent className="p-0">
           {loading ? (
             <div className="py-16 text-center text-muted-foreground">
-              <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2 text-primary" />
-              <span>{t("common_loading")}</span>
+              <QshellLoader size="md" text={t("common_loading")} />
+
             </div>
           ) : filteredHosts.length === 0 ? (
             <div className="py-16 text-center text-muted-foreground select-none">

@@ -905,10 +905,10 @@ export function WorkspacePage({
     !isBmcModule &&
     effectiveModule !== "files";
 
-  // 文件面板可用性：连接可用且目标类型支持文件管理（telnet 不支持）
+  // 文件面板可用性：目标类型支持文件管理（telnet 不支持），分屏模式下隐藏。
+  // 保活常驻：断开连接时不卸载面板，保留用户已展开的视图与布局，消除断连时的界面割裂与跳动
   const filesPanelAvailable =
     !isSplitPane &&
-    (isConnected || wasConnected) &&
     isModuleAvailable(server?.targetType, "files") &&
     server?.protocol !== "telnet";
   // 文件面板是否可见：可用且用户已展开
