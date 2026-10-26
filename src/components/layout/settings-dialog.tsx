@@ -29,6 +29,7 @@ import { TerminalThemePreview } from "@/components/workspace/modules/terminal-th
 import { backend } from "@/services/api";
 import type { AuditLog } from "@/services/api/types";
 import { Card, CardContent } from "@/components/ui/card";
+import { Kbd } from "@/components/ui/kbd";
 import { QshellLoader } from "@/components/ui/qshell-loader";
 import { Switch } from "@/components/ui/switch";
 import { playSound, SoundType } from "@/lib/sound";
@@ -1583,9 +1584,7 @@ function SettingsPanel({
                     {t("app_lock_shortcut_hint") || "随时使用全局快捷键锁定："}
                   </span>
                 </div>
-                <kbd className="px-2 py-0.5 rounded bg-muted font-mono font-semibold text-xs border border-border">
-                  Ctrl + Alt + L
-                </kbd>
+                <Kbd className="h-6 px-2.5 text-xs font-semibold">Ctrl + Alt + L</Kbd>
               </CardContent>
             </Card>
           </div>

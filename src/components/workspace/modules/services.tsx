@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { RefreshCw, FileText, Search, Loader2, BarChart3, MoreVertical } from 'lucide-react'
 import { sshService } from '@/services/ssh-service'
@@ -258,9 +259,28 @@ export function ServicesModule({ serverId, onNavigate, initialSearchQuery }: Ser
   })
 
   const statusBadge = (service: ServiceInfo) => {
-    if (service.active) return <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-500/10 text-green-500">active ({service.subState})</span>
-    if (service.subState === 'failed') return <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/10 text-red-500">failed</span>
-    return <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">inactive</span>
+    if (service.active) {
+      return (
+        <Badge variant="soft-success" className="gap-1.5 px-2 py-0.5 text-[10px] font-normal tracking-wide">
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 status-dot-pulse" />
+          active ({service.subState})
+        </Badge>
+      )
+    }
+    if (service.subState === 'failed') {
+      return (
+        <Badge variant="soft-destructive" className="gap-1.5 px-2 py-0.5 text-[10px] font-normal tracking-wide">
+          <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
+          failed
+        </Badge>
+      )
+    }
+    return (
+      <Badge variant="soft" className="gap-1.5 px-2 py-0.5 text-[10px] font-normal tracking-wide">
+        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />
+        inactive
+      </Badge>
+    )
   }
 
   return (

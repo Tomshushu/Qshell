@@ -5894,3 +5894,51 @@ button.ofv-toolbar-icon-button[title*="下载"] {
   from { opacity: 0; transform: scale(0.96); }
   to { opacity: 1; transform: scale(1); }
 }
+
+
+/* ==========================================================================
+   Awesome Design MD 规范拓展：Linear / Raycast / Vercel 设计工程学基建设施
+   ========================================================================== */
+
+/* 1. 数字等宽与微排版规范：用于监控、速率、进度、时钟、端口与表格，彻底杜绝跳动抖动 */
+.tabular-nums,
+.font-mono {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 2. Linear / Vercel 印刷级科技标题负字距 */
+.tracking-tight-title {
+  letter-spacing: -0.025em;
+}
+
+/* 3. Linear / Raycast 容器内发光倒角 (Top Edge Refraction) */
+.dark .card-elevated,
+.dark [data-surface="card"] {
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.06), 0 2px 8px -2px rgba(0, 0, 0, 0.5);
+}
+
+.dark .popover-elevated,
+.dark [data-surface="popover"] {
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.10), 0 0 0 1px rgba(255, 255, 255, 0.05), var(--shadow-lg);
+}
+
+/* 4. Vercel 极简状态微光呼吸点 (Status Dot Pulse) */
+.status-dot-pulse {
+  position: relative;
+  display: inline-flex;
+}
+.status-dot-pulse::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 9999px;
+  background: inherit;
+  opacity: 0.45;
+  animation: status-dot-ping 2.2s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+@keyframes status-dot-ping {
+  70%, 100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}

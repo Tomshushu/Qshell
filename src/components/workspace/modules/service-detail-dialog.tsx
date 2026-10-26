@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { sshService } from '@/services/ssh-service'
 import { listen } from '@tauri-apps/api/event'
@@ -8,6 +9,7 @@ import { useTranslation } from '@/i18n'
 import type { ServiceInfo, ServiceProps, ServiceDependencies, WorkspaceModule } from '@/types'
 import { useToast } from '@/components/ui/toast'
 import { QshellLoader } from '@/components/ui/qshell-loader'
+import { cn } from '@/lib/utils'
 import {
   Loader2, RefreshCw, Play, Square, RotateCcw, X, Copy, Download, Search, Pause,
   Info, BarChart3, Network, Settings2, Cpu, Plug, Folder, FileText,
@@ -479,9 +481,18 @@ export function ServiceDetailDialog({
             <Button variant="ghost" size="icon" className="h-7 w-7" title={t('svc_refresh')} onClick={onChanged} disabled={loadingProps}>
               <RefreshCw className={`h-3.5 w-3.5 ${loadingProps ? 'animate-spin' : ''}`} />
             </Button>
-            <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${statusColor()}`}>
+            <Badge
+              variant={isFailed ? 'soft-destructive' : isActive ? 'soft-success' : 'soft'}
+              className="gap-1.5 px-2 py-0.5 text-[10px] font-normal tracking-wide"
+            >
+              <span
+                className={cn(
+                  'h-1.5 w-1.5 rounded-full',
+                  isFailed ? 'bg-rose-500' : isActive ? 'bg-emerald-500 status-dot-pulse' : 'bg-muted-foreground/40',
+                )}
+              />
               {statusText()}
-            </span>
+            </Badge>
             {service?.enabledState && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
                 {t('svc_auto_badge')} {service.enabledState}

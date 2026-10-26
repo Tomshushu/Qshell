@@ -47,6 +47,7 @@ import {
   CheckCircle2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Kbd } from '@/components/ui/kbd'
 import { QshellLoader } from '@/components/ui/qshell-loader'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useToast } from '@/components/ui/toast'
@@ -1156,7 +1157,7 @@ export function FloatingAIAssistant() {
     if (!isInTerminal) {
       return {
         isTerminalMode: false,
-        dialogContainer: 'bg-background/95 backdrop-blur-2xl border border-border/80 shadow-2xl text-foreground',
+        dialogContainer: 'bg-background/95 backdrop-blur-2xl border border-border/80 shadow-2xl dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08),0_24px_50px_-12px_rgba(0,0,0,0.85)] ring-1 ring-white/5 text-foreground',
         header: 'border-b border-border/60 bg-muted/25 hover:bg-muted/40 text-foreground',
         headerBtn: 'hover:bg-muted text-muted-foreground hover:text-foreground',
         copilotBadge: 'bg-primary/10 text-primary',
@@ -1223,7 +1224,7 @@ export function FloatingAIAssistant() {
     // 终端暗色主题模式：背景明度适度提升至 #22263a，与较暗的终端背景 (#181824 / #1e1e1e) 形成鲜明悬浮层级区分
     return {
       isTerminalMode: true,
-      dialogContainer: 'dark bg-[#22263a]/96 backdrop-blur-2xl border border-white/[0.14] shadow-[0_24px_50px_-8px_rgba(0,0,0,0.85),0_0_0_1px_rgba(255,255,255,0.08)] text-slate-100',
+      dialogContainer: 'dark bg-[#22263a]/96 backdrop-blur-2xl border border-white/[0.14] shadow-[0_24px_50px_-8px_rgba(0,0,0,0.85),inset_0_1px_0_0_rgba(255,255,255,0.08),0_0_0_1px_rgba(255,255,255,0.08)] ring-1 ring-white/5 text-slate-100',
       header: 'border-b border-white/10 bg-white/[0.04] hover:bg-white/[0.06] text-slate-100',
       headerBtn: 'hover:bg-white/[0.08] text-slate-300 hover:text-white',
       copilotBadge: 'bg-sky-500/15 text-sky-400 border border-sky-500/25',
@@ -2190,8 +2191,9 @@ export function FloatingAIAssistant() {
                     <X className="h-4 w-4" />
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent side="bottom" className="text-xs">
-                  关闭 (Esc)
+                <TooltipContent side="bottom" className="text-xs flex items-center gap-1.5">
+                  <span>关闭</span>
+                  <Kbd size="xs">Esc</Kbd>
                 </TooltipContent>
               </Tooltip>
             </div>
@@ -2395,7 +2397,8 @@ export function FloatingAIAssistant() {
               /* 空状态：2列横向功能卡片 + 热门推荐问答 Pills */
               <div className="flex flex-col space-y-4 pt-1 pb-2">
                 {/* 顶部欢迎区：机器人插图 + 醒目标题 */}
-                <div className={cn('flex items-center gap-3.5 p-3.5 rounded-xl border', themeStyles.welcomeBanner)}>
+                <div className={cn('relative overflow-hidden flex items-center gap-3.5 p-3.5 rounded-xl border', themeStyles.welcomeBanner)}>
+                  <div className="pointer-events-none absolute -left-6 -top-6 h-28 w-28 rounded-full bg-primary/15 blur-2xl dark:bg-sky-500/15" />
                   <AIMascotAvatar size={60} mood={assistantMascotMood} showGlowRing={false} />
                   <div>
                     <h2 className={cn('text-sm font-bold tracking-tight', themeStyles.welcomeTitle)}>
@@ -2806,8 +2809,12 @@ export function FloatingAIAssistant() {
             </div>
 
             {/* 底部免责声明小字 */}
-            <div className={cn('text-[9.5px] text-center select-none truncate px-1', themeStyles.disclaimerText)}>
-              内容由 AI 生成，仅供参考，操作前请仔细确认
+            <div className={cn('text-[9.5px] text-center select-none truncate px-1 flex items-center justify-center gap-1.5', themeStyles.disclaimerText)}>
+              <span>内容由 AI 生成，仅供参考</span>
+              <span className="opacity-40">•</span>
+              <span className="inline-flex items-center gap-1">
+                换行 <Kbd size="xs">Shift</Kbd><Kbd size="xs">↵</Kbd>
+              </span>
             </div>
           </div>
 

@@ -947,7 +947,7 @@ export function OverviewModule({
               </span>
             </CardHeader>
             <CardContent className="min-h-0 flex-1 overflow-hidden">
-              <div className="mb-3 text-3xl font-semibold text-blue-500">
+              <div className="mb-3 text-3xl font-semibold font-mono tabular-nums tracking-tight-title text-blue-500">
                 {safeFixed(metrics?.cpuUsage, 1)}%
               </div>
               <div className="h-[190px] min-h-[190px] min-w-0 w-full rounded-md border border-blue-400/10 bg-background/25 p-1">
@@ -1088,7 +1088,7 @@ export function OverviewModule({
               {memoryBreakdownData.length > 0 ? (
                 <div className="grid h-full min-w-0 grid-cols-[128px_138px_max-content] items-center justify-start gap-4">
                   <div className="min-w-0 self-stretch py-2">
-                    <div className="text-3xl font-semibold text-emerald-500">
+                    <div className="text-3xl font-semibold font-mono tabular-nums tracking-tight-title text-emerald-500">
                       {safeFixed(memoryUse * 100, 1)}%
                     </div>
                     <div className="mt-1 text-[10px] text-muted-foreground">
@@ -1207,7 +1207,7 @@ export function OverviewModule({
               <div className="flex items-end justify-between gap-3">
                 <div>
                   <div
-                    className={`text-3xl font-semibold ${swapUse >= 0.5 || memoryUse >= 0.9 ? "text-red-500" : swapUse >= 0.3 || memoryUse >= 0.8 ? "text-amber-500" : "text-violet-500"}`}
+                    className={`text-3xl font-semibold font-mono tabular-nums tracking-tight-title ${swapUse >= 0.5 || memoryUse >= 0.9 ? "text-red-500" : swapUse >= 0.3 || memoryUse >= 0.8 ? "text-amber-500" : "text-violet-500"}`}
                   >
                     {safeFixed(swapUse * 100, 1)}%
                   </div>

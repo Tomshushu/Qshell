@@ -24,6 +24,7 @@ import {
   readFile as readFileLocal,
 } from '@tauri-apps/plugin-fs'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { CodeEditor } from '@/components/ui/code-editor'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -8236,42 +8237,57 @@ export function SftpPanel() {
                         {/* 状态 */}
                         <td className="px-2 py-1.5 shrink-0">
                           {item.status === 'transferring' && item.phase === 'preflight' && (
-                            <span className="text-muted-foreground inline-flex items-center gap-1">
+                            <Badge variant="soft" className="gap-1 px-1.5 py-0 text-[10px] h-5 font-normal tracking-wide">
                               <Loader2 className="h-2.5 w-2.5 animate-spin" />
                               {t('sftp_transfer_preflight')}
-                            </span>
+                            </Badge>
                           )}
                           {item.status === 'transferring' && item.phase !== 'preflight' && (
-                            <span className="text-primary inline-flex items-center gap-1">
-                              <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                            <Badge variant="soft-info" className="gap-1 px-1.5 py-0 text-[10px] h-5 font-normal tracking-wide">
+                              <span className="h-1.5 w-1.5 rounded-full bg-sky-400 status-dot-pulse" />
                               {t('sftp_transfer_transferring')}
-                            </span>
+                            </Badge>
                           )}
                           {item.status === 'paused' && (
-                            <span className="text-blue-500">{t('sftp_transfer_paused')}</span>
+                            <Badge variant="soft-info" className="gap-1 px-1.5 py-0 text-[10px] h-5 font-normal tracking-wide text-blue-400 border-blue-500/20 bg-blue-500/10">
+                              <span className="h-1.5 w-1.5 rounded-full bg-blue-400" />
+                              {t('sftp_transfer_paused')}
+                            </Badge>
                           )}
                           {item.status === 'completed' && (
-                            <span className="text-green-600">{t('sftp_transfer_completed')}</span>
+                            <Badge variant="soft-success" className="gap-1 px-1.5 py-0 text-[10px] h-5 font-normal tracking-wide">
+                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                              {t('sftp_transfer_completed')}
+                            </Badge>
                           )}
                           {item.status === 'failed' && (
-                            <span className="text-red-500" title={item.error}>
+                            <Badge variant="soft-destructive" className="gap-1 px-1.5 py-0 text-[10px] h-5 font-normal tracking-wide" title={item.error}>
+                              <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
                               {t('sftp_transfer_failed')}
-                            </span>
+                            </Badge>
                           )}
                           {item.status === 'partial' && (
-                            <span
-                              className="text-amber-600"
+                            <Badge
+                              variant="soft-warning"
+                              className="gap-1 px-1.5 py-0 text-[10px] h-5 font-normal tracking-wide"
                               title={`${item.succeededCount ?? 0} ${t('sftp_transfer_completed')} / ${item.failedCount ?? 0} ${t('sftp_transfer_failed')}`}
                             >
+                              <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
                               {t('sftp_transfer_partial')}
                               {(item.failedCount ?? 0) > 0 && ` (${item.failedCount})`}
-                            </span>
+                            </Badge>
                           )}
                           {item.status === 'skipped' && (
-                            <span className="text-muted-foreground">{t('sftp_transfer_skipped')}</span>
+                            <Badge variant="soft" className="gap-1 px-1.5 py-0 text-[10px] h-5 font-normal tracking-wide">
+                              <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />
+                              {t('sftp_transfer_skipped')}
+                            </Badge>
                           )}
                           {item.status === 'canceled' && (
-                            <span className="text-amber-500">{t('sftp_transfer_canceled')}</span>
+                            <Badge variant="soft-warning" className="gap-1 px-1.5 py-0 text-[10px] h-5 font-normal tracking-wide">
+                              <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                              {t('sftp_transfer_canceled')}
+                            </Badge>
                           )}
                         </td>
                         {/* 大小 */}
@@ -8325,13 +8341,13 @@ export function SftpPanel() {
                                   />
                                 )}
                               </div>
-                              <span className="font-mono text-[10px] w-8 text-right shrink-0">
+                              <span className="font-mono tabular-nums text-[10px] w-8 text-right shrink-0">
                                 {/* total=0 时显示已传输字节数而非百分比 */}
                                 {!hasDeterminateProgress && item.status === 'transferring'
                                   ? formatTransferSize(item.current)
                                   : `${displayPercent}%`}
                               </span>
-                              <span className="font-mono text-[9px] text-muted-foreground/70 shrink-0 whitespace-nowrap min-w-[58px] text-right">
+                              <span className="font-mono tabular-nums text-[9px] text-muted-foreground/70 shrink-0 whitespace-nowrap min-w-[58px] text-right">
                                 {item.status === 'transferring'
                                   ? formatTransferRate(displayRate)
                                   : item.status === 'completed'

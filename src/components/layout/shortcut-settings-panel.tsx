@@ -12,6 +12,7 @@ import {
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Kbd } from '@/components/ui/kbd'
 import {
   Dialog,
   DialogContent,
@@ -592,9 +593,7 @@ export function ShortcutSettingsPanel() {
                                 +
                               </span>
                             )}
-                            <kbd className="inline-flex items-center justify-center min-w-[22px] h-5 px-1.5 rounded border border-border/80 bg-background font-mono font-semibold text-[10px] shadow-[0_1px_0_0_rgba(0,0,0,0.15)] dark:shadow-[0_1px_0_0_rgba(255,255,255,0.08)]">
-                              {k}
-                            </kbd>
+                            <Kbd>{k}</Kbd>
                           </React.Fragment>
                         ))
                       ) : (

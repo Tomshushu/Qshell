@@ -1,5 +1,6 @@
 import { Fragment, useMemo, useState, useEffect, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -87,6 +88,21 @@ function memClass(v: number): string {
   if (v > 10) return 'text-red-500 font-medium'
   if (v > 5) return 'text-yellow-500'
   return ''
+}
+
+function renderStatBadge(stat: string) {
+  const variant = stat.includes('Z')
+    ? 'soft-destructive'
+    : stat.includes('D')
+      ? 'soft-warning'
+      : stat.startsWith('R')
+        ? 'soft-success'
+        : 'soft'
+  return (
+    <Badge variant={variant} className="px-1.5 py-0 h-4.5 font-mono text-[10px] font-normal">
+      {stat}
+    </Badge>
+  )
 }
 
 function statClass(stat: string): string {
@@ -321,17 +337,17 @@ export function ProcessesModule({ serverId, onNavigate }: ProcessesModuleProps) 
 
   const renderRowCells = (proc: ProcessInfo) => (
     <>
-      <td className="px-3 py-1.5 font-mono">{proc.pid}</td>
+      <td className="px-3 py-1.5 font-mono tabular-nums">{proc.pid}</td>
       <td className="px-3 py-1.5">{proc.user}</td>
       <td className="px-3 py-1.5">
-        <span className={cpuClass(proc.cpu)}>{proc.cpu}</span>
+        <span className={`font-mono tabular-nums ${cpuClass(proc.cpu)}`}>{proc.cpu}</span>
       </td>
       <td className="px-3 py-1.5">
-        <span className={memClass(proc.memory)}>{proc.memory}</span>
+        <span className={`font-mono tabular-nums ${memClass(proc.memory)}`}>{proc.memory}</span>
       </td>
-      <td className="px-3 py-1.5 text-muted-foreground">{formatSize(proc.vsz)}</td>
-      <td className="px-3 py-1.5 text-muted-foreground">{formatSize(proc.rss)}</td>
-      <td className={`px-3 py-1.5 font-mono ${statClass(proc.stat)}`}>{proc.stat}</td>
+      <td className="px-3 py-1.5 font-mono tabular-nums text-muted-foreground">{formatSize(proc.vsz)}</td>
+      <td className="px-3 py-1.5 font-mono tabular-nums text-muted-foreground">{formatSize(proc.rss)}</td>
+      <td className="px-3 py-1.5">{renderStatBadge(proc.stat)}</td>
       <td
         className="px-3 py-1.5 truncate max-w-[320px] font-mono cursor-pointer hover:underline"
         title={proc.command}
@@ -377,19 +393,19 @@ export function ProcessesModule({ serverId, onNavigate }: ProcessesModuleProps) 
                 ) : (
                   <span className="w-4" />
                 )}
-                <span className="font-mono">{node.proc.pid}</span>
+                <span className="font-mono tabular-nums">{node.proc.pid}</span>
               </div>
             </td>
             <td className="px-3 py-1.5">{node.proc.user}</td>
             <td className="px-3 py-1.5">
-              <span className={cpuClass(node.proc.cpu)}>{node.proc.cpu}</span>
+              <span className={`font-mono tabular-nums ${cpuClass(node.proc.cpu)}`}>{node.proc.cpu}</span>
             </td>
             <td className="px-3 py-1.5">
-              <span className={memClass(node.proc.memory)}>{node.proc.memory}</span>
+              <span className={`font-mono tabular-nums ${memClass(node.proc.memory)}`}>{node.proc.memory}</span>
             </td>
-            <td className="px-3 py-1.5 text-muted-foreground">{formatSize(node.proc.vsz)}</td>
-            <td className="px-3 py-1.5 text-muted-foreground">{formatSize(node.proc.rss)}</td>
-            <td className={`px-3 py-1.5 font-mono ${statClass(node.proc.stat)}`}>{node.proc.stat}</td>
+            <td className="px-3 py-1.5 font-mono tabular-nums text-muted-foreground">{formatSize(node.proc.vsz)}</td>
+            <td className="px-3 py-1.5 font-mono tabular-nums text-muted-foreground">{formatSize(node.proc.rss)}</td>
+            <td className="px-3 py-1.5">{renderStatBadge(node.proc.stat)}</td>
             <td
               className="px-3 py-1.5 truncate max-w-[320px] font-mono cursor-pointer hover:underline"
               title={node.proc.command}
