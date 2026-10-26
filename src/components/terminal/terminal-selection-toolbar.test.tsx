@@ -77,7 +77,7 @@ describe("TerminalSelectionToolbar", () => {
     expect(screen.getByRole("button", { name: "网页搜索" })).toBeTruthy();
   });
 
-  it("handles copy action and shows feedback", async () => {
+  it("handles copy action and closes toolbar immediately like context menu", () => {
     const onCopy = vi.fn();
     const onClose = vi.fn();
 
@@ -98,11 +98,8 @@ describe("TerminalSelectionToolbar", () => {
     fireEvent.click(copyBtn);
 
     expect(onCopy).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("已复制")).toBeTruthy();
-
-    await waitFor(() => {
-      expect(onClose).toHaveBeenCalled();
-    }, { timeout: 600 });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("已复制")).toBeNull();
   });
 
   it("handles paste to shell action", () => {

@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef, memo } from "react";
-import { Copy, ClipboardPaste, Search, Globe, Check, Sparkles, Layers } from "lucide-react";
+import React, { memo } from "react";
+import { Copy, ClipboardPaste, Search, Globe, Sparkles, Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "@/i18n";
 import { playSound, SoundType } from "@/lib/sound";
@@ -78,16 +78,6 @@ export const TerminalSelectionToolbar = memo(function TerminalSelectionToolbar({
 }: TerminalSelectionToolbarProps) {
   const { t } = useTranslation();
   const enableAiGlobal = useAIStore((s) => s.enableAiGlobal);
-  const [copied, setCopied] = useState(false);
-  const copyTimerRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (copyTimerRef.current !== null) {
-        window.clearTimeout(copyTimerRef.current);
-      }
-    };
-  }, []);
 
   if (!visible || !selectedText) return null;
 
@@ -96,12 +86,7 @@ export const TerminalSelectionToolbar = memo(function TerminalSelectionToolbar({
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
     onCopy();
-    setCopied(true);
-    if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
-    copyTimerRef.current = window.setTimeout(() => {
-      setCopied(false);
-      onClose();
-    }, 450);
+    onClose();
   };
 
   const handlePaste = (e: React.MouseEvent) => {
@@ -174,18 +159,9 @@ export const TerminalSelectionToolbar = memo(function TerminalSelectionToolbar({
         )}
         title={t("tm_copy") || "复制"}
       >
-        {copied ? (
-          <Check className="h-3.5 w-3.5 text-emerald-400 shrink-0 animate-in zoom-in-50" />
-        ) : (
-          <Copy className="h-3.5 w-3.5 text-sky-400 shrink-0" />
-        )}
-        <span
-          className={cn(
-            "truncate tracking-tight font-sans text-[11.5px]",
-            copied && "text-emerald-400 font-semibold",
-          )}
-        >
-          {copied ? (t("tm_copied") || "已复制") : (t("tm_copy") || "复制")}
+        <Copy className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+        <span className="truncate tracking-tight font-sans text-[11.5px]">
+          {t("tm_copy") || "复制"}
         </span>
       </button>
 
