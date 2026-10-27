@@ -195,6 +195,11 @@ export class TerminalWebglManager {
       entry.term.loadAddon(addon);
       entry.addon = addon;
       entry.lastUsedAt = Date.now();
+      try {
+        addon.clearTextureAtlas();
+      } catch {
+        // ignore
+      }
 
       const core = (entry.term as any)._core;
       if (core?._viewport) {

@@ -5,16 +5,18 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=2" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Qshell</title>
-    <!-- 立即读取本地主题持久化配置，0ms 渲染正确的亮色/暗色配色，杜绝首帧闪烁 -->
+    <!-- 立即读取本地主题持久化配置，0ms 渲染正确的亮色/暗色配色与语言，杜绝首帧闪烁 -->
     <script>
       (function() {
         try {
           var raw = localStorage.getItem('qshell-storage');
           var theme = 'dark';
+          var lang = '';
           if (raw) {
             var parsed = JSON.parse(raw);
-            if (parsed && parsed.state && parsed.state.theme) {
-              theme = parsed.state.theme;
+            if (parsed && parsed.state) {
+              if (parsed.state.theme) theme = parsed.state.theme;
+              if (parsed.state.language) lang = parsed.state.language;
             }
           }
           if (theme === 'system') {
@@ -27,8 +29,10 @@
             document.documentElement.classList.add('dark');
             document.documentElement.classList.remove('light');
           }
+          window.__initialLanguage = lang || (navigator.language && navigator.language.startsWith('zh') ? 'zh-CN' : 'en');
         } catch (e) {
           document.documentElement.classList.add('dark');
+          window.__initialLanguage = 'zh-CN';
         }
       })();
     </script>
@@ -37,47 +41,31 @@
       :root,
       html.dark {
         --bg-color: #090d16;
-        --glow-bg: radial-gradient(circle, rgba(56, 189, 248, 0.12) 0%, rgba(251, 113, 133, 0.08) 45%, transparent 70%);
+        --glow-bg: radial-gradient(circle, rgba(56, 189, 248, 0.16) 0%, rgba(251, 113, 133, 0.08) 50%, transparent 70%);
         --qshell-c-q: #38bdf8;
         --qshell-c-s: #fb923c;
         --qshell-c-h: #34d399;
         --qshell-c-e: #fb7185;
         --qshell-c-l1: #c084fc;
         --qshell-c-l2: #facc15;
-
-        --qshell-glow-q: rgba(56, 189, 248, 0.75);
-        --qshell-glow-s: rgba(251, 146, 60, 0.75);
-        --qshell-glow-h: rgba(52, 211, 153, 0.75);
-        --qshell-glow-e: rgba(251, 113, 133, 0.75);
-        --qshell-glow-l1: rgba(192, 132, 252, 0.75);
-        --qshell-glow-l2: rgba(250, 204, 21, 0.75);
-
         --qshell-belly-fill: rgba(56, 189, 248, 0.16);
-        --qshell-ground-shadow: rgba(0, 0, 0, 0.45);
+        --qshell-ground-shadow: rgba(0, 0, 0, 0.55);
         --sub-color: #94a3b8;
         --dot-color: #38bdf8;
       }
 
-      /* 亮色模式：明亮奶油白 (palette-light-cream) - 仅在明确为 .light 且非 .dark 时激活 */
-      html.light:not(.dark) {
+      /* 亮色模式：明亮奶油白 (palette-light-cream) */
+      html.light {
         --bg-color: #f8fafc;
-        --glow-bg: radial-gradient(circle, rgba(2, 132, 199, 0.08) 0%, rgba(225, 29, 72, 0.05) 45%, transparent 70%);
+        --glow-bg: radial-gradient(circle, rgba(2, 132, 199, 0.10) 0%, rgba(225, 29, 72, 0.06) 50%, transparent 70%);
         --qshell-c-q: #0284c7;
         --qshell-c-s: #ea580c;
         --qshell-c-h: #059669;
         --qshell-c-e: #e11d48;
         --qshell-c-l1: #7c3aed;
         --qshell-c-l2: #d97706;
-
-        --qshell-glow-q: rgba(2, 132, 199, 0.35);
-        --qshell-glow-s: rgba(234, 88, 12, 0.35);
-        --qshell-glow-h: rgba(5, 150, 105, 0.35);
-        --qshell-glow-e: rgba(225, 29, 72, 0.35);
-        --qshell-glow-l1: rgba(124, 58, 237, 0.35);
-        --qshell-glow-l2: rgba(217, 119, 6, 0.35);
-
         --qshell-belly-fill: rgba(2, 132, 199, 0.10);
-        --qshell-ground-shadow: rgba(0, 0, 0, 0.14);
+        --qshell-ground-shadow: rgba(0, 0, 0, 0.16);
         --sub-color: #64748b;
         --dot-color: #0284c7;
       }
@@ -101,24 +89,22 @@
         overflow: hidden;
       }
 
-      /* 启动屏专属极速动画 */
-      @keyframes q-splash-jump {
+      /* 启动屏专属波浪物理弹性跳跃，彻底规避 CSS 变量在 calc/filter 中的兼容性坑 */
+      @keyframes q-splash-wave {
         0%, 100% {
-          transform: translateY(0) scale(1, 1) rotate(0deg);
-          filter: drop-shadow(0 0 0 transparent);
+          transform: translateY(0) scale(1, 1);
         }
         16% {
-          transform: translateY(4px) scale(1.30, 0.72) rotate(0deg);
+          transform: translateY(4px) scale(1.24, 0.76);
         }
         38% {
-          transform: translateY(-22px) scale(0.84, 1.26) rotate(var(--tilt, 0deg));
-          filter: drop-shadow(0 12px 18px var(--glow));
+          transform: translateY(-20px) scale(0.88, 1.22);
         }
         65% {
-          transform: translateY(2px) scale(1.18, 0.86) rotate(0deg);
+          transform: translateY(2px) scale(1.14, 0.88);
         }
         82% {
-          transform: translateY(-4px) scale(0.94, 1.06) rotate(calc(var(--tilt, 0deg) * -0.6));
+          transform: translateY(-3px) scale(0.96, 1.04);
         }
       }
 
@@ -136,31 +122,27 @@
       }
       @keyframes q-splash-tail {
         0%, 100% { transform: rotate(0deg); }
-        25% { transform: rotate(-25deg); }
-        75% { transform: rotate(25deg); }
+        25% { transform: rotate(-22deg); }
+        75% { transform: rotate(22deg); }
       }
       @keyframes q-splash-antenna {
         0%, 100% { transform: scale(1); opacity: 0.8; }
-        50% { transform: scale(1.35); opacity: 1; filter: drop-shadow(0 0 8px var(--qshell-c-h)); }
+        50% { transform: scale(1.35); opacity: 1; }
       }
       @keyframes q-splash-sparkle {
         0% { opacity: 0; transform: translateY(0) scale(0.4) rotate(0deg); }
-        50% { opacity: 1; transform: translateY(-16px) scale(1.2) rotate(45deg); filter: drop-shadow(0 0 8px #f43f5e); }
+        50% { opacity: 1; transform: translateY(-16px) scale(1.15) rotate(45deg); }
         100% { opacity: 0; transform: translateY(-28px) scale(0.8) rotate(90deg); }
       }
       @keyframes q-splash-shadow {
         0%, 100% { transform: scale(1); opacity: 0.35; }
-        16% { transform: scale(1.4, 0.7); opacity: 0.55; }
-        38% { transform: scale(0.3, 0.3); opacity: 0.08; }
-        65% { transform: scale(1.2, 0.85); opacity: 0.45; }
-        82% { transform: scale(0.75, 0.75); opacity: 0.22; }
-      }
-      @keyframes q-splash-fade-in {
-        from { opacity: 0; transform: scale(0.95); }
-        to { opacity: 1; transform: scale(1); }
+        16% { transform: scale(1.35, 0.7); opacity: 0.55; }
+        38% { transform: scale(0.4, 0.4); opacity: 0.12; }
+        65% { transform: scale(1.18, 0.85); opacity: 0.45; }
+        82% { transform: scale(0.8, 0.8); opacity: 0.25; }
       }
       @keyframes q-splash-pulse {
-        0%, 100% { opacity: 0.6; }
+        0%, 100% { opacity: 0.65; }
         50% { opacity: 1; }
       }
 
@@ -187,8 +169,8 @@
       }
       .splash-glow {
         position: absolute;
-        width: 500px;
-        height: 500px;
+        width: 540px;
+        height: 540px;
         border-radius: 50%;
         background: var(--glow-bg);
         pointer-events: none;
@@ -206,17 +188,20 @@
         display: flex;
         flex-direction: column;
         align-items: center;
+        justify-content: flex-end;
+        position: relative;
+        flex-shrink: 0;
       }
       .splash-bounce {
         position: relative;
         transform-origin: bottom center;
-        animation: q-splash-jump 1.2s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
+        animation: q-splash-wave 1.2s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
       }
       .splash-shadow {
         height: 6px;
         border-radius: 9999px;
         background: var(--qshell-ground-shadow);
-        margin-top: 4px;
+        margin-top: 6px;
         transform-origin: center;
         animation: q-splash-shadow 1.2s cubic-bezier(0.34, 1.56, 0.64, 1) infinite;
       }
@@ -244,120 +229,130 @@
   <body>
     <!-- 客户端原生启动即时呈现画面（置于 #root 外部，React 启动与开发模式 StrictMode 双渲染在底层静默完成，0ms 启动 0 闪烁） -->
     <div id="qshell-splash" class="splash-container">
-        <div class="splash-glow"></div>
-        <div class="splash-letters">
-          <!-- 1. Q 宝 (跳起时: 亮色明亮深天蓝 / 暗色冰川苏打蓝) -->
-          <div class="splash-char">
-            <div class="splash-bounce" style="--glow: var(--qshell-glow-q); --tilt: -5deg; animation-delay: 0.00s;">
-              <svg style="width: 76px; height: 76px; overflow: visible;" viewBox="0 0 90 90" fill="none">
-                <g style="transform-origin: 30px 24px; animation: q-splash-ear-l 2s ease-in-out infinite;">
-                  <polygon points="22,26 31,10 38,24" fill="var(--qshell-c-q)" stroke="var(--qshell-c-q)" stroke-width="2" stroke-linejoin="round" />
-                  <polygon points="25,24 31,14 36,23" fill="#f43f5e" opacity="0.6" />
-                </g>
-                <g style="transform-origin: 58px 24px; animation: q-splash-ear-r 2s ease-in-out infinite;">
-                  <polygon points="50,24 57,10 66,26" fill="var(--qshell-c-q)" stroke="var(--qshell-c-q)" stroke-width="2" stroke-linejoin="round" />
-                  <polygon points="52,23 57,14 63,24" fill="#f43f5e" opacity="0.6" />
-                </g>
-                <circle cx="44" cy="48" r="32" fill="var(--qshell-belly-fill)" stroke="var(--qshell-c-q)" stroke-width="5" />
-                <g style="transform-origin: 44px 44px; animation: q-splash-blink 3.4s infinite;">
-                  <circle cx="32" cy="44" r="5" fill="var(--qshell-c-q)" />
-                  <circle cx="30.5" cy="42" r="2" fill="#ffffff" />
-                  <circle cx="34" cy="46" r="1" fill="#ffffff" opacity="0.8" />
-                  <circle cx="56" cy="44" r="5" fill="var(--qshell-c-q)" />
-                  <circle cx="54.5" cy="42" r="2" fill="#ffffff" />
-                  <circle cx="58" cy="46" r="1" fill="#ffffff" opacity="0.8" />
-                </g>
-                <path d="M38 52 Q41 56 44 52 Q47 56 50 52" stroke="var(--qshell-c-q)" stroke-width="3" stroke-linecap="round" fill="none" />
-                <ellipse cx="25" cy="51" rx="4" ry="2.5" fill="#f43f5e" opacity="0.65" />
-                <ellipse cx="63" cy="51" rx="4" ry="2.5" fill="#f43f5e" opacity="0.65" />
-                <g style="transform-origin: 64px 64px; animation: q-splash-tail 0.5s ease-in-out infinite;">
-                  <path d="M62 62 Q72 74 80 80" stroke="var(--qshell-c-q)" stroke-width="6" stroke-linecap="round" />
-                  <circle cx="80" cy="80" r="3.5" fill="#ffffff" />
-                </g>
-              </svg>
-            </div>
-            <div class="splash-shadow" style="width: 42px; animation-delay: 0.00s;"></div>
+      <div class="splash-glow"></div>
+      <div class="splash-letters">
+        <!-- 1. Q 宝 -->
+        <div class="splash-char" style="width: 76px;">
+          <div class="splash-bounce" style="width: 76px; height: 76px; animation-delay: 0.00s;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="76" height="76" viewBox="0 0 90 90" fill="none" style="display: block; width: 76px; height: 76px; overflow: visible;">
+              <g style="transform-origin: 30px 24px; animation: q-splash-ear-l 2s ease-in-out infinite;">
+                <polygon points="22,26 31,10 38,24" fill="var(--qshell-c-q, #38bdf8)" stroke="var(--qshell-c-q, #38bdf8)" stroke-width="2" stroke-linejoin="round" />
+                <polygon points="25,24 31,14 36,23" fill="#f43f5e" opacity="0.6" />
+              </g>
+              <g style="transform-origin: 58px 24px; animation: q-splash-ear-r 2s ease-in-out infinite;">
+                <polygon points="50,24 57,10 66,26" fill="var(--qshell-c-q, #38bdf8)" stroke="var(--qshell-c-q, #38bdf8)" stroke-width="2" stroke-linejoin="round" />
+                <polygon points="52,23 57,14 63,24" fill="#f43f5e" opacity="0.6" />
+              </g>
+              <circle cx="44" cy="48" r="32" fill="var(--qshell-belly-fill, rgba(56,189,248,0.16))" stroke="var(--qshell-c-q, #38bdf8)" stroke-width="5" />
+              <g style="transform-origin: 44px 44px; animation: q-splash-blink 3.4s infinite;">
+                <circle cx="32" cy="44" r="5" fill="var(--qshell-c-q, #38bdf8)" />
+                <circle cx="30.5" cy="42" r="2" fill="#ffffff" />
+                <circle cx="34" cy="46" r="1" fill="#ffffff" opacity="0.8" />
+                <circle cx="56" cy="44" r="5" fill="var(--qshell-c-q, #38bdf8)" />
+                <circle cx="54.5" cy="42" r="2" fill="#ffffff" />
+                <circle cx="58" cy="46" r="1" fill="#ffffff" opacity="0.8" />
+              </g>
+              <path d="M38 52 Q41 56 44 52 Q47 56 50 52" stroke="var(--qshell-c-q, #38bdf8)" stroke-width="3" stroke-linecap="round" fill="none" />
+              <ellipse cx="25" cy="51" rx="4" ry="2.5" fill="#f43f5e" opacity="0.65" />
+              <ellipse cx="63" cy="51" rx="4" ry="2.5" fill="#f43f5e" opacity="0.65" />
+              <g style="transform-origin: 64px 64px; animation: q-splash-tail 0.5s ease-in-out infinite;">
+                <path d="M62 62 Q72 74 80 80" stroke="var(--qshell-c-q, #38bdf8)" stroke-width="6" stroke-linecap="round" />
+                <circle cx="80" cy="80" r="3.5" fill="#ffffff" />
+              </g>
+            </svg>
           </div>
-
-          <!-- 2. s 宝 (跳起时: 亮色浓郁暖橘橙 / 暗色活力甜橙黄) -->
-          <div class="splash-char">
-            <div class="splash-bounce" style="--glow: var(--qshell-glow-s); --tilt: 6deg; animation-delay: 0.09s;">
-              <svg style="width: 48px; height: 62px; overflow: visible;" viewBox="0 0 54 70" fill="none">
-                <path d="M42 22 C42 10, 14 10, 14 26 C14 42, 40 34, 40 50 C40 64, 12 64, 12 52" stroke="var(--qshell-c-s)" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round" />
-                <path d="M22 23 L26 26 L22 29" stroke="var(--qshell-c-s)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
-                <path d="M34 23 L30 26 L34 29" stroke="var(--qshell-c-s)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
-                <circle cx="18" cy="27" r="2.5" fill="#f43f5e" opacity="0.75" />
-                <circle cx="38" cy="27" r="2.5" fill="#f43f5e" opacity="0.75" />
-              </svg>
-            </div>
-            <div class="splash-shadow" style="width: 32px; animation-delay: 0.09s;"></div>
-          </div>
-
-          <!-- 3. h 宝 (跳起时: 亮色清新翡翠绿 / 暗色清新薄荷绿) -->
-          <div class="splash-char">
-            <div class="splash-bounce" style="--glow: var(--qshell-glow-h); --tilt: -4deg; animation-delay: 0.18s;">
-              <svg style="width: 52px; height: 72px; overflow: visible;" viewBox="0 0 60 84" fill="none">
-                <path d="M16 20 L16 70" stroke="var(--qshell-c-h)" stroke-width="7.5" stroke-linecap="round" />
-                <path d="M16 46 C16 32, 46 32, 46 48 L46 70" stroke="var(--qshell-c-h)" stroke-width="7.5" stroke-linecap="round" />
-                <ellipse cx="16" cy="28" rx="2.5" ry="6" fill="#f43f5e" opacity="0.6" />
-                <circle cx="16" cy="11" r="5" fill="var(--qshell-c-h)" style="animation: q-splash-antenna 1.2s infinite;" />
-                <circle cx="31" cy="46" r="2.5" fill="var(--qshell-c-h)" />
-                <path d="M29 52 Q31 55 33 52" stroke="var(--qshell-c-h)" stroke-width="2" stroke-linecap="round" fill="none" />
-              </svg>
-            </div>
-            <div class="splash-shadow" style="width: 34px; animation-delay: 0.18s;"></div>
-          </div>
-
-          <!-- 4. e 宝 (跳起时: 亮色娇艳草莓玫粉 / 暗色蜜桃草莓粉) -->
-          <div class="splash-char">
-            <div class="splash-bounce" style="--glow: var(--qshell-glow-e); --tilt: 7deg; animation-delay: 0.27s;">
-              <svg style="width: 48px; height: 62px; overflow: visible;" viewBox="0 0 54 70" fill="none">
-                <path d="M42 36 L12 36 C12 18, 42 16, 42 30 C42 50, 14 60, 12 46 C12 34, 30 34, 42 52" stroke="var(--qshell-c-e)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" />
-                <path d="M22 36 Q27 45 32 36 Z" fill="#f43f5e" />
-                <path d="M24 26 Q27 22 30 26" stroke="var(--qshell-c-e)" stroke-width="2.5" stroke-linecap="round" fill="none" />
-              </svg>
-            </div>
-            <div class="splash-shadow" style="width: 32px; animation-delay: 0.27s;"></div>
-          </div>
-
-          <!-- 5. 双胞胎哥哥 l (跳起时: 亮色优雅香芋浓紫 / 暗色香芋梦幻紫) -->
-          <div class="splash-char">
-            <div class="splash-bounce" style="--glow: var(--qshell-glow-l1); --tilt: 8deg; animation-delay: 0.36s;">
-              <svg style="width: 30px; height: 72px; overflow: visible;" viewBox="0 0 34 84" fill="none">
-                <path d="M17 18 L17 66 Q17 72 25 72" stroke="var(--qshell-c-l1)" stroke-width="7.5" stroke-linecap="round" />
-                <circle cx="17" cy="36" r="2.5" fill="var(--qshell-c-l1)" />
-                <ellipse cx="17" cy="42" rx="2" ry="1" fill="#f43f5e" opacity="0.6" />
-                <path d="M17 14 Q23 8 20 5" stroke="var(--qshell-c-l1)" stroke-width="2.5" stroke-linecap="round" fill="none" />
-              </svg>
-            </div>
-            <div class="splash-shadow" style="width: 22px; animation-delay: 0.36s;"></div>
-          </div>
-
-          <!-- 6. 双胞胎弟弟 l (跳起时: 亮色亮丽琥珀金橙 / 暗色闪亮柠檬金) -->
-          <div class="splash-char" style="position: relative;">
-            <div style="position: absolute; top: -16px; left: -10px; color: #fb7185; font-size: 14px; font-weight: bold; animation: q-splash-sparkle 1.2s infinite; animation-delay: 0.42s; pointer-events: none;">
-              ♥
-            </div>
-            <div class="splash-bounce" style="--glow: var(--qshell-glow-l2); --tilt: -8deg; animation-delay: 0.45s;">
-              <svg style="width: 30px; height: 72px; overflow: visible;" viewBox="0 0 34 84" fill="none">
-                <path d="M17 18 L17 66 Q17 72 25 72" stroke="var(--qshell-c-l2)" stroke-width="7.5" stroke-linecap="round" />
-                <path d="M14 34 L18 36 L14 38" stroke="var(--qshell-c-l2)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
-                <ellipse cx="17" cy="42" rx="2" ry="1" fill="#f43f5e" opacity="0.6" />
-                <path d="M17 14 Q11 8 14 5" stroke="var(--qshell-c-l2)" stroke-width="2.5" stroke-linecap="round" fill="none" />
-              </svg>
-            </div>
-            <div class="splash-shadow" style="width: 22px; animation-delay: 0.45s;"></div>
-          </div>
+          <div class="splash-shadow" style="width: 44px; animation-delay: 0.00s;"></div>
         </div>
 
-        <div class="splash-sub">
-          <span class="splash-dot"></span>
-          <span>正在启动 Qshell 智能终端...</span>
+        <!-- 2. s 宝 -->
+        <div class="splash-char" style="width: 48px;">
+          <div class="splash-bounce" style="width: 48px; height: 64px; animation-delay: 0.09s;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="64" viewBox="0 0 54 70" fill="none" style="display: block; width: 48px; height: 64px; overflow: visible;">
+              <path d="M42 22 C42 10, 14 10, 14 26 C14 42, 40 34, 40 50 C40 64, 12 64, 12 52" stroke="var(--qshell-c-s, #fb923c)" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M22 23 L26 26 L22 29" stroke="var(--qshell-c-s, #fb923c)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M34 23 L30 26 L34 29" stroke="var(--qshell-c-s, #fb923c)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+              <circle cx="18" cy="27" r="2.5" fill="#f43f5e" opacity="0.75" />
+              <circle cx="38" cy="27" r="2.5" fill="#f43f5e" opacity="0.75" />
+            </svg>
+          </div>
+          <div class="splash-shadow" style="width: 34px; animation-delay: 0.09s;"></div>
         </div>
+
+        <!-- 3. h 宝 -->
+        <div class="splash-char" style="width: 52px;">
+          <div class="splash-bounce" style="width: 52px; height: 72px; animation-delay: 0.18s;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="52" height="72" viewBox="0 0 60 84" fill="none" style="display: block; width: 52px; height: 72px; overflow: visible;">
+              <path d="M16 20 L16 70" stroke="var(--qshell-c-h, #34d399)" stroke-width="7.5" stroke-linecap="round" />
+              <path d="M16 46 C16 32, 46 32, 46 48 L46 70" stroke="var(--qshell-c-h, #34d399)" stroke-width="7.5" stroke-linecap="round" />
+              <ellipse cx="16" cy="28" rx="2.5" ry="6" fill="#f43f5e" opacity="0.6" />
+              <circle cx="16" cy="11" r="5" fill="var(--qshell-c-h, #34d399)" style="animation: q-splash-antenna 1.2s infinite;" />
+              <circle cx="31" cy="46" r="2.5" fill="var(--qshell-c-h, #34d399)" />
+              <path d="M29 52 Q31 55 33 52" stroke="var(--qshell-c-h, #34d399)" stroke-width="2" stroke-linecap="round" fill="none" />
+            </svg>
+          </div>
+          <div class="splash-shadow" style="width: 36px; animation-delay: 0.18s;"></div>
+        </div>
+
+        <!-- 4. e 宝 -->
+        <div class="splash-char" style="width: 48px;">
+          <div class="splash-bounce" style="width: 48px; height: 64px; animation-delay: 0.27s;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="64" viewBox="0 0 54 70" fill="none" style="display: block; width: 48px; height: 64px; overflow: visible;">
+              <path d="M42 36 L12 36 C12 18, 42 16, 42 30 C42 50, 14 60, 12 46 C12 34, 30 34, 42 52" stroke="var(--qshell-c-e, #fb7185)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M22 36 Q27 45 32 36 Z" fill="#f43f5e" />
+              <path d="M24 26 Q27 22 30 26" stroke="var(--qshell-c-e, #fb7185)" stroke-width="2.5" stroke-linecap="round" fill="none" />
+            </svg>
+          </div>
+          <div class="splash-shadow" style="width: 34px; animation-delay: 0.27s;"></div>
+        </div>
+
+        <!-- 5. 双胞胎哥哥 l -->
+        <div class="splash-char" style="width: 30px;">
+          <div class="splash-bounce" style="width: 30px; height: 72px; animation-delay: 0.36s;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="30" height="72" viewBox="0 0 34 84" fill="none" style="display: block; width: 30px; height: 72px; overflow: visible;">
+              <path d="M17 18 L17 66 Q17 72 25 72" stroke="var(--qshell-c-l1, #c084fc)" stroke-width="7.5" stroke-linecap="round" />
+              <circle cx="17" cy="36" r="2.5" fill="var(--qshell-c-l1, #c084fc)" />
+              <ellipse cx="17" cy="42" rx="2" ry="1" fill="#f43f5e" opacity="0.6" />
+              <path d="M17 14 Q23 8 20 5" stroke="var(--qshell-c-l1, #c084fc)" stroke-width="2.5" stroke-linecap="round" fill="none" />
+            </svg>
+          </div>
+          <div class="splash-shadow" style="width: 24px; animation-delay: 0.36s;"></div>
+        </div>
+
+        <!-- 6. 双胞胎弟弟 l -->
+        <div class="splash-char" style="width: 30px;">
+          <!-- 矢量心形高光，使用 SVG 杜绝 Windows 纯文本黑字问题 -->
+          <div style="position: absolute; top: -14px; left: -8px; width: 14px; height: 14px; animation: q-splash-sparkle 1.2s infinite; animation-delay: 0.42s; pointer-events: none;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="#fb7185">
+              <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+            </svg>
+          </div>
+          <div class="splash-bounce" style="width: 30px; height: 72px; animation-delay: 0.45s;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="30" height="72" viewBox="0 0 34 84" fill="none" style="display: block; width: 30px; height: 72px; overflow: visible;">
+              <path d="M17 18 L17 66 Q17 72 25 72" stroke="var(--qshell-c-l2, #facc15)" stroke-width="7.5" stroke-linecap="round" />
+              <path d="M14 34 L18 36 L14 38" stroke="var(--qshell-c-l2, #facc15)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+              <ellipse cx="17" cy="42" rx="2" ry="1" fill="#f43f5e" opacity="0.6" />
+              <path d="M17 14 Q11 8 14 5" stroke="var(--qshell-c-l2, #facc15)" stroke-width="2.5" stroke-linecap="round" fill="none" />
+            </svg>
+          </div>
+          <div class="splash-shadow" style="width: 24px; animation-delay: 0.45s;"></div>
+        </div>
+      </div>
+
+      <div class="splash-sub">
+        <span class="splash-dot"></span>
+        <span id="splash-sub-text">正在启动 Qshell 智能终端...</span>
       </div>
     </div>
     <div id="root"></div>
     <script>
+      (function() {
+        try {
+          var el = document.getElementById('splash-sub-text');
+          if (el && window.__initialLanguage && !window.__initialLanguage.startsWith('zh')) {
+            el.textContent = 'Starting Qshell Terminal...';
+          }
+        } catch (e) {}
+      })();
       window.__dismissSplash = function() {
         var s = document.getElementById('qshell-splash');
         if (s && !s.classList.contains('fade-out')) {
