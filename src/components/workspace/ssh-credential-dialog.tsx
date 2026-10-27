@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input'
 import { Eye, EyeOff, KeyRound } from 'lucide-react'
 import { useTranslation } from '@/i18n'
 import { QshellLoader } from '@/components/ui/qshell-loader'
+import { friendlyError } from '@/lib/error-messages'
 
 interface SshCredentialDialogProps {
   open: boolean
@@ -46,7 +47,7 @@ export function SshCredentialDialog({
           <div className="flex items-center gap-3"><label className="w-16 shrink-0 text-right text-xs text-foreground">{t('ssh_credential_password')}:</label><div className="relative flex-1"><Input type={showPassword ? 'text' : 'password'} value={password} onChange={(event) => setPassword(event.target.value)} disabled={submitting} className="h-7 pr-8 text-xs font-mono bg-background" autoComplete="current-password" onKeyDown={(event) => { if (event.key === 'Enter') submit() }} /><button type="button" tabIndex={-1} onClick={() => setShowPassword((value) => !value)} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">{showPassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}</button></div></div>
         </div>
 
-        {error && <div className="mt-3 rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}</div>}
+        {error && <div className="mt-3 rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs text-destructive">{friendlyError(error).message}</div>}
       </div>
 
       <div className="flex items-center justify-end gap-2 border-t border-border/60 bg-muted/20 px-5 py-2.5">

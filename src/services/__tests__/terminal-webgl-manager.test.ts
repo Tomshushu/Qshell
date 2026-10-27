@@ -55,7 +55,7 @@ describe("TerminalWebglManager", () => {
     expect(term.refresh).toHaveBeenCalled();
   });
 
-  it("does not allocate WebGL for terminal with bgMedia, but allows fractional DPR", () => {
+  it("allocates WebGL for terminal with bgMedia and allows fractional DPR", () => {
     const manager = new TerminalWebglManager({ maxActiveContexts: 4 });
     const term1 = createMockTerminal();
     const term2 = createMockTerminal();
@@ -66,8 +66,8 @@ describe("TerminalWebglManager", () => {
       isVisible: true,
       hasBgMedia: true,
     });
-    expect(ok1).toBe(false);
-    expect(manager.isWebglActive("t1")).toBe(false);
+    expect(ok1).toBe(true);
+    expect(manager.isWebglActive("t1")).toBe(true);
 
     const ok2 = manager.registerTerminal({
       termId: "t2",
@@ -77,7 +77,7 @@ describe("TerminalWebglManager", () => {
     });
     expect(ok2).toBe(true);
     expect(manager.isWebglActive("t2")).toBe(true);
-    expect(manager.getActiveCount()).toBe(1);
+    expect(manager.getActiveCount()).toBe(2);
   });
 
   it("evicts oldest hidden terminal when maxActiveContexts is reached", () => {

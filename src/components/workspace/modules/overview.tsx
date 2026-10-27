@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo, memo } from "react";
 import { SelectPopover } from '@/components/ui/select-popover'
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { friendlyError } from "@/lib/error-messages";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Progress } from "@/components/ui/progress";
@@ -670,7 +671,7 @@ export function OverviewModule({
     return (
       <div className="p-4">
         <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-md text-sm text-red-500">
-          {error}
+          {friendlyError(error).message}
         </div>
         <button
           onClick={() => {

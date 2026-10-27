@@ -84,6 +84,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { formatSftpError, isSftpConnectionError } from '@/lib/sftp-error'
+import { friendlyError } from '@/lib/error-messages'
 import { playSound, SoundType } from '@/lib/sound'
 import { ErrorDialog } from '@/components/ui/error-dialog'
 import { backend } from '@/services/api'
@@ -7283,8 +7284,8 @@ export function SftpPanel() {
                       </span>
                     )}
                     {remoteDisconnectedError && reconnectState.status !== 'countdown' && (
-                      <span className="text-[11px] text-muted-foreground truncate hidden sm:inline" title={remoteDisconnectedError}>
-                        ({remoteDisconnectedError})
+                      <span className="text-[11px] text-muted-foreground truncate hidden sm:inline" title={friendlyError(remoteDisconnectedError).message}>
+                        ({friendlyError(remoteDisconnectedError).message})
                       </span>
                     )}
                   </div>
@@ -7366,7 +7367,7 @@ export function SftpPanel() {
                   </div>
                 ) : remoteError && !isRemoteDisconnected && remoteFiles.length === 0 ? (
                   <div className="flex flex-col items-center justify-center h-full p-4 text-center">
-                    <p className="text-xs text-destructive mb-2">{remoteError}</p>
+                    <p className="text-xs text-destructive mb-2">{friendlyError(remoteError).message}</p>
                     <Button size="sm" variant="outline" onClick={() => loadRemoteDirectory(selectedServerId, remotePath)}>
                       {t('sftp_retry')}
                     </Button>

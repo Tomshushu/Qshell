@@ -113,16 +113,9 @@ export class TerminalWebglManager {
     if (updates.hasFractionalDpr !== undefined)
       entry.hasFractionalDpr = updates.hasFractionalDpr;
 
-    if (entry.hasBgMedia) {
-      if (entry.suspendTimer) {
-        clearTimeout(entry.suspendTimer);
-        entry.suspendTimer = null;
-      }
-      if (entry.addon) {
-        this.detachWebgl(entry);
-      }
-      return;
-    }
+    // 背景媒体模式：现代 @xterm/addon-webgl (>=0.19) 在 allowTransparency: true 下
+    // 原生支持半透明/全透明画布（默认背景单元格输出 NULL_COLOR alpha=0），
+    // 底层 CSS 背景媒体与蒙层可直接透出，无需强制回退 DOM，全力保持 GPU 硬件加速。
 
     if (entry.isVisible) {
       if (entry.suspendTimer) {
@@ -162,15 +155,8 @@ export class TerminalWebglManager {
       return false;
     }
 
-    // 2. 自定义背景媒体：按策略使用 DOM（避免 WebGL canvas 遮挡底层半透明背景媒体）
-    // 注意：现代 @xterm/addon-webgl (>=0.19) 已完美支持非整数 DPR (125%/150%)，
-    // 全力开启 GPU 硬件加速，彻底消灭 DOM 渲染带来的巨幅性能开销。
-    if (entry.hasBgMedia) {
-      if (entry.addon) {
-        this.detachWebgl(entry);
-      }
-      return false;
-    }
+    // 2. 自定义背景媒体模式下，现代 @xterm/addon-webgl 结合 allowTransparency: true
+    // 已原生支持底层背景图与蒙层透出，不再强制降级 DOM，继续分配 WebGL 上下文加速。
 
     // 3. 已经装载 WebGL
     if (entry.addon) {

@@ -9,6 +9,7 @@ import { useTranslation } from '@/i18n'
 import { ServiceDetailDialog } from './service-detail-dialog'
 import { useToast } from '@/components/ui/toast'
 import { QshellLoader } from '@/components/ui/qshell-loader'
+import { friendlyError } from '@/lib/error-messages'
 
 /** 批量操作对应的 i18n key（默认不提供批量 Mask，风险过高） */
 const BATCH_LABEL_KEY: Record<'start' | 'stop' | 'restart' | 'enable' | 'disable', string> = {
@@ -406,7 +407,7 @@ export function ServicesModule({ serverId, onNavigate, initialSearchQuery }: Ser
       {/* Error message */}
       {error && (
         <div className="px-4 py-2 bg-rose-500/10 text-rose-600 dark:text-rose-400 text-xs border-b border-rose-500/20 flex items-center justify-between">
-          <span>{error}</span>
+          <span>{friendlyError(error).message}</span>
           <Button variant="ghost" size="sm" className="h-4 text-[10px] ml-2" onClick={() => setError(null)}>{t('svc_close')}</Button>
         </div>
       )}

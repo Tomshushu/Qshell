@@ -12,6 +12,7 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import type { ExternalImportCandidate, ExternalImportPreview, ExternalImportSource, ImportResult } from '@/services/api'
 import { AlertCircle, Check, CheckCircle2, Eye, EyeOff, FileCode2, FileText, FolderOpen, KeyRound, Loader2, MonitorDown, Server, ShieldAlert, TerminalSquare, Upload, XCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { friendlyError } from '@/lib/error-messages'
 
 interface ImportServersDialogProps { open: boolean; onClose: () => void }
 type ImportSource = 'workspace' | ExternalImportSource
@@ -164,7 +165,7 @@ export function ImportServersDialog({ open, onClose }: ImportServersDialogProps)
         <DialogDescription className="sr-only">{t('imp_choose_source_desc')}</DialogDescription>
       </DialogHeader>
 
-      {error && <div className="px-5 py-1.5 bg-destructive/10 border-b border-destructive/20 text-destructive text-xs font-medium flex items-center gap-2 shrink-0"><AlertCircle className="h-3.5 w-3.5 shrink-0" /><span className="break-all">{error}</span></div>}
+      {error && <div className="px-5 py-1.5 bg-destructive/10 border-b border-destructive/20 text-destructive text-xs font-medium flex items-center gap-2 shrink-0"><AlertCircle className="h-3.5 w-3.5 shrink-0" /><span className="break-all">{friendlyError(error).message}</span></div>}
 
       <div className="flex-1 flex min-h-0 overflow-hidden">
         <div className="w-40 shrink-0 border-r border-border/60 bg-muted/15 p-2 overflow-y-auto">

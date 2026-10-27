@@ -11,6 +11,7 @@ import {
   ChevronLeft, File as FileIcon, Folder, Home, Loader2, RefreshCw, X,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { friendlyError } from '@/lib/error-messages'
 import { sshService } from '@/services/ssh-service'
 import { useTranslation } from '@/i18n'
 import { QshellLoader } from '@/components/ui/qshell-loader'
@@ -158,7 +159,7 @@ export function RemoteFilePicker({
               <QshellLoader size="md" text={t('dk_loading')} />
             </div>
           ) : error ? (
-            <div className="flex items-center justify-center h-full text-destructive text-sm px-4 text-center">{error}</div>
+            <div className="flex items-center justify-center h-full text-destructive text-sm px-4 text-center">{friendlyError(error).message}</div>
           ) : entries.length === 0 ? (
             <div className="flex items-center justify-center h-full text-muted-foreground text-sm">{t('dk_files_empty')}</div>
           ) : (

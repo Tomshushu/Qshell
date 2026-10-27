@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { friendlyError } from '@/lib/error-messages'
 import {
   ArrowUpDown,
   ChevronDown,
@@ -518,7 +519,7 @@ export function ProcessesModule({ serverId, onNavigate }: ProcessesModuleProps) 
       {/* Error */}
       {error && (
         <div className="px-3 py-2 bg-red-500/10 text-red-500 text-xs border-b flex items-center justify-between">
-          <span>{error}</span>
+          <span>{friendlyError(error).message}</span>
           <Button variant="ghost" size="sm" className="h-4 text-[10px]" onClick={() => refreshProcessSnapshot(serverId)}>
             {t('proc_retry')}
           </Button>

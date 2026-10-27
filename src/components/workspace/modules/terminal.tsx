@@ -151,6 +151,7 @@ import {
   formatTerminalPasteData,
   TerminalConnectionOverlay,
 } from "@/components/terminal";
+import { friendlyError } from "@/lib/error-messages";
 import { EditServerDialog } from "@/components/server/edit-server-dialog";
 import { useAIStore } from "@/store/ai-store";
 import {
@@ -1511,10 +1512,26 @@ export function TerminalModule({
   // 监听主题变化，动态更新终端的颜色主题样式
   useEffect(() => {
     const xtermTheme = themeToXtermTheme(activeTheme);
+    // 背景媒体模式下 theme.background 是 rgba(0,0,0,0)：xterm 对比度算法忽略
+    // alpha 按纯黑计算，会改写前景色（浅色主题深前景 → 中灰），此时必须禁用
+    const hasBgMedia = !!(activeTheme.background?.image || activeTheme.background?.videoPath);
     const refreshes: Array<() => void> = [];
-    xtermInstances.current.forEach(({ term }) => {
-      term.options.minimumContrastRatio = 4.5;
+    xtermInstances.current.forEach(({ term }, instanceTermId) => {
+      // 渲染器选择跟随背景媒体状态：hasBgMedia 只在 registerTerminal 时快照过，
+      // 若中途开关背景图不同步，会出现「清了背景仍在 DOM 渲染器（性能损耗）」或
+      // 「已有终端开背景后仍用 WebGL（canvas 覆盖背景媒体）」两种不一致。
+      terminalWebglManager.updateState(instanceTermId, { hasBgMedia });
+      term.options.minimumContrastRatio = hasBgMedia ? 1 : 4.5;
       term.options.theme = xtermTheme;
+      // DOM 渲染器回退兜底：DomRenderer 不给默认前景色的单元格写 inline color，
+      // 文字颜色依赖 CSS 继承，会被应用全局主题（浅色 = 深色文字）污染，
+      // 在深色终端背景上形成暗底暗字。显式把主题前景色钉到 DOM 宿主与行容器。
+      const host = term.element as HTMLElement | null;
+      if (host) {
+        host.style.color = xtermTheme.foreground;
+        const rowsEl = host.querySelector(".xterm-rows") as HTMLElement | null;
+        if (rowsEl) rowsEl.style.color = xtermTheme.foreground;
+      }
       // WebGL renderer 会缓存包含颜色信息的字形纹理。只修改 theme 时，已有字形
       // （尤其是当前选区）可能继续沿用旧前景色，看起来像 selectionForeground
       // 没有生效。清理纹理后再刷新，确保 Canvas 与 WebGL 渲染路径表现一致。
@@ -1668,6 +1685,18 @@ export function TerminalModule({
         container.style.removeProperty("--xterm-bg-overlay");
       }
     });
+    // 背景媒体切换会改变 theme.background 的透明度语义（有媒体 = rgba(0,0,0,0)），
+    // xterm 对比度算法忽略 alpha 按纯黑计算，结果不可信 —— 切换时同步禁用/启用
+    // 对比度改写，并清理纹理与对比度缓存，避免残留被改写的前景色（暗底暗字）。
+    xtermInstances.current.forEach(({ term }) => {
+      term.options.minimumContrastRatio = hasBgMedia ? 1 : 4.5;
+      try {
+        term.clearTextureAtlas();
+      } catch {
+        // ignore
+      }
+    });
+    terminalWebglManager.clearAllTextureAtlases();
   }, [
     hasBgMedia,
     terminals,
@@ -1730,7 +1759,14 @@ export function TerminalModule({
       container.classList.remove("has-bg-image");
       xtermEl?.classList.remove("has-bg-image");
     }
-    instance.term.options.theme = themeToXtermTheme(activeTheme);
+    const xtermTheme = themeToXtermTheme(activeTheme);
+    const themeHasBgMedia = !!(activeTheme.background?.image || activeTheme.background?.videoPath);
+    instance.term.options.minimumContrastRatio = themeHasBgMedia ? 1 : 4.5;
+    instance.term.options.theme = xtermTheme;
+    // DOM 渲染器回退兜底：显式钉主题前景色（见主题应用 effect 注释）
+    container.style.color = xtermTheme.foreground;
+    const rowsEl = container.querySelector(".xterm-rows") as HTMLElement | null;
+    if (rowsEl) rowsEl.style.color = xtermTheme.foreground;
     try {
       instance.term.clearTextureAtlas();
     } catch {
@@ -3516,7 +3552,7 @@ export function TerminalModule({
         if (!result.success || !result.sessionId) {
           xtermInfo.term.write("\r\x1b[2K");
           xtermInfo.term.writeln(
-            `\r\n\x1b[31m${t("tm_reconnect_failed")}: ${result.error}\x1b[0m`,
+            `\r\n\x1b[31m${t("tm_reconnect_failed")}: ${friendlyError(result.error || '').message}\x1b[0m`,
           );
           xtermInfo.term.writeln(
             "\x1b[33m" + t("tm_disconnected_hint") + "\x1b[0m",
@@ -3813,7 +3849,7 @@ export function TerminalModule({
             sessionCleanup();
             if (isUnmountedRef.current) return;
             xtermInfo.term.writeln(
-              `\r\n\x1b[31mShell Error: ${data.error}\x1b[0m`,
+              `\r\n\x1b[31m${t("tm_connection_failed") || "连接异常"}: ${friendlyError(data.error || '').message}\x1b[0m`,
             );
             // E1：Shell 错误也属于断线场景，补充 toast.warning 提示
             toastRef.current.warning(t("tm_disconnected"));
@@ -4327,10 +4363,11 @@ export function TerminalModule({
         fastScrollSensitivity: 5,
         scrollSensitivity: 1,
         drawBoldTextInBrightColors: terminalDrawBoldInBrightColors ?? true,
-        // 对齐 VS Code / Windows Terminal 标准实践（WCAG AA 4.5:1 对比度）：
-        // 遇到暗色前景、低对比度 ANSI 码或着色器初始瞬态时自动向上提亮，
-        // 彻底杜绝暗底暗字不可见故障；现代 xterm WebGL renderer 采用 256 色查找表缓存对比度，开销为 O(1)。
-        minimumContrastRatio: 4.5,
+        // 对齐 VS Code / Windows Terminal 标准实践（WCAG AA 4.5:1 对比度）。
+        // 注意：背景媒体模式下 theme.background 是 rgba(0,0,0,0)，xterm 的对比度
+        // 算法会忽略 alpha 把它当纯黑参与计算（浅色主题的深前景会被改写成中灰），
+        // 结果不可信 —— 此时关闭对比度改写（可读性由 --xterm-bg-overlay 压暗/提亮层保证）。
+        minimumContrastRatio: hasBgMediaAtInit ? 1 : 4.5,
         // 允许背景透明：themeToXtermTheme 在有背景图时把 background 降为半透明 rgba，
         // 必须开启 allowTransparency 才能让 xterm canvas 透出底层背景图 div。
         allowTransparency: true,
@@ -4347,6 +4384,25 @@ export function TerminalModule({
       console.log(`[Terminal Init] ${sId} term.open() 开始`);
       term.open(container);
       console.log(`[Terminal Init] ${sId} term.open() 完成`);
+
+      // DOM 渲染器回退兜底：xterm 的 DomRenderer 不给「默认前景色」的单元格写
+      // inline color（只有对比度调整触发时才写），文字颜色完全依赖 CSS 继承——
+      // 会被应用全局主题（浅色 = 深色文字）污染，在深色终端背景上形成暗底暗字。
+      // WebGL 渲染器按实例偶发初始化失败（context 上限/GPU 时序），回退是静默的，
+      // 因此无论当前实际使用哪个渲染器，都显式把主题前景色钉到 DOM。
+      const initXtermTheme = themeToXtermTheme(themeAtInit);
+      try {
+        container.style.color = initXtermTheme.foreground;
+        const rowsEl = container.querySelector(".xterm-rows") as HTMLElement | null;
+        if (rowsEl) rowsEl.style.color = initXtermTheme.foreground;
+        if (hasBgMediaAtInit) {
+          console.warn(
+            `[Terminal Init] ${sId} 背景媒体模式启用，minimumContrastRatio 已禁用（透明背景参与对比度计算不可信）`,
+          );
+        }
+      } catch {
+        // ignore
+      }
 
       // Shell integration 基础协议：支持 OSC 7 当前目录和 OSC 52 剪贴板。
       // 这些处理器只影响桌面端能力，不改变 SSH 原始数据流。
@@ -5974,7 +6030,7 @@ export function TerminalModule({
           if (data.sessionId === sessionId) {
             sessionCleanup();
             if (isUnmountedRef.current) return;
-            term.writeln(`\r\n\x1b[31mShell Error: ${data.error}\x1b[0m`);
+            term.writeln(`\r\n\x1b[31m${t("tm_connection_failed") || "连接异常"}: ${friendlyError(data.error || '').message}\x1b[0m`);
             // E1：Shell 错误也属于断线场景，补充 toast.warning 提示
             toastRef.current.warning(t("tm_disconnected"));
             const serverName = server?.name || "Unknown";
@@ -6748,28 +6804,20 @@ export function TerminalModule({
       });
     };
 
-    // 分屏拖拽开始：钉住所有可见终端宿主的像素尺寸（Termius 式）。
-    // 拖拽期间面板尺寸高频变化，把 .term-host 冻结在拖拽开始时的像素尺寸上：
-    // 终端画布完全不动（超出面板的部分被 overflow-hidden 裁剪），
-    // 任何 resize 路径（fit / WebGL DPR 监听 / xterm 测量）都看不到尺寸变化，
-    // 从根源上杜绝拖拽期间的清屏、重排与 WebGL context loss 抖动。
+    // 分屏拖拽开始：抑制逐帧 fit 与 PTY resize 风暴。
+    // 拖拽期间窗格尺寸高频变化，保持 isSplitDragResizingRef.current 为 true，
+    // 跳过逐帧 fit，终端画布保持旧尺寸（内容稳定，超出面板被 overflow-hidden 裁剪，
+    // 扩大时底色/背景图自适应贴合），杜绝拖拽期间频繁清屏、重排与 WebGL context loss 抖动。
+    // 不再锁死 .term-host 的像素宽高，确保拖拽拉大窗格时背景图与压暗蒙层永远无缝平铺，绝不露黑。
     const handleSplitResizeStart = () => {
       isSplitDragResizingRef.current = true;
-      termContainerRefs.current.forEach((el) => {
-        // 隐藏实例（非活跃终端/其他标签）无有效尺寸，跳过
-        if (el.classList.contains("hidden")) return;
-        const rect = el.getBoundingClientRect();
-        if (rect.width < 2 || rect.height < 2) return;
-        el.style.width = `${rect.width}px`;
-        el.style.height = `${rect.height}px`;
-      });
     };
 
-    // 解除冻结：清空内联宽高，.term-host 回到 inset-0 跟随面板尺寸
+    // 解除冻结：清空内联宽高，.term-host 回到 inset-0 跟随面板尺寸（保留作为安全兜底）
     const unfreezeTermHosts = () => {
       termContainerRefs.current.forEach((el) => {
-        el.style.width = "";
-        el.style.height = "";
+        if (el.style.width) el.style.width = "";
+        if (el.style.height) el.style.height = "";
       });
     };
 

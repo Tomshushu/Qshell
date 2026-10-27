@@ -15,7 +15,6 @@ import {
   Monitor,
   Wifi,
   WifiOff,
-  AlertCircle,
   Camera,
   Loader2,
   Radio,
@@ -418,17 +417,6 @@ export function ModuleTabs({
               >
                 <Wifi className="h-3 w-3" />
               </Button>
-            )}
-            {connectError && (
-              <button
-                type="button"
-                onClick={onShowDiagnostics}
-                className="text-[10px] text-destructive truncate max-w-[130px] ml-1 hover:underline cursor-pointer flex items-center gap-1 bg-destructive/10 hover:bg-destructive/15 px-1.5 py-0.5 rounded transition-colors"
-                title={`${connectError} (${t("diag_open") || "查看诊断"})`}
-              >
-                <AlertCircle className="h-3 w-3 shrink-0" />
-                <span className="truncate">{connectError}</span>
-              </button>
             )}
             <Button
               variant="ghost"

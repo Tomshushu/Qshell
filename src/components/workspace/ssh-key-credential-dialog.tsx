@@ -8,6 +8,7 @@ import { EditKeyDialog } from '@/components/key/edit-key-dialog'
 import { useTranslation } from '@/i18n'
 import { useAppStore } from '@/store'
 import type { SshKey } from '@/types'
+import { friendlyError } from '@/lib/error-messages'
 
 interface SshKeyCredentialDialogProps {
   open: boolean
@@ -135,7 +136,7 @@ export function SshKeyCredentialDialog({
             </Button>
           </fieldset>
 
-          {error && <div className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}</div>}
+          {error && <div className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs text-destructive">{friendlyError(error).message}</div>}
           <div className="flex items-start gap-2 text-[11px] leading-relaxed text-muted-foreground">
             <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" />
             <span>{t('ssh_key_credential_save_hint')}</span>

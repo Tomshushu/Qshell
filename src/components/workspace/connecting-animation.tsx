@@ -3,6 +3,7 @@ import { Terminal, Shield, Wifi, CheckCircle2, WifiOff } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTranslation } from '@/i18n'
 import { ConnectionState } from '@/services/ssh-connection-state'
+import { friendlyError } from '@/lib/error-messages'
 
 interface ConnectingAnimationProps {
   serverName?: string
@@ -110,7 +111,7 @@ export function ConnectingAnimation({ serverName, error, onRetry, state }: Conne
       {/* 连接步骤 / 错误信息 */}
       {error ? (
         <div className="text-center">
-          <p className="text-sm text-destructive mb-3 max-w-xs">{error}</p>
+          <p className="text-sm text-destructive mb-3 max-w-xs">{friendlyError(error).message}</p>
           {onRetry && (
             <button
               onClick={onRetry}

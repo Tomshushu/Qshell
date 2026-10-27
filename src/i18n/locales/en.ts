@@ -3416,7 +3416,10 @@ export default {
     "Permission denied: you do not have permission to perform this operation",
   err_not_found: "The target does not exist or has been removed",
   err_no_space: "Insufficient storage space",
-  err_disconnected: "The connection was lost. Reconnect and try again",
+  err_disconnected: "Connection disconnected: the remote session was lost or closed by host",
+  err_host_key_mismatch: "Host key mismatch: host key verification failed",
+  err_serial_busy: "Serial port busy: unable to access the serial device",
+  err_generic_conn_failed: "Connection failed: unable to establish connection to remote host",
   err_show_detail: "Show technical details",
   err_hide_detail: "Hide details",
 

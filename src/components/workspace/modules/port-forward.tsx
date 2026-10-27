@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/toast'
 import { backend } from '@/services/api'
 import { useTranslation } from '@/i18n'
+import { friendlyError } from '@/lib/error-messages'
 import { useAppStore } from '@/store'
 import { extractBaseServerId } from '@/services/ssh-connection-state'
 import {
@@ -157,7 +158,7 @@ export function PortForwardModule({ serverId, hideToolbarHeader }: PortForwardMo
         {/* 错误提示 */}
         {error && (
           <div className="rounded-md border border-destructive/30 bg-destructive/5 p-2.5 text-xs text-destructive">
-            {error}
+            {friendlyError(error).message}
           </div>
         )}
 

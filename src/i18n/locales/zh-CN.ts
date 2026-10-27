@@ -3357,7 +3357,10 @@ export default {
   err_permission: "权限不足：当前用户没有执行此操作的权限",
   err_not_found: "目标不存在或已被移除",
   err_no_space: "存储空间不足",
-  err_disconnected: "连接已断开，请重新连接后重试",
+  err_disconnected: "连接已断开：与远端主机的网络会话已中断或服务器主动断开了连接",
+  err_host_key_mismatch: "主机密钥不匹配：目标主机公钥指纹与已保存记录不符",
+  err_serial_busy: "串口设备被占用：无法访问本地串口设备，请检查是否被其他程序占用",
+  err_generic_conn_failed: "连接建立失败：未能成功连接至远端主机，请检查网络与服务状态",
   err_show_detail: "查看技术详情",
   err_hide_detail: "收起详情",
 

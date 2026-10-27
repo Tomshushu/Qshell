@@ -5,12 +5,10 @@ import {
   RotateCcw,
   Terminal,
   Settings2,
-  AlertTriangle,
   Eye,
-  Copy,
 } from 'lucide-react'
 import { useTranslation } from '@/i18n'
-import { useToast } from '@/components/ui/toast'
+import { friendlyError } from '@/lib/error-messages'
 import type { Server } from '@/types'
 
 export interface TerminalConnectionOverlayProps {
@@ -39,7 +37,7 @@ export const TerminalConnectionOverlay = memo(function TerminalConnectionOverlay
   onCancel,
 }: TerminalConnectionOverlayProps) {
   const { t } = useTranslation()
-  const { toast } = useToast()
+  const friendly = useMemo(() => friendlyError(error || ''), [error])
 
   // 快捷键支持：在失败/重连状态下，用户直接按 Enter 键触发重新连接，按 Esc 切换原始终端回显
   useEffect(() => {
@@ -59,28 +57,6 @@ export const TerminalConnectionOverlay = memo(function TerminalConnectionOverlay
     window.addEventListener('keydown', handleKeyDown, true)
     return () => window.removeEventListener('keydown', handleKeyDown, true)
   }, [status, isPeekRaw, onReconnect, onTogglePeekRaw])
-
-  // 智能错误诊断提示，为用户快速排障提供建议
-  const smartDiagnosticHint = useMemo(() => {
-    if (!error) return null
-    const lower = error.toLowerCase()
-    if (lower.includes('timed out') || lower.includes('timeout') || lower.includes('no route')) {
-      return '远端主机响应超时，请检查 IP 地址、网络路由或云安全组出入站规则'
-    }
-    if (lower.includes('connection refused') || lower.includes('refused')) {
-      return '目标端口连接被拒，请确认远程 SSH/Telnet 服务是否已启动且端口正确'
-    }
-    if (lower.includes('permission denied') || lower.includes('auth') || lower.includes('authentication')) {
-      return '身份认证被拒，请检查用户名、密码或 SSH 私钥配置是否正确'
-    }
-    if (lower.includes('host key') || lower.includes('fingerprint') || lower.includes('mismatch')) {
-      return '目标主机公钥指纹与已保存记录不一致，请检查是否重装了系统或网络劫持'
-    }
-    if (lower.includes('busy') || lower.includes('com') || lower.includes('serial')) {
-      return '本地串口设备可能被其他应用程序占用，或硬件连接已松脱'
-    }
-    return null
-  }, [error])
 
   // 连接目标描述串
   const targetLabel = useMemo(() => {
@@ -123,8 +99,8 @@ export const TerminalConnectionOverlay = memo(function TerminalConnectionOverlay
         {status === 'error' && (
           <>
             <span className="w-2 h-2 rounded-full bg-destructive animate-ping shrink-0" />
-            <span className="text-[11px] text-destructive font-medium truncate max-w-[140px]" title={error}>
-              {error || t('tm_connection_failed') || '连接失败'}
+            <span className="text-[11px] text-destructive font-medium truncate max-w-[140px]" title={friendly.message}>
+              {friendly.message || t('tm_connection_failed') || '连接失败'}
             </span>
             <Button
               size="sm"
@@ -279,37 +255,6 @@ export const TerminalConnectionOverlay = memo(function TerminalConnectionOverlay
               {targetLabel}
             </span>
           </div>
-
-          {/* 错误详情 & 一键复制 */}
-          <div className="w-full mt-1 rounded-xl bg-muted/40 border border-border/50 p-2.5 text-left space-y-1">
-            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-              <span className="font-mono">错误详情:</span>
-              {error && (
-                <button
-                  type="button"
-                  className="text-[10px] text-primary hover:underline flex items-center gap-1 select-none"
-                  onClick={() => {
-                    navigator.clipboard.writeText(error)
-                    toast.success('错误信息已复制到剪贴板')
-                  }}
-                >
-                  <Copy className="h-3 w-3" />
-                  <span>复制</span>
-                </button>
-              )}
-            </div>
-            <div className="font-mono text-xs text-destructive break-all leading-relaxed max-h-20 overflow-y-auto select-text">
-              {error || 'SSH 连接失败'}
-            </div>
-          </div>
-
-          {/* 智能排障建议 */}
-          {smartDiagnosticHint && (
-            <div className="w-full flex items-start gap-2 rounded-xl bg-amber-500/10 border border-amber-500/20 p-2 text-left text-[11px] text-amber-600 dark:text-amber-400 leading-relaxed">
-              <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-              <span>{smartDiagnosticHint}</span>
-            </div>
-          )}
 
           {/* 底部行动按钮群：重新连接 (Enter) + 编辑配置 + 原始输出 */}
           <div className="mt-4 flex items-center gap-2.5">

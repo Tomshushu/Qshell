@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { sshService } from '@/services/ssh-service'
 import { useTranslation } from '@/i18n'
+import { friendlyError } from '@/lib/error-messages'
 import { X, Save, Loader2 } from 'lucide-react'
 
 interface FilePermissionsModalProps {
@@ -222,7 +223,7 @@ export function FilePermissionsModal({
           {/* 错误提示 */}
           {error && (
             <div className="mt-4 p-3 rounded-md text-sm bg-red-500/10 text-red-600 border border-red-500/20">
-              {error}
+              {friendlyError(error).message}
             </div>
           )}
         </div>

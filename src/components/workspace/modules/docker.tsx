@@ -19,6 +19,7 @@ import { useAppStore } from '@/store'
 import { extractBaseServerId } from '@/services/ssh-connection-state'
 import { useTranslation } from '@/i18n'
 import { cn } from '@/lib/utils'
+import { friendlyError } from '@/lib/error-messages'
 import { useToast } from '@/components/ui/toast'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
@@ -2803,7 +2804,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
       {/* 错误提示 */}
       {error && (
         <div className="flex items-center gap-2 px-3 py-1.5 bg-destructive/10 border-b border-destructive/20 text-destructive text-xs">
-          <span className="flex-1">{error}</span>
+          <span className="flex-1">{friendlyError(error).message}</span>
           <button onClick={() => setError(null)} className="opacity-60 hover:opacity-100">
             <X className="h-3 w-3" />
           </button>
@@ -4093,7 +4094,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
             </div>
             <div className="flex-1 overflow-auto p-3 text-xs font-mono">
               {volumeBrowseModal.error ? (
-                <div className="text-destructive">{volumeBrowseModal.error}</div>
+                <div className="text-destructive">{friendlyError(volumeBrowseModal.error).message}</div>
               ) : volumeBrowseModal.entries.length === 0 ? (
                 <div className="text-muted-foreground text-center py-6">{t('docker_volume_browse_empty')}</div>
               ) : (

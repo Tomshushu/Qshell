@@ -23,6 +23,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { QshellLoader } from '@/components/ui/qshell-loader'
+import { friendlyError } from '@/lib/error-messages'
 import { FileSkeletonList } from '@/components/sftp/file-skeleton-list'
 import {
   renderFileIcon,
@@ -1832,7 +1833,7 @@ export function FilesModule({
                 {t('fs_err_load_list') || 'Failed to load directory'}
               </p>
               <p className="text-xs text-muted-foreground max-w-sm text-center mb-3">
-                {error}
+                {friendlyError(error).message}
               </p>
               <Button size="sm" variant="outline" onClick={() => fetchFiles(currentPath)}>
                 <RefreshCw className="h-3.5 w-3.5 mr-1" />

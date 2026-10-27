@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { useTranslation } from '@/i18n'
+import { friendlyError } from '@/lib/error-messages'
 import { useAppStore } from '@/store'
 import { backend } from '@/services/api'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
@@ -448,7 +449,7 @@ export function EditKeyDialog({ open, onClose, keyId, initialKeyType = 'private'
             </div>
           </div>
 
-          {error && <p className="text-xs text-destructive mt-3">{error}</p>}
+          {error && <p className="text-xs text-destructive mt-3">{friendlyError(error).message}</p>}
 
           <div className="flex justify-end gap-2 mt-6">
             <Button variant="outline" size="sm" onClick={onClose} className="h-8 text-xs">

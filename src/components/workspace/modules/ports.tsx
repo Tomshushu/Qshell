@@ -8,6 +8,7 @@ import { useTranslation } from '@/i18n'
 import { QshellLoader } from '@/components/ui/qshell-loader'
 import type { PortInfo } from '@/types'
 import { cn } from '@/lib/utils'
+import { friendlyError } from '@/lib/error-messages'
 import { PortForwardModule } from './port-forward'
 
 export type PortSubTab = 'listening' | 'forward'
@@ -143,7 +144,7 @@ export function PortsModule({ serverId, initialSearchQuery, initialSubTab = 'lis
           {/* Error message */}
           {error && (
             <div className="px-4 py-2 bg-rose-500/10 text-rose-600 dark:text-rose-400 text-xs border-b border-rose-500/20 flex items-center justify-between">
-              <span>{error}</span>
+              <span>{friendlyError(error).message}</span>
               <Button variant="ghost" size="sm" className="h-4 text-[10px] ml-2" onClick={() => setError(null)}>{t('prts_close')}</Button>
             </div>
           )}

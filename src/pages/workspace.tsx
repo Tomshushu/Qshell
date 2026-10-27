@@ -15,6 +15,7 @@ import { ConnectingAnimation } from "@/components/workspace/connecting-animation
 import { ConnectionDiagnosticsDialog } from "@/components/workspace/connection-diagnostics-dialog";
 import { SshCredentialDialog } from "@/components/workspace/ssh-credential-dialog";
 import { SshKeyCredentialDialog } from "@/components/workspace/ssh-key-credential-dialog";
+import { friendlyError } from "@/lib/error-messages";
 
 import { SnapshotModal } from "@/components/workspace/snapshot-modal";
 import { Button } from "@/components/ui/button";
@@ -1058,7 +1059,7 @@ export function WorkspacePage({
           )}
           {connectError && (
             <p className="text-[11px] text-destructive mt-2">
-              {connectError}
+              {friendlyError(connectError).message}
             </p>
           )}
         </>
@@ -1071,7 +1072,7 @@ export function WorkspacePage({
           <p className="text-sm mb-4">{t("ws_not_connected_desc")}</p>
           {connectError && (
             <p className="text-xs text-destructive mb-3 max-w-md text-center">
-              {connectError}
+              {friendlyError(connectError).message}
             </p>
           )}
           <div className="flex items-center gap-2">
