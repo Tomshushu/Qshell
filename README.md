@@ -8,6 +8,14 @@
 
 ### 🚀 现代化极速桌面终端与多协议服务器管理工作台
 
+<p align="center">
+  <a href="./README.md"><b>简体中文</b></a> |
+  <a href="./README_en.md"><b>English</b></a> |
+  <a href="./README_zh-TW.md"><b>繁體中文</b></a> |
+  <a href="./README_ja.md"><b>日本語</b></a> |
+  <a href="./README_ko.md"><b>한국어</b></a>
+</p>
+
 [![GitHub Release](https://img.shields.io/badge/GitHub-v1.0.17-blue.svg?style=flat-square&logo=github)](https://github.com/Tomshushu/Qshell/releases)
 [![Gitee Release](https://img.shields.io/badge/Gitee-v1.0.17-red.svg?style=flat-square&logo=gitee)](https://gitee.com/Tom-shushu/qshell/releases)
 [![Tauri](https://img.shields.io/badge/Tauri-v2.0-24C8D8.svg?style=flat-square&logo=tauri)](https://tauri.app/)
