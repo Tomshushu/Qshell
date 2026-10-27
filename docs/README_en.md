@@ -1,7 +1,7 @@
 <div align="center">
 
 <p align="center">
-  <img src="./public/logo.png" alt="Qshell Logo" width="108" height="108" />
+  <img src="../public/logo.png" alt="Qshell Logo" width="108" height="108" />
 </p>
 
 # Qshell
@@ -9,7 +9,7 @@
 ### 🚀 Modern High-Performance Desktop Terminal & Multi-Protocol Operations Workbench
 
 <p align="center">
-  <a href="./README.md"><b>简体中文</b></a> |
+  <a href="../README.md"><b>简体中文</b></a> |
   <a href="./README_en.md"><b>English</b></a> |
   <a href="./README_zh-TW.md"><b>繁體中文</b></a> |
   <a href="./README_ja.md"><b>日本語</b></a> |
@@ -21,12 +21,12 @@
 [![Tauri](https://img.shields.io/badge/Tauri-v2.0-24C8D8.svg?style=flat-square&logo=tauri)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-19.0-61DAFB.svg?style=flat-square&logo=react)](https://react.dev/)
 [![Rust](https://img.shields.io/badge/Rust-1.80+-DEA584.svg?style=flat-square&logo=rust)](https://www.rust-lang.org/)
-[![License](https://img.shields.io/badge/License-Apache%202.0-green.svg?style=flat-square)](./LICENSE)
+[![License](https://img.shields.io/badge/License-Apache%202.0-green.svg?style=flat-square)](../LICENSE)
 ![Platform: Windows | macOS | Linux](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg?style=flat-square)
 
 **Lightweight & Blazing Fast · Local Markov Command Prediction · Modern Hacker Aesthetics · Zero-Knowledge E2EE Cloud Sync · Full-Stack Protocol Hub · Agentless Monitoring**
 
-[🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases) · [⚡ Gitee Fast Mirror (China)](https://gitee.com/Tom-shushu/qshell/releases) · [✨ Highlights](#-why-qshell-highlights) · [📖 Features](#-key-features) · [📦 Download](#-download--installation) · [🤝 Contributing](./CONTRIBUTING.md)
+[🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases) · [⚡ Gitee Fast Mirror (China)](https://gitee.com/Tom-shushu/qshell/releases) · [✨ Highlights](#-why-qshell-highlights) · [📖 Features](#-key-features) · [📦 Download](#-download--installation) · [🤝 Contributing](../CONTRIBUTING.md)
 
 </div>
 
@@ -262,11 +262,11 @@ npm run build
 
 We welcome contributions and feedback from the community!
 - **Issues**: Report bugs or submit feature requests using our [Issue Templates](https://github.com/Tomshushu/Qshell/issues/new/choose).
-- **Pull Requests**: Please review [**CONTRIBUTING.md**](./CONTRIBUTING.md) before submitting.
-- **Release Protocol**: Strict compliance with [**AGENTS.md**](./AGENTS.md) is enforced for release engineering.
+- **Pull Requests**: Please review [**CONTRIBUTING.md**](../CONTRIBUTING.md) before submitting.
+- **Release Protocol**: Strict compliance with [**AGENTS.md**](../AGENTS.md) is enforced for release engineering.
 
 ---
 
 ## 📄 License
 
-Licensed under [Apache License 2.0](./LICENSE). Free for commercial and non-commercial use with patent protection. Copyright © Qshell Community.
+Licensed under [Apache License 2.0](../LICENSE). Free for commercial and non-commercial use with patent protection. Copyright © Qshell Community.

@@ -1,7 +1,7 @@
 <div align="center">
 
 <p align="center">
-  <img src="./public/logo.png" alt="Qshell Logo" width="108" height="108" />
+  <img src="../public/logo.png" alt="Qshell Logo" width="108" height="108" />
 </p>
 
 # Qshell
@@ -9,7 +9,7 @@
 ### 🚀 現代化極速桌面終端機與多協定伺服器管理工作台
 
 <p align="center">
-  <a href="./README.md"><b>简体中文</b></a> |
+  <a href="../README.md"><b>简体中文</b></a> |
   <a href="./README_en.md"><b>English</b></a> |
   <a href="./README_zh-TW.md"><b>繁體中文</b></a> |
   <a href="./README_ja.md"><b>日本語</b></a> |
@@ -21,12 +21,12 @@
 [![Tauri](https://img.shields.io/badge/Tauri-v2.0-24C8D8.svg?style=flat-square&logo=tauri)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-19.0-61DAFB.svg?style=flat-square&logo=react)](https://react.dev/)
 [![Rust](https://img.shields.io/badge/Rust-1.80+-DEA584.svg?style=flat-square&logo=rust)](https://www.rust-lang.org/)
-[![License](https://img.shields.io/badge/License-Apache%202.0-green.svg?style=flat-square)](./LICENSE)
+[![License](https://img.shields.io/badge/License-Apache%202.0-green.svg?style=flat-square)](../LICENSE)
 ![Platform: Windows | macOS | Linux](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg?style=flat-square)
 
 **輕量極速 · 本地馬可夫預測 · 現代極客美學 · 零知識雲漫遊 · 全協定支援 · 免 Agent 監控**
 
-[⚡ Gitee 鏡像極速下載](https://gitee.com/Tom-shushu/qshell/releases) · [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases) · [✨ 核心亮點](#-為什麼選擇-qshell-highlights) · [📖 功能特性](#-核心特性與亮點-key-features) · [📦 安裝指南](#-安裝與下載-download--installation) · [🤝 參與貢獻](./CONTRIBUTING.md)
+[⚡ Gitee 鏡像極速下載](https://gitee.com/Tom-shushu/qshell/releases) · [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases) · [✨ 核心亮點](#-為什麼選擇-qshell-highlights) · [📖 功能特性](#-核心特性與亮點-key-features) · [📦 安裝指南](#-安裝與下載-download--installation) · [🤝 參與貢獻](../CONTRIBUTING.md)
 
 </div>
 
@@ -263,11 +263,11 @@ npm run build
 
 我們非常歡迎社群開發者為 Qshell 貢獻程式碼或提出想法！
 - **提交 Issue**：回報 Bug 或提出新需求，請直接使用我們的 [Issue 範本](https://github.com/Tomshushu/Qshell/issues/new/choose)。
-- **提交 PR**：在發起程式碼合併請求前，請詳細閱讀 [**開源貢獻指南 (CONTRIBUTING.md)**](./CONTRIBUTING.md)。
-- **發版標準**：核心維護者發版請嚴格遵守 [**固化發版流程規範 (AGENTS.md / GEMINI.md)**](./AGENTS.md)。
+- **提交 PR**：在發起程式碼合併請求前，請詳細閱讀 [**開源貢獻指南 (CONTRIBUTING.md)**](../CONTRIBUTING.md)。
+- **發版標準**：核心維護者發版請嚴格遵守 [**固化發版流程規範 (AGENTS.md / GEMINI.md)**](../AGENTS.md)。
 
 ---
 
 ## 📄 開源許可證 (License)
 
-本專案採用 [Apache License 2.0](./LICENSE) 協議開源。版權歸 Qshell 社群所有。
+本專案採用 [Apache License 2.0](../LICENSE) 協議開源。版權歸 Qshell 社群所有。

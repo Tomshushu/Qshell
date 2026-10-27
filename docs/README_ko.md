@@ -1,7 +1,7 @@
 <div align="center">
 
 <p align="center">
-  <img src="./public/logo.png" alt="Qshell Logo" width="108" height="108" />
+  <img src="../public/logo.png" alt="Qshell Logo" width="108" height="108" />
 </p>
 
 # Qshell
@@ -9,7 +9,7 @@
 ### 🚀 현대적인 초고속 데스크톱 터미널 및 멀티 프로토콜 서버 관리 워크벤치
 
 <p align="center">
-  <a href="./README.md"><b>简体中文</b></a> |
+  <a href="../README.md"><b>简体中文</b></a> |
   <a href="./README_en.md"><b>English</b></a> |
   <a href="./README_zh-TW.md"><b>繁體中文</b></a> |
   <a href="./README_ja.md"><b>日本語</b></a> |
@@ -21,12 +21,12 @@
 [![Tauri](https://img.shields.io/badge/Tauri-v2.0-24C8D8.svg?style=flat-square&logo=tauri)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-19.0-61DAFB.svg?style=flat-square&logo=react)](https://react.dev/)
 [![Rust](https://img.shields.io/badge/Rust-1.80+-DEA584.svg?style=flat-square&logo=rust)](https://www.rust-lang.org/)
-[![License](https://img.shields.io/badge/License-Apache%202.0-green.svg?style=flat-square)](./LICENSE)
+[![License](https://img.shields.io/badge/License-Apache%202.0-green.svg?style=flat-square)](../LICENSE)
 ![Platform: Windows | macOS | Linux](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg?style=flat-square)
 
 **초경량 고성능 · 로컬 마르코프 명령어 예측 · 세련된 긱 미학 · 제로 지식 클라우드 동기화 · 전 프로토콜 지원 · 에이전트리스 모니터링**
 
-[🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases) · [⚡ Gitee 고속 미러](https://gitee.com/Tom-shushu/qshell/releases) · [✨ 핵심 특징](#-qshell을-선택하는-이유-highlights) · [📖 주요 기능](#-핵심-기능-key-features) · [📦 설치 안내](#-다운로드-및-설치-download--installation) · [🤝 기여하기](./CONTRIBUTING.md)
+[🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases) · [⚡ Gitee 고속 미러](https://gitee.com/Tom-shushu/qshell/releases) · [✨ 핵심 특징](#-qshell을-선택하는-이유-highlights) · [📖 주요 기능](#-핵심-기능-key-features) · [📦 설치 안내](#-다운로드-및-설치-download--installation) · [🤝 기여하기](../CONTRIBUTING.md)
 
 </div>
 
@@ -260,11 +260,11 @@ npm run build
 
 커뮤니티의 모든 피드백과 기여를 진심으로 환영합니다!
 - **이슈 등록**: 버그 제보나 기능 제안은 [이슈 템플릿](https://github.com/Tomshushu/Qshell/issues/new/choose)을 이용해 주세요.
-- **PR 제출**: 기여 전에 [**CONTRIBUTING.md**](./CONTRIBUTING.md) 문서를 참고해 주세요.
-- **릴리스 규약**: 메인테이너 릴리스 작업은 [**AGENTS.md**](./AGENTS.md) 지침을 엄격히 준수합니다.
+- **PR 제출**: 기여 전에 [**CONTRIBUTING.md**](../CONTRIBUTING.md) 문서를 참고해 주세요.
+- **릴리스 규약**: 메인테이너 릴리스 작업은 [**AGENTS.md**](../AGENTS.md) 지침을 엄격히 준수합니다.
 
 ---
 
 ## 📄 라이선스 (License)
 
-본 프로젝트는 [Apache License 2.0](./LICENSE)에 따라 오픈소스로 배포됩니다. 저작권은 Qshell 커뮤니티에 있습니다.
+본 프로젝트는 [Apache License 2.0](../LICENSE)에 따라 오픈소스로 배포됩니다. 저작권은 Qshell 커뮤니티에 있습니다.
