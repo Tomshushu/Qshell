@@ -16,6 +16,8 @@ import { backend, isTauri } from '@/services/api'
 import type { SshKeyInput } from '@/services/api'
 import type { WorkspaceTab } from '@/types'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
+import { emit, listen } from '@tauri-apps/api/event'
+import { getSupabaseClient } from '@/lib/supabase'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { AlertCircle, Copy, ShieldCheck } from 'lucide-react'
 import { useEffect, useCallback, useState } from 'react'
@@ -84,13 +86,17 @@ function AppContent() {
   }, [terminalWindowSizeKb]);
 
   // 原生启动屏平滑解散：等待双帧渲染（Layout + Paint 双缓冲就绪）后平滑淡出，彻底杜绝白闪
+  // 保证启动屏至少呈现满 1 轮完整的波浪动画（约 1.2s），使正式包视觉效果与开发环境保持一致且充满灵动感
   useEffect(() => {
     let timer: number | null = null
+    const startTime = Date.now()
     const frame1 = requestAnimationFrame(() => {
       const frame2 = requestAnimationFrame(() => {
+        const elapsed = Date.now() - startTime
+        const remaining = Math.max(0, 1200 - elapsed)
         timer = window.setTimeout(() => {
           (window as any).__dismissSplash?.()
-        }, 180)
+        }, remaining + 180)
       })
       return () => cancelAnimationFrame(frame2)
     })
@@ -120,25 +126,22 @@ function AppContent() {
     void sendStartupPulse()
 
     if (isTauri) {
-      void import('@tauri-apps/api/webviewWindow').then(({ getCurrentWebviewWindow }) => {
-        try {
-          const win = getCurrentWebviewWindow()
-          if (win.label === 'qshell-oauth') {
-            setIsOAuthPopup(true)
-            const handleOAuth = async () => {
-              const { getSupabaseClient } = await import('@/lib/supabase')
-              const client = getSupabaseClient()
-              if (!client) return
+      try {
+        const win = getCurrentWebviewWindow()
+        if (win.label === 'qshell-oauth') {
+          setIsOAuthPopup(true)
+          const handleOAuth = async () => {
+            const client = getSupabaseClient()
+            if (!client) return
 
-              const finishLogin = async () => {
-                try {
-                  const { emit } = await import('@tauri-apps/api/event')
-                  await emit('oauth-session-success')
-                } catch {
-                  /* ignore */
-                }
-                setTimeout(() => void win.close(), 400)
+            const finishLogin = async () => {
+              try {
+                await emit('oauth-session-success')
+              } catch {
+                /* ignore */
               }
+              setTimeout(() => void win.close(), 400)
+            }
 
               // 1. 尝试直接获取 Session
               const { data } = await client.auth.getSession()
@@ -175,10 +178,9 @@ function AppContent() {
             }
             void handleOAuth()
           }
-        } catch {
-          /* ignore */
-        }
-      })
+      } catch {
+        /* ignore */
+      }
     }
   }, [])
 
@@ -186,27 +188,27 @@ function AppContent() {
     if (!isTauri) return
     let unlisten: (() => void) | undefined
     let unlistenPayload: (() => void) | undefined
-    void import('@tauri-apps/api/event').then(({ listen }) => {
-      listen('oauth-session-success', () => {
-        void useAuthStore.getState().init().then(() => {
-          useAuthStore.getState().closeAuthDialog()
-          toast.success('GitHub 账号登录成功，欢迎回来')
-        })
-      }).then((u) => {
-        unlisten = u
-      })
 
-      listen<string>('oauth-session-payload', (event) => {
-        if (event.payload) {
-          void useAuthStore.getState().setSessionFromToken(event.payload).then(() => {
-            useAuthStore.getState().closeAuthDialog()
-            toast.success('授权令牌导入成功，已登录')
-          })
-        }
-      }).then((u) => {
-        unlistenPayload = u
+    void listen('oauth-session-success', () => {
+      void useAuthStore.getState().init().then(() => {
+        useAuthStore.getState().closeAuthDialog()
+        toast.success('GitHub 账号登录成功，欢迎回来')
       })
+    }).then((u) => {
+      unlisten = u
     })
+
+    void listen<string>('oauth-session-payload', (event) => {
+      if (event.payload) {
+        void useAuthStore.getState().setSessionFromToken(event.payload).then(() => {
+          useAuthStore.getState().closeAuthDialog()
+          toast.success('授权令牌导入成功，已登录')
+        })
+      }
+    }).then((u) => {
+      unlistenPayload = u
+    })
+
     return () => {
       unlisten?.()
       unlistenPayload?.()

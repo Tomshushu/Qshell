@@ -11,6 +11,8 @@
  */
 
 import { create } from 'zustand'
+import { appDataDir, join } from '@tauri-apps/api/path'
+import { convertFileSrc } from '@tauri-apps/api/core'
 import { encryptData, decryptData } from '@/utils/crypto-sync'
 import * as giteeAdapter from '@/services/sync/gitee-sync-adapter'
 import * as githubAdapter from '@/services/sync/github-sync-adapter'
@@ -195,13 +197,11 @@ async function resolveMediaPath(p: string | undefined, isVideo = false): Promise
   const filename = p.replace('media://', '')
   if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
     try {
-      const { appDataDir, join } = await import('@tauri-apps/api/path')
       const dir = await appDataDir()
       const localFilePath = await join(dir, 'backgrounds', filename)
       if (isVideo) {
         return localFilePath
       } else {
-        const { convertFileSrc } = await import('@tauri-apps/api/core')
         return convertFileSrc(localFilePath)
       }
     } catch {

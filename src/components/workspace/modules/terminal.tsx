@@ -254,7 +254,6 @@ export function TerminalModule({
   );
   const [activeTermId, setActiveTermId] = useState<string | null>(null);
   const activeTermIdRef = useRef(activeTermId);
-  const [peekRawTerminals, setPeekRawTerminals] = useState<Set<string>>(new Set());
   const [editServerOpen, setEditServerOpen] = useState(false);
   useEffect(() => {
     activeTermIdRef.current = activeTermId;
@@ -5028,6 +5027,15 @@ export function TerminalModule({
       const contextMenuHandler = (e: Event) => {
         e.preventDefault();
         setSelectionToolbar(null);
+        // 若当前终端处于连接中、重连中或失败遮罩状态，禁止触发右键菜单
+        const currentStatus = terminals.get(termId)?.status;
+        if (
+          currentStatus === "connecting" ||
+          currentStatus === "reconnecting" ||
+          currentStatus === "error"
+        ) {
+          return;
+        }
         const selection = term.getSelection();
         const hasSelection = !!selection;
 
@@ -8891,6 +8899,18 @@ export function TerminalModule({
         ref={terminalContainerRef}
         className="flex-1 h-full w-full relative overflow-hidden"
         onContextMenu={(e) => {
+          // 处于连接中、重连中或连接失败等覆盖层界面时，彻底禁止弹出终端右键菜单
+          const activeInst = activeTermId ? terminals.get(activeTermId) : undefined;
+          if (
+            activeInst &&
+            (activeInst.status === "connecting" ||
+              activeInst.status === "reconnecting" ||
+              activeInst.status === "error")
+          ) {
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+          }
           // 兜底：终端容器之外的空白区域/覆盖层上的右键也要能弹出菜单。
           // 每个终端实例的 contextmenu 监听已处理并 preventDefault，这里跳过避免重复处理。
           if (e.defaultPrevented) return;
@@ -9040,15 +9060,6 @@ export function TerminalModule({
               reconnectAttempt={inst.reconnectAttempt}
               server={server}
               termName={inst.name}
-              isPeekRaw={peekRawTerminals.has(termId)}
-              onTogglePeekRaw={() => {
-                setPeekRawTerminals((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(termId)) next.delete(termId);
-                  else next.add(termId);
-                  return next;
-                });
-              }}
               onReconnect={() => reconnectTerminal(termId)}
               onEditServer={baseServerId ? () => setEditServerOpen(true) : undefined}
             />
