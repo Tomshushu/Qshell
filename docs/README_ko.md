@@ -9,8 +9,8 @@
 ### 🚀 현대적인 초고속 데스크톱 터미널 및 멀티 프로토콜 서버 관리 워크벤치
 
 <p align="center">
-  <a href="../README.md"><b>简体中文</b></a> |
-  <a href="./README_en.md"><b>English</b></a> |
+  <a href="../README.md"><b>English</b></a> |
+  <a href="./README_zh-CN.md"><b>简体中文</b></a> |
   <a href="./README_zh-TW.md"><b>繁體中文</b></a> |
   <a href="./README_ja.md"><b>日本語</b></a> |
   <a href="./README_ko.md"><b>한국어</b></a>
