@@ -1485,6 +1485,12 @@ export function TerminalModule({
           }
 
           try {
+            term.clearTextureAtlas();
+          } catch {
+            // ignore
+          }
+
+          try {
             fitTerminalSafely(fitAddon, term);
             if (sessionId) {
               sshService.resizeShell(sessionId, term.cols, term.rows);
@@ -1507,7 +1513,7 @@ export function TerminalModule({
     const xtermTheme = themeToXtermTheme(activeTheme);
     const refreshes: Array<() => void> = [];
     xtermInstances.current.forEach(({ term }) => {
-      term.options.minimumContrastRatio = 1;
+      term.options.minimumContrastRatio = 4.5;
       term.options.theme = xtermTheme;
       // WebGL renderer 会缓存包含颜色信息的字形纹理。只修改 theme 时，已有字形
       // （尤其是当前选区）可能继续沿用旧前景色，看起来像 selectionForeground
@@ -4321,8 +4327,10 @@ export function TerminalModule({
         fastScrollSensitivity: 5,
         scrollSensitivity: 1,
         drawBoldTextInBrightColors: terminalDrawBoldInBrightColors ?? true,
-        // minimumContrastRatio 设为 1（关闭逐字符相对亮度反色循环，日志高频倾泻时大幅减少 CPU 开销）
-        minimumContrastRatio: 1,
+        // 对齐 VS Code / Windows Terminal 标准实践（WCAG AA 4.5:1 对比度）：
+        // 遇到暗色前景、低对比度 ANSI 码或着色器初始瞬态时自动向上提亮，
+        // 彻底杜绝暗底暗字不可见故障；现代 xterm WebGL renderer 采用 256 色查找表缓存对比度，开销为 O(1)。
+        minimumContrastRatio: 4.5,
         // 允许背景透明：themeToXtermTheme 在有背景图时把 background 降为半透明 rgba，
         // 必须开启 allowTransparency 才能让 xterm canvas 透出底层背景图 div。
         allowTransparency: true,
@@ -4581,6 +4589,11 @@ export function TerminalModule({
         document.fonts.ready
           .then(() => {
             if (!isUnmountedRef.current) {
+              try {
+                term.clearTextureAtlas();
+              } catch {
+                // ignore
+              }
               refreshCharSizeAndFit();
             }
           })
