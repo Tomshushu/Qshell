@@ -17,8 +17,8 @@ export interface TerminalConnectionOverlayProps {
   reconnectAttempt?: number
   server?: Server | null
   termName?: string
-  isPeekRaw: boolean
-  onTogglePeekRaw: () => void
+  isPeekRaw?: boolean
+  onTogglePeekRaw?: () => void
   onReconnect: () => void
   onEditServer?: () => void
   onCancel?: () => void
@@ -30,8 +30,8 @@ export const TerminalConnectionOverlay = memo(function TerminalConnectionOverlay
   reconnectAttempt,
   server,
   termName,
-  isPeekRaw,
-  onTogglePeekRaw,
+  isPeekRaw = false,
+  onTogglePeekRaw = () => {},
   onReconnect,
   onEditServer,
   onCancel,

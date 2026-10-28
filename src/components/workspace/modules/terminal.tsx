@@ -984,7 +984,7 @@ export function TerminalModule({
       )
       .then((r) => {
         aliasFetchInflightRef.current.delete(sid);
-        if (r?.success) {
+        if (r?.exitCode === 0) {
           setUserAliases(sid, parseAliasOutput(r.stdout ?? ""));
         }
       })
@@ -8779,7 +8779,7 @@ export function TerminalModule({
   const pendingPasteLatestRef = useLatestRef(pendingPaste);
   const handleClosePasteConfirm = useCallback(() => setPendingPaste(null), []);
   const handleConfirmPaste = useCallback(
-    (dontAskAgain: boolean) => {
+    (dontAskAgain?: boolean) => {
       if (dontAskAgain) {
         setTerminalPasteWarnEnabled(false);
       }

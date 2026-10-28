@@ -397,8 +397,8 @@ export function SftpPanel() {
   // 用 ref 跟踪最新 remotePath，上传完成刷新时对比，避免刷新到已离开的目录
   const remotePathRef = useRef<string>('')
   // loadRemoteDirectory / loadLocalDirectory 的 ref 包装，供空依赖 useEffect 内调用最新版本
-  const loadRemoteDirectoryRef = useRef<(serverId: string, path: string) => Promise<void> | void>(() => {})
-  const loadLocalDirectoryRef = useRef<(path: string, overrideSideType?: 'local' | 'remote', overrideServerId?: string) => Promise<void> | void>(() => {})
+  const loadRemoteDirectoryRef = useRef<(serverId: string, path: string, options?: { isRefresh?: boolean }) => Promise<void> | void>(() => {})
+  const loadLocalDirectoryRef = useRef<(path: string, overrideSideType?: 'local' | 'remote', overrideServerId?: string, options?: { isRefresh?: boolean }) => Promise<void> | void>(() => {})
   remotePathRef.current = remotePath
   const [remoteFiles, setRemoteFiles] = useState<FileEntry[]>([])
   // 用 ref 跟踪最新 remoteFiles，供 pasteFilesFromClipboard 等空依赖 useCallback 读取，避免闭包陷阱
@@ -1422,6 +1422,7 @@ export function SftpPanel() {
     pathString: string,
     overrideSideType?: 'local' | 'remote',
     overrideServerId?: string,
+    options?: { isRefresh?: boolean },
   ) => {
     if (!backend) return
     const prevPath = localPathRef.current
@@ -1499,7 +1500,11 @@ export function SftpPanel() {
   }
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const loadRemoteDirectory = async (serverId: string, pathString: string) => {
+  const loadRemoteDirectory = async (
+    serverId: string,
+    pathString: string,
+    options?: { isRefresh?: boolean },
+  ) => {
     if (!backend || !serverId) return
     const prevPath = remotePathRef.current
     const reqId = ++remoteDirReqIdRef.current
