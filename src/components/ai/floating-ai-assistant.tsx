@@ -19,6 +19,7 @@ import {
   Sparkles,
   MessageSquare,
   ArrowUp,
+  ArrowDown,
   ArrowRight,
   Plus,
   History,
@@ -238,6 +239,60 @@ function ThinkingAccordion({
 }) {
   const { t } = useTranslation()
   const [isExpanded, setIsExpanded] = useState(false)
+  const contentRef = useRef<HTMLDivElement>(null)
+  const isUserScrolledUpRef = useRef<boolean>(false)
+  const [showThinkingScrollBtn, setShowThinkingScrollBtn] = useState(false)
+
+  // 当处于展开状态且正在输出/内容变动时，若用户没有向上滑动，自动追踪最新行
+  useEffect(() => {
+    if (!isExpanded) return
+    const el = contentRef.current
+    if (!el) return
+
+    if (!isUserScrolledUpRef.current) {
+      el.scrollTop = el.scrollHeight
+    }
+  }, [thinking, isExpanded, isStreaming])
+
+  // 当流式输出开始时，默认重置为自动追踪底部
+  useEffect(() => {
+    if (isStreaming) {
+      isUserScrolledUpRef.current = false
+      setShowThinkingScrollBtn(false)
+    }
+  }, [isStreaming])
+
+  const handleToggleExpand = () => {
+    setIsExpanded((prev) => {
+      const next = !prev
+      if (next) {
+        // 展开时重置追踪状态
+        isUserScrolledUpRef.current = false
+        setShowThinkingScrollBtn(false)
+      }
+      return next
+    })
+  }
+
+  const handleThinkingScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget
+    const threshold = 30
+    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= threshold
+    isUserScrolledUpRef.current = !isNearBottom
+    if (isNearBottom) {
+      setShowThinkingScrollBtn(false)
+    } else if (isStreaming) {
+      setShowThinkingScrollBtn(true)
+    }
+  }
+
+  const scrollToBottom = () => {
+    isUserScrolledUpRef.current = false
+    setShowThinkingScrollBtn(false)
+    if (contentRef.current) {
+      contentRef.current.scrollTop = contentRef.current.scrollHeight
+    }
+  }
 
   if (!thinking) return null
 
@@ -263,7 +318,7 @@ function ThinkingAccordion({
       )}
       <button
         type="button"
-        onClick={() => setIsExpanded((prev) => !prev)}
+        onClick={handleToggleExpand}
         className={cn(
           'w-full flex items-center justify-between px-3 py-1.5 text-xs font-medium transition-colors select-none cursor-pointer',
           isTerminal
@@ -315,29 +370,43 @@ function ThinkingAccordion({
       </button>
 
       {isExpanded && (
-        <div
-          data-testid="ai-thinking-content"
-          className={cn(
-            'px-3.5 py-2.5 text-[11.5px] leading-relaxed border-t whitespace-pre-wrap font-sans select-text max-h-64 overflow-y-auto',
-            isTerminal
-              ? 'border-purple-500/20 bg-black/40 text-slate-200 selection:bg-purple-500/30'
-              : 'border-indigo-500/20 bg-indigo-50/40 dark:bg-black/40 text-zinc-800 dark:text-zinc-200 selection:bg-indigo-500/30',
-          )}
-        >
-          {thinking}
-          {isStreaming && (
-            <span
-              className={cn(
-                'inline-block w-1.5 h-3.5 ml-0.5 align-middle rounded-xs animate-pulse',
-                isTerminal ? 'bg-purple-400' : 'bg-indigo-500',
-              )}
-            />
-          )}
-          {isStreaming && (
-            <div className="mt-2.5 pt-2 border-t border-purple-500/15 flex items-center gap-1.5 text-[10.5px] text-purple-400/90 font-mono select-none">
-              <Sparkles className="w-3 h-3 text-purple-400 animate-spin shrink-0" />
-              <span>AI 正在深层次推导研判中，持续生成思维链...</span>
-            </div>
+        <div className="relative">
+          <div
+            ref={contentRef}
+            onScroll={handleThinkingScroll}
+            data-testid="ai-thinking-content"
+            className={cn(
+              'px-3.5 py-2.5 text-[11.5px] leading-relaxed border-t whitespace-pre-wrap font-sans select-text max-h-64 overflow-y-auto',
+              isTerminal
+                ? 'border-purple-500/20 bg-black/40 text-slate-200 selection:bg-purple-500/30'
+                : 'border-indigo-500/20 bg-indigo-50/40 dark:bg-black/40 text-zinc-800 dark:text-zinc-200 selection:bg-indigo-500/30',
+            )}
+          >
+            {thinking}
+            {isStreaming && (
+              <span
+                className={cn(
+                  'inline-block w-1.5 h-3.5 ml-0.5 align-middle rounded-xs animate-pulse',
+                  isTerminal ? 'bg-purple-400' : 'bg-indigo-500',
+                )}
+              />
+            )}
+            {isStreaming && (
+              <div className="mt-2.5 pt-2 border-t border-purple-500/15 flex items-center gap-1.5 text-[10.5px] text-purple-400/90 font-mono select-none">
+                <Sparkles className="w-3 h-3 text-purple-400 animate-spin shrink-0" />
+                <span>AI 正在深层次推导研判中，持续生成思维链...</span>
+              </div>
+            )}
+          </div>
+          {showThinkingScrollBtn && (
+            <button
+              type="button"
+              onClick={scrollToBottom}
+              className="absolute bottom-2 right-3 z-10 flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-purple-950/85 text-purple-200 border border-purple-500/40 shadow-xs hover:bg-purple-900 cursor-pointer backdrop-blur-xs transition-all animate-in fade-in"
+            >
+              <ArrowDown className="w-2.5 h-2.5 animate-bounce" />
+              <span>追踪思考最新行</span>
+            </button>
           )}
         </div>
       )}
@@ -1279,6 +1348,9 @@ export function FloatingAIAssistant() {
   })
   const [showHistoryPanel, setShowHistoryPanel] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const isChatUserScrolledUpRef = useRef<boolean>(false)
+  const [showScrollBottomBtn, setShowScrollBottomBtn] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   // 1. 小人位置（始终相对窗口右下角定位，缩放全屏不漂移）
@@ -1386,21 +1458,39 @@ export function FloatingAIAssistant() {
     closeFloatingAssistant,
   ])
 
-  // 自动滚动到最新消息
+  // 自动滚动到最新消息 (类似终端追踪机制：正在输出或有新消息时，未向上滚动则自动追踪最新行；用户向上滚动后锁定停留；滑回底部恢复追踪)
   useEffect(() => {
     if (isFloatingAssistantOpen && assistantMessages.length > 0) {
-      if (typeof messagesEndRef.current?.scrollIntoView === 'function') {
-        messagesEndRef.current.scrollIntoView({ behavior: 'smooth' })
+      if (!isChatUserScrolledUpRef.current && messagesContainerRef.current) {
+        messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight
       }
     }
-  }, [assistantMessages, isFloatingAssistantOpen])
+  }, [assistantMessages, isAssistantResponding, isFloatingAssistantOpen])
 
-  // 弹窗显隐状态变更时：重置卡片位置与尺寸、关闭历史抽屉（打开时聚焦输入框）
+  // 当新一轮响应开始时，重置滑动锁以自动追踪最新回答
+  useEffect(() => {
+    if (isAssistantResponding) {
+      isChatUserScrolledUpRef.current = false
+      setShowScrollBottomBtn(false)
+      if (messagesContainerRef.current) {
+        messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight
+      }
+    }
+  }, [isAssistantResponding])
+
+  // 弹窗显隐状态变更时：重置卡片位置与尺寸、关闭历史抽屉（打开时聚焦输入框并追踪最新）
   useEffect(() => {
     resetDialogCardPosition()
     setShowHistoryPanel(false)
     if (isFloatingAssistantOpen) {
-      setTimeout(() => textareaRef.current?.focus(), 150)
+      isChatUserScrolledUpRef.current = false
+      setShowScrollBottomBtn(false)
+      setTimeout(() => {
+        textareaRef.current?.focus()
+        if (messagesContainerRef.current) {
+          messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight
+        }
+      }, 150)
     }
   }, [isFloatingAssistantOpen])
 
@@ -1680,8 +1770,30 @@ export function FloatingAIAssistant() {
     window.addEventListener('pointerup', onPointerUp)
   }
 
+  const handleChatScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget
+    const threshold = 40
+    const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= threshold
+    isChatUserScrolledUpRef.current = !isNearBottom
+    if (isNearBottom) {
+      setShowScrollBottomBtn(false)
+    } else {
+      setShowScrollBottomBtn(el.scrollHeight > el.clientHeight + 80)
+    }
+  }
+
+  const scrollToBottom = () => {
+    isChatUserScrolledUpRef.current = false
+    setShowScrollBottomBtn(false)
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight
+    }
+  }
+
   const handleSend = () => {
     if (!assistantInput.trim() || isAssistantResponding) return
+    isChatUserScrolledUpRef.current = false
+    setShowScrollBottomBtn(false)
     playSound(SoundType.Click)
     void sendAssistantMessage()
   }
@@ -2392,7 +2504,11 @@ export function FloatingAIAssistant() {
           )}
 
           {/* Body 消息与空状态区域 */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-4 select-text">
+          <div
+            ref={messagesContainerRef}
+            onScroll={handleChatScroll}
+            className="flex-1 overflow-y-auto p-4 space-y-4 select-text relative"
+          >
             {assistantMessages.length === 0 ? (
               /* 空状态：2列横向功能卡片 + 热门推荐问答 Pills */
               <div className="flex flex-col space-y-4 pt-1 pb-2">
@@ -2700,6 +2816,23 @@ export function FloatingAIAssistant() {
               </div>
             )}
           </div>
+
+          {/* 向上滑动脱离底部追踪时，显示直观的“追踪最新输出”浮动胶囊 */}
+          {showScrollBottomBtn && (
+            <div className="absolute bottom-[86px] right-6 z-20 pointer-events-auto animate-in fade-in zoom-in-95 duration-150">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                data-testid="ai-scroll-to-bottom-btn"
+                onClick={scrollToBottom}
+                className="h-7 px-2.5 text-[11px] font-medium bg-background/95 dark:bg-zinc-900/95 text-foreground border border-border shadow-lg hover:bg-accent backdrop-blur-xs gap-1.5 rounded-full cursor-pointer transition-all"
+              >
+                <ArrowDown className="w-3 h-3 text-sky-500 animate-bounce" />
+                <span>{isAssistantResponding ? '追踪最新输出' : '回到底部'}</span>
+              </Button>
+            </div>
+          )}
 
           {/* Bottom 输入区域 (Antigravity 紧凑卡片风格，减少垂直占用) */}
           <div className={cn('p-2.5 pb-2 shrink-0 space-y-1.5 transition-colors', themeStyles.inputBar)}>

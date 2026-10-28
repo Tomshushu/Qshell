@@ -6,7 +6,7 @@
 
 import React from 'react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, fireEvent, act, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, act, cleanup, waitFor } from '@testing-library/react'
 import { AIMascotAvatar } from '../ai-mascot-avatar'
 import { FloatingAIAssistant, parseThinkingAndContent } from '../floating-ai-assistant'
 import { useAIStore } from '@/store/ai-store'
@@ -1008,6 +1008,125 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
     // 再次点击收起
     fireEvent.click(screen.getByText('收起思考'))
     expect(screen.queryByTestId('ai-thinking-content')).toBeNull()
+
+    unmount()
+  })
+
+  it('implements terminal-like scroll pinning in ThinkingAccordion (auto-tracks unless scrolled up)', async () => {
+    const msgId = 'msg_thinking_scroll'
+    useAIStore.setState({
+      isFloatingAssistantOpen: true,
+      assistantMessages: [
+        {
+          id: msgId,
+          role: 'assistant',
+          content: '<think>第一行思考\n第二行思考\n第三行思考</think>\n\n分析结果',
+          createdAt: Date.now(),
+          mode: 'agent',
+          status: 'responding',
+        },
+      ],
+    })
+
+    const { unmount } = renderWithProviders(<FloatingAIAssistant />)
+
+    // 展开思考
+    fireEvent.click(screen.getByText('展开思考'))
+    const thinkingContent = screen.getByTestId('ai-thinking-content')
+    expect(thinkingContent).toBeTruthy()
+
+    // 模拟 DOM 滚动尺寸
+    Object.defineProperty(thinkingContent, 'scrollHeight', { value: 500, configurable: true, writable: true })
+    Object.defineProperty(thinkingContent, 'clientHeight', { value: 200, configurable: true, writable: true })
+    thinkingContent.scrollTop = 300 // 500 - 300 - 200 = 0 (处于最底部)
+
+    // 用户向上滑动：scrollTop 变为 100 -> 距离底部 500 - 100 - 200 = 200 > 30px
+    thinkingContent.scrollTop = 100
+    fireEvent.scroll(thinkingContent)
+
+    // 此时用户已向上滑动，触发思考内容更新
+    useAIStore.setState({
+      assistantMessages: [
+        {
+          id: msgId,
+          role: 'assistant',
+          content: '<think>第一行思考\n第二行思考\n第三行思考\n第四行新输出</think>\n\n分析结果',
+          createdAt: Date.now(),
+          mode: 'agent',
+          status: 'responding',
+        },
+      ],
+    })
+
+    // scrollTop 不应该被强行拉到 500，应保持在用户的浏览位置
+    expect(thinkingContent.scrollTop).toBe(100)
+
+    // 用户滑回底部：scrollTop 变为 280 -> 距离底部 500 - 280 - 200 = 20 <= 30px
+    thinkingContent.scrollTop = 280
+    fireEvent.scroll(thinkingContent)
+
+    // 再次触发思考更新，应该恢复自动追踪到底部
+    Object.defineProperty(thinkingContent, 'scrollHeight', { value: 600, configurable: true, writable: true })
+    useAIStore.setState({
+      assistantMessages: [
+        {
+          id: msgId,
+          role: 'assistant',
+          content: '<think>第一行思考\n第二行思考\n第三行思考\n第四行新输出\n第五行持续思考</think>\n\n分析结果',
+          createdAt: Date.now(),
+          mode: 'agent',
+          status: 'responding',
+        },
+      ],
+    })
+
+    await waitFor(() => {
+      expect(thinkingContent.scrollTop).toBe(600)
+    })
+
+    unmount()
+  })
+
+  it('implements terminal-like scroll tracking and scroll-to-bottom button in main chat container', async () => {
+    useAIStore.setState({
+      isFloatingAssistantOpen: true,
+      assistantMessages: [
+        {
+          id: 'msg_1',
+          role: 'user',
+          content: '排查服务器内存',
+          createdAt: Date.now(),
+        },
+        {
+          id: 'msg_2',
+          role: 'assistant',
+          content: '正在排查...',
+          createdAt: Date.now(),
+          mode: 'chat',
+          status: 'responding',
+        },
+      ],
+    })
+
+    const { unmount } = renderWithProviders(<FloatingAIAssistant />)
+
+    const chatContainer = document.querySelector('.overflow-y-auto.p-4') as HTMLDivElement
+    expect(chatContainer).toBeTruthy()
+
+    Object.defineProperty(chatContainer, 'scrollHeight', { value: 1000, configurable: true, writable: true })
+    Object.defineProperty(chatContainer, 'clientHeight', { value: 400, configurable: true, writable: true })
+    chatContainer.scrollTop = 600 // 处于底部
+
+    // 向上滚动
+    fireEvent.scroll(chatContainer, { target: { scrollTop: 200, scrollHeight: 1000, clientHeight: 400 } })
+
+    // 向上滑动后，浮动“追踪最新输出”按钮应该出现
+    expect(screen.getByTestId('ai-scroll-to-bottom-btn')).toBeTruthy()
+
+    // 点击该按钮应恢复追踪并滚动到底部
+    fireEvent.click(screen.getByTestId('ai-scroll-to-bottom-btn'))
+    expect(chatContainer.scrollTop).toBe(1000)
+    expect(screen.queryByTestId('ai-scroll-to-bottom-btn')).toBeNull()
 
     unmount()
   })
