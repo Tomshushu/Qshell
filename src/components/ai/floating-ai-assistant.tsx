@@ -14,7 +14,7 @@ import { getTerminalTheme } from '@/utils/terminal-themes'
 import { AIMascotAvatar } from './ai-mascot-avatar'
 import { useTranslation } from '@/i18n'
 import { playSound, SoundType } from '@/lib/sound'
-import { marked } from 'marked'
+import { renderMarkdown } from '@/lib/markdown'
 import {
   Sparkles,
   MessageSquare,
@@ -661,7 +661,7 @@ function AssistantMessageRenderer({
           )
         }
 
-        const html = marked.parse(part.text, { gfm: true, breaks: true }) as string
+        const html = renderMarkdown(part.text)
         return (
           <div
             key={idx}

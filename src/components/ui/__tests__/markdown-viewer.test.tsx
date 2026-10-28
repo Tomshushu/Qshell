@@ -34,4 +34,16 @@ describe('MarkdownViewer', () => {
     const { container } = render(<MarkdownViewer content="" />)
     expect(container.firstChild).not.toBeNull()
   })
+
+  it('sanitizes raw HTML to prevent XSS', () => {
+    const md =
+      '<img src=x onerror=alert(1)><script>alert(1)</script>' +
+      '<a href="javascript:alert(2)">link</a>'
+    const { container } = render(<MarkdownViewer content={md} />)
+    const html = container.innerHTML
+
+    expect(html).not.toContain('onerror')
+    expect(html).not.toContain('<script')
+    expect(html).not.toContain('javascript:')
+  })
 })

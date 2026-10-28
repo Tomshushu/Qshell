@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
-import { marked } from 'marked'
 import { cn } from '@/lib/utils'
+import { renderMarkdown } from '@/lib/markdown'
 
 interface MarkdownViewerProps {
   content: string
@@ -8,13 +8,7 @@ interface MarkdownViewerProps {
 }
 
 export function MarkdownViewer({ content, className }: MarkdownViewerProps) {
-  const html = useMemo(() => {
-    try {
-      return marked.parse(content || '', { gfm: true, breaks: true }) as string
-    } catch {
-      return content || ''
-    }
-  }, [content])
+  const html = useMemo(() => renderMarkdown(content || ''), [content])
 
   return (
     <div
