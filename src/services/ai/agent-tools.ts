@@ -55,7 +55,7 @@ export const AGENT_TOOLS = [
     function: {
       name: 'execute_readonly_command',
       description:
-        '在目标服务器上安全执行单条只读检查排障命令（必须严格属于只读白名单，如 systemctl status nginx, journalctl -n 50, cat /etc/hosts 等）。严禁包含 rm, kill, reboot, 写重定向等修改破坏操作。',
+        '在目标服务器上安全执行单条只读排障命令，用于现场实机取证（如查看服务存活 systemctl status/is-active、截取报错日志 journalctl -u app -n 50 --no-pager / tail -n 40 /var/log/nginx/error.log / docker logs --tail 50、检查去噪配置文件 grep -vE "^\\s*#|^\\s*$" /etc/nginx/conf.d/*.conf、排查端口监听 ss -tulpn | grep :8080、检查内核 OOM 强杀 dmesg -T | grep -i oom 等）。严禁包含 rm, kill, reboot, 写重定向等修改破坏操作。',
       parameters: {
         type: 'object',
         properties: {
