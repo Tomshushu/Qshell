@@ -549,5 +549,87 @@ rm -f /tmp/qshell_test_bloat.log
     expect(capturedHeaders['anthropic-version']).toBe('2023-06-01')
     expect(capturedBody.model).toBe('Qwen/Qwen2.5-Coder-32B-Instruct')
   })
+
+  it('sanitizes sensitive secrets in tool output before sending to model when DLP is enabled', async () => {
+    let capturedToolMsgContent = ''
+    let callCount = 0
+
+    globalThis.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+      callCount++
+      const body = init?.body ? JSON.parse(init.body as string) : {}
+      if (callCount === 1) {
+        return {
+          ok: true,
+          json: async () => ({
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content: '正在查询应用配置',
+                  tool_calls: [
+                    {
+                      id: 'call_config_1',
+                      type: 'function',
+                      function: {
+                        name: 'probe_server',
+                        arguments: JSON.stringify({ metric: 'memory' }),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+        }
+      } else {
+        const toolMsg = body.messages?.find((m: any) => m.role === 'tool')
+        capturedToolMsgContent = toolMsg?.content || ''
+        return {
+          ok: true,
+          json: async () => ({
+            choices: [
+              {
+                message: {
+                  role: 'assistant',
+                  content: '已完成分析。',
+                },
+              },
+            ],
+          }),
+        }
+      }
+    })
+
+    const dlpSettings: AISettings = {
+      ...baseSettings,
+      enableDlp: true,
+      maskPrivateIps: true,
+    }
+
+    await sendAssistantChat(
+      dlpSettings,
+      [{ role: 'user', content: '查看内存' }],
+      'agent',
+      {
+        servers: [
+          {
+            id: 'srv-1',
+            name: '测试机',
+            host: '10.0.0.5',
+            port: 22,
+            username: 'root',
+            authType: 'password',
+            targetType: 'linux',
+            status: 'online',
+          },
+        ] as any,
+        activeServerId: 'srv-1',
+      },
+    )
+
+    expect(callCount).toBe(2)
+    // When maskPrivateIps is enabled, any private IPs in probe output are masked
+    expect(capturedToolMsgContent).not.toContain('10.0.0.5')
+  })
 })
 

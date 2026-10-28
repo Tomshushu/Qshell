@@ -236,6 +236,10 @@ const SENSITIVE_PATH_PATTERNS: Array<{ regex: RegExp; reason: string }> = [
     reason: '禁止访问任何 SSH 密钥凭证文件 (~/.ssh/*)',
   },
   { regex: /\.(?:bash_history|zsh_history|sh_history|history)\b/, reason: '禁止读取终端命令历史记录，防止明文凭证泄露' },
+  { regex: /\.(?:aws|kube)\/(?:credentials|config)\b/, reason: '禁止访问云厂商凭据或 K8s 集群凭据文件 (~/.aws/*, ~/.kube/*)' },
+  { regex: /\.(?:git-credentials|netrc|npmrc|dockercfg|docker\/config\.json)\b/, reason: '禁止读取开发与容器仓库授权认证文件' },
+  { regex: /\.env(?:\.[a-zA-Z0-9_-]+)?\b/, reason: '禁止读取包含明文机密的 .env 环境变量配置文件' },
+  { regex: /(?:\/etc\/ssl|\/etc\/pki(?:\/tls)?)\/private\b/, reason: '禁止访问系统 SSL/TLS 证书私钥保护目录' },
   { regex: /\/proc\/(?:kcore|kmem)\b/, reason: '禁止访问 Linux 内核物理内存映射 (/proc/kcore)' },
   { regex: /\/dev\/(?:mem|kmem|port)\b/, reason: '禁止直接访问底层内存与硬件端口设备 (/dev/mem)' },
 ]

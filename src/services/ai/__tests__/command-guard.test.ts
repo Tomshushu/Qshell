@@ -149,6 +149,12 @@ describe('AI Command Guard Engine (指令安全网关)', () => {
       expect(evaluateCommandForExecution('cat /etc/shadow').allowed).toBe(false)
       expect(evaluateCommandForExecution('cat ~/.ssh/id_rsa').allowed).toBe(false)
       expect(evaluateCommandForExecution('tail /etc/gshadow').allowed).toBe(false)
+      expect(evaluateCommandForExecution('cat /app/.env').allowed).toBe(false)
+      expect(evaluateCommandForExecution('cat /root/.env.production').allowed).toBe(false)
+      expect(evaluateCommandForExecution('cat ~/.aws/credentials').allowed).toBe(false)
+      expect(evaluateCommandForExecution('cat ~/.kube/config').allowed).toBe(false)
+      expect(evaluateCommandForExecution('cat /etc/ssl/private/server.key').allowed).toBe(false)
+      expect(evaluateCommandForExecution('cat ~/.git-credentials').allowed).toBe(false)
     })
   })
 

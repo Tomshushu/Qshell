@@ -1439,8 +1439,13 @@ export async function sendAssistantChat(
         })
       }
 
-      // 保护性截断冗余工具输出，防止上下文过大导致思维链发散和 Token 耗尽
+      // 保护性 DLP 数据脱敏与长度截断，防止服务器日志中的秘钥、密码或 Token 泄露给大模型 API
       let sanitizedToolOutput = execResult.output || ''
+      if (settings.enableDlp) {
+        sanitizedToolOutput = sanitizeLogContent(sanitizedToolOutput, {
+          maskPrivateIps: settings.maskPrivateIps,
+        })
+      }
       if (sanitizedToolOutput.length > 2500) {
         const head = sanitizedToolOutput.slice(0, 1500)
         const tail = sanitizedToolOutput.slice(-800)
