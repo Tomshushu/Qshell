@@ -113,6 +113,25 @@ describe('markov-chain transition model', () => {
 
       expect(predInMatchingCwd[0].confidence).toBeGreaterThan(predInOtherCwd[0].confidence)
     })
+
+    it('严格按服务器实例隔离自主学习连招，且内置预置连招各主机通用共享', () => {
+      // 在 Server A 上学习了专有容器维护连招
+      recordMarkovTransition('docker ps', 'docker logs -f my-private-container', undefined, 'server-a', 'server-a')
+
+      // 在 Server A 下查询：应该能看到习惯连招
+      const predServerA = predictNextMarkovCommands('docker ps', 'docker', undefined, 5, { serverId: 'server-a', scopeId: 'server-a' })
+      expect(predServerA.some((p) => p.command === 'docker logs -f my-private-container')).toBe(true)
+
+      // 在 Server B 下查询：绝不能看到 Server A 的专有容器连招！
+      const predServerB = predictNextMarkovCommands('docker ps', 'docker', undefined, 5, { serverId: 'server-b', scopeId: 'server-b' })
+      expect(predServerB.some((p) => p.command === 'docker logs -f my-private-container')).toBe(false)
+
+      // 但内置预置连招在 Server A 和 Server B 下均通用可用（如 git add . -> git commit -m ""）
+      const builtinA = predictNextMarkovCommands('git add .', 'git', undefined, 5, { serverId: 'server-a' })
+      const builtinB = predictNextMarkovCommands('git add .', 'git', undefined, 5, { serverId: 'server-b' })
+      expect(builtinA.some((p) => p.command === 'git commit -m ""')).toBe(true)
+      expect(builtinB.some((p) => p.command === 'git commit -m ""')).toBe(true)
+    })
   })
 
   describe('getMarkovHintItems', () => {

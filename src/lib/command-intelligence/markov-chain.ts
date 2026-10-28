@@ -33,6 +33,7 @@ export interface TransitionRecord {
   count: number
   lastUsed: number
   cwd?: string
+  serverId?: string
 }
 
 /** 本地持久化 Key */
@@ -623,6 +624,7 @@ export function recordMarkovTransition(
   nextCmd: string,
   cwd?: string,
   scopeId = 'default',
+  serverId?: string,
 ): void {
   const nextClean = nextCmd.trim()
   if (nextClean) {
@@ -640,18 +642,20 @@ export function recordMarkovTransition(
   predictionCache = null
   const entries = loadLearnedTransitions()
   const now = Date.now()
+  const effectiveServerId = serverId?.trim() || (scopeId !== 'default' ? scopeId.trim() : undefined)
 
   // 规范化 from（保留前两个 token 作为转移触发锚点）
   const { base: fromBase } = normalizeCommandPattern(prevClean)
   const normFrom = fromBase || prevClean
 
-  // cwd 也参与匹配：同一条转移在不同目录下应分开统计，
-  // 否则最后一次的 cwd 会覆盖之前所有目录的记录（导致跨目录误推荐）。
+  // cwd 与 serverId 均参与匹配：同一条转移在不同服务器或不同目录下分开统计，
+  // 隔离各主机的个性化习惯连招，彻底避免跨服污染。
   const existingIdx = entries.findIndex(
     (e) =>
       (e.from === normFrom || e.from === prevClean) &&
       e.to === nextClean &&
-      (e.cwd || '') === (cwd || ''),
+      (e.cwd || '') === (cwd || '') &&
+      (e.serverId || '') === (effectiveServerId || ''),
   )
 
   if (existingIdx >= 0) {
@@ -664,6 +668,7 @@ export function recordMarkovTransition(
       count: nextCount,
       lastUsed: now,
       cwd: cwd || existing.cwd,
+      serverId: effectiveServerId || existing.serverId,
     })
     // 当某条转移达到 1000 次时，对该前驱命令（from）下的所有转移执行等比折半归一化：
     // 既保留同一前驱下各后继动作的相对概率比例（如 1000:400 -> 500:200），又避免频繁触发或数值超过三位数
@@ -681,6 +686,7 @@ export function recordMarkovTransition(
       count: 1,
       lastUsed: now,
       cwd,
+      serverId: effectiveServerId,
     })
   }
 
@@ -728,8 +734,19 @@ function collectMarkovCandidates(
   const learned = loadLearnedTransitions()
   const now = Date.now()
   const DAY_MS = 86_400_000
+  const effectiveServerId = serverId?.trim() || (scopeId !== 'default' ? scopeId.trim() : undefined)
 
   for (const entry of learned) {
+    // 服务器实例隔离过滤：
+    // - 若当前处于特定主机 (effectiveServerId 存在)，仅推荐属于该主机的习惯连招；
+    // - 若当前未绑定特定主机，仅推荐未打标特定主机的通用习惯连招。
+    // 严格杜绝在 Server A 学习到的容器/私有命令链（如 docker logs -f ...）泄露到 Server B。
+    if (effectiveServerId) {
+      if (entry.serverId !== effectiveServerId) continue
+    } else {
+      if (entry.serverId) continue
+    }
+
     const matchFrom = entry.from === cleanPrev || entry.from === prevBase
     if (!matchFrom) continue
 

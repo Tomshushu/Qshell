@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { matchHints, applyHint, tokenize } from '../completion-engine'
-import { recordCommand, getHistory, clearHistory } from '../command-history'
+import { recordCommand, getHistory, clearHistory, suggestHistory } from '../command-history'
 import type { HintItem } from '../completion-engine'
 
 describe('sudo 穿透', () => {
@@ -250,6 +250,33 @@ describe('参数语义搜索与智能光标定位', () => {
     expect(pullEntry?.useCount).toBe(200)
     expect(statusEntry?.serverCounts?.s1).toBe(500)
     expect(pullEntry?.serverCounts?.s1).toBe(200)
+    clearHistory()
+  })
+
+  it('严格按服务器实例隔离历史命令推荐，杜绝异地容器名/私有路径渗透', () => {
+    clearHistory()
+    // 在 host-prod 上高频执行专有容器排错命令
+    for (let i = 0; i < 15; i++) {
+      recordCommand('docker logs -f hycloud-sdb-prod', { serverId: 'host-prod' })
+    }
+    // 在 host-dev 上执行常规开发命令
+    for (let i = 0; i < 2; i++) {
+      recordCommand('docker compose ps', { serverId: 'host-dev' })
+    }
+
+    // 在 host-dev 上键入 "docker "：只能看到本机的命令，绝不能透出 host-prod 的私有容器！
+    const hintsDev = suggestHistory('docker ', 5, { serverId: 'host-dev' })
+    expect(hintsDev.length).toBe(1)
+    expect(hintsDev[0].label).toBe('docker compose ps')
+    expect(hintsDev[0].desc).toContain('同主机 · 2 次')
+    expect(hintsDev.some((h) => h.label.includes('hycloud-sdb-prod'))).toBe(false)
+
+    // 在 host-prod 上键入 "docker "：可以看到 host-prod 的历史
+    const hintsProd = suggestHistory('docker ', 5, { serverId: 'host-prod' })
+    expect(hintsProd.length).toBe(1)
+    expect(hintsProd[0].label).toBe('docker logs -f hycloud-sdb-prod')
+    expect(hintsProd[0].desc).toContain('同主机 · 15 次')
+
     clearHistory()
   })
 })

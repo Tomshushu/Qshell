@@ -327,13 +327,31 @@ export function suggestHistory(
     const recencyScore =
       daysAgo < 0.04 ? 36 : daysAgo < 7 ? 30 - daysAgo * 3 : Math.max(0, 10 - (daysAgo - 7))
 
-    // 4. 主机与目录亲和度（Context Affinity）
-    let contextBonus = 0
-    let badge: string | undefined
-    const cwdHits = curCwd ? (e.cwdCounts?.[curCwd] ?? (e.lastCwd === curCwd ? 1 : 0)) : 0
+    // 4. 主机与服务器隔离检查 (Server Isolation)
+    // 行业标杆实践（对标 Atuin host-filter 与 Termius Host 隔离）：
+    // - 若当前处于特定主机 (curServerId 存在)，仅推荐在该主机真实执行过的历史；
+    //   彻底杜绝 A 服务器专有的容器名、私有路径、数据库参数跨服渗透到 B 服务器。
+    // - 若当前未指定主机（如本地未绑定上下文），仅排除那些明确打标在远程服务器的历史。
     const serverHits = curServerId
       ? (e.serverCounts?.[curServerId] ?? (e.lastServerId === curServerId ? 1 : 0))
       : 0
+
+    if (curServerId) {
+      if (serverHits === 0) {
+        continue
+      }
+    } else {
+      const hasOtherServerOnly = Boolean(
+        (e.serverCounts && Object.keys(e.serverCounts).length > 0) || e.lastServerId,
+      )
+      if (hasOtherServerOnly) {
+        continue
+      }
+    }
+
+    let contextBonus = 0
+    let badge: string | undefined
+    const cwdHits = curCwd ? (e.cwdCounts?.[curCwd] ?? (e.lastCwd === curCwd ? 1 : 0)) : 0
 
     if (cwdHits > 0) {
       contextBonus += 28 + Math.min(12, Math.log2(cwdHits + 1) * 4)
@@ -342,12 +360,6 @@ export function suggestHistory(
     if (serverHits > 0) {
       contextBonus += 22 + Math.min(10, Math.log2(serverHits + 1) * 3)
       if (!badge) badge = '同主机'
-    } else if (
-      curServerId &&
-      ((e.serverCounts && Object.keys(e.serverCounts).length > 0) || e.lastServerId)
-    ) {
-      // 仅在其他服务器执行过，轻微降权防止喧宾夺主
-      contextBonus -= 12
     }
 
     // 完全相等（用户输入就是历史命令）给最高分
@@ -365,14 +377,18 @@ export function suggestHistory(
 
   return scored.slice(0, maxItems).map(({ e, score, badge }) => {
     const endsWithEmptyQuotes = e.cmd.endsWith('""') || e.cmd.endsWith("''")
-    const countText = `${formatUseCount(e.useCount ?? 1)} 次`
+    const serverHits = curServerId
+      ? (e.serverCounts?.[curServerId] ?? (e.lastServerId === curServerId ? 1 : 0))
+      : 0
+    const hostCount = curServerId && serverHits > 0 ? serverHits : (e.useCount ?? 1)
+    const countText = `${formatUseCount(hostCount)} 次`
     return {
       kind: 'history' as const,
       label: e.cmd,
       desc: badge ? `${badge} · ${countText}` : `最近使用 · ${countText}`,
       insertText: e.cmd,
       usedAt: e.usedAt,
-      useCount: e.useCount,
+      useCount: hostCount,
       score,
       badge,
       cursorBack: endsWithEmptyQuotes ? 1 : undefined,

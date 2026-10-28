@@ -1096,19 +1096,20 @@ export function TerminalModule({
       const buildPredictiveHints = (staticItems: HintItem[]): HintItem[] => {
         const trimmed = input.trim();
         if (!trimmed) return [];
+        const effectiveSid = baseServerId || serverId;
         const markovHints = getMarkovHintItems(prevCmd, input, cwd, 2, {
-          scopeId,
-          serverId,
+          scopeId: effectiveSid || scopeId,
+          serverId: effectiveSid,
           lastOutput: recentOutput,
           platform: platformRef.current,
         });
         const markovLabels = new Set(markovHints.map((m) => m.label));
         const staticLabels = new Set(staticItems.map((i) => i.label));
 
-        // 全阶段上下文历史推荐（支持命令/子命令/参数/动态阶段及多词缩写，按 ServerId+CWD 加权）
+        // 全阶段上下文历史推荐（按 ServerId 隔离，杜绝外部主机私有指令渗透）
         const histBudget = result.phase === "command" ? 2 : 3;
         const rawHist = suggestHistory(input, histBudget, {
-          serverId,
+          serverId: effectiveSid,
           cwd: cwd || undefined,
         });
         const dedupHist = rawHist.filter((h) => {
@@ -2873,14 +2874,15 @@ export function TerminalModule({
       if (!clean) return;
       pendingCommandRef.current.set(termId, clean);
 
-      const scopeId = serverId || termId;
+      const effectiveSid = baseServerId || serverId;
+      const scopeId = effectiveSid || termId;
       updateSessionEntities(clean, scopeId);
 
-      // 本地马尔可夫模型自适应强化学习：记录相邻执行命令转移对
+      // 本地马尔可夫模型自适应强化学习：记录相邻执行命令转移对（按 ServerId 绑定隔离）
       const prevCmd = lastSubmittedCommandPerTermRef.current.get(termId);
       const currentCwd = terminalCwdRef.current.get(termId);
       if (prevCmd && prevCmd !== clean) {
-        recordMarkovTransition(prevCmd, clean, currentCwd, scopeId);
+        recordMarkovTransition(prevCmd, clean, currentCwd, scopeId, effectiveSid);
       }
       lastSubmittedCommandPerTermRef.current.set(termId, clean);
 
@@ -3933,8 +3935,13 @@ export function TerminalModule({
             // 注：customKeyEventHandler 对 Enter 做智能判断——命令完整匹配或
             // 非命令阶段时放行执行，仅前缀补全模式才拦截；此处即真正执行命令
             if (currentInputRef.current.trim()) {
+              const curCwd =
+                terminalCwdRef.current.get(termId) ?? homeDirRef.current;
               rememberSubmittedCommand(termId, submittedCommand);
-              recordCommand(currentInputRef.current);
+              recordCommand(currentInputRef.current, {
+                serverId: baseServerId || serverId,
+                cwd: curCwd,
+              });
               // 新命令入历史后令排名缓存失效，下一次补全即反映最新频次
               invalidateRankingCache();
             }
@@ -6133,7 +6140,7 @@ export function TerminalModule({
                 terminalCwdRef.current.get(termId) ?? homeDirRef.current;
               rememberSubmittedCommand(termId, currentInputRef.current);
               recordCommand(currentInputRef.current, {
-                serverId,
+                serverId: baseServerId || serverId,
                 cwd: curCwd,
               });
               // 新命令入历史后令排名缓存失效，下一次补全即反映最新频次
@@ -6155,7 +6162,7 @@ export function TerminalModule({
                   terminalCwdRef.current.get(termId) ?? homeDirRef.current;
                 rememberSubmittedCommand(termId, fullCmd);
                 recordCommand(fullCmd, {
-                  serverId,
+                  serverId: baseServerId || serverId,
                   cwd: curCwd,
                 });
                 // 新命令入历史后令排名缓存失效，下一次补全即反映最新频次
