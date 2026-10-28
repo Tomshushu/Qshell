@@ -144,17 +144,34 @@ describe('AI Command Guard Engine (指令安全网关)', () => {
     })
   })
 
-  describe('Sensitive Credential Protection (敏感凭证路径保护)', () => {
-    it('should block access to /etc/shadow or private keys', () => {
+  describe('Sensitive Credential Protection (敏感凭证路径分级防护 - 对齐 Claude Code 工业标准)', () => {
+    it('should block absolute red-line secrets unconditionally (shadow, ssh private key, ssl key, git credentials)', () => {
       expect(evaluateCommandForExecution('cat /etc/shadow').allowed).toBe(false)
       expect(evaluateCommandForExecution('cat ~/.ssh/id_rsa').allowed).toBe(false)
       expect(evaluateCommandForExecution('tail /etc/gshadow').allowed).toBe(false)
-      expect(evaluateCommandForExecution('cat /app/.env').allowed).toBe(false)
-      expect(evaluateCommandForExecution('cat /root/.env.production').allowed).toBe(false)
-      expect(evaluateCommandForExecution('cat ~/.aws/credentials').allowed).toBe(false)
-      expect(evaluateCommandForExecution('cat ~/.kube/config').allowed).toBe(false)
       expect(evaluateCommandForExecution('cat /etc/ssl/private/server.key').allowed).toBe(false)
       expect(evaluateCommandForExecution('cat ~/.git-credentials').allowed).toBe(false)
+    })
+
+    it('should block reading raw credentials from ~/.aws and ~/.kube while allowing safe metadata inspection', () => {
+      // Content reading is blocked
+      expect(evaluateCommandForExecution('cat ~/.aws/credentials').allowed).toBe(false)
+      expect(evaluateCommandForExecution('cat ~/.kube/config').allowed).toBe(false)
+      expect(evaluateCommandForExecution('cat ~/.docker/config.json').allowed).toBe(false)
+
+      // Safe metadata checks are allowed
+      expect(evaluateCommandForExecution('ls -la ~/.aws/credentials').allowed).toBe(true)
+      expect(evaluateCommandForExecution('stat ~/.kube/config').allowed).toBe(true)
+      expect(evaluateCommandForExecution('test -f ~/.kube/config').allowed).toBe(true)
+    })
+
+    it('should allow application .env file inspection and metadata check under read-only mode (DLP sanitizes content on egress)', () => {
+      expect(evaluateCommandForExecution('ls -la /app/.env').allowed).toBe(true)
+      expect(evaluateCommandForExecution('stat /app/.env').allowed).toBe(true)
+      expect(evaluateCommandForExecution('test -f /app/.env').allowed).toBe(true)
+      expect(evaluateCommandForExecution('cat /app/.env').allowed).toBe(true)
+      expect(evaluateCommandForExecution('grep DB_HOST /app/.env').allowed).toBe(true)
+      expect(evaluateCommandForExecution('ls -ld /etc/ssl/private').allowed).toBe(true)
     })
   })
 

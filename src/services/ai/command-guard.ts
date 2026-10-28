@@ -141,6 +141,8 @@ const READONLY_COMMAND_WHITELIST = new Set([
   'which',
   'whereis',
   'type',
+  'test', // Bash 条件测试（仅限只读检查文件属性）
+  '[',
 
   // Linux / Unix 扩展系统与发行版只读信息
   'hostnamectl',
@@ -223,9 +225,9 @@ const ABSOLUTE_BLOCKED_PATTERNS: Array<{ regex: RegExp; reason: string }> = [
 ]
 
 /**
- * 敏感凭证与机密路径保护 (禁止读取系统私钥、密码散列与凭据文件)
+ * 绝对不可触碰的系统级红线路径 (永久硬阻断，任何命令均禁止访问)
  */
-const SENSITIVE_PATH_PATTERNS: Array<{ regex: RegExp; reason: string }> = [
+const ABSOLUTE_SYSTEM_CREDENTIAL_PATTERNS: Array<{ regex: RegExp; reason: string }> = [
   { regex: /\/etc\/shadow\b/, reason: '禁止读取 Linux 用户密码哈希表 (/etc/shadow)' },
   { regex: /\/etc\/gshadow\b/, reason: '禁止读取用户组凭证表 (/etc/gshadow)' },
   { regex: /\/etc\/master\.passwd\b/, reason: '禁止读取系统主密码表 (/etc/master.passwd)' },
@@ -236,13 +238,57 @@ const SENSITIVE_PATH_PATTERNS: Array<{ regex: RegExp; reason: string }> = [
     reason: '禁止访问任何 SSH 密钥凭证文件 (~/.ssh/*)',
   },
   { regex: /\.(?:bash_history|zsh_history|sh_history|history)\b/, reason: '禁止读取终端命令历史记录，防止明文凭证泄露' },
-  { regex: /\.(?:aws|kube)\/(?:credentials|config)\b/, reason: '禁止访问云厂商凭据或 K8s 集群凭据文件 (~/.aws/*, ~/.kube/*)' },
-  { regex: /\.(?:git-credentials|netrc|npmrc|dockercfg|docker\/config\.json)\b/, reason: '禁止读取开发与容器仓库授权认证文件' },
-  { regex: /\.env(?:\.[a-zA-Z0-9_-]+)?\b/, reason: '禁止读取包含明文机密的 .env 环境变量配置文件' },
-  { regex: /(?:\/etc\/ssl|\/etc\/pki(?:\/tls)?)\/private\b/, reason: '禁止访问系统 SSL/TLS 证书私钥保护目录' },
   { regex: /\/proc\/(?:kcore|kmem)\b/, reason: '禁止访问 Linux 内核物理内存映射 (/proc/kcore)' },
   { regex: /\/dev\/(?:mem|kmem|port)\b/, reason: '禁止直接访问底层内存与硬件端口设备 (/dev/mem)' },
+  { regex: /(?:\/etc\/ssl|\/etc\/pki(?:\/tls)?)\/private\/.*(?:\.key|\.pem)\b/, reason: '禁止直接读取系统 SSL/TLS 证书私钥明文内容' },
+  { regex: /\.(?:git-credentials|netrc|dockercfg)\b/, reason: '禁止读取代码仓库明文授权认证文件' },
 ]
+
+/**
+ * 敏感应用凭证路径：允许元数据探查（ls, stat, test 等确认文件在不在/权限对不对），
+ * 但严禁使用 cat/head/tail/grep 读取完整凭据明文
+ */
+const CREDENTIAL_CONTENT_BLOCKED_PATTERNS: Array<{ regex: RegExp; reason: string }> = [
+  { regex: /\.(?:aws|kube)\/(?:credentials|config)\b/, reason: '禁止直接读取云厂商凭据或 K8s 集群凭证明文内容' },
+  { regex: /\.(?:docker\/config\.json|npmrc)\b/, reason: '禁止直接读取 Docker 或 NPM 注册表认证凭证明文' },
+]
+
+/**
+ * 纯元数据探查命令集（仅返回文件存在性、属主、权限位、大小或类型，绝不读取或输出文件内部数据）
+ */
+const METADATA_BASE_COMMANDS = new Set([
+  'ls',
+  'dir',
+  'stat',
+  'file',
+  'test',
+  '[',
+])
+
+/**
+ * 检查整个指令链是否为仅查看文件属性/状态的纯元数据指令
+ */
+export function isMetadataOnlyCommand(command: string): boolean {
+  const segments = command
+    .split(/(?:&&|\|\||[;|\r\n]+)/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+
+  if (segments.length === 0) return false
+
+  return segments.every((seg) => {
+    const pipeParts = seg.split(/\|/).map((p) => p.trim()).filter(Boolean)
+    const firstPart = pipeParts[0] || ''
+    const tokens = firstPart.split(/\s+/).filter(Boolean)
+    let cmdIndex = 0
+    while (cmdIndex < tokens.length && tokens[cmdIndex].includes('=')) {
+      cmdIndex++
+    }
+    const rawToken = tokens[cmdIndex] || ''
+    const baseCmd = rawToken.toLowerCase().replace(/['"\\]/g, '').replace(/^[\w/-]+\//, '')
+    return METADATA_BASE_COMMANDS.has(baseCmd)
+  })
+}
 
 /**
  * 写操作与变更类操作阻断模式
@@ -636,8 +682,8 @@ export function evaluateCommandForExecution(
     }
   }
 
-  // 3. 敏感路径访问防护 (凭证、Shadow、SSH 私钥、历史记录、内核内存)
-  for (const item of SENSITIVE_PATH_PATTERNS) {
+  // 3. 绝对机密与系统级红线路径防护 (系统 Shadow、SSH 私钥、终端历史记录、内核内存、SSL私钥明文文件等，永久硬阻断)
+  for (const item of ABSOLUTE_SYSTEM_CREDENTIAL_PATTERNS) {
     if (item.regex.test(trimmed)) {
       return {
         allowed: false,
@@ -646,6 +692,25 @@ export function evaluateCommandForExecution(
         reason: item.reason,
         safeToAutoExecute: false,
         blockedReason: item.reason,
+      }
+    }
+  }
+
+  // 3.1 敏感应用凭证路径分级审查 (对齐 Claude Code / AWS Q 工业级标准)：
+  // - 允许元数据探查 (如 ls -la ~/.kube/config, stat ~/.aws/credentials, test -f ~/.kube/config)，帮助排查配置在不在与权限对不对；
+  // - 阻断直接读取明文凭据 (如 cat ~/.aws/credentials, grep token ~/.kube/config)；
+  // - 对于应用级 .env 配置，允许在只读模式下由本地 DLP 脱敏引擎实时打码 (password=[REDACTED_SECRET]) 确保安全。
+  for (const item of CREDENTIAL_CONTENT_BLOCKED_PATTERNS) {
+    if (item.regex.test(trimmed)) {
+      if (!isMetadataOnlyCommand(trimmed)) {
+        return {
+          allowed: false,
+          isReadOnly: false,
+          riskLevel: 'blocked',
+          reason: item.reason,
+          safeToAutoExecute: false,
+          blockedReason: `${item.reason}（建议使用 ls/stat 检查文件状态，避免泄露明文内容）。`,
+        }
       }
     }
   }
