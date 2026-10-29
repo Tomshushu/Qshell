@@ -513,6 +513,41 @@ pub async fn files_stat_info(server_id: String, path: String) -> Result<String, 
     serde_json::to_string(&result).map_err(|e| format!("Serialize error: {}", e))
 }
 
+/// Linux 侧危险根路径判定的回归测试（与 `files/remote.rs` 的 Unix 部分保持一致）。
+#[cfg(test)]
+mod dangerous_path_tests {
+    use super::is_dangerous_root_path;
+
+    #[test]
+    fn rejects_all_linux_system_roots() {
+        for p in [
+            "", "/", "/etc", "/usr", "/var", "/home", "/boot", "/bin", "/sbin", "/lib", "/lib64",
+            "/opt", "/root", "/proc", "/sys", "/dev", "/run", "/mnt", "/media",
+        ] {
+            assert!(is_dangerous_root_path(p), "expected dangerous: {p:?}");
+        }
+    }
+
+    #[test]
+    fn rejects_roots_with_trailing_slashes() {
+        assert!(is_dangerous_root_path("/etc/"));
+        assert!(is_dangerous_root_path("/usr//"));
+        assert!(is_dangerous_root_path("/home///"));
+    }
+
+    #[test]
+    fn allows_nested_linux_paths() {
+        for p in [
+            "/home/user/data",
+            "/etc/nginx/nginx.conf",
+            "/var/log/app.log",
+            "/tmp/x",
+        ] {
+            assert!(!is_dangerous_root_path(p), "expected safe: {p}");
+        }
+    }
+}
+
 /// 递归统计目录内文件数
 ///
 /// 使用 SFTP 递归列举统计文件数。

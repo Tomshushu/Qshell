@@ -1366,6 +1366,99 @@ mod local_upload_stats_tests {
     }
 }
 
+/// 归档条目路径安全与归档路径解析的回归测试。
+///
+/// 这些是"解压即落盘"的最后一道防线：一旦 `archive_entries_are_safe` 判定漏掉
+/// 绝对路径或 `..`，恶意压缩包就能把文件写到目标目录之外（Zip Slip）。
+#[cfg(test)]
+mod archive_security_tests {
+    use super::{archive_entries_are_safe, validate_archive_path, ArchiveKind};
+
+    #[test]
+    fn accepts_plain_relative_entries() {
+        assert!(archive_entries_are_safe("a.txt\nb/c.txt\n报告/2024.pdf"));
+    }
+
+    #[test]
+    fn accepts_single_dot_segments() {
+        // "./" 是合法的相对路径段，不属于穿越
+        assert!(archive_entries_are_safe("a/./b.txt"));
+    }
+
+    #[test]
+    fn ignores_blank_lines() {
+        assert!(archive_entries_are_safe(""));
+        assert!(archive_entries_are_safe("\n\n   \n"));
+        assert!(archive_entries_are_safe("a.txt\n\n   \nb.txt"));
+    }
+
+    #[test]
+    fn rejects_absolute_unix_paths() {
+        assert!(!archive_entries_are_safe("/etc/passwd"));
+        assert!(!archive_entries_are_safe("ok.txt\n/etc/shadow"));
+        assert!(!archive_entries_are_safe("//server/share"));
+    }
+
+    #[test]
+    fn rejects_windows_drive_letter_entries() {
+        assert!(!archive_entries_are_safe(r"C:\Windows\System32\x.dll"));
+        assert!(!archive_entries_are_safe("c:/windows/x"));
+        assert!(!archive_entries_are_safe(r"D:\"));
+    }
+
+    #[test]
+    fn rejects_parent_directory_traversal() {
+        assert!(!archive_entries_are_safe("../evil.sh"));
+        assert!(!archive_entries_are_safe("a/../../evil.sh"));
+        assert!(!archive_entries_are_safe(".."));
+        assert!(!archive_entries_are_safe("a/b/.."));
+    }
+
+    #[test]
+    fn rejects_traversal_with_backslashes() {
+        // 归档条目可能使用反斜杠；归一化后必须仍能识别 ..
+        assert!(!archive_entries_are_safe(r"..\evil.sh"));
+        assert!(!archive_entries_are_safe(r"a\..\..\evil.sh"));
+    }
+
+    #[test]
+    fn rejects_any_bad_entry_in_the_list() {
+        assert!(!archive_entries_are_safe("safe1.txt\nsafe2.txt\n/abs\n"));
+    }
+
+    #[test]
+    fn detects_supported_archive_kinds() {
+        assert_eq!(validate_archive_path("a.zip").unwrap().0, ArchiveKind::Zip);
+        assert_eq!(validate_archive_path("a.tar.gz").unwrap().0, ArchiveKind::TarGz);
+        assert_eq!(validate_archive_path("a.tgz").unwrap().0, ArchiveKind::TarGz);
+        assert_eq!(validate_archive_path("a.tar.bz2").unwrap().0, ArchiveKind::TarBz2);
+        assert_eq!(validate_archive_path("a.tar.xz").unwrap().0, ArchiveKind::TarXz);
+        assert_eq!(validate_archive_path("a.7z").unwrap().0, ArchiveKind::SevenZip);
+        assert_eq!(validate_archive_path("a.rar").unwrap().0, ArchiveKind::Rar);
+    }
+
+    #[test]
+    fn rejects_unsupported_and_empty_archive_paths() {
+        assert!(validate_archive_path("a.txt").is_err());
+        assert!(validate_archive_path("").is_err());
+        assert!(validate_archive_path("   ").is_err());
+        assert!(validate_archive_path("noext").is_err());
+    }
+
+    #[test]
+    fn rejects_null_byte_in_archive_path() {
+        // 扩展名仍可识别，但路径含 null 字节必须拒绝
+        assert!(validate_archive_path("a\0.zip").is_err());
+    }
+
+    #[test]
+    fn strips_the_whole_compound_suffix() {
+        let (kind, dir) = validate_archive_path("/data/app.tar.gz").unwrap();
+        assert_eq!(kind, ArchiveKind::TarGz);
+        assert_eq!(dir, "/data/app");
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalUploadStats {

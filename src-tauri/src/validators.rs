@@ -980,3 +980,93 @@ mod exclusion_tests {
     }
 }
 
+/// PowerShell 参数转义与 `-EncodedCommand` 构建的回归测试。
+///
+/// 这两者共同构成 Windows 远端命令注入的最后防线：
+/// 转义失效或编码格式错误都会让用户输入被远端 shell 解释执行。
+#[cfg(test)]
+mod powershell_escape_tests {
+    use super::{build_powershell_command, escape_powershell_arg};
+
+    #[test]
+    fn wraps_plain_argument_in_single_quotes() {
+        assert_eq!(
+            escape_powershell_arg("C:\\Users\\demo".to_string()),
+            "'C:\\Users\\demo'"
+        );
+    }
+
+    #[test]
+    fn doubles_embedded_single_quotes() {
+        assert_eq!(escape_powershell_arg("it's".to_string()), "'it''s'");
+        assert_eq!(escape_powershell_arg("a'b'c".to_string()), "'a''b''c'");
+    }
+
+    #[test]
+    fn strips_null_bytes() {
+        assert_eq!(escape_powershell_arg("a\0b".to_string()), "'ab'");
+        assert_eq!(escape_powershell_arg("\0".to_string()), "''");
+    }
+
+    #[test]
+    fn keeps_injection_payloads_literal() {
+        for p in [
+            "$(Remove-Item C:\\ -Recurse)",
+            "`whoami`",
+            "a; Remove-Item C:\\ -Recurse",
+            "a | Out-File x",
+            "a & calc",
+            "a\nb",
+            "报告 🎉",
+        ] {
+            let quoted = escape_powershell_arg(p.to_string());
+            assert!(quoted.starts_with('\''), "not quoted: {quoted}");
+            assert!(quoted.ends_with('\''), "not quoted: {quoted}");
+            // 单引号内所有字符都是字面量；只需确认没有未成对的裸单引号
+            let inner = &quoted[1..quoted.len() - 1];
+            let mut chars = inner.chars().peekable();
+            while let Some(c) = chars.next() {
+                if c == '\'' {
+                    assert_eq!(chars.next(), Some('\''), "unescaped single quote in {quoted}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn builds_cmd_wrapped_encoded_command() {
+        let cmd = build_powershell_command("Get-ChildItem C:\\");
+        assert!(cmd.starts_with(
+            "C:\\Windows\\System32\\cmd.exe /c powershell.exe -NoProfile -NonInteractive -EncodedCommand "
+        ));
+        // Base64 段只含 [A-Za-z0-9+/=]，可安全作为裸参数传递
+        let encoded = cmd.rsplit(' ').next().unwrap();
+        assert!(!encoded.is_empty());
+        assert!(encoded
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '='));
+    }
+
+    #[test]
+    fn encoded_command_round_trips_as_utf16le() {
+        use base64::{engine::general_purpose, Engine};
+
+        let script = "Write-Output '你好，世界'";
+        let cmd = build_powershell_command(script);
+        let encoded = cmd.rsplit(' ').next().unwrap();
+        let bytes = general_purpose::STANDARD.decode(encoded).unwrap();
+        let units: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        assert_eq!(String::from_utf16(&units).unwrap(), script);
+    }
+
+    #[test]
+    fn handles_empty_script() {
+        let cmd = build_powershell_command("");
+        assert!(cmd.contains("-EncodedCommand"));
+        assert!(cmd.ends_with("-EncodedCommand "));
+    }
+}
+

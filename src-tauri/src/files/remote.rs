@@ -28,6 +28,11 @@ const DANGEROUS_WINDOWS_PATHS: &[&str] = &[
 /// - Windows: `C:\`, `C:\Windows`, `C:\Users`, ...
 pub fn is_dangerous_root_path(path: &str) -> bool {
     let normalized = path.trim_end_matches('/').trim_end_matches('\\');
+    // 裸盘符根（`C:` / `C:\` / `C:/`）：归一化会吃掉尾部反斜杠，得到 `C:`，
+    // 无法与常量表里的 `c:\` 匹配，必须单独判定，否则盘符根目录会漏过删除保护。
+    if normalized.len() == 2 && normalized.as_bytes()[1] == b':' {
+        return true;
+    }
     if DANGEROUS_PATHS.contains(&normalized) {
         return true;
     }
@@ -675,4 +680,78 @@ async fn sftp_count_recursive_inner(
         }
     }
     Ok(())
+}
+
+/// 危险根路径判定的回归测试。
+///
+/// 该函数是 delete / archive / 递归扫描等不可逆操作的前置闸门，
+/// 一旦漏判或后续重构降低严格度，用户可能一条命令删掉系统根目录。
+#[cfg(test)]
+mod dangerous_path_tests {
+    use super::is_dangerous_root_path;
+
+    #[test]
+    fn rejects_unix_system_roots() {
+        for p in [
+            "/", "/etc", "/usr", "/var", "/home", "/boot", "/bin", "/sbin", "/lib", "/lib64",
+            "/opt", "/root", "/proc", "/sys", "/dev", "/run", "/mnt", "/media",
+        ] {
+            assert!(is_dangerous_root_path(p), "expected dangerous: {p}");
+        }
+    }
+
+    #[test]
+    fn rejects_empty_path() {
+        assert!(is_dangerous_root_path(""));
+    }
+
+    #[test]
+    fn rejects_unix_roots_with_trailing_slashes() {
+        assert!(is_dangerous_root_path("/etc/"));
+        assert!(is_dangerous_root_path("/usr//"));
+        assert!(is_dangerous_root_path("/home///"));
+    }
+
+    /// 回归用例：裸盘符根曾被漏判。
+    /// 归一化会去掉尾部反斜杠得到 `C:`，与常量表的 `c:\` 匹配不上。
+    #[test]
+    fn rejects_bare_drive_roots() {
+        for p in ["C:\\", "C:/", "C:", "D:\\", "d:/", "E:/"] {
+            assert!(is_dangerous_root_path(p), "expected dangerous: {p}");
+        }
+        assert!(is_dangerous_root_path("Z:"));
+    }
+
+    #[test]
+    fn rejects_windows_system_roots() {
+        for p in [
+            r"C:\Windows", "c:/windows",
+            r"C:\Program Files", "c:/program files",
+            r"C:\Program Files (x86)",
+            r"C:\Users", "c:/users",
+        ] {
+            assert!(is_dangerous_root_path(p), "expected dangerous: {p}");
+        }
+    }
+
+    #[test]
+    fn windows_paths_are_case_insensitive() {
+        assert!(is_dangerous_root_path(r"C:\WINDOWS"));
+        assert!(is_dangerous_root_path("C:/UsErS/"));
+    }
+
+    #[test]
+    fn allows_nested_paths() {
+        for p in [
+            "/home/user/data",
+            "/etc/nginx/nginx.conf",
+            "/var/log/app.log",
+            "/tmp/x",
+            r"C:\Users\demo\file.txt",
+            r"C:\Windows\System32\notepad.exe",
+            "C:/data/app",
+        ] {
+            assert!(!is_dangerous_root_path(p), "expected safe: {p}");
+        }
+    }
 }
