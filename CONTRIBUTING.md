@@ -86,6 +86,60 @@ npm run dev
    - 性能改进：`perf/<优化简述>`（如 `perf/virtual-scroll-table`）
    - 文档变动：`docs/<文档简述>`（如 `docs/update-readme`）
 
+3. **仓库维护者分支模型（develop / main）**：
+
+   本仓库采用双分支模型，区分「日常开发」与「稳定发布」：
+
+   | 分支 | 定位 | 允许的操作 |
+   |:---|:---|:---|
+   | `develop` | 日常开发分支（默认工作分支） | ✅ 直接提交、推送 |
+   | `main` | 稳定发布分支 | ⛔ **只允许合并（merge），禁止直接提交** |
+
+   **日常开发流程**（所有开发工作都在 `develop`）：
+
+   ```bash
+   git checkout develop
+   git add .
+   git commit -m "feat(scope): 你的改动"
+   git push
+   ```
+
+   **发布流程**（把 `develop` 合并到 `main`）：
+
+   ```bash
+   git checkout main
+   git merge develop
+   git push
+   git checkout develop   # 合并完成后切回开发分支
+   ```
+
+   **`main` 分支的两层保护**：
+
+   1. **本地 git hook**（`.git/hooks/pre-commit`）：拦截 `main` 上的直接 `commit`，但放行合并产生的 merge commit（检测 `MERGE_HEAD`）。若换机器或 hook 丢失，可重新创建：
+
+      ```sh
+      #!/bin/sh
+      branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+      if [ "$branch" = "main" ]; then
+        if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+          exit 0
+        fi
+        echo "  [branch-protection] Direct commits on 'main' are not allowed."
+        echo "  Please work on 'develop' and merge afterwards."
+        exit 1
+      fi
+      exit 0
+      ```
+
+   2. **服务端分支保护**（推荐开启，团队协作时以此为准）：
+
+      | 平台 | 设置路径 |
+      |:---|:---|
+      | **GitHub** | 仓库 → Settings → Branches → Add branch protection rule → 填 `main` → 勾选 *Require a pull request before merging* 与 *Do not allow bypassing the above settings* |
+      | **Gitee** | 仓库 → 管理 → 分支设置 → 保护分支 → 添加 `main` → 禁止直接 push |
+
+   > ⚠️ 本地 hook 只对当前机器生效、不随仓库分发；**真正的强制保护必须依赖服务端分支保护设置**。
+
 ---
 
 ## 五、 代码规范与提交约定
