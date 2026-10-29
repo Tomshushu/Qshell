@@ -3447,3 +3447,74 @@ pub fn tunnels_get_by_ids(ids: &[String]) -> Result<Vec<Tunnel>, String> {
     tunnels.map_err(|e| format!("Failed to collect tunnels: {}", e))
 }
 
+/// known_hosts 校验（TOFU / MITM 判定）的回归测试。
+///
+/// 这里固化的是真实出现过的一次安全回归：旧实现里「(host, port) 有记录但
+/// key_type 不匹配」会返回 NotFound，触发 TOFU 自动信任，攻击者可换用新算法绕过校验。
+/// 现在必须返回 Mismatch。
+#[cfg(test)]
+mod known_host_tests {
+    use super::*;
+    use std::sync::Once;
+
+    static INIT: Once = Once::new();
+
+    /// 全局 DB 只能初始化一次；所有用例共享同一个临时库。
+    fn setup() {
+        INIT.call_once(|| {
+            let dir = std::env::temp_dir().join("qshell-db-known-host-test");
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("create temp db dir");
+            let db_path = dir.join("qshell.db");
+            set_master_key([7u8; 32]);
+            init_database(db_path.to_string_lossy().to_string()).expect("init test db");
+        });
+    }
+
+    #[test]
+    fn first_contact_returns_not_found() {
+        setup();
+        let r = check_known_host("kh-first-contact", 22, "ssh-ed25519", "AAAA").unwrap();
+        assert_eq!(r, KnownHostVerifyResult::NotFound);
+    }
+
+    #[test]
+    fn same_key_returns_match() {
+        setup();
+        let host = "kh-match";
+        save_known_host(host, 22, "ssh-ed25519", "AAAA").unwrap();
+        let r = check_known_host(host, 22, "ssh-ed25519", "AAAA").unwrap();
+        assert_eq!(r, KnownHostVerifyResult::Match);
+    }
+
+    #[test]
+    fn changed_key_value_returns_mismatch() {
+        setup();
+        let host = "kh-changed-value";
+        save_known_host(host, 22, "ssh-ed25519", "AAAA").unwrap();
+        let r = check_known_host(host, 22, "ssh-ed25519", "BBBB").unwrap();
+        assert_eq!(r, KnownHostVerifyResult::Mismatch);
+    }
+
+    /// 安全回归：已知 host 只记录过 ed25519，攻击者改用 rsa 算法连入。
+    /// 必须判 Mismatch（而不是 NotFound 自动信任）。
+    #[test]
+    fn unknown_key_type_for_known_host_returns_mismatch() {
+        setup();
+        let host = "kh-unknown-type";
+        save_known_host(host, 22, "ssh-ed25519", "AAAA").unwrap();
+        let r = check_known_host(host, 22, "ssh-rsa", "CCCC").unwrap();
+        assert_eq!(r, KnownHostVerifyResult::Mismatch);
+    }
+
+    #[test]
+    fn different_port_is_an_independent_record() {
+        setup();
+        let host = "kh-port-isolation";
+        save_known_host(host, 22, "ssh-ed25519", "AAAA").unwrap();
+        // 同 host 不同端口：属于独立记录，仍是 TOFU 首次信任
+        let r = check_known_host(host, 2200, "ssh-ed25519", "ZZZZ").unwrap();
+        assert_eq!(r, KnownHostVerifyResult::NotFound);
+    }
+}
+
