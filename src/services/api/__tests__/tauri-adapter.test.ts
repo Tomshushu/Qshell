@@ -226,4 +226,90 @@ describe('tauri-adapter IPC contract', () => {
       consoleSpy.mockRestore()
     })
   })
+
+  describe('server normalization', () => {
+    /** 通过 servers.list 间接验证 normalizeServer（模块内私有函数，不为测试额外暴露） */
+    async function normalizeOne(raw: Record<string, unknown>): Promise<Server> {
+      invokeMock.mockResolvedValue(JSON.stringify([raw]))
+      const [server] = await tauriAdapter.servers.list()
+      return server as Server
+    }
+
+    it('maps snake_case fields to camelCase', async () => {
+      const s = await normalizeOne({
+        id: 's1',
+        name: 'S1',
+        auth_type: 'privateKey',
+        private_key_path: '/home/u/.ssh/id_ed25519',
+        target_type: 'windows',
+        rdp_port: 3389,
+        created_at: 111,
+        updated_at: 222,
+      })
+
+      expect(s.authType).toBe('privateKey')
+      expect(s.privateKeyPath).toBe('/home/u/.ssh/id_ed25519')
+      expect(s.targetType).toBe('windows')
+      expect(s.rdpPort).toBe(3389)
+      expect(s.createdAt).toBe(111)
+      expect(s.updatedAt).toBe(222)
+    })
+
+    it('keeps camelCase payload unchanged', async () => {
+      const s = await normalizeOne({
+        id: 's1',
+        name: 'S1',
+        authType: 'sshAgent',
+        privateKeyPath: '/k',
+        targetType: 'unix',
+        rdpPort: 3390,
+      })
+
+      expect(s.authType).toBe('sshAgent')
+      expect(s.privateKeyPath).toBe('/k')
+      expect(s.targetType).toBe('unix')
+      expect(s.rdpPort).toBe(3390)
+    })
+
+    it('parses tags returned as a JSON string', async () => {
+      const s = await normalizeOne({ id: 's1', name: 'S1', tags: '["prod","db"]' })
+      expect(s.tags).toEqual(['prod', 'db'])
+    })
+
+    it('falls back to an empty tag list for malformed tags JSON', async () => {
+      const s = await normalizeOne({ id: 's1', name: 'S1', tags: 'not-json' })
+      expect(s.tags).toEqual([])
+    })
+
+    it('falls back to the single protocol when protocols JSON is malformed', async () => {
+      const s = await normalizeOne({
+        id: 's1',
+        name: 'S1',
+        protocols: 'oops',
+        protocol: 'telnet',
+      })
+      expect(s.protocols).toEqual(['telnet'])
+    })
+
+    it('keeps rdpPort 0 instead of replacing it with a default', async () => {
+      // 实现特意用 !== undefined 判断，避免 `||` 把 0 当成空值
+      const s = await normalizeOne({ id: 's1', name: 'S1', rdp_port: 0 })
+      expect(s.rdpPort).toBe(0)
+    })
+
+    it('applies sane defaults for missing optional fields', async () => {
+      const s = await normalizeOne({ id: 's1', name: 'S1' })
+
+      expect(s.authType).toBe('password')
+      expect(s.privateKeyPath).toBe('')
+      expect(s.targetType).toBe('linux')
+      expect(s.protocol).toBe('ssh')
+      expect(s.protocols).toEqual(['ssh'])
+      expect(s.tags).toEqual([])
+      expect(s.bmcPort).toBe(443)
+      expect(s.osType).toBe('')
+      expect(s.osInfo).toBe('')
+      expect(s.groupId).toBeNull()
+    })
+  })
 })
