@@ -1,9 +1,10 @@
-import React, { memo } from "react";
-import { Copy, ClipboardPaste, Search, Globe, Sparkles, Layers } from "lucide-react";
+import React, { memo, useMemo } from "react";
+import { Copy, ClipboardPaste, Search, Globe, Sparkles, Layers, Braces } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "@/i18n";
 import { playSound, SoundType } from "@/lib/sound";
 import { useAIStore } from "@/store/ai-store";
+import { detectFormatters } from "./text-formatters";
 
 export interface TerminalSelectionToolbarProps {
   visible: boolean;
@@ -15,6 +16,8 @@ export interface TerminalSelectionToolbarProps {
   onCopy: () => void;
   onPasteSelection: () => void;
   onSearch: () => void;
+  /** 点击「格式化 JSON」时触发，传入原始选中文本 */
+  onFormatJson?: (text: string) => void;
   /**
    * 在浮动条上右键时转交给终端右键菜单。
    * 浮动条渲染在终端容器之外且正好覆盖选区松手位置，若不转发，
@@ -74,10 +77,17 @@ export const TerminalSelectionToolbar = memo(function TerminalSelectionToolbar({
   onCopy,
   onPasteSelection,
   onSearch,
+  onFormatJson,
   onContextMenu,
 }: TerminalSelectionToolbarProps) {
   const { t } = useTranslation();
   const enableAiGlobal = useAIStore((s) => s.enableAiGlobal);
+
+  const formatters = useMemo(
+    () => detectFormatters(selectedText),
+    [selectedText],
+  );
+  const primaryFormatter = formatters[0];
 
   if (!visible || !selectedText) return null;
 
@@ -122,6 +132,13 @@ export const TerminalSelectionToolbar = memo(function TerminalSelectionToolbar({
     e.stopPropagation();
     playSound(SoundType.Click);
     useAIStore.getState().openExplainShell(selectedText);
+    onClose();
+  };
+
+  const handleFormatJson = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    playSound(SoundType.Click);
+    onFormatJson?.(selectedText);
     onClose();
   };
 
@@ -182,6 +199,27 @@ export const TerminalSelectionToolbar = memo(function TerminalSelectionToolbar({
           {t("tm_paste_to_shell") || "粘贴至终端"}
         </span>
       </button>
+
+      {/* 格式化文本（选中内容可识别为 JSON / JWT / Base64 等格式时显示） */}
+      {primaryFormatter && (
+        <button
+          type="button"
+          data-testid="selection-toolbar-format-text"
+          onClick={handleFormatJson}
+          className={cn(
+            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+            isLightTerminal
+              ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+              : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+          )}
+          title={t("fmt_format_tooltip", { type: t(primaryFormatter.labelKey) })}
+        >
+          <Braces className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+          <span className="truncate tracking-tight font-sans text-[11.5px]">
+            {t("fmt_format_action", { type: t(primaryFormatter.labelKey) })}
+          </span>
+        </button>
+      )}
 
       {/* AI 智能诊断 */}
       {enableAiGlobal && (

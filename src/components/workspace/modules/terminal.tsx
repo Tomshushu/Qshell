@@ -154,6 +154,7 @@ import {
 import { friendlyError } from "@/lib/error-messages";
 import { EditServerDialog } from "@/components/server/edit-server-dialog";
 import { useAIStore } from "@/store/ai-store";
+import { useTextFormatterStore } from "@/store/text-formatter-store";
 import {
   extractPathFromShellTitle,
   resolveRelativePath,
@@ -271,6 +272,7 @@ export function TerminalModule({
     y: number;
     text: string;
   } | null>(null);
+  const openTextFormatter = useTextFormatterStore((s) => s.openTextFormatter);
   const selectionTimerRef = useRef<number | null>(null);
   const [showSearch, setShowSearch] = useState(false);
   const showSearchRef = useRef(false);
@@ -1842,8 +1844,9 @@ export function TerminalModule({
   const focusActiveTerm = useCallback((force = false) => {
     if (isUnmountedRef.current) return;
     const activeEl = document.activeElement;
-    // 非强制模式下，若焦点处于搜索栏内部，不得抢夺搜索栏输入框焦点
-    if (!force && showSearchRef.current && activeEl?.closest?.(".terminal-search-bar, [data-terminal-search]")) {
+    // 搜索栏优先级最高：无论是否强制聚焦，只要搜索栏已打开且焦点在其内部，
+    // 就绝不抢占（否则用户点击搜索框时会被随后排队的多帧 RAF 抢回终端焦点）
+    if (showSearchRef.current && activeEl?.closest?.(".terminal-search-bar, [data-terminal-search]")) {
       return;
     }
 
@@ -1863,7 +1866,8 @@ export function TerminalModule({
     const doFocus = () => {
       if (isUnmountedRef.current) return;
       const el = document.activeElement;
-      if (!force && showSearchRef.current && el?.closest?.(".terminal-search-bar, [data-terminal-search]")) return;
+      // 同上：多帧 RAF 回调里也必须尊重搜索栏焦点，force 模式不能越过
+      if (showSearchRef.current && el?.closest?.(".terminal-search-bar, [data-terminal-search]")) return;
       if (el?.closest?.('[role="dialog"], [role="alertdialog"], .modal, .dialog')) return;
       if (!force && isInteractiveOrInputElement(el)) return;
       if (!force && (!isActiveRef.current || !isVisibleRef.current)) return;
@@ -8691,6 +8695,12 @@ export function TerminalModule({
     void handleChooseLogDirectory();
   }, [handleChooseLogDirectory]);
   const closeSelectionToolbar = useCallback(() => setSelectionToolbar(null), []);
+  const handleFormatJson = useCallback(
+    (text: string) => {
+      openTextFormatter(text);
+    },
+    [openTextFormatter],
+  );
   const handleSelectionContextMenu = useCallback((x: number, y: number) => {
     setSelectionToolbar(null);
     setCtxMenu({ x, y, hasSelection: true });
@@ -9285,6 +9295,7 @@ export function TerminalModule({
         onCopy={handleCopy}
         onPasteSelection={handlePasteSelection}
         onSearch={handleSearch}
+        onFormatJson={handleFormatJson}
         onContextMenu={handleSelectionContextMenu}
       />
 

@@ -35,6 +35,7 @@ import { useUpdaterStore } from '@/store/updater-store'
 import { UpdateDialog } from '@/components/layout/update-dialog'
 import { useToast } from '@/components/ui/toast'
 import { FloatingAIAssistant } from '@/components/ai/floating-ai-assistant'
+import { FloatingTextFormatter } from '@/components/terminal/floating-text-formatter'
 
 
 function AppContent() {
@@ -673,6 +674,9 @@ function AppContent() {
 
       {/* 全局悬浮 AI 助手吉祥物与对话面板 */}
       <FloatingAIAssistant />
+
+      {/* 全局悬浮文本格式化器 */}
+      <FloatingTextFormatter />
     </div>
   )
 }

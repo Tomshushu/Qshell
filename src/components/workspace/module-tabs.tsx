@@ -32,6 +32,7 @@ import {
   Play,
   FileUp,
   ListOrdered,
+  Braces,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -44,6 +45,7 @@ import {
 import { TransferPanel } from "@/components/workspace/transfer-panel";
 import { TerminalThemeDialog } from "@/components/workspace/modules/terminal-theme-dialog";
 import { playSound, SoundType } from "@/lib/sound";
+import { useTextFormatterStore } from "@/store/text-formatter-store";
 
 const modules: {
   key: WorkspaceModule;
@@ -143,6 +145,7 @@ export function ModuleTabs({
   filesPanelOpen,
 }: ModuleTabsProps) {
   const { t } = useTranslation();
+  const openTextFormatter = useTextFormatterStore((s) => s.openTextFormatter);
   const [showThemeDialog, setShowThemeDialog] = useState(false);
   const [customBreakInput, setCustomBreakInput] = useState("");
   const [breakDropdownOpen, setBreakDropdownOpen] = useState(false);
@@ -151,6 +154,9 @@ export function ModuleTabs({
   const broadcastTabIds = useAppStore((s) => s.broadcastTabIds);
   const tabs = useAppStore((s) => s.tabs);
   const toggleBroadcastTab = useAppStore((s) => s.toggleBroadcastTab);
+  const broadcastAllTabs = useAppStore((s) => s.broadcastAllTabs);
+  const broadcastToSplit = useAppStore((s) => s.broadcastToSplit);
+  const clearBroadcast = useAppStore((s) => s.clearBroadcast);
   const isBroadcasting = broadcastTabIds.includes(tabId);
   // 按 serverId 去重：同一服务器开了多个广播 tab 时，避免 hover 提示里同名重复列出、
   // 计数虚高（与危险命令确认框的去重逻辑一致）。
@@ -230,6 +236,24 @@ export function ModuleTabs({
             <span className="truncate max-w-[120px]">{t(`module_${key}`)}</span>
           </button>
         ))}
+
+        {/* 文本格式化器：全局浮动弹框入口 */}
+        <button
+          className={cn(
+            "theme-module-item flex flex-shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap text-[11px] rounded-lg",
+            vertical
+              ? "w-full justify-start px-3.5 py-2 is-vertical"
+              : "mx-0.5 my-0.5 px-2.5 py-1 is-horizontal",
+          )}
+          onClick={() => {
+            openTextFormatter();
+            playSound(SoundType.Open);
+          }}
+          title={t("fmt_dialog_title")}
+        >
+          <Braces className="h-3.5 w-3.5 flex-shrink-0 opacity-85 text-sky-400" />
+          <span className="truncate max-w-[120px]">{t("fmt_short_label")}</span>
+        </button>
 
         {/* 串口专属控制组（直插顶栏单行，零遮挡终端画布） */}
         {(targetType === "serial" || server?.protocol === "serial") && serialToolbar && !vertical && (
@@ -363,28 +387,63 @@ export function ModuleTabs({
       >
         {/* 终端广播按钮：仅在终端模块显示，开启后输入同步到所有开启广播的终端 */}
         {activeModule === "terminal" && (
-          <button
-            className={cn(
-              cn(
-                "flex h-6 flex-shrink-0 items-center gap-1 rounded-md px-1.5 text-[10px] transition-colors",
-                vertical && "w-full justify-start px-3",
-              ),
-              isBroadcasting
-                ? "bg-primary/20 text-primary font-medium"
-                : "text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent/40",
-            )}
-            onClick={() => toggleBroadcastTab(tabId)}
-            title={
-              isBroadcasting
-                ? t("broadcast_enabled_hint", { targets: broadcastTargetTitle })
-                : t("broadcast_disabled_hint", {
-                    targets: broadcastTargetTitle,
-                  })
-            }
-          >
-            <Radio className="h-3 w-3 flex-shrink-0" />
-            <span className="truncate">{t("broadcast_label")}</span>
-          </button>
+          <div className={cn("flex items-stretch", vertical ? "w-full" : "items-center")}>
+            <button
+              className={cn(
+                "flex h-6 flex-shrink-0 items-center gap-1 rounded-l-md px-1.5 text-[10px] transition-colors",
+                vertical && "flex-1 justify-start px-3",
+                isBroadcasting
+                  ? "bg-primary/20 text-primary font-medium"
+                  : "text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent/40",
+              )}
+              onClick={() => toggleBroadcastTab(tabId)}
+              title={
+                isBroadcasting
+                  ? t("broadcast_enabled_hint", { targets: broadcastTargetTitle })
+                  : t("broadcast_disabled_hint", {
+                      targets: broadcastTargetTitle,
+                    })
+              }
+            >
+              <Radio className="h-3 w-3 flex-shrink-0" />
+              <span className="truncate">{t("broadcast_label")}</span>
+            </button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  className={cn(
+                    "flex h-6 flex-shrink-0 items-center justify-center rounded-r-md px-1 text-[10px] transition-colors",
+                    isBroadcasting
+                      ? "bg-primary/20 text-primary"
+                      : "text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent/40",
+                  )}
+                  title={t("broadcast_more")}
+                >
+                  <ChevronDown className="h-3 w-3" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48 p-1">
+                <DropdownMenuItem
+                  onClick={() => broadcastToSplit(tabId)}
+                  className="text-xs cursor-pointer"
+                >
+                  {t("broadcast_select_split")}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={broadcastAllTabs}
+                  className="text-xs cursor-pointer"
+                >
+                  {t("broadcast_select_all")}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={clearBroadcast}
+                  className="text-xs cursor-pointer"
+                >
+                  {t("broadcast_clear_all")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         )}
         {activeModule !== "bmc" && targetType !== "serial" && server?.protocol !== "serial" && server?.protocol !== "rdp" && (
           <>

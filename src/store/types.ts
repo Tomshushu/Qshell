@@ -397,6 +397,12 @@ export interface WorkspaceSlice {
   /** 终端广播：开关打开的 tab 之间互相转发键盘输入 */
   broadcastTabIds: string[];
   toggleBroadcastTab: (tabId: string) => void;
+  /** 一键开启所有可广播终端（terminal 模块、非串口、非 RDP）的广播 */
+  broadcastAllTabs: () => void;
+  /** 一键广播到指定 tab 所在工作台的全部终端（即当前所有分屏；terminal 模块、非串口、非 RDP） */
+  broadcastToSplit: (tabId: string) => void;
+  /** 关闭全部广播 */
+  clearBroadcast: () => void;
   /** 从 URL 参数恢复窗口状态（拖拽创建新窗口时使用） */
   restoreWindowState: (
     tabs: WorkspaceTab[],

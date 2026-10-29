@@ -756,6 +756,60 @@ export const createWorkspaceSlice: StateCreator<
       };
     }),
 
+  // 一键开启所有可广播终端（terminal 模块，排除串口 / RDP 目标）的广播
+  broadcastAllTabs: () => {
+    const { tabs, servers } = get();
+    const ids = tabs
+      .filter((t) => t.module === "terminal")
+      .filter((t) => {
+        const sv = servers.find((s) => s.id === t.serverId);
+        return (
+          sv &&
+          sv.targetType !== "serial" &&
+          sv.protocol !== "serial" &&
+          sv.protocol !== "rdp"
+        );
+      })
+      .map((t) => t.id);
+    playSound(SoundType.Toggle);
+    set({ broadcastTabIds: ids });
+  },
+
+  // 一键广播到指定 tab 所在工作台的全部终端（terminal 模块，排除串口 / RDP 目标）。
+  // 分屏后所有窗格同属一个 workspace，因此即"广播到当前所有分屏"；
+  // 顶层独立 tab（无 workspaceId，未分屏）退化为仅广播当前 tab。
+  broadcastToSplit: (tabId) => {
+    const { tabs, servers } = get();
+    const current = tabs.find((t) => t.id === tabId);
+    if (!current) {
+      playSound(SoundType.Toggle);
+      set({ broadcastTabIds: [] });
+      return;
+    }
+    const wsId = current.workspaceId;
+    const ids = tabs
+      .filter((t) => (wsId ? t.workspaceId === wsId : t.id === tabId))
+      .filter((t) => t.module === "terminal")
+      .filter((t) => {
+        const sv = servers.find((s) => s.id === t.serverId);
+        return (
+          sv &&
+          sv.targetType !== "serial" &&
+          sv.protocol !== "serial" &&
+          sv.protocol !== "rdp"
+        );
+      })
+      .map((t) => t.id);
+    playSound(SoundType.Toggle);
+    set({ broadcastTabIds: ids });
+  },
+
+  // 关闭全部广播
+  clearBroadcast: () => {
+    playSound(SoundType.Toggle);
+    set({ broadcastTabIds: [] });
+  },
+
   restoreWindowState: (newTabs, newActiveTabId) =>
     set(() => {
       // 跨窗口迁移的 tab 统一放入一个新分组（新窗口默认无分屏）

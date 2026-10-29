@@ -72,9 +72,13 @@ export const TerminalSearchBar = memo(function TerminalSearchBar({
       onMouseDown={(e) => {
         e.stopPropagation();
         const target = e.target as HTMLElement | null;
-        if (!target?.closest("button")) {
-          inputRef.current?.focus();
+        if (target?.closest("button")) return;
+        // 点击非 input 区域（内边距、图标等）时阻止浏览器默认的聚焦/失焦行为，
+        // 否则默认 blur 会排在我们手动 focus 之后执行，导致“点了没反应、需点两次”
+        if (target !== inputRef.current) {
+          e.preventDefault();
         }
+        inputRef.current?.focus();
       }}
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => {

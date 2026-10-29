@@ -30,7 +30,14 @@ import {
   Radio,
   Copy,
   Check,
+  ChevronDown,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { playSound, SoundType } from "@/lib/sound";
 import { useTranslation } from "@/i18n";
 
@@ -477,6 +484,9 @@ function TabGroupView({ groupId }: { groupId: string }) {
   const detachTabToTopLevel = useAppStore((s) => s.detachTabToTopLevel);
   const broadcastTabIds = useAppStore((s) => s.broadcastTabIds);
   const toggleBroadcastTab = useAppStore((s) => s.toggleBroadcastTab);
+  const broadcastAllTabs = useAppStore((s) => s.broadcastAllTabs);
+  const broadcastToSplit = useAppStore((s) => s.broadcastToSplit);
+  const clearBroadcast = useAppStore((s) => s.clearBroadcast);
   const terminalThemeId = useAppStore((s) => s.terminalThemeId);
   const customTerminalThemes = useAppStore((s) => s.customTerminalThemes);
   const terminalThemeOverrides = useAppStore((s) => s.terminalThemeOverrides);
@@ -738,31 +748,76 @@ function TabGroupView({ groupId }: { groupId: string }) {
 
           <div className="flex items-center gap-1 shrink-0">
             {/* 广播按钮：开启后键盘输入同步到所有开启广播的终端 */}
-            <button
-              className={cn(
-                "h-5 px-1.5 rounded text-[10px] flex items-center gap-1 transition-colors",
-                isBroadcasting
-                  ? "bg-primary/20 text-primary font-medium"
-                  : isDarkTheme
-                    ? "hover:bg-white/10"
-                    : "hover:bg-black/5",
-              )}
-              style={{
-                color: isBroadcasting
-                  ? undefined
-                  : terminalTheme.ui.foreground,
-                opacity: isBroadcasting ? 1 : 0.75,
-              }}
-              onClick={() => toggleBroadcastTab(activeTab.id)}
-              title={
-                isBroadcasting
-                  ? t("broadcast_split_enabled")
-                  : t("broadcast_split_disabled")
-              }
-            >
-              <Radio className="h-3 w-3 flex-shrink-0" />
-              <span className="truncate">{t("broadcast_label")}</span>
-            </button>
+            <div className="flex items-center">
+              <button
+                className={cn(
+                  "h-5 px-1.5 rounded-l text-[10px] flex items-center gap-1 transition-colors",
+                  isBroadcasting
+                    ? "bg-primary/20 text-primary font-medium"
+                    : isDarkTheme
+                      ? "hover:bg-white/10"
+                      : "hover:bg-black/5",
+                )}
+                style={{
+                  color: isBroadcasting
+                    ? undefined
+                    : terminalTheme.ui.foreground,
+                  opacity: isBroadcasting ? 1 : 0.75,
+                }}
+                onClick={() => toggleBroadcastTab(activeTab.id)}
+                title={
+                  isBroadcasting
+                    ? t("broadcast_split_enabled")
+                    : t("broadcast_split_disabled")
+                }
+              >
+                <Radio className="h-3 w-3 flex-shrink-0" />
+                <span className="truncate">{t("broadcast_label")}</span>
+              </button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    className={cn(
+                      "h-5 px-0.5 rounded-r text-[10px] flex items-center transition-colors",
+                      isBroadcasting
+                        ? "bg-primary/20 text-primary"
+                        : isDarkTheme
+                          ? "hover:bg-white/10"
+                          : "hover:bg-black/5",
+                    )}
+                    style={{
+                      color: isBroadcasting
+                        ? undefined
+                        : terminalTheme.ui.foreground,
+                      opacity: isBroadcasting ? 1 : 0.75,
+                    }}
+                    title={t("broadcast_more")}
+                  >
+                    <ChevronDown className="h-3 w-3" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48 p-1">
+                  <DropdownMenuItem
+                    onClick={() => broadcastToSplit(activeTab.id)}
+                    className="text-xs cursor-pointer"
+                  >
+                    {t("broadcast_select_split")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={broadcastAllTabs}
+                    className="text-xs cursor-pointer"
+                  >
+                    {t("broadcast_select_all")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={clearBroadcast}
+                    className="text-xs cursor-pointer"
+                  >
+                    {t("broadcast_clear_all")}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
 
             {/* 将当前窗格恢复为顶部独立工作台 */}
             <button
