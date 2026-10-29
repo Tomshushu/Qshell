@@ -17,6 +17,7 @@
     "build:all": "tauri build",
     "lint": "eslint .",
     "check:undefined": "node tools/check-undefined.mjs",
+    "check:ipc": "node tools/check-ipc-contract.mjs",
     "preview": "vite preview",
     "site:dev": "vite website --port 5180",
     "site:build": "vite build website",
