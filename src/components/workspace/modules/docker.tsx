@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo, type WheelEvent as ReactWheelEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Button } from '@/components/ui/button'
@@ -77,6 +77,18 @@ import {
 } from "@/components/docker";
 import { useAIStore } from "@/store/ai-store";
 import { parseContainerExitCode } from "@/services/ai/docker-diagnoser";
+
+/**
+ * Shift + 滚轮横向滚动：表格容器横向溢出时，按住 Shift 滚动滚轮即可左右移动，
+ * 无需先把纵向列表滚到底部再去拖滚动条。
+ */
+function handleTableWheel(e: ReactWheelEvent<HTMLDivElement>) {
+  if (!e.shiftKey) return
+  const el = e.currentTarget
+  if (el.scrollWidth <= el.clientWidth) return
+  el.scrollLeft += e.deltaY
+  e.preventDefault()
+}
 
 export function DockerModule({ serverId, initialView, initialSearchQuery }: DockerModuleProps) {
   const baseServerId = extractBaseServerId(serverId)
@@ -2985,7 +2997,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
           />
         ) : viewMode === 'list' ? (
           /* === 列表视图 === */
-          <div className="my-2 rounded-xl border border-border/70 bg-card dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_1px_3px_rgba(0,0,0,0.35)] shadow-xs overflow-hidden">
+          <div className="my-2 max-h-[calc(100%-1rem)] flex flex-col rounded-xl border border-border/70 bg-card dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_1px_3px_rgba(0,0,0,0.35)] shadow-xs overflow-hidden">
             {/* 批量操作工具栏：有选中项时出现 */}
             {selectedIds.size > 0 && (
               <div className="flex items-center gap-2 px-4 py-2 border-b border-border/40 bg-accent/30 flex-wrap">
@@ -3005,8 +3017,8 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
                 </Button>
               </div>
             )}
-            {/* 横向滚动：窄容器下列宽不再压缩（容器名可读），整表左右滑动查看 */}
-            <div className="overflow-x-auto">
+            {/* 横竖滚动都由表格容器自身承担：滚动条固定在可视区底部，无需滚到列表末尾才能横向拖动 */}
+            <div className="flex-1 min-h-0 overflow-auto" onWheel={handleTableWheel}>
             <table className="w-full text-xs min-w-[880px]">
             <thead className="workspace-table-head">
               <tr className="text-left text-muted-foreground/70">
@@ -3237,8 +3249,8 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
               )}
             />
           ) : (
-            <div className="my-2 rounded-xl border border-border/70 bg-card dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_1px_3px_rgba(0,0,0,0.35)] shadow-xs overflow-hidden">
-            <div className="overflow-x-auto">
+            <div className="my-2 max-h-[calc(100%-1rem)] flex flex-col rounded-xl border border-border/70 bg-card dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_1px_3px_rgba(0,0,0,0.35)] shadow-xs overflow-hidden">
+            <div className="flex-1 min-h-0 overflow-auto" onWheel={handleTableWheel}>
             <table className="w-full text-xs min-w-[760px]">
               <thead className="workspace-table-head">
                 <tr className="text-left text-muted-foreground/70">
@@ -3342,8 +3354,8 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
           ) : networks.length === 0 ? (
             <EmptyState icon={<Network className="h-6 w-6" />} title={t('docker_no_networks')} />
           ) : (
-            <div className="my-2 rounded-xl border border-border/70 bg-card dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_1px_3px_rgba(0,0,0,0.35)] shadow-xs overflow-hidden">
-            <div className="overflow-x-auto">
+            <div className="my-2 max-h-[calc(100%-1rem)] flex flex-col rounded-xl border border-border/70 bg-card dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_1px_3px_rgba(0,0,0,0.35)] shadow-xs overflow-hidden">
+            <div className="flex-1 min-h-0 overflow-auto" onWheel={handleTableWheel}>
             <table className="w-full text-xs min-w-[560px]">
               <thead className="workspace-table-head">
                 <tr className="text-left text-muted-foreground/70">
@@ -3398,8 +3410,8 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
           ) : volumes.length === 0 ? (
             <EmptyState icon={<HardDrive className="h-6 w-6" />} title={t('docker_no_volumes')} />
           ) : (
-            <div className="my-2 rounded-xl border border-border/70 bg-card dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_1px_3px_rgba(0,0,0,0.35)] shadow-xs overflow-hidden">
-            <div className="overflow-x-auto">
+            <div className="my-2 max-h-[calc(100%-1rem)] flex flex-col rounded-xl border border-border/70 bg-card dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_1px_3px_rgba(0,0,0,0.35)] shadow-xs overflow-hidden">
+            <div className="flex-1 min-h-0 overflow-auto" onWheel={handleTableWheel}>
             <table className="w-full text-xs min-w-[560px]">
               <thead className="workspace-table-head">
                 <tr className="text-left text-muted-foreground/70">
