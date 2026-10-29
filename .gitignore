@@ -5,6 +5,9 @@ node_modules
 dist
 release
 
+# Test coverage reports
+coverage
+
 # Tauri build artifacts
 src-tauri/target
 src-tauri/target-codex-check
