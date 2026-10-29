@@ -4057,11 +4057,22 @@
   background-color: color-mix(in oklch, var(--color-accent) 65%, transparent);
 }
 .workspace-table-row.is-selected {
-  background-color: color-mix(in oklch, var(--color-primary) 24%, transparent) !important;
-  box-shadow: inset 3.5px 0 0 0 var(--color-primary);
+  background-color: var(--color-primary) !important;
+  box-shadow: inset 3.5px 0 0 0 var(--color-primary-foreground);
+}
+/* 选中行整行反色：与 Xftp 一致，实心主色底 + 前景色文字 */
+.workspace-table-row.is-selected > * {
+  color: var(--color-primary-foreground) !important;
+}
+.workspace-table-row.is-selected .text-muted-foreground,
+.workspace-table-row.is-selected .text-muted-foreground\/80,
+.workspace-table-row.is-selected .text-muted-foreground\/60,
+.workspace-table-row.is-selected .text-muted-foreground\/40 {
+  color: var(--color-primary-foreground) !important;
+  opacity: 0.85;
 }
 .workspace-table-row.is-selected:hover {
-  background-color: color-mix(in oklch, var(--color-primary) 32%, transparent) !important;
+  background-color: color-mix(in oklch, var(--color-primary) 88%, white) !important;
 }
 
 [data-ui-style="ubuntu"] .workspace-table-row,
@@ -4074,12 +4085,12 @@
 }
 [data-ui-style="ubuntu"] .workspace-table-row.is-selected,
 [data-theme="ubuntu"] .workspace-table-row.is-selected {
-  background-color: color-mix(in oklch, var(--color-primary) 24%, transparent) !important;
-  box-shadow: inset 3.5px 0 0 0 var(--color-primary);
+  background-color: var(--color-primary) !important;
+  box-shadow: inset 3.5px 0 0 0 var(--color-primary-foreground);
 }
 [data-ui-style="ubuntu"] .workspace-table-row.is-selected:hover,
 [data-theme="ubuntu"] .workspace-table-row.is-selected:hover {
-  background-color: color-mix(in oklch, var(--color-primary) 32%, transparent) !important;
+  background-color: color-mix(in oklch, var(--color-primary) 88%, white) !important;
 }
 
 .dark[data-ui-style="cyberpunk"] .workspace-table-row {
@@ -4089,11 +4100,11 @@
   background-color: rgba(0, 240, 255, 0.12);
 }
 .dark[data-ui-style="cyberpunk"] .workspace-table-row.is-selected {
-  background-color: rgba(0, 240, 255, 0.22);
-  box-shadow: inset 3px 0 0 0 #00F0FF, 0 0 10px rgba(0, 240, 255, 0.20);
+  background-color: #00F0FF;
+  box-shadow: inset 3px 0 0 0 #00F0FF, 0 0 12px rgba(0, 240, 255, 0.35);
 }
 .dark[data-ui-style="cyberpunk"] .workspace-table-row.is-selected:hover {
-  background-color: rgba(0, 240, 255, 0.28);
+  background-color: #33F4FF;
 }
 
 .light[data-ui-style="cyberpunk"] .workspace-table-row,
@@ -4106,12 +4117,12 @@
 }
 .light[data-ui-style="cyberpunk"] .workspace-table-row.is-selected,
 [data-ui-style="cyberpunk"]:not(.dark) .workspace-table-row.is-selected {
-  background-color: rgba(255, 107, 53, 0.18);
-  box-shadow: inset 3px 0 0 0 #FF6B35, 0 0 8px rgba(8, 217, 214, 0.22);
+  background-color: #FF6B35;
+  box-shadow: inset 3px 0 0 0 #FF6B35, 0 0 10px rgba(8, 217, 214, 0.30);
 }
 .light[data-ui-style="cyberpunk"] .workspace-table-row.is-selected:hover,
 [data-ui-style="cyberpunk"]:not(.dark) .workspace-table-row.is-selected:hover {
-  background-color: rgba(255, 107, 53, 0.25);
+  background-color: #FF8255;
 }
 
 [data-ui-style="anime"] .workspace-table-row {
@@ -4122,11 +4133,11 @@
   background-color: color-mix(in oklch, var(--color-primary) 12%, transparent);
 }
 [data-ui-style="anime"] .workspace-table-row.is-selected {
-  background-color: color-mix(in oklch, var(--color-primary) 22%, transparent);
-  box-shadow: inset 3px 0 0 0 var(--color-primary);
+  background-color: var(--color-primary);
+  box-shadow: inset 3px 0 0 0 var(--color-primary-foreground);
 }
 [data-ui-style="anime"] .workspace-table-row.is-selected:hover {
-  background-color: color-mix(in oklch, var(--color-primary) 30%, transparent);
+  background-color: color-mix(in oklch, var(--color-primary) 88%, white);
 }
 
 [data-ui-style="nord"] .workspace-table-row {
@@ -4136,12 +4147,12 @@
   background-color: color-mix(in srgb, var(--color-secondary) 75%, transparent);
 }
 [data-ui-style="nord"] .workspace-table-row.is-selected {
-  background-color: color-mix(in srgb, var(--color-primary) 22%, var(--color-card));
-  color: var(--color-primary);
-  box-shadow: inset 3px 0 0 0 var(--color-primary);
+  background-color: var(--color-primary);
+  color: var(--color-primary-foreground);
+  box-shadow: inset 3px 0 0 0 var(--color-primary-foreground);
 }
 [data-ui-style="nord"] .workspace-table-row.is-selected:hover {
-  background-color: color-mix(in srgb, var(--color-primary) 30%, var(--color-card));
+  background-color: color-mix(in srgb, var(--color-primary) 88%, white);
 }
 .dark[data-ui-style="retro-crt"] .workspace-table-row {
   border-bottom-color: #1E461E;
@@ -4152,11 +4163,11 @@
   color: #33FF33;
 }
 .dark[data-ui-style="retro-crt"] .workspace-table-row.is-selected {
-  background-color: #245024;
-  box-shadow: inset 3px 0 0 0 #33FF33;
+  background-color: #33FF33;
+  box-shadow: inset 3px 0 0 0 #0A0E0A;
 }
 .dark[data-ui-style="retro-crt"] .workspace-table-row.is-selected:hover {
-  background-color: #2C602C;
+  background-color: #5CFF5C;
 }
 .light[data-ui-style="retro-crt"] .workspace-table-row,
 [data-ui-style="retro-crt"]:not(.dark) .workspace-table-row {
@@ -4170,12 +4181,12 @@
 }
 .light[data-ui-style="retro-crt"] .workspace-table-row.is-selected,
 [data-ui-style="retro-crt"]:not(.dark) .workspace-table-row.is-selected {
-  background-color: #C2DCC2;
-  box-shadow: inset 3px 0 0 0 #187A18;
+  background-color: #187A18;
+  box-shadow: inset 3px 0 0 0 #FFFFFF;
 }
 .light[data-ui-style="retro-crt"] .workspace-table-row.is-selected:hover,
 [data-ui-style="retro-crt"]:not(.dark) .workspace-table-row.is-selected:hover {
-  background-color: #B2D2B2;
+  background-color: #1F8F1F;
 }
 
 .light[data-ui-style="win98"] .workspace-table-row,
@@ -4218,11 +4229,11 @@
   background-color: #2E3742;
 }
 .dark[data-ui-style="mecha"] .workspace-table-row.is-selected {
-  background-color: rgba(255, 204, 0, 0.22);
-  box-shadow: inset 3px 0 0 0 #FFCC00;
+  background-color: #FFCC00;
+  box-shadow: inset 3px 0 0 0 #14171A;
 }
 .dark[data-ui-style="mecha"] .workspace-table-row.is-selected:hover {
-  background-color: rgba(255, 204, 0, 0.30);
+  background-color: #FFD633;
 }
 
 .light[data-ui-style="mecha"] .workspace-table-row,
@@ -4235,12 +4246,12 @@
 }
 .light[data-ui-style="mecha"] .workspace-table-row.is-selected,
 [data-ui-style="mecha"]:not(.dark) .workspace-table-row.is-selected {
-  background-color: rgba(212, 136, 0, 0.20);
-  box-shadow: inset 3px 0 0 0 #D48800;
+  background-color: #D48800;
+  box-shadow: inset 3px 0 0 0 #FFFFFF;
 }
 .light[data-ui-style="mecha"] .workspace-table-row.is-selected:hover,
 [data-ui-style="mecha"]:not(.dark) .workspace-table-row.is-selected:hover {
-  background-color: rgba(212, 136, 0, 0.28);
+  background-color: #E89A0A;
 }
 
 /* Ink 宣纸水墨数据表格行：细墨边线与焦墨沉着指示 */
@@ -4251,11 +4262,11 @@
   background-color: #262C34;
 }
 .dark[data-ui-style="ink"] .workspace-table-row.is-selected {
-  background-color: rgba(242, 239, 235, 0.18);
-  box-shadow: inset 3px 0 0 0 #F2EFEB;
+  background-color: #F2EFEB;
+  box-shadow: inset 3px 0 0 0 #101215;
 }
 .dark[data-ui-style="ink"] .workspace-table-row.is-selected:hover {
-  background-color: rgba(242, 239, 235, 0.26);
+  background-color: #FFFFFF;
 }
 
 .light[data-ui-style="ink"] .workspace-table-row,
@@ -4268,12 +4279,12 @@
 }
 .light[data-ui-style="ink"] .workspace-table-row.is-selected,
 [data-ui-style="ink"]:not(.dark) .workspace-table-row.is-selected {
-  background-color: rgba(24, 26, 29, 0.16);
-  box-shadow: inset 3px 0 0 0 #181A1D;
+  background-color: #181A1D;
+  box-shadow: inset 3px 0 0 0 #FFFFFF;
 }
 .light[data-ui-style="ink"] .workspace-table-row.is-selected:hover,
 [data-ui-style="ink"]:not(.dark) .workspace-table-row.is-selected:hover {
-  background-color: rgba(24, 26, 29, 0.24);
+  background-color: #2A2D31;
 }
 
 /* 10. SFTP / 文件模块桌面图标视图（大图标、中图标、小图标，仿 Ubuntu 桌面版 / Windows Explorer） */

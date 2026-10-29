@@ -372,6 +372,53 @@ export function SftpPanel() {
   const [systemRoots, setSystemRoots] = useState<string[]>([])
   const [leftViewMode, setLeftViewMode] = useState<SftpViewMode>(sftpLocalViewMode)
   const [rightViewMode, setRightViewMode] = useState<SftpViewMode>(sftpRemoteViewMode)
+  // 列表视图列宽（null = 使用默认 fr 比例）：拖动表头列边界调整
+  const [leftColWidths, setLeftColWidths] = useState<number[] | null>(null)
+  const [rightColWidths, setRightColWidths] = useState<number[] | null>(null)
+  const leftHeaderRef = useRef<HTMLDivElement>(null)
+  const rightHeaderRef = useRef<HTMLDivElement>(null)
+
+  // 前 N-1 列固定为拖动后的像素宽，最后一列自适应，保证始终铺满容器
+  const buildColTemplate = (widths: number[] | null, count: number): string | undefined => {
+    if (!widths || widths.length !== count) return undefined
+    return widths.slice(0, -1).map((w) => `${Math.round(w)}px`).join(' ') + ' minmax(60px, 1fr)'
+  }
+
+  const handleColResize = (side: 'left' | 'right', index: number, e: React.PointerEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const header = side === 'left' ? leftHeaderRef.current : rightHeaderRef.current
+    if (!header) return
+    const cols = Array.from(header.children) as HTMLElement[]
+    const startWidths = cols.map((c) => c.getBoundingClientRect().width)
+    const startX = e.clientX
+    const startW = startWidths[index]
+    const setter = side === 'left' ? setLeftColWidths : setRightColWidths
+    setter(startWidths)
+    const onMove = (ev: PointerEvent) => {
+      const next = [...startWidths]
+      next[index] = Math.max(60, startW + (ev.clientX - startX))
+      setter(next)
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
+
+  const renderColResizeHandle = (side: 'left' | 'right', index: number) => (
+    <span
+      className="absolute -right-1 top-0 z-20 h-full w-2 cursor-col-resize hover:bg-primary/40"
+      onPointerDown={(e) => handleColResize(side, index, e)}
+      onClick={(e) => e.stopPropagation()}
+    />
+  )
+
+  const leftColCount = leftSideType === 'remote' ? 6 : 4
+  const leftColTemplate = buildColTemplate(leftColWidths, leftColCount)
+  const rightColTemplate = buildColTemplate(rightColWidths, 6)
 
   const handleSetLeftViewMode = useCallback((mode: SftpViewMode) => {
     setLeftViewMode(mode)
@@ -647,8 +694,8 @@ export function SftpPanel() {
   }
 
   // === 虚拟滚动 ===
-  // 文件行固定高度 40px（与 h-10 一致）
-  const FILE_ROW_HEIGHT = 40
+  // 文件行固定高度 36px（与行样式 h-9 严格一致，还原 Xftp 实际档位）
+  const FILE_ROW_HEIGHT = 36
   // 本地/远程列表的滚动容器 ref（virtualizer 在 filteredXxxFiles 定义后创建）
   const localListRef = useRef<HTMLDivElement | null>(null)
   const remoteListRef = useRef<HTMLDivElement | null>(null)
@@ -1861,6 +1908,8 @@ export function SftpPanel() {
     if (status === 'size_mismatch') {
       return 'bg-amber-500/15 hover:bg-amber-500/25 border-l-2 border-amber-500 text-amber-600 dark:text-amber-400'
     }
+    // identical / 未知：保持普通 hover 反馈
+    return 'hover:bg-accent/70'
   }
 
   const getCompareCardClass = (path: string, side: 'local' | 'remote', isSelected: boolean) => {
@@ -6037,42 +6086,55 @@ export function SftpPanel() {
                 <div className="flex-1 flex flex-col overflow-hidden">
                   {/* 本地列表表头（仅列表模式展示） */}
                   {leftViewMode === 'list' && (
-                    <div className={cn(
-                      "grid px-4 border-b border-border/50 bg-muted/20 text-[10px] text-muted-foreground/80 font-semibold select-none items-stretch h-7 flex-shrink-0 tracking-wider uppercase",
+                    <div
+                      ref={leftHeaderRef}
+                      className={cn(
+                      "grid px-4 border-b border-border/60 bg-muted/30 text-[13px] text-muted-foreground/80 font-semibold select-none items-stretch h-9 flex-shrink-0 tracking-wider uppercase divide-x divide-border/40",
                       leftSideType === 'remote' ? "grid-cols-[2.5fr_0.8fr_1fr_1.5fr_1.2fr_1fr]" : "grid-cols-[2.5fr_1fr_1.2fr_1.8fr]"
-                    )}>
+                    )}
+                      style={leftColTemplate ? { gridTemplateColumns: leftColTemplate } : undefined}
+                    >
                       <button 
                         onClick={() => handleLocalSort('name')}
-                        className="flex items-center gap-1 hover:text-foreground text-left cursor-pointer font-medium tracking-wider pr-3 h-full transition-colors"
+                        className="relative flex items-center gap-1 hover:text-foreground text-left cursor-pointer font-medium tracking-wider pr-3 h-full transition-colors"
                       >
                         <span>{t('sftp_col_name')}</span>
                         {localSortField === 'name' && (
                           localSortOrder === 'asc' ? <ArrowUp className="h-3 w-3 text-primary" /> : <ArrowDown className="h-3 w-3 text-primary" />
                         )}
+                        {renderColResizeHandle('left', 0)}
                       </button>
                       <button 
                         onClick={() => handleLocalSort('size')}
-                        className="flex items-center justify-start gap-1 hover:text-foreground text-left cursor-pointer font-medium tracking-wider pl-3 pr-3 h-full transition-colors"
+                        className="relative flex items-center justify-end gap-1 hover:text-foreground text-right cursor-pointer font-medium tracking-wider px-3 h-full transition-colors"
                       >
                         <span>{t('sftp_col_size')}</span>
                         {localSortField === 'size' && (
                           localSortOrder === 'asc' ? <ArrowUp className="h-3 w-3 text-primary" /> : <ArrowDown className="h-3 w-3 text-primary" />
                         )}
+                        {renderColResizeHandle('left', 1)}
                       </button>
-                      <span className="text-left pl-3 pr-3 h-full flex items-center justify-start font-medium tracking-wider">{t('sftp_col_type') || 'Type'}</span>
+                      <span className="relative text-right px-3 h-full flex items-center justify-end font-medium tracking-wider">
+                        {t('sftp_col_type') || 'Type'}
+                        {renderColResizeHandle('left', 2)}
+                      </span>
                       <button 
                         onClick={() => handleLocalSort('modified')}
-                        className="flex items-center justify-start gap-1 hover:text-foreground text-left cursor-pointer font-medium tracking-wider pl-3 h-full transition-colors"
+                        className="relative flex items-center justify-end gap-1 hover:text-foreground text-right cursor-pointer font-medium tracking-wider px-3 h-full transition-colors"
                       >
                         <span>{t('sftp_col_modified')}</span>
                         {localSortField === 'modified' && (
                           localSortOrder === 'asc' ? <ArrowUp className="h-3 w-3 text-primary" /> : <ArrowDown className="h-3 w-3 text-primary" />
                         )}
+                        {leftSideType === 'remote' && renderColResizeHandle('left', 3)}
                       </button>
                       {leftSideType === 'remote' && (
                         <>
-                          <span className="text-left pl-3 pr-3 h-full flex items-center justify-start font-medium tracking-wider">{t('sftp_col_permissions')}</span>
-                          <span className="text-left pl-3 pr-3 h-full flex items-center justify-start font-medium tracking-wider">{t('sftp_col_owner') || 'Owner'}</span>
+                          <span className="relative text-right px-3 h-full flex items-center justify-end font-medium tracking-wider">
+                            {t('sftp_col_permissions')}
+                            {renderColResizeHandle('left', 4)}
+                          </span>
+                          <span className="text-right px-3 h-full flex items-center justify-end font-medium tracking-wider">{t('sftp_col_owner') || 'Owner'}</span>
                         </>
                       )}
                     </div>
@@ -6155,6 +6217,7 @@ export function SftpPanel() {
                                     width: '100%',
                                     height: `${virtualItem.size}px`,
                                     transform: `translateY(${virtualItem.start}px)`,
+                                    ...(leftColTemplate ? { gridTemplateColumns: leftColTemplate } : {}),
                                   }}
                                   onPointerDown={(e) => {
                                     if (e.button !== 0 || file.name === '..') return
@@ -6262,7 +6325,7 @@ export function SftpPanel() {
                                     setLocalContextMenuFile(file)
                                   }}
                                   className={cn(
-                                    "workspace-table-row group grid px-4 h-9 text-xs items-center cursor-pointer select-none",
+                                    "workspace-table-row group grid px-4 h-9 text-sm items-center cursor-pointer select-none",
                                     leftSideType === 'remote' ? "grid-cols-[2.5fr_0.8fr_1fr_1.5fr_1.2fr_1fr]" : "grid-cols-[2.5fr_1fr_1.2fr_1.8fr]",
                                     getCompareRowBgClass(file.path, 'local', isSelected)
                                   )}
@@ -6271,18 +6334,18 @@ export function SftpPanel() {
                                     <div className="inline-flex items-center gap-2 max-w-full overflow-hidden" data-drag-handle="true">
                                       {file.name === '..' ? (
                                         <div className="flex items-center gap-2 text-muted-foreground/90 font-medium">
-                                          <div className="flex h-5 w-5 items-center justify-center rounded bg-muted/60 text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary transition-colors">
-                                            <FolderUp className="h-3.5 w-3.5" />
+                                          <div className="flex h-6 w-6 items-center justify-center rounded bg-muted/60 text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary transition-colors">
+                                            <FolderUp className="h-4.5 w-4.5" />
                                           </div>
-                                          <span className="font-mono text-xs font-semibold tracking-wide">..</span>
-                                          <span className="text-[11px] text-muted-foreground/60 hidden sm:inline font-normal">({t('fp_parent_dir')})</span>
+                                          <span className="font-mono text-sm font-semibold tracking-wide">..</span>
+                                          <span className="text-sm text-muted-foreground/60 hidden sm:inline font-normal">({t('fp_parent_dir')})</span>
                                         </div>
                                       ) : (
                                         <>
                                           {openingLocalPath === file.path ? (
                                             <Loader2 className="h-4 w-4 animate-spin text-primary shrink-0" />
                                           ) : (
-                                            renderFileIcon(file, "h-4.5 w-4.5")
+                                            renderFileIcon(file, "h-6 w-6")
                                           )}
                                           {renameTarget && renameTarget.path === file.path ? (
                                             <InlineRenameInput
@@ -6306,25 +6369,25 @@ export function SftpPanel() {
                                       )}
                                     </div>
                                   </div>
-                                  <span className="truncate text-left text-[11px] text-muted-foreground font-mono tabular-nums pl-3">
+                                  <span className="truncate text-right text-sm text-muted-foreground font-mono tabular-nums px-3">
                                     {file.name === '..' ? (
                                       <span className="opacity-0 group-hover:opacity-100 transition-opacity">
                                         <Kbd size="xs">Alt+↑</Kbd>
                                       </span>
-                                    ) : (file.isDirectory ? <span className="text-[10px] text-muted-foreground/40 font-sans uppercase">dir</span> : formatFileSize(file.size))}
+                                    ) : (file.isDirectory ? <span className="text-xs text-muted-foreground/40 font-sans uppercase">dir</span> : formatFileSize(file.size))}
                                   </span>
-                                  <span className="text-left text-[11px] text-muted-foreground font-mono truncate pl-3">
+                                  <span className="text-right text-sm text-muted-foreground font-mono truncate px-3">
                                     {file.name === '..' ? '' : t(getFileTypeLabel(file))}
                                   </span>
-                                  <span className="text-left text-[11px] text-muted-foreground font-mono truncate pl-3">
+                                  <span className="text-right text-sm text-muted-foreground font-mono truncate px-3">
                                     {file.name === '..' ? '' : (leftSideType === 'remote' ? ((file as unknown as FileEntry).modifiedTime || '-') : (file.modified || '-'))}
                                   </span>
                                   {leftSideType === 'remote' && (
                                     <>
-                                      <span className="text-left text-[11px] text-muted-foreground font-mono truncate pl-3">
+                                      <span className="text-right text-sm text-muted-foreground font-mono truncate px-3">
                                         {file.name === '..' ? '' : ((file as unknown as FileEntry).permissions || '-')}
                                       </span>
-                                      <span className="text-left text-[11px] text-muted-foreground font-mono truncate pl-3">
+                                      <span className="text-right text-sm text-muted-foreground font-mono truncate px-3">
                                         {file.name === '..' ? '' : ((file as unknown as FileEntry).owner || ((file as unknown as FileEntry).uid === 0 ? 'root' : ((file as unknown as FileEntry).uid != null ? String((file as unknown as FileEntry).uid) : '-')))}
                                       </span>
                                     </>
@@ -7381,37 +7444,50 @@ export function SftpPanel() {
                   <div className={cn("flex-1 flex flex-col overflow-hidden", isRemoteDisconnected && "opacity-85")}>
                     {/* 表头（仅列表模式展示） */}
                     {rightViewMode === 'list' && (
-                      <div className="grid grid-cols-[2.5fr_0.8fr_1fr_1.5fr_1.2fr_1fr] px-4 border-b border-border/50 bg-muted/20 text-[10px] text-muted-foreground/80 font-semibold select-none items-stretch h-7 flex-shrink-0 tracking-wider uppercase">
+                      <div
+                        ref={rightHeaderRef}
+                        className="grid grid-cols-[2.5fr_0.8fr_1fr_1.5fr_1.2fr_1fr] px-4 border-b border-border/60 bg-muted/30 text-[13px] text-muted-foreground/80 font-semibold select-none items-stretch h-9 flex-shrink-0 tracking-wider uppercase divide-x divide-border/40"
+                        style={rightColTemplate ? { gridTemplateColumns: rightColTemplate } : undefined}
+                      >
                         <button 
                           onClick={() => handleRemoteSort('name')}
-                          className="flex items-center gap-1 hover:text-foreground text-left cursor-pointer font-medium tracking-wider pr-3 h-full transition-colors"
+                          className="relative flex items-center gap-1 hover:text-foreground text-left cursor-pointer font-medium tracking-wider pr-3 h-full transition-colors"
                         >
                           <span>{t('sftp_col_name')}</span>
                           {remoteSortField === 'name' && (
                             remoteSortOrder === 'asc' ? <ArrowUp className="h-3 w-3 text-primary" /> : <ArrowDown className="h-3 w-3 text-primary" />
                           )}
+                          {renderColResizeHandle('right', 0)}
                         </button>
                         <button 
                           onClick={() => handleRemoteSort('size')}
-                          className="flex items-center justify-start gap-1 hover:text-foreground text-left cursor-pointer font-medium tracking-wider pl-3 pr-3 h-full transition-colors"
+                          className="relative flex items-center justify-end gap-1 hover:text-foreground text-right cursor-pointer font-medium tracking-wider px-3 h-full transition-colors"
                         >
                           <span>{t('sftp_col_size')}</span>
                           {remoteSortField === 'size' && (
                             remoteSortOrder === 'asc' ? <ArrowUp className="h-3 w-3 text-primary" /> : <ArrowDown className="h-3 w-3 text-primary" />
                           )}
+                          {renderColResizeHandle('right', 1)}
                         </button>
-                        <span className="text-left pl-3 pr-3 h-full flex items-center justify-start font-medium tracking-wider">{t('sftp_col_type') || 'Type'}</span>
+                        <span className="relative text-right px-3 h-full flex items-center justify-end font-medium tracking-wider">
+                          {t('sftp_col_type') || 'Type'}
+                          {renderColResizeHandle('right', 2)}
+                        </span>
                         <button 
                           onClick={() => handleRemoteSort('modified')}
-                          className="flex items-center justify-start gap-1 hover:text-foreground text-left cursor-pointer font-medium tracking-wider pl-3 pr-3 h-full transition-colors"
+                          className="relative flex items-center justify-end gap-1 hover:text-foreground text-right cursor-pointer font-medium tracking-wider px-3 h-full transition-colors"
                         >
                           <span>{t('sftp_col_modified')}</span>
                           {remoteSortField === 'modified' && (
                             remoteSortOrder === 'asc' ? <ArrowUp className="h-3 w-3 text-primary" /> : <ArrowDown className="h-3 w-3 text-primary" />
                           )}
+                          {renderColResizeHandle('right', 3)}
                         </button>
-                        <span className="text-left pl-3 pr-3 h-full flex items-center justify-start font-medium tracking-wider">{t('sftp_col_permissions')}</span>
-                        <span className="text-left pl-3 pr-3 h-full flex items-center justify-start font-medium tracking-wider">{t('sftp_col_owner') || 'Owner'}</span>
+                        <span className="relative text-right px-3 h-full flex items-center justify-end font-medium tracking-wider">
+                          {t('sftp_col_permissions')}
+                          {renderColResizeHandle('right', 4)}
+                        </span>
+                        <span className="text-right px-3 h-full flex items-center justify-end font-medium tracking-wider">{t('sftp_col_owner') || 'Owner'}</span>
                       </div>
                     )}
 
@@ -7492,6 +7568,7 @@ export function SftpPanel() {
                                     width: '100%',
                                     height: `${virtualItem.size}px`,
                                     transform: `translateY(${virtualItem.start}px)`,
+                                    ...(rightColTemplate ? { gridTemplateColumns: rightColTemplate } : {}),
                                   }}
                                   onPointerDown={(e) => {
                                     if (e.button !== 0 || file.name === '..') return
@@ -7592,7 +7669,7 @@ export function SftpPanel() {
                                     setRemoteContextMenuFile(file)
                                   }}
                                   className={cn(
-                                    "workspace-table-row group grid grid-cols-[2.5fr_0.8fr_1fr_1.5fr_1.2fr_1fr] px-4 h-9 text-xs items-center cursor-pointer select-none",
+                                    "workspace-table-row group grid grid-cols-[2.5fr_0.8fr_1fr_1.5fr_1.2fr_1fr] px-4 h-9 text-sm items-center cursor-pointer select-none",
                                     getCompareRowBgClass(file.path, 'remote', isSelected)
                                   )}
                                 >
@@ -7600,18 +7677,18 @@ export function SftpPanel() {
                                     <div className="inline-flex items-center gap-2 max-w-full overflow-hidden" data-drag-handle="true">
                                       {file.name === '..' ? (
                                         <div className="flex items-center gap-2 text-muted-foreground/90 font-medium">
-                                          <div className="flex h-5 w-5 items-center justify-center rounded bg-muted/60 text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary transition-colors">
-                                            <FolderUp className="h-3.5 w-3.5" />
+                                          <div className="flex h-6 w-6 items-center justify-center rounded bg-muted/60 text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary transition-colors">
+                                            <FolderUp className="h-4.5 w-4.5" />
                                           </div>
-                                          <span className="font-mono text-xs font-semibold tracking-wide">..</span>
-                                          <span className="text-[11px] text-muted-foreground/60 hidden sm:inline font-normal">({t('fp_parent_dir')})</span>
+                                          <span className="font-mono text-sm font-semibold tracking-wide">..</span>
+                                          <span className="text-sm text-muted-foreground/60 hidden sm:inline font-normal">({t('fp_parent_dir')})</span>
                                         </div>
                                       ) : (
                                         <>
                                           {openingRemotePath === file.path ? (
                                             <Loader2 className="h-4 w-4 animate-spin text-primary shrink-0" />
                                           ) : (
-                                            renderFileIcon(file, "h-4.5 w-4.5")
+                                            renderFileIcon(file, "h-6 w-6")
                                           )}
                                           {renameTarget && renameTarget.path === file.path ? (
                                             <InlineRenameInput
@@ -7635,23 +7712,23 @@ export function SftpPanel() {
                                       )}
                                     </div>
                                   </div>
-                                  <span className="truncate text-left text-[11px] text-muted-foreground font-mono tabular-nums pl-3">
+                                  <span className="truncate text-right text-sm text-muted-foreground font-mono tabular-nums px-3">
                                     {file.name === '..' ? (
                                       <span className="opacity-0 group-hover:opacity-100 transition-opacity">
                                         <Kbd size="xs">Alt+↑</Kbd>
                                       </span>
-                                    ) : (file.isDirectory ? <span className="text-[10px] text-muted-foreground/40 font-sans uppercase">dir</span> : formatFileSize(file.size))}
+                                    ) : (file.isDirectory ? <span className="text-xs text-muted-foreground/40 font-sans uppercase">dir</span> : formatFileSize(file.size))}
                                   </span>
-                                  <span className="text-left text-[11px] text-muted-foreground font-mono truncate pl-3">
+                                  <span className="text-right text-sm text-muted-foreground font-mono truncate px-3">
                                     {file.name === '..' ? '' : t(getFileTypeLabel(file))}
                                   </span>
-                                  <span className="text-left text-[11px] text-muted-foreground font-mono truncate pl-3">
+                                  <span className="text-right text-sm text-muted-foreground font-mono truncate px-3">
                                     {file.name === '..' ? '' : (file.modifiedTime || '-')}
                                   </span>
-                                  <span className="text-left text-[11px] text-muted-foreground font-mono truncate pl-3">
+                                  <span className="text-right text-sm text-muted-foreground font-mono truncate px-3">
                                     {file.name === '..' ? '' : (file.permissions || '-')}
                                   </span>
-                                  <span className="text-left text-[11px] text-muted-foreground font-mono truncate pl-3">
+                                  <span className="text-right text-sm text-muted-foreground font-mono truncate px-3">
                                     {file.name === '..' ? '' : (file.owner || (file.uid === 0 ? 'root' : (file.uid != null ? String(file.uid) : '-')))}
                                   </span>
                                 </div>
