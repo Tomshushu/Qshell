@@ -2370,3 +2370,124 @@ pub async fn test_tcp_connection(host: &str, port: u16, timeout_secs: u64) -> bo
     // 忽略读取结果：TCP 连接已建立即判定在线
     true
 }
+
+/// 私钥路径校验的回归测试。
+///
+/// 该函数是加载本地私钥前的唯一闸门：绕过它既能读取任意系统文件，
+/// 也能让恶意路径流入日志或命令拼接。
+#[cfg(test)]
+mod key_path_tests {
+    use super::{validate_and_canonicalize_key_path, SshError};
+    use std::path::PathBuf;
+
+    /// 断言被拒绝，并返回 AuthFailed 的错误文本以便核对具体原因
+    fn rejection(r: Result<PathBuf, SshError>) -> String {
+        match r {
+            Ok(p) => panic!("expected rejection, got Ok({})", p.display()),
+            Err(SshError::AuthFailed(msg)) => msg,
+            Err(e) => panic!("expected AuthFailed, got {e:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_empty_path() {
+        assert!(rejection(validate_and_canonicalize_key_path("")).contains("empty"));
+    }
+
+    #[test]
+    fn rejects_null_byte() {
+        assert!(rejection(validate_and_canonicalize_key_path("a\0b")).contains("null byte"));
+    }
+
+    #[test]
+    fn rejects_control_characters() {
+        for p in ["a\u{1}b", "a\u{7f}b"] {
+            assert!(
+                rejection(validate_and_canonicalize_key_path(p)).contains("control characters"),
+                "payload: {p:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn tabs_are_not_treated_as_control_characters() {
+        // tab 明确放行，会继续走"文件不存在"分支
+        let r = validate_and_canonicalize_key_path("qshell-no-such-key\tx");
+        assert!(rejection(r).contains("not found"));
+    }
+
+    #[test]
+    fn rejects_command_substitution() {
+        assert!(rejection(validate_and_canonicalize_key_path("$(whoami)"))
+            .contains("command substitution"));
+        assert!(
+            rejection(validate_and_canonicalize_key_path("`id`")).contains("command substitution")
+        );
+        assert!(rejection(validate_and_canonicalize_key_path("/tmp/$(id)/key"))
+            .contains("command substitution"));
+    }
+
+    #[test]
+    fn rejects_shell_metacharacters() {
+        for p in ["a;b", "a|b", "a&b"] {
+            assert!(
+                rejection(validate_and_canonicalize_key_path(p)).contains("shell metacharacter"),
+                "payload: {p:?}"
+            );
+        }
+        // 换行/回车属于控制字符，会被更早的一道闸拦下
+        for p in ["a\nb", "a\rb"] {
+            assert!(
+                rejection(validate_and_canonicalize_key_path(p)).contains("control characters"),
+                "payload: {p:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_missing_file() {
+        let missing = std::env::temp_dir().join("qshell-no-such-private-key-1765432");
+        let msg = rejection(validate_and_canonicalize_key_path(missing.to_str().unwrap()));
+        assert!(msg.contains("not found"));
+    }
+
+    #[test]
+    fn rejects_directory() {
+        let dir = std::env::temp_dir();
+        let msg = rejection(validate_and_canonicalize_key_path(dir.to_str().unwrap()));
+        assert!(msg.contains("regular file"));
+    }
+
+    #[test]
+    fn accepts_regular_file_and_returns_absolute_canonical_path() {
+        let dir = std::env::temp_dir().join(format!("qshell-key-ok-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = dir.join("id_ed25519");
+        std::fs::write(&key, b"-----BEGIN OPENSSH PRIVATE KEY-----\n").unwrap();
+
+        let resolved = validate_and_canonicalize_key_path(key.to_str().unwrap()).unwrap();
+        assert!(resolved.is_absolute());
+        assert_eq!(resolved.file_name().unwrap(), "id_ed25519");
+        assert!(!resolved.to_string_lossy().contains(".."));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn resolves_dotdot_segments() {
+        let dir = std::env::temp_dir().join(format!("qshell-key-dotdot-{}", std::process::id()));
+        let nested = dir.join("a").join("b");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("key.pem"), b"x").unwrap();
+
+        // 路径里带 `..`，canonicalize 必须把它消掉后再返回
+        let with_dotdot = dir.join("a").join("b").join("..").join("b").join("key.pem");
+        let resolved = validate_and_canonicalize_key_path(with_dotdot.to_str().unwrap()).unwrap();
+        assert_eq!(
+            resolved,
+            std::fs::canonicalize(nested.join("key.pem")).unwrap()
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
