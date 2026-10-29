@@ -1023,7 +1023,7 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
           content: '<think>第一行思考\n第二行思考\n第三行思考</think>\n\n分析结果',
           createdAt: Date.now(),
           mode: 'agent',
-          status: 'responding',
+          status: 'streaming',
         },
       ],
     })
@@ -1053,7 +1053,7 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
           content: '<think>第一行思考\n第二行思考\n第三行思考\n第四行新输出</think>\n\n分析结果',
           createdAt: Date.now(),
           mode: 'agent',
-          status: 'responding',
+          status: 'streaming',
         },
       ],
     })
@@ -1075,7 +1075,7 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
           content: '<think>第一行思考\n第二行思考\n第三行思考\n第四行新输出\n第五行持续思考</think>\n\n分析结果',
           createdAt: Date.now(),
           mode: 'agent',
-          status: 'responding',
+          status: 'streaming',
         },
       ],
     })
@@ -1103,7 +1103,7 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
           content: '正在排查...',
           createdAt: Date.now(),
           mode: 'chat',
-          status: 'responding',
+          status: 'streaming',
         },
       ],
     })
