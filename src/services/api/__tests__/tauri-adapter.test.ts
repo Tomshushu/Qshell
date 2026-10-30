@@ -312,4 +312,159 @@ describe('tauri-adapter IPC contract', () => {
       expect(s.groupId).toBeNull()
     })
   })
+
+  describe('serial', () => {
+    it('listPorts calls serial_list_ports without args', async () => {
+      invokeMock.mockResolvedValue([])
+
+      await tauriAdapter.serial.listPorts()
+
+      expect(invokeMock).toHaveBeenCalledWith('serial_list_ports', undefined)
+    })
+
+    it('testPort fills the serial defaults', async () => {
+      invokeMock.mockResolvedValue({ success: true })
+
+      await tauriAdapter.serial.testPort('COM3')
+
+      expect(invokeMock).toHaveBeenCalledWith('serial_test_port', {
+        portName: 'COM3',
+        baudRate: 115200,
+        dataBits: 8,
+        stopBits: 1,
+        parity: 'none',
+        flowControl: 'none',
+      })
+    })
+
+    it('createShell passes port config together with dtr/rts and encoding defaults', async () => {
+      invokeMock.mockResolvedValue({ success: true })
+
+      await tauriAdapter.serial.createShell('s1', 'COM3')
+
+      expect(invokeMock).toHaveBeenCalledWith(
+        'serial_create_shell',
+        expect.objectContaining({
+          serverId: 's1',
+          portName: 'COM3',
+          baudRate: 115200,
+          dataBits: 8,
+          stopBits: 1,
+          parity: 'none',
+          flowControl: 'none',
+          dtr: true,
+          rts: true,
+          encoding: 'utf-8',
+        }),
+      )
+    })
+  })
+
+  describe('rdp', () => {
+    it('launch sends null for every omitted option', async () => {
+      invokeMock.mockResolvedValue({ success: true })
+
+      await tauriAdapter.rdp.launch({ serverId: 's1' } as never)
+
+      expect(invokeMock).toHaveBeenCalledWith('rdp_launch', {
+        serverId: 's1',
+        rdpPort: null,
+        width: null,
+        height: null,
+        fullscreen: null,
+        colorDepth: null,
+      })
+    })
+
+    it('launch forwards explicit options', async () => {
+      invokeMock.mockResolvedValue({ success: true })
+
+      await tauriAdapter.rdp.launch({
+        serverId: 's1',
+        rdpPort: 3389,
+        width: 1920,
+        height: 1080,
+        fullscreen: true,
+        colorDepth: 32,
+      } as never)
+
+      expect(invokeMock).toHaveBeenCalledWith('rdp_launch', {
+        serverId: 's1',
+        rdpPort: 3389,
+        width: 1920,
+        height: 1080,
+        fullscreen: true,
+        colorDepth: 32,
+      })
+    })
+  })
+
+  describe('bmc', () => {
+    it('powerAction sends serverId and action', async () => {
+      invokeMock.mockResolvedValue({ success: true })
+
+      await tauriAdapter.bmc.powerAction('s1', 'on' as never)
+
+      expect(invokeMock).toHaveBeenCalledWith('bmc_power_action', {
+        serverId: 's1',
+        action: 'on',
+      })
+    })
+
+    it('setIdentifyLed sends the boolean flag as "on"', async () => {
+      invokeMock.mockResolvedValue({ success: true })
+
+      await tauriAdapter.bmc.setIdentifyLed('s1', true)
+
+      expect(invokeMock).toHaveBeenCalledWith('bmc_set_identify_led', {
+        serverId: 's1',
+        on: true,
+      })
+    })
+  })
+
+  describe('portForward', () => {
+    it('list with no server maps to null', async () => {
+      invokeMock.mockResolvedValue([])
+
+      await tauriAdapter.portForward.list()
+
+      expect(invokeMock).toHaveBeenCalledWith('port_forward_list', { serverId: null })
+    })
+
+    it('list forwards an explicit serverId', async () => {
+      invokeMock.mockResolvedValue([])
+
+      await tauriAdapter.portForward.list('s1')
+
+      expect(invokeMock).toHaveBeenCalledWith('port_forward_list', { serverId: 's1' })
+    })
+
+    it('add wraps the spec object', async () => {
+      invokeMock.mockResolvedValue({ success: true })
+      const spec = { serverId: 's1', localPort: 8080 }
+
+      await tauriAdapter.portForward.add(spec as never)
+
+      expect(invokeMock).toHaveBeenCalledWith('port_forward_add', { spec })
+    })
+
+    it('stop and restart use forwardId', async () => {
+      invokeMock.mockResolvedValue({ success: true })
+
+      await tauriAdapter.portForward.stop('f1')
+      expect(invokeMock).toHaveBeenCalledWith('port_forward_stop', { forwardId: 'f1' })
+
+      await tauriAdapter.portForward.restart('f1')
+      expect(invokeMock).toHaveBeenCalledWith('port_forward_restart', { forwardId: 'f1' })
+    })
+
+    it('stopAll uses serverId', async () => {
+      invokeMock.mockResolvedValue({ success: true })
+
+      await tauriAdapter.portForward.stopAll('s1')
+
+      expect(invokeMock).toHaveBeenCalledWith('port_forward_stop_all', { serverId: 's1' })
+    })
+  })
 })
