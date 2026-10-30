@@ -20,6 +20,8 @@ import { friendlyError } from "@/lib/error-messages";
 import { SnapshotModal } from "@/components/workspace/snapshot-modal";
 import { Button } from "@/components/ui/button";
 import {
+  ChevronDown,
+  ChevronUp,
   WifiOff,
   RefreshCw,
   Stethoscope,
@@ -431,6 +433,8 @@ export function WorkspacePage({
   const contentAreaRef = useRef<HTMLDivElement>(null);
   const filesResizeRef = useRef<{ startY: number; startHeight: number } | null>(null);
   const filesResizeRafRef = useRef<number | null>(null);
+  // 把手同时支持「点击切换」与「拖动调高」：拖动超过阈值后抑制随之而来的 click
+  const filesPanelDragMovedRef = useRef(false);
   const startFilesPanelResize = useCallback(
     (e: React.MouseEvent) => {
       if (e.button !== 0) return;
@@ -442,6 +446,7 @@ export function WorkspacePage({
       );
       const startY = e.clientY;
       const startHeight = filesPanelHeight;
+      filesPanelDragMovedRef.current = false;
       filesResizeRef.current = { startY, startHeight };
 
       // 拖拽开始：广播 split-resize-start 冻结终端画布像素尺寸并抑制逐帧 fit，
@@ -450,6 +455,10 @@ export function WorkspacePage({
 
       const onMouseMove = (ev: MouseEvent) => {
         if (!filesResizeRef.current) return;
+        // 超过 3px 视为拖动，抬起鼠标后的 click 不再触发收起/展开
+        if (Math.abs(ev.clientY - filesResizeRef.current.startY) > 3) {
+          filesPanelDragMovedRef.current = true;
+        }
         if (filesResizeRafRef.current !== null) return;
         const currentClientY = ev.clientY;
         filesResizeRafRef.current = requestAnimationFrame(() => {
@@ -1144,20 +1153,53 @@ export function WorkspacePage({
             （与旧弹窗 keepMounted 语义一致）；收起时 filesPanelActive=false，轮询与订阅自动停止 */}
         {filesPanelAvailable && (
           <>
-            {/* 拖拽分隔条：向上拖动增高面板，双击恢复默认高度 */}
-            {showFilesPanel && (
-              <div
-                className={cn(
-                  "group relative z-10 shrink-0 h-1.5 cursor-ns-resize border-t border-border/50 bg-transparent transition-colors hover:bg-primary/20 active:bg-primary/30",
-                  filesPanelAnimActive && "files-panel-divider-in",
-                )}
+            {/* 抽屉把手：始终渲染——收起后仍要能再次拉出（不能随面板一起消失）。
+                交互只发生在中间胶囊上：左右空白区域不响应点击/拖动，避免误触。
+                点击 = 收起/展开；上下拖动 = 调节面板高度；双击 = 恢复默认高度。
+                收起/展开只切换 CSS（面板 hidden），FilesModule 不卸载，SFTP 连接与目录树全程保留 */}
+            <div
+              className={cn(
+                "relative z-10 flex h-[10px] shrink-0 items-center justify-center bg-transparent",
+                showFilesPanel && "border-t border-border/50",
+                filesPanelAnimActive && showFilesPanel && "files-panel-divider-in",
+              )}
+            >
+              <span
+                className="flex h-[10px] w-24 cursor-ns-resize select-none items-center justify-center rounded-full border border-foreground/25 bg-foreground/[0.08] shadow-sm transition-colors hover:border-primary/60 hover:bg-foreground/[0.14]"
                 onMouseDown={startFilesPanelResize}
                 onDoubleClick={() => setFilesPanelHeight(FILES_PANEL_DEFAULT_HEIGHT)}
-                title="拖动调节文件面板高度，双击恢复默认"
+                onClick={() => {
+                  // 拖动后紧随的 click 不应触发收起/展开
+                  if (filesPanelDragMovedRef.current) {
+                    filesPanelDragMovedRef.current = false;
+                    return;
+                  }
+                  handleModuleChange("files");
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    handleModuleChange("files");
+                  }
+                }}
+                role="button"
+                tabIndex={0}
+                aria-expanded={showFilesPanel}
+                aria-label={showFilesPanel ? "收起文件面板" : "展开文件面板"}
+                title={
+                  showFilesPanel
+                    ? "点击收起文件面板；上下拖动调节高度；双击恢复默认高度"
+                    : "点击展开文件面板"
+                }
               >
-                <div className="absolute left-1/2 top-1/2 h-0.5 w-12 -translate-x-1/2 -translate-y-1/2 rounded-full bg-border/70 transition-colors group-hover:bg-primary/50" />
-              </div>
-            )}
+                {/* 图标缩到 8px 后默认 stroke 会等比降到 0.67px，需显式加粗才看得清 */}
+                {showFilesPanel ? (
+                  <ChevronDown className="h-2 w-2 text-primary" strokeWidth={4} />
+                ) : (
+                  <ChevronUp className="h-2 w-2 text-primary" strokeWidth={4} />
+                )}
+              </span>
+            </div>
 
             {/* 文件面板：无标题栏，直接铺满内容区以最大化可用空间（开关由顶部「文件」按钮控制）；
                 打开时从底部滑出（height 0 → 目标值，终端被逐渐推上去）。
