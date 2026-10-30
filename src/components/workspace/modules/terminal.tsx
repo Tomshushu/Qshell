@@ -3819,11 +3819,11 @@ export function TerminalModule({
                 return next;
               });
             } else {
-              if (isSerial) {
-                useAppStore.getState().setServerState(serverId, ConnectionState.Disconnected);
-                if (baseServerId && baseServerId !== serverId) {
-                  useAppStore.getState().setServerState(baseServerId, ConnectionState.Disconnected);
-                }
+              // 会话断开：无论 SSH / Telnet / 串口，都同步 store 连接状态。
+              // 历史 bug：只有串口更新了，导致 SSH 断开后顶部标签仍误显示"在线"。
+              useAppStore.getState().setServerState(serverId, ConnectionState.Disconnected);
+              if (baseServerId && baseServerId !== serverId) {
+                useAppStore.getState().setServerState(baseServerId, ConnectionState.Disconnected);
               }
               // E1：断线提示增强终端内醒目 writeln + toast.warning 双重提示
               xtermInfo.term.writeln(
@@ -6015,11 +6015,11 @@ export function TerminalModule({
                 return next;
               });
             } else {
-              if (isSerial) {
-                useAppStore.getState().setServerState(sId, ConnectionState.Disconnected);
-                if (baseServerId && baseServerId !== sId) {
-                  useAppStore.getState().setServerState(baseServerId, ConnectionState.Disconnected);
-                }
+              // 会话断开：无论 SSH / Telnet / 串口，都同步 store 连接状态。
+              // 历史 bug：只有串口更新了，导致 SSH 断开后顶部标签仍误显示"在线"。
+              useAppStore.getState().setServerState(sId, ConnectionState.Disconnected);
+              if (baseServerId && baseServerId !== sId) {
+                useAppStore.getState().setServerState(baseServerId, ConnectionState.Disconnected);
               }
               // E1：断线提示增强终端内醒目 writeln + toast.warning 双重提示
               term.writeln(
