@@ -467,4 +467,497 @@ describe('tauri-adapter IPC contract', () => {
       expect(invokeMock).toHaveBeenCalledWith('port_forward_stop_all', { serverId: 's1' })
     })
   })
+
+  describe('serverGroups', () => {
+    it('list maps snake_case parent_id and timestamps', async () => {
+      invokeMock.mockResolvedValue(
+        JSON.stringify([{ id: 'g1', name: 'G1', parent_id: 'p1', created_at: 5 }]),
+      )
+
+      const [g] = await tauriAdapter.serverGroups.list()
+
+      expect(invokeMock).toHaveBeenCalledWith('server_groups_list', undefined)
+      expect(g.parentId).toBe('p1')
+      expect(g.createdAt).toBe(5)
+    })
+
+    it('add serializes the group and omits a missing id', async () => {
+      invokeMock.mockResolvedValue({ success: true })
+
+      await tauriAdapter.serverGroups.add({ name: 'G1', parentId: null } as never)
+
+      expect(invokeMock).toHaveBeenCalledWith('server_groups_add', {
+        group: JSON.stringify({ name: 'G1', parentId: null }),
+      })
+    })
+
+    it('update serializes only the provided fields', async () => {
+      invokeMock.mockResolvedValue({ success: true })
+
+      await tauriAdapter.serverGroups.update('g1', { name: 'Renamed' } as never)
+
+      expect(invokeMock).toHaveBeenCalledWith('server_groups_update', {
+        id: 'g1',
+        updates: JSON.stringify({ name: 'Renamed' }),
+      })
+    })
+
+    it('delete passes the id', async () => {
+      invokeMock.mockResolvedValue({ success: true })
+
+      await tauriAdapter.serverGroups.delete('g1')
+
+      expect(invokeMock).toHaveBeenCalledWith('server_groups_delete', { id: 'g1' })
+    })
+  })
+
+  describe('telnet', () => {
+    it('createShell sends host/port/size and defaults timeout to null', async () => {
+      invokeMock.mockResolvedValue({ success: true })
+
+      await tauriAdapter.telnet.createShell('s1', '10.0.0.1', 23, 120, 40)
+
+      expect(invokeMock).toHaveBeenCalledWith('telnet_create_shell', {
+        serverId: 's1',
+        host: '10.0.0.1',
+        port: 23,
+        cols: 120,
+        rows: 40,
+        timeoutSecs: null,
+        encoding: 'utf-8',
+      })
+    })
+  })
+
+  describe('sshKeys', () => {
+    it('list parses JSON and listForSync uses its own command', async () => {
+      invokeMock.mockResolvedValue(JSON.stringify([{ id: 'k1' }]))
+      await tauriAdapter.sshKeys.list()
+      expect(invokeMock).toHaveBeenCalledWith('ssh_keys_list', undefined)
+
+      invokeMock.mockResolvedValue(JSON.stringify([]))
+      await tauriAdapter.sshKeys.listForSync!()
+      expect(invokeMock).toHaveBeenCalledWith('ssh_keys_list_for_sync', undefined)
+    })
+
+    it('add serializes the key input', async () => {
+      invokeMock.mockResolvedValue({ success: true })
+
+      await tauriAdapter.sshKeys.add({ name: 'k1' } as never)
+
+      expect(invokeMock).toHaveBeenCalledWith('ssh_keys_add', {
+        key: JSON.stringify({ name: 'k1' }),
+      })
+    })
+
+    it('update and delete pass id plus serialized updates', async () => {
+      invokeMock.mockResolvedValue({ success: true })
+
+      await tauriAdapter.sshKeys.update('k1', { name: 'k2' } as never)
+      expect(invokeMock).toHaveBeenCalledWith('ssh_keys_update', {
+        id: 'k1',
+        updates: JSON.stringify({ name: 'k2' }),
+      })
+
+      await tauriAdapter.sshKeys.delete('k1')
+      expect(invokeMock).toHaveBeenCalledWith('ssh_keys_delete', { id: 'k1' })
+    })
+
+    it('readFileContent passes the path', async () => {
+      invokeMock.mockResolvedValue('content')
+
+      await tauriAdapter.sshKeys.readFileContent('/home/u/.ssh/id_ed25519')
+
+      expect(invokeMock).toHaveBeenCalledWith('ssh_keys_read_file_content', {
+        path: '/home/u/.ssh/id_ed25519',
+      })
+    })
+  })
+
+  describe('tags', () => {
+    it('list maps rows to plain names', async () => {
+      invokeMock.mockResolvedValue([{ name: 'prod' }, { name: 'db' }])
+
+      const names = await tauriAdapter.tags!.list()
+
+      expect(invokeMock).toHaveBeenCalledWith('tags_list', undefined)
+      expect(names).toEqual(['prod', 'db'])
+    })
+
+    it('create returns the created name', async () => {
+      invokeMock.mockResolvedValue({ name: 'new-tag' })
+
+      const name = await tauriAdapter.tags!.create('new-tag')
+
+      expect(invokeMock).toHaveBeenCalledWith('tags_create', { name: 'new-tag' })
+      expect(name).toBe('new-tag')
+    })
+
+    it('rename sends both names', async () => {
+      invokeMock.mockResolvedValue(undefined)
+
+      await tauriAdapter.tags!.rename('old', 'new')
+
+      expect(invokeMock).toHaveBeenCalledWith('tags_rename', { oldName: 'old', newName: 'new' })
+    })
+
+    it('listAll reuses tags_list but keeps raw rows', async () => {
+      invokeMock.mockResolvedValue([{ name: 'prod', created_at: 1 }])
+
+      const rows = await tauriAdapter.tags!.listAll!()
+
+      expect(invokeMock).toHaveBeenCalledWith('tags_list', undefined)
+      expect(rows).toHaveLength(1)
+    })
+  })
+
+  describe('metrics', () => {
+    it('collect parses the JSON string returned by metrics_collect', async () => {
+      invokeMock.mockResolvedValue(JSON.stringify({ cpuPercent: 12 }))
+
+      const m = await tauriAdapter.metrics.collect('s1')
+
+      expect(invokeMock).toHaveBeenCalledWith('metrics_collect', { serverId: 's1' })
+      expect(m).toEqual({ cpuPercent: 12 })
+    })
+
+    it('refreshCache uses its own command', async () => {
+      invokeMock.mockResolvedValue({ success: true })
+
+      await tauriAdapter.metrics.refreshCache('s1')
+
+      expect(invokeMock).toHaveBeenCalledWith('metrics_refresh_cache', { serverId: 's1' })
+    })
+  })
+
+  describe('services', () => {
+    it('start maps the "name" argument to serviceName', async () => {
+      invokeMock.mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 })
+
+      await tauriAdapter.services.start('s1', 'nginx')
+
+      expect(invokeMock).toHaveBeenCalledWith('services_start', {
+        serverId: 's1',
+        serviceName: 'nginx',
+      })
+    })
+
+    it('logs defaults every optional filter to null', async () => {
+      invokeMock.mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 })
+
+      await tauriAdapter.services.logs('s1', 'nginx')
+
+      expect(invokeMock).toHaveBeenCalledWith('services_logs', {
+        serverId: 's1',
+        serviceName: 'nginx',
+        lines: null,
+        since: null,
+        priority: null,
+      })
+    })
+
+    it('followStart defaults lines to null and returns the session id', async () => {
+      invokeMock.mockResolvedValue({ success: true, id: 'sess-1' })
+
+      const id = await tauriAdapter.services.followStart('s1', 'nginx', undefined)
+
+      expect(invokeMock).toHaveBeenCalledWith('services_logs_follow_start', {
+        serverId: 's1',
+        serviceName: 'nginx',
+        lines: null,
+      })
+      expect(id).toBe('sess-1')
+    })
+
+    it('followStart throws when the backend reports failure', async () => {
+      invokeMock.mockResolvedValue({ success: false, error: 'follow failed' })
+
+      await expect(tauriAdapter.services.followStart('s1', 'nginx')).rejects.toThrow('follow failed')
+    })
+
+    it('daemonReload only sends serverId', async () => {
+      invokeMock.mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 })
+
+      await tauriAdapter.services.daemonReload('s1')
+
+      expect(invokeMock).toHaveBeenCalledWith('services_daemon_reload', { serverId: 's1' })
+    })
+  })
+
+  describe('processes', () => {
+    it('signal forwards pid/signal/startTimeTicks', async () => {
+      invokeMock.mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 })
+
+      await tauriAdapter.processes.signal('s1', 4321, 'term', 987)
+
+      expect(invokeMock).toHaveBeenCalledWith('processes_signal', {
+        serverId: 's1',
+        pid: 4321,
+        signal: 'term',
+        startTimeTicks: 987,
+      })
+    })
+  })
+
+  describe('ports', () => {
+    it('killByPid sends serverId and pid', async () => {
+      invokeMock.mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 })
+
+      await tauriAdapter.ports.killByPid('s1', 8080)
+
+      expect(invokeMock).toHaveBeenCalledWith('ports_kill_by_pid', {
+        serverId: 's1',
+        pid: 8080,
+      })
+    })
+  })
+
+  describe('network command prefixes', () => {
+    it('diagnostics use the network_ prefix', async () => {
+      invokeMock.mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 })
+
+      await tauriAdapter.network.dns('s1', 'example.com')
+      expect(invokeMock).toHaveBeenCalledWith('network_dns', {
+        serverId: 's1',
+        target: 'example.com',
+      })
+
+      await tauriAdapter.network.tcpCheck('s1', '10.0.0.1', 80)
+      expect(invokeMock).toHaveBeenCalledWith('network_tcp_check', {
+        serverId: 's1',
+        host: '10.0.0.1',
+        port: 80,
+      })
+    })
+
+    // 同一个分组里存在两种前缀：diagnostics 用 network_，监控类用 net_
+    it('monitoring endpoints use the shorter net_ prefix', async () => {
+      invokeMock.mockResolvedValue({})
+
+      await tauriAdapter.network.getOverview('s1')
+      expect(invokeMock).toHaveBeenCalledWith('net_overview', { serverId: 's1' })
+
+      await tauriAdapter.network.getInterfaces('s1')
+      expect(invokeMock).toHaveBeenCalledWith('net_interfaces', { serverId: 's1' })
+    })
+
+    it('getConnections maps an omitted query to null', async () => {
+      invokeMock.mockResolvedValue({})
+
+      await tauriAdapter.network.getConnections('s1')
+
+      expect(invokeMock).toHaveBeenCalledWith('net_connections', {
+        serverId: 's1',
+        query: null,
+      })
+    })
+
+    it('getCapabilities defaults refresh to false', async () => {
+      invokeMock.mockResolvedValue({})
+
+      await tauriAdapter.network.getCapabilities('s1')
+
+      expect(invokeMock).toHaveBeenCalledWith('net_capabilities', {
+        serverId: 's1',
+        refresh: false,
+      })
+    })
+
+    it('runQuickCheck defaults port and protocol to null', async () => {
+      invokeMock.mockResolvedValue({})
+
+      await tauriAdapter.network.runQuickCheck('s1', 'example.com')
+
+      expect(invokeMock).toHaveBeenCalledWith('net_run_quick_check', {
+        serverId: 's1',
+        target: 'example.com',
+        port: null,
+        protocol: null,
+      })
+    })
+  })
+
+  describe('logs', () => {
+    it('read maps the path argument to logPath', async () => {
+      invokeMock.mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 })
+
+      await tauriAdapter.logs.read('s1', '/var/log/app.log', 200)
+
+      expect(invokeMock).toHaveBeenCalledWith('logs_read', {
+        serverId: 's1',
+        logPath: '/var/log/app.log',
+        lines: 200,
+      })
+    })
+
+    it('search maps the path argument to logPath', async () => {
+      invokeMock.mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 })
+
+      await tauriAdapter.logs.search('s1', '/var/log/app.log', 'ERROR')
+
+      expect(invokeMock).toHaveBeenCalledWith('logs_search', {
+        serverId: 's1',
+        logPath: '/var/log/app.log',
+        keyword: 'ERROR',
+      })
+    })
+
+    // 接口签名要求 (serverId, path)，但实现按 serverId 索引会话、忽略 path。
+    // 这里固化实际 payload：只有 serverId。
+    it('stopTail drops the unused path argument', async () => {
+      invokeMock.mockResolvedValue({ success: true })
+
+      await tauriAdapter.logs.stopTail('s1', '/var/log/app.log')
+
+      expect(invokeMock).toHaveBeenCalledWith('logs_stop_tail', { serverId: 's1' })
+    })
+  })
+
+  describe('snapshot', () => {
+    it('generate sends only serverId', async () => {
+      invokeMock.mockResolvedValue({})
+
+      await tauriAdapter.snapshot.generate('s1')
+
+      expect(invokeMock).toHaveBeenCalledWith('snapshot_generate', { serverId: 's1' })
+    })
+  })
+
+  describe('favCmds', () => {
+    it('add and update carry cmd/desc', async () => {
+      invokeMock.mockResolvedValue({ success: true })
+
+      await tauriAdapter.favCmds.add('ls -la', 'list all')
+      expect(invokeMock).toHaveBeenCalledWith('fav_cmds_add', { cmd: 'ls -la', desc: 'list all' })
+
+      await tauriAdapter.favCmds.update('f1', 'ls', 'shorter')
+      expect(invokeMock).toHaveBeenCalledWith('fav_cmds_update', {
+        id: 'f1',
+        cmd: 'ls',
+        desc: 'shorter',
+      })
+    })
+
+    it('delete and restore use distinct payload keys', async () => {
+      invokeMock.mockResolvedValue({ success: true })
+
+      await tauriAdapter.favCmds.delete('f1')
+      expect(invokeMock).toHaveBeenCalledWith('fav_cmds_delete', { id: 'f1' })
+
+      const cmds = [{ id: 'f1' }]
+      await tauriAdapter.favCmds.restore!(cmds as never)
+      expect(invokeMock).toHaveBeenCalledWith('fav_cmds_restore', { cmds })
+    })
+  })
+
+  describe('bookmarks', () => {
+    // 注意命令名是 bookmarks_list_all，而不是 bookmarks_list
+    it('listAll uses bookmarks_list_all', async () => {
+      invokeMock.mockResolvedValue(JSON.stringify([{ id: 'b1' }]))
+
+      const rows = await tauriAdapter.bookmarks!.listAll()
+
+      expect(invokeMock).toHaveBeenCalledWith('bookmarks_list_all', undefined)
+      expect(rows).toHaveLength(1)
+    })
+
+    it('restore wraps items', async () => {
+      invokeMock.mockResolvedValue({ success: true })
+      const items = [{ id: 'b1' }]
+
+      await tauriAdapter.bookmarks!.restore(items as never)
+
+      expect(invokeMock).toHaveBeenCalledWith('bookmarks_restore', { items })
+    })
+  })
+
+  describe('backgrounds', () => {
+    it('listForSync and restore use their own commands', async () => {
+      invokeMock.mockResolvedValue([])
+      await tauriAdapter.backgrounds!.listForSync()
+      expect(invokeMock).toHaveBeenCalledWith('backgrounds_list_for_sync', undefined)
+
+      invokeMock.mockResolvedValue(2)
+      const n = await tauriAdapter.backgrounds!.restore([{ id: 'x' }] as never)
+      expect(invokeMock).toHaveBeenCalledWith('backgrounds_restore', { items: [{ id: 'x' }] })
+      expect(n).toBe(2)
+    })
+  })
+
+  describe('window', () => {
+    it('create sends label/title/stateJson/x/y', async () => {
+      invokeMock.mockResolvedValue(undefined)
+
+      await tauriAdapter.window!.create('win-2', 'Title', '{}', 100, 200)
+
+      expect(invokeMock).toHaveBeenCalledWith('window_create', {
+        label: 'win-2',
+        title: 'Title',
+        stateJson: '{}',
+        x: 100,
+        y: 200,
+      })
+    })
+
+    // 注意：命令名是 get_cursor_state，没有 window_ 前缀
+    it('getCursorState uses the bare get_cursor_state command', async () => {
+      invokeMock.mockResolvedValue({ x: 1, y: 2, leftButtonDown: false })
+
+      await tauriAdapter.window!.getCursorState()
+
+      expect(invokeMock).toHaveBeenCalledWith('get_cursor_state', undefined)
+    })
+
+    it('setPosition and startDragging send expected payloads', async () => {
+      invokeMock.mockResolvedValue(undefined)
+
+      await tauriAdapter.window!.setPosition('win-2', 10, 20)
+      expect(invokeMock).toHaveBeenCalledWith('window_set_position', {
+        label: 'win-2',
+        x: 10,
+        y: 20,
+      })
+
+      await tauriAdapter.window!.startDragging()
+      expect(invokeMock).toHaveBeenCalledWith('window_start_dragging', undefined)
+    })
+  })
+
+  describe('auditLogs', () => {
+    it('list defaults limit/offset', async () => {
+      invokeMock.mockResolvedValue([])
+
+      await tauriAdapter.auditLogs.list('ssh', 'nginx')
+
+      expect(invokeMock).toHaveBeenCalledWith('audit_logs_list', {
+        logType: 'ssh',
+        searchQuery: 'nginx',
+        limit: 50,
+        offset: 0,
+      })
+    })
+
+    // 注意命令名是 record_audit_log（动词在前），与 audit_logs_* 前缀相反
+    it('record uses the record_audit_log command', async () => {
+      invokeMock.mockResolvedValue({ success: true })
+
+      await tauriAdapter.auditLogs.record('ssh', 'Server 1', 'connect', 'success', 'detail')
+
+      expect(invokeMock).toHaveBeenCalledWith('record_audit_log', {
+        logType: 'ssh',
+        serverName: 'Server 1',
+        event: 'connect',
+        status: 'success',
+        details: 'detail',
+      })
+    })
+
+    it('clear needs no arguments', async () => {
+      invokeMock.mockResolvedValue({ success: true })
+
+      await tauriAdapter.auditLogs.clear()
+
+      expect(invokeMock).toHaveBeenCalledWith('audit_logs_clear', undefined)
+    })
+  })
 })
