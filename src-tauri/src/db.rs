@@ -1987,57 +1987,6 @@ pub fn servers_get_raw(id: String) -> Result<String, String> {
         .map_err(|e| format!("Serialization failed: {}", e))
 }
 
-pub fn bookmarks_list(server_id: String) -> Result<String, String> {
-    let conn = get_conn()?;
-
-    let mut stmt = conn
-        .prepare("SELECT * FROM log_bookmarks WHERE server_id = ?1 ORDER BY created_at DESC")
-        .map_err(|e| format!("Failed to prepare query: {}", e))?;
-
-    let bookmarks: Vec<LogBookmark> = stmt
-        .query_map(params![server_id], |row| {
-            Ok(LogBookmark {
-                id: row.get("id")?,
-                server_id: row.get("server_id")?,
-                path: row.get("path")?,
-                alias: row.get("alias")?,
-                created_at: row.get("created_at")?,
-            })
-        })
-        .map_err(|e| format!("Query failed: {}", e))?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    serde_json::to_string(&bookmarks)
-        .map_err(|e| format!("Serialization failed: {}", e))
-}
-
-/// Add a log bookmark
-pub fn bookmarks_add(server_id: String, path: String, alias: String) -> Result<String, String> {
-    let conn = get_conn()?;
-
-    let id = Uuid::new_v4().to_string();
-    let now = Utc::now().timestamp_millis();
-
-    conn.execute(
-        "INSERT INTO log_bookmarks (id, server_id, path, alias, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![id, server_id, path, alias, now],
-    )
-    .map_err(|e| format!("Failed to insert bookmark: {}", e))?;
-
-    Ok(id)
-}
-
-/// Delete a log bookmark by ID
-pub fn bookmarks_delete(id: String) -> Result<(), String> {
-    let conn = get_conn()?;
-
-    conn.execute("DELETE FROM log_bookmarks WHERE id = ?1", params![id])
-        .map_err(|e| format!("Failed to delete bookmark: {}", e))?;
-
-    Ok(())
-}
-
 /// 列出全部书签（用于云端同步备份）
 pub fn bookmarks_list_all() -> Result<String, String> {
     let conn = get_conn()?;

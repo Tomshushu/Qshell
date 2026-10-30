@@ -426,11 +426,8 @@ pub fn run() {
             commands::fav_cmds::fav_cmds_update,
             commands::fav_cmds::fav_cmds_delete,
             commands::fav_cmds::fav_cmds_restore,
-            // 书签
-            commands::bookmarks::bookmarks_list,
+            // 书签（仅保留云同步所需的导出/还原；增删改 UI 已移除）
             commands::bookmarks::bookmarks_list_all,
-            commands::bookmarks::bookmarks_add,
-            commands::bookmarks::bookmarks_delete,
             commands::bookmarks::bookmarks_restore,
             // 终端自定义背景
             commands::backgrounds::backgrounds_list_for_sync,
