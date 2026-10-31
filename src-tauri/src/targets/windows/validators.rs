@@ -57,3 +57,48 @@ pub fn windows_to_posix_path(path: &str) -> String {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_posix_to_windows_path() {
+        assert_eq!(posix_to_windows_path("/"), "C:\\");
+        assert_eq!(posix_to_windows_path("/C:/"), "C:\\");
+        assert_eq!(posix_to_windows_path("/C:"), "C:\\");
+        assert_eq!(posix_to_windows_path("/C:/Users/Admin"), "C:\\Users\\Admin");
+        assert_eq!(posix_to_windows_path("/D:/data/logs"), "D:\\data\\logs");
+        assert_eq!(posix_to_windows_path("E:/data/file.txt"), "E:\\data\\file.txt");
+    }
+
+    #[test]
+    fn test_windows_to_posix_path() {
+        assert_eq!(windows_to_posix_path("C:\\Users\\Admin"), "/C:/Users/Admin");
+        assert_eq!(windows_to_posix_path("C:/Users/Admin"), "/C:/Users/Admin");
+        assert_eq!(windows_to_posix_path("/C:/Users/Admin"), "/C:/Users/Admin");
+        assert_eq!(windows_to_posix_path("relative/path"), "relative/path");
+    }
+
+    #[test]
+    fn test_validate_windows_path() {
+        let valid = validate_windows_path("C:\\Users\\Admin\\file.txt", false);
+        assert!(valid.valid);
+        assert!(valid.error.is_none());
+
+        let forward_valid = validate_windows_path("C:/Users/Admin/file.txt", false);
+        assert!(forward_valid.valid);
+
+        let traversal = validate_windows_path("C:\\Users\\..\\Windows", false);
+        assert!(!traversal.valid);
+
+        let traversal_allowed = validate_windows_path("C:\\Users\\..\\Windows", true);
+        assert!(traversal_allowed.valid);
+
+        let non_windows = validate_windows_path("/etc/passwd", false);
+        assert!(!non_windows.valid);
+
+        let injection = validate_windows_path("C:\\Users\\`whoami`", false);
+        assert!(!injection.valid);
+    }
+}

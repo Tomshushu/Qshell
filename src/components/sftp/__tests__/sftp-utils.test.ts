@@ -4,6 +4,18 @@ import {
   validateFileName,
   generateDuplicateName,
   getSyncPathFromRoot,
+  parsePermissions,
+  getOctalMode,
+  formatTransferSize,
+  formatTransferRate,
+  toSftpConnId,
+  toBaseServerId,
+  isAlreadyGoneError,
+  isResumableTmpPath,
+  isSupportedArchiveName,
+  getMimeFromExt,
+  sortFiles,
+  runWithConcurrency,
 } from '../sftp-utils'
 
 /** 测试用翻译函数：直接返回 key，便于断言具体错误类型 */
@@ -36,12 +48,10 @@ describe('sftp-utils', () => {
     })
 
     it('treats a base without backslash as POSIX', () => {
-      // 判定依据是 base 是否含反斜杠：'C:/Users' 全是正斜杠，因此按 POSIX 拼接
       expect(joinPath('C:/Users', 'a.txt')).toBe('C:/Users/a.txt')
     })
 
     it('preserves name as-is (no sanitization) — callers must validate', () => {
-      // 记录当前行为：joinPath 不做 .. 规范化，穿越防护依赖 validateFileName
       expect(joinPath('/root', '../etc/passwd')).toBe('/root/../etc/passwd')
       expect(joinPath('/root', '/etc/passwd')).toBe('/root//etc/passwd')
     })
@@ -70,7 +80,6 @@ describe('sftp-utils', () => {
       for (const ch of [':', '*', '?', '"', '<', '>', '|']) {
         expect(validateFileName(`a${ch}b.txt`, t, 'local')).toBe('sftp_name_invalid_chars')
       }
-      // Linux 远端允许这些字符
       expect(validateFileName('a:b.txt', t, 'remote')).toBeNull()
     })
 
@@ -111,7 +120,6 @@ describe('sftp-utils', () => {
     })
 
     it('treats dotfiles as extension-less', () => {
-      // lastIndexOf('.') === 0 不视为扩展名
       expect(generateDuplicateName('.bashrc', new Set())).toBe('.bashrc(1)')
     })
 
@@ -144,7 +152,6 @@ describe('sftp-utils', () => {
     })
 
     it('does not confuse a sibling prefix with a child path', () => {
-      // /src/abc 不是 /src/a 的子路径
       expect(getSyncPathFromRoot('/src/abc', '/src/a', '/dst', false, false)).toBeNull()
     })
 
@@ -155,14 +162,12 @@ describe('sftp-utils', () => {
     })
 
     it('normalizes mixed separators and lowercases the destination drive letter', () => {
-      // 记录当前行为：目的地根先归一为正斜杠 + 盘符小写，再接反斜杠拼子路径
       expect(getSyncPathFromRoot('C:/Users/me/sub', 'C:\\Users\\me', 'D:/out', true, true)).toBe(
         'd:/out\\sub',
       )
     })
 
     it('uses backslash when destination is Windows', () => {
-      // 记录当前行为：目的地根被归一为 c:/dst，子路径分隔符用反斜杠
       expect(getSyncPathFromRoot('/src/a/b', '/src/a', 'C:\\dst', false, true)).toBe('c:/dst\\b')
     })
 
@@ -170,6 +175,206 @@ describe('sftp-utils', () => {
       expect(getSyncPathFromRoot('', '/src', '/dst', false, false)).toBeNull()
       expect(getSyncPathFromRoot('/src/a', '', '/dst', false, false)).toBeNull()
       expect(getSyncPathFromRoot('/src/a', '/src', '', false, false)).toBeNull()
+    })
+  })
+
+  describe('parsePermissions & getOctalMode', () => {
+    it('parses standard 0755 unix permissions', () => {
+      const perms = parsePermissions('-rwxr-xr-x')
+      expect(perms.owner).toEqual({ read: true, write: true, execute: true })
+      expect(perms.group).toEqual({ read: true, write: false, execute: true })
+      expect(perms.others).toEqual({ read: true, write: false, execute: true })
+      expect(perms.setuid).toBe(false)
+      expect(perms.setgid).toBe(false)
+      expect(perms.sticky).toBe(false)
+      expect(getOctalMode(perms)).toBe('0755')
+    })
+
+    it('parses standard 0644 file permissions', () => {
+      const perms = parsePermissions('-rw-r--r--')
+      expect(perms.owner).toEqual({ read: true, write: true, execute: false })
+      expect(perms.group).toEqual({ read: true, write: false, execute: false })
+      expect(perms.others).toEqual({ read: true, write: false, execute: false })
+      expect(getOctalMode(perms)).toBe('0644')
+    })
+
+    it('detects special setuid, setgid, and sticky bits', () => {
+      // 4755: rwsr-xr-x
+      const setuidPerms = parsePermissions('-rwsr-xr-x')
+      expect(setuidPerms.setuid).toBe(true)
+      expect(setuidPerms.owner.execute).toBe(true)
+      expect(getOctalMode(setuidPerms)).toBe('4755')
+
+      // 2755: rwxr-sr-x
+      const setgidPerms = parsePermissions('-rwxr-sr-x')
+      expect(setgidPerms.setgid).toBe(true)
+      expect(setgidPerms.group.execute).toBe(true)
+      expect(getOctalMode(setgidPerms)).toBe('2755')
+
+      // 1777: rwxrwxrwt
+      const stickyPerms = parsePermissions('drwxrwxrwt')
+      expect(stickyPerms.sticky).toBe(true)
+      expect(stickyPerms.others.execute).toBe(true)
+      expect(getOctalMode(stickyPerms)).toBe('1777')
+
+      // 7777: rwsrwsrwt
+      const allSpecial = parsePermissions('-rwsrwsrwt')
+      expect(allSpecial.setuid).toBe(true)
+      expect(allSpecial.setgid).toBe(true)
+      expect(allSpecial.sticky).toBe(true)
+      expect(getOctalMode(allSpecial)).toBe('7777')
+    })
+
+    it('returns all false when permissions string is invalid or too short', () => {
+      const perms = parsePermissions('')
+      expect(perms.owner.read).toBe(false)
+      expect(getOctalMode(perms)).toBe('0000')
+
+      const shortPerms = parsePermissions('rwx')
+      expect(shortPerms.owner.read).toBe(false)
+      expect(getOctalMode(shortPerms)).toBe('0000')
+    })
+  })
+
+  describe('formatTransferSize & formatTransferRate', () => {
+    it('formats sizes across boundaries (B, KB, MB, GB)', () => {
+      expect(formatTransferSize(0)).toBe('0 B')
+      expect(formatTransferSize(-100)).toBe('0 B')
+      expect(formatTransferSize(512)).toBe('512 B')
+      expect(formatTransferSize(1024)).toBe('1.0 KB')
+      expect(formatTransferSize(1536)).toBe('1.5 KB')
+      expect(formatTransferSize(1048576)).toBe('1.00 MB')
+      expect(formatTransferSize(1073741824)).toBe('1.00 GB')
+    })
+
+    it('formats transfer rates correctly', () => {
+      expect(formatTransferRate(0)).toBe('-')
+      expect(formatTransferRate(-50)).toBe('-')
+      expect(formatTransferRate(1024)).toBe('1.0 KB/s')
+      expect(formatTransferRate(1048576)).toBe('1.00 MB/s')
+    })
+  })
+
+  describe('toSftpConnId & toBaseServerId', () => {
+    it('handles sftp prefix conversions', () => {
+      expect(toSftpConnId('srv-1')).toBe('sftp:srv-1')
+      expect(toSftpConnId('sftp:srv-1')).toBe('sftp:srv-1')
+      expect(toSftpConnId('')).toBe('')
+      expect(toSftpConnId(null)).toBe('')
+
+      expect(toBaseServerId('sftp:srv-1')).toBe('srv-1')
+      expect(toBaseServerId('srv-1')).toBe('srv-1')
+      expect(toBaseServerId('')).toBe('')
+      expect(toBaseServerId(null)).toBe('')
+    })
+  })
+
+  describe('isAlreadyGoneError & isResumableTmpPath', () => {
+    it('identifies file not found errors in both English and Chinese', () => {
+      expect(isAlreadyGoneError('No such file or directory')).toBe(true)
+      expect(isAlreadyGoneError('Error: file not found on remote')).toBe(true)
+      expect(isAlreadyGoneError('文件或目录不存在')).toBe(true)
+      expect(isAlreadyGoneError('找不到指定路径')).toBe(true)
+      expect(isAlreadyGoneError('Permission denied')).toBe(false)
+      expect(isAlreadyGoneError('Connection timeout')).toBe(false)
+    })
+
+    it('identifies resumable temporary upload/download files', () => {
+      expect(isResumableTmpPath('/tmp/.sw-upload-tmp-12345678')).toBe(true)
+      expect(isResumableTmpPath('/tmp/.sw-dl-tmp-abcd-1234')).toBe(true)
+      expect(isResumableTmpPath('/tmp/regular_file.txt')).toBe(false)
+      expect(isResumableTmpPath(null)).toBe(false)
+      expect(isResumableTmpPath(undefined)).toBe(false)
+    })
+  })
+
+  describe('isSupportedArchiveName & getMimeFromExt', () => {
+    it('identifies archive extensions', () => {
+      expect(isSupportedArchiveName('backup.zip')).toBe(true)
+      expect(isSupportedArchiveName('source.tar.gz')).toBe(true)
+      expect(isSupportedArchiveName('data.tar.xz')).toBe(true)
+      expect(isSupportedArchiveName('archive.7z')).toBe(true)
+      expect(isSupportedArchiveName('app.apk')).toBe(true)
+      expect(isSupportedArchiveName('document.docx')).toBe(false)
+      expect(isSupportedArchiveName('script.sh')).toBe(false)
+    })
+
+    it('resolves mime types by file extension', () => {
+      expect(getMimeFromExt('photo.png')).toBe('image/png')
+      expect(getMimeFromExt('document.pdf')).toBe('application/pdf')
+      expect(getMimeFromExt('clip.mp4')).toBe('video/mp4')
+      expect(getMimeFromExt('track.mp3')).toBe('audio/mpeg')
+      expect(getMimeFromExt('unknown.xyz')).toBe('application/octet-stream')
+    })
+  })
+
+  describe('sortFiles', () => {
+    const mockFiles = [
+      { name: 'file-b.txt', isDirectory: false, size: 500, modified: '2026-01-02' },
+      { name: 'folder-z', isDirectory: true, size: 0, modified: '2026-01-01' },
+      { name: '..', isDirectory: true, size: 0, modified: '2026-01-01' },
+      { name: 'folder-a', isDirectory: true, size: 0, modified: '2026-01-03' },
+      { name: 'file-a.txt', isDirectory: false, size: 1500, modified: '2026-01-04' },
+    ]
+
+    it('places .. first and sorts directories before files by name asc', () => {
+      const sorted = sortFiles(
+        mockFiles,
+        'name',
+        'asc',
+        () => 'file',
+        (f) => f.modified,
+      )
+      expect(sorted[0].name).toBe('..')
+      expect(sorted[1].name).toBe('folder-a')
+      expect(sorted[2].name).toBe('folder-z')
+      expect(sorted[3].name).toBe('file-a.txt')
+      expect(sorted[4].name).toBe('file-b.txt')
+    })
+
+    it('sorts by size correctly keeping directories first', () => {
+      const sorted = sortFiles(
+        mockFiles,
+        'size',
+        'asc',
+        () => 'file',
+        (f) => f.modified,
+      )
+      expect(sorted[0].name).toBe('..')
+      // directories come first
+      expect(sorted[1].isDirectory).toBe(true)
+      expect(sorted[2].isDirectory).toBe(true)
+      // then files by size: 500 before 1500
+      expect(sorted[3].name).toBe('file-b.txt')
+      expect(sorted[4].name).toBe('file-a.txt')
+    })
+  })
+
+  describe('runWithConcurrency', () => {
+    it('executes tasks with concurrency and preserves result indices', async () => {
+      const items = [10, 20, 30, 40]
+      const results = await runWithConcurrency(items, 2, async (val, idx) => {
+        return val * 2 + idx
+      })
+
+      expect(results).toHaveLength(4)
+      expect(results[0]).toEqual({ ok: true, value: 20, index: 0 })
+      expect(results[1]).toEqual({ ok: true, value: 41, index: 1 })
+      expect(results[2]).toEqual({ ok: true, value: 62, index: 2 })
+      expect(results[3]).toEqual({ ok: true, value: 83, index: 3 })
+    })
+
+    it('catches individual errors without crashing other tasks', async () => {
+      const items = ['ok1', 'fail', 'ok2']
+      const results = await runWithConcurrency(items, 2, async (item) => {
+        if (item === 'fail') throw new Error('Boom')
+        return item.toUpperCase()
+      })
+
+      expect(results[0]).toEqual({ ok: true, value: 'OK1', index: 0 })
+      expect(results[1].ok).toBe(false)
+      expect((results[1].error as Error).message).toBe('Boom')
+      expect(results[2]).toEqual({ ok: true, value: 'OK2', index: 2 })
     })
   })
 })

@@ -265,3 +265,77 @@ fn launch_macos(config: &RdpLaunchConfig) -> Result<(), String> {
     schedule_cleanup(rdp_file);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rdp_launch_config_default() {
+        let config = RdpLaunchConfig::default();
+        assert_eq!(config.port, 3389);
+        assert_eq!(config.width, 1920);
+        assert_eq!(config.height, 1080);
+        assert!(!config.fullscreen);
+        assert_eq!(config.color_depth, 32);
+        assert_eq!(config.username, "");
+        assert!(config.domain.is_none());
+    }
+
+    #[test]
+    fn test_build_rdp_file_content_standard_port() {
+        let config = RdpLaunchConfig {
+            host: "192.168.1.100".to_string(),
+            port: 3389,
+            username: "administrator".to_string(),
+            domain: None,
+            fullscreen: false,
+            width: 1920,
+            height: 1080,
+            color_depth: 32,
+            ..Default::default()
+        };
+        let content = build_rdp_file_content(&config);
+        assert!(content.contains("full address:s:192.168.1.100\n"));
+        assert!(content.contains("username:s:administrator\n"));
+        assert!(content.contains("screen mode id:i:1\n"));
+        assert!(content.contains("desktopwidth:i:1920\n"));
+        assert!(content.contains("desktopheight:i:1080\n"));
+        assert!(content.contains("session bpp:i:32\n"));
+        assert!(content.contains("prompt for credentials:i:1\n"));
+    }
+
+    #[test]
+    fn test_build_rdp_file_content_custom_port_and_domain() {
+        let config = RdpLaunchConfig {
+            host: "rdp.example.com".to_string(),
+            port: 13389,
+            username: "alice".to_string(),
+            domain: Some("CORP".to_string()),
+            fullscreen: true,
+            width: 2560,
+            height: 1440,
+            color_depth: 24,
+            ..Default::default()
+        };
+        let content = build_rdp_file_content(&config);
+        assert!(content.contains("full address:s:rdp.example.com:13389\n"));
+        assert!(content.contains("username:s:CORP\\alice\n"));
+        assert!(content.contains("screen mode id:i:2\n"));
+        assert!(content.contains("desktopwidth:i:2560\n"));
+        assert!(content.contains("desktopheight:i:1440\n"));
+        assert!(content.contains("session bpp:i:24\n"));
+    }
+
+    #[test]
+    fn test_build_rdp_file_content_empty_user() {
+        let config = RdpLaunchConfig {
+            host: "10.0.0.1".to_string(),
+            port: 3389,
+            username: "".to_string(),
+            ..Default::default()
+        };
+        let content = build_rdp_file_content(&config);
+        assert!(!content.contains("username:s:"));
+    }
+}
