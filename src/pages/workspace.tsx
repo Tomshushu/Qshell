@@ -1165,9 +1165,12 @@ export function WorkspacePage({
               )}
             >
               <span
-                className="flex h-[10px] w-24 cursor-ns-resize select-none items-center justify-center rounded-full border border-foreground/25 bg-foreground/[0.08] shadow-sm transition-colors hover:border-primary/60 hover:bg-foreground/[0.14]"
-                onMouseDown={startFilesPanelResize}
-                onDoubleClick={() => setFilesPanelHeight(FILES_PANEL_DEFAULT_HEIGHT)}
+                className={cn(
+                  "flex h-[10px] w-24 select-none items-center justify-center rounded-full border border-foreground/25 bg-foreground/[0.08] shadow-sm transition-colors hover:border-primary/60 hover:bg-foreground/[0.14]",
+                  showFilesPanel ? "cursor-ns-resize" : "cursor-pointer",
+                )}
+                onMouseDown={showFilesPanel ? startFilesPanelResize : undefined}
+                onDoubleClick={showFilesPanel ? () => setFilesPanelHeight(FILES_PANEL_DEFAULT_HEIGHT) : undefined}
                 onClick={() => {
                   // 拖动后紧随的 click 不应触发收起/展开
                   if (filesPanelDragMovedRef.current) {
