@@ -913,3 +913,89 @@ pub fn parse_metrics_diff(prev: &RawSnapshot, cur: &RawSnapshot, dt_secs: f64) -
 
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_cpu_stat_valid() {
+        let raw = "cpu  2255 34 2290 22625563 6290 127 456 0\ncpu0 1100 20 ...";
+        let stat = parse_cpu_stat(raw).unwrap();
+        assert_eq!(stat.user, 2255);
+        assert_eq!(stat.nice, 34);
+        assert_eq!(stat.system, 2290);
+        assert_eq!(stat.idle, 22625563);
+        assert_eq!(stat.iowait, 6290);
+        assert_eq!(stat.irq, 127);
+        assert_eq!(stat.softirq, 456);
+        assert_eq!(stat.steal, 0);
+    }
+
+    #[test]
+    fn test_parse_cpu_stat_invalid() {
+        assert!(parse_cpu_stat("").is_none());
+        assert!(parse_cpu_stat("no cpu line here").is_none());
+    }
+
+    #[test]
+    fn test_parse_meminfo_valid() {
+        let raw = "MemTotal:       16384000 kB\n\
+                   MemFree:         4096000 kB\n\
+                   MemAvailable:    8192000 kB\n\
+                   Buffers:          512000 kB\n\
+                   Cached:          3072000 kB\n\
+                   SwapTotal:       2048000 kB\n\
+                   SwapFree:        1024000 kB\n\
+                   Filesystem      1K-blocks";
+        let info = parse_meminfo(raw);
+        assert_eq!(info.total_kb, 16384000);
+        assert_eq!(info.free_kb, 4096000);
+        assert_eq!(info.available_kb, 8192000);
+        assert_eq!(info.buffers_kb, 512000);
+        assert_eq!(info.cached_kb, 3072000);
+        assert_eq!(info.swap_total_kb, 2048000);
+        assert_eq!(info.swap_free_kb, 1024000);
+    }
+
+    #[test]
+    fn test_parse_meminfo_empty() {
+        let info = parse_meminfo("");
+        assert_eq!(info.total_kb, 0);
+        assert_eq!(info.available_kb, 0);
+    }
+
+    #[test]
+    fn test_parse_net_dev() {
+        let raw = "Inter-|   Receive                                                |  Transmit\n\
+                   face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n\
+                   eth0: 1000000    1500    0    1    0     0          0         0   500000    1200    0    2    0     0       0          0\n\
+                   lo:    50000     200    0    0    0     0          0         0    50000     200    0    0    0     0       0          0";
+        let map = parse_net_dev(raw);
+        assert_eq!(map.len(), 2);
+        let eth0 = map.get("eth0").unwrap();
+        assert_eq!(eth0.rx_bytes, 1000000);
+        assert_eq!(eth0.tx_bytes, 500000);
+        assert_eq!(eth0.rx_packets, 1500);
+        assert_eq!(eth0.tx_packets, 1200);
+        assert_eq!(eth0.rx_drop, 1);
+        assert_eq!(eth0.tx_drop, 2);
+    }
+
+    #[test]
+    fn test_parse_tcp_snmp() {
+        let raw = "Tcp: RtoAlgorithm RtoMin RtoMax MaxConn ActiveOpens PassiveOpens AttemptFails EstabResets CurrEstab InSegs OutSegs RetransSegs InErrs OutRsts InCsumErrors\n\
+                   Tcp: 1 200 120000 -1 1234 5678 12 34 5 100000 120000 300 0 45 0";
+        let snmp = parse_tcp_snmp(raw);
+        assert_eq!(snmp.out_segs, 120000);
+        assert_eq!(snmp.retrans_segs, 300);
+    }
+
+    #[test]
+    fn test_rounding_helpers() {
+        assert_eq!(round1(1.26), 1.3);
+        assert_eq!(round2(1.236), 1.24);
+        assert_eq!(round3(1.2346), 1.235);
+        assert_eq!(round4(1.23456), 1.2346);
+    }
+}
