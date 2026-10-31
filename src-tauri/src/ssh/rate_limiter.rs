@@ -93,3 +93,36 @@ impl GlobalRateLimiter {
 lazy_static! {
     pub static ref GLOBAL_RATE_LIMITER: GlobalRateLimiter = GlobalRateLimiter::new();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rate_limiter_set_and_get() {
+        let limiter = GlobalRateLimiter::new();
+        assert_eq!(limiter.get_limit(), 0);
+        limiter.set_limit(1024);
+        assert_eq!(limiter.get_limit(), 1024);
+        limiter.set_limit(0);
+        assert_eq!(limiter.get_limit(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_acquire_unlimited_returns_immediately() {
+        let limiter = GlobalRateLimiter::new();
+        limiter.set_limit(0);
+        let start = Instant::now();
+        limiter.acquire(1024 * 1024).await;
+        assert!(start.elapsed() < Duration::from_millis(50));
+    }
+
+    #[tokio::test]
+    async fn test_acquire_zero_bytes_returns_immediately() {
+        let limiter = GlobalRateLimiter::new();
+        limiter.set_limit(100);
+        let start = Instant::now();
+        limiter.acquire(0).await;
+        assert!(start.elapsed() < Duration::from_millis(50));
+    }
+}
