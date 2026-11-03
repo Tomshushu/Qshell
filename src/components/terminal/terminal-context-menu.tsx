@@ -83,10 +83,10 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
   return (
     <div
       className={cn(
-        "fixed z-50 min-w-[190px] rounded-xl select-none transition-all duration-150 animate-in fade-in zoom-in-95 p-1 terminal-context-menu",
+        "fixed z-50 min-w-[190px] rounded-xl select-none transition-all duration-150 animate-in fade-in zoom-in-95 origin-top-left p-1 terminal-context-menu",
         isLightTerminal
-          ? "bg-white/90 text-slate-800 border border-slate-200/80 shadow-[0_12px_32px_-6px_rgba(0,0,0,0.18),0_0_0_1px_rgba(0,0,0,0.04)] backdrop-blur-xl"
-          : "bg-[#13141f]/92 text-slate-100 border border-white/10 shadow-[0_16px_36px_-8px_rgba(0,0,0,0.7),0_0_0_1px_rgba(255,255,255,0.06)] backdrop-blur-xl",
+          ? "bg-white/85 text-slate-800 border border-black/10 shadow-[0_16px_36px_-6px_rgba(0,0,0,0.18),inset_0_1px_0_0_rgba(255,255,255,0.8)] backdrop-blur-2xl backdrop-saturate-150"
+          : "bg-zinc-950/85 text-slate-100 border border-white/10 shadow-[0_20px_40px_-8px_rgba(0,0,0,0.7),inset_0_1px_0_0_rgba(255,255,255,0.12)] backdrop-blur-2xl backdrop-saturate-150",
       )}
       style={{ left: pos.left, top: pos.top }}
       onMouseDown={(e) => e.stopPropagation()}
@@ -98,7 +98,7 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
       <button
         type="button"
         className={cn(
-          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
           isLightTerminal
             ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
             : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
@@ -117,7 +117,7 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
       <button
         type="button"
         className={cn(
-          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
           isLightTerminal
             ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
             : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
@@ -132,7 +132,7 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
       <button
         type="button"
         className={cn(
-          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
           isLightTerminal
             ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
             : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
@@ -150,7 +150,7 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
       <button
         type="button"
         className={cn(
-          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
           isLightTerminal
             ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
             : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
@@ -169,7 +169,7 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
           <button
             type="button"
             className={cn(
-              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
               isLightTerminal
                 ? "text-purple-700 hover:bg-purple-50 hover:text-purple-900"
                 : "text-purple-300 hover:bg-purple-500/15 hover:text-purple-200",
@@ -190,7 +190,7 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
           type="button"
           data-testid="terminal-menu-ai-explain-shell"
           className={cn(
-            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
             isLightTerminal
               ? "text-sky-700 hover:bg-sky-50 hover:text-sky-900"
               : "text-sky-300 hover:bg-sky-500/15 hover:text-sky-200",
@@ -212,7 +212,7 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
             type="button"
             data-testid="terminal-menu-ai-diagnose-recent"
             className={cn(
-              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
               isLightTerminal
                 ? "text-purple-700 hover:bg-purple-50 hover:text-purple-900"
                 : "text-purple-300 hover:bg-purple-500/15 hover:text-purple-200",
@@ -233,7 +233,7 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
       <button
         type="button"
         className={cn(
-          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
           isLightTerminal
             ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
             : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
@@ -257,7 +257,7 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
         <button
           type="button"
           className={cn(
-            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
             isLightTerminal
               ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
               : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
@@ -271,16 +271,16 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
         <div
           className={cn(
             "hidden group-hover:block absolute top-0 -mt-1 min-w-[190px] rounded-xl overflow-hidden select-none transition-all duration-150 animate-in fade-in zoom-in-95 p-1 z-50",
-            isSubmenuLeft ? "right-full" : "left-full",
+            isSubmenuLeft ? "right-full mr-1 origin-top-right" : "left-full ml-1 origin-top-left",
             isLightTerminal
-              ? "bg-white/95 text-slate-800 border border-slate-200/80 shadow-[0_12px_32px_-6px_rgba(0,0,0,0.18),0_0_0_1px_rgba(0,0,0,0.04)] backdrop-blur-xl"
-              : "bg-[#13141f]/95 text-slate-100 border border-white/10 shadow-[0_16px_36px_-8px_rgba(0,0,0,0.7),0_0_0_1px_rgba(255,255,255,0.06)] backdrop-blur-xl",
+              ? "bg-white/90 text-slate-800 border border-black/10 shadow-[0_16px_36px_-6px_rgba(0,0,0,0.18),inset_0_1px_0_0_rgba(255,255,255,0.8)] backdrop-blur-2xl backdrop-saturate-150"
+              : "bg-zinc-950/90 text-slate-100 border border-white/10 shadow-[0_20px_40px_-8px_rgba(0,0,0,0.7),inset_0_1px_0_0_rgba(255,255,255,0.12)] backdrop-blur-2xl backdrop-saturate-150",
           )}
         >
           <button
             type="button"
             className={cn(
-              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
               isLightTerminal
                 ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
                 : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
@@ -295,7 +295,7 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
           <button
             type="button"
             className={cn(
-              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
               isLightTerminal
                 ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
                 : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
@@ -310,7 +310,7 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
           <button
             type="button"
             className={cn(
-              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
               isLightTerminal
                 ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
                 : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
@@ -332,7 +332,7 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
         <button
           type="button"
           className={cn(
-            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left text-amber-500/90 hover:text-amber-500",
+            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left text-amber-500/90 hover:text-amber-500",
             isLightTerminal ? "hover:bg-amber-500/10" : "hover:bg-amber-500/15",
           )}
           onClick={onLockSession}
@@ -354,7 +354,7 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
         <button
           type="button"
           className={cn(
-            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
             isLightTerminal
               ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
               : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
@@ -368,16 +368,16 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
         <div
           className={cn(
             "hidden group-hover:block absolute top-0 -mt-1 min-w-[200px] rounded-xl overflow-hidden select-none transition-all duration-150 animate-in fade-in zoom-in-95 p-1 z-50",
-            isSubmenuLeft ? "right-full" : "left-full",
+            isSubmenuLeft ? "right-full mr-1 origin-top-right" : "left-full ml-1 origin-top-left",
             isLightTerminal
-              ? "bg-white/95 text-slate-800 border border-slate-200/80 shadow-[0_12px_32px_-6px_rgba(0,0,0,0.18),0_0_0_1px_rgba(0,0,0,0.04)] backdrop-blur-xl"
-              : "bg-[#13141f]/95 text-slate-100 border border-white/10 shadow-[0_16px_36px_-8px_rgba(0,0,0,0.7),0_0_0_1px_rgba(255,255,255,0.06)] backdrop-blur-xl",
+              ? "bg-white/90 text-slate-800 border border-black/10 shadow-[0_16px_36px_-6px_rgba(0,0,0,0.18),inset_0_1px_0_0_rgba(255,255,255,0.8)] backdrop-blur-2xl backdrop-saturate-150"
+              : "bg-zinc-950/90 text-slate-100 border border-white/10 shadow-[0_20px_40px_-8px_rgba(0,0,0,0.7),inset_0_1px_0_0_rgba(255,255,255,0.12)] backdrop-blur-2xl backdrop-saturate-150",
           )}
         >
           <button
             type="button"
             className={cn(
-              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
               isLightTerminal
                 ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
                 : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
@@ -393,7 +393,7 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
           <button
             type="button"
             className={cn(
-              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
               activeTermId &&
                 recordingTermIds.has(activeTermId) &&
                 !recordingPausedIds.has(activeTermId)
@@ -409,7 +409,7 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
           <button
             type="button"
             className={cn(
-              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
               activeTermId && recordingPausedIds.has(activeTermId)
                 ? isLightTerminal
                   ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
@@ -427,7 +427,7 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
             type="button"
             disabled={isOpening}
             className={cn(
-              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
               isOpening
                 ? "opacity-50 pointer-events-none"
                 : isLightTerminal
@@ -442,7 +442,7 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
             type="button"
             disabled={isOpening}
             className={cn(
-              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
               isOpening
                 ? "opacity-50 pointer-events-none"
                 : isLightTerminal
@@ -456,7 +456,7 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
           <button
             type="button"
             className={cn(
-              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
               isLightTerminal
                 ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
                 : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",

@@ -67,7 +67,7 @@ export const TerminalSearchBar = memo(function TerminalSearchBar({
 
   return (
     <div
-      className="absolute top-2 right-2 z-10 flex items-center gap-1 bg-card border rounded-xl shadow-lg dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08),0_12px_28px_-4px_rgba(0,0,0,0.7)] ring-1 ring-white/5 backdrop-blur-md p-1.5 terminal-search-bar"
+      className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded-xl border border-black/10 dark:border-white/10 bg-white/85 dark:bg-zinc-950/85 backdrop-blur-2xl backdrop-saturate-150 shadow-[0_16px_36px_-6px_rgba(0,0,0,0.18),inset_0_1px_0_0_rgba(255,255,255,0.8)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.7),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-1.5 terminal-search-bar select-none animate-in fade-in-0 zoom-in-95 origin-top-right duration-100"
       data-terminal-search="true"
       onMouseDown={(e) => {
         e.stopPropagation();
@@ -153,7 +153,7 @@ export const TerminalSearchBar = memo(function TerminalSearchBar({
         variant="ghost"
         size="icon"
         className={cn(
-          "h-5 w-5 flex-shrink-0 text-[10px] font-semibold",
+          "h-5 w-5 flex-shrink-0 text-[10px] font-semibold active:scale-90 transition-all cursor-pointer",
           searchCaseSensitive
             ? "bg-accent text-foreground"
             : "text-muted-foreground",
@@ -168,7 +168,7 @@ export const TerminalSearchBar = memo(function TerminalSearchBar({
         variant="ghost"
         size="icon"
         className={cn(
-          "h-5 w-5 flex-shrink-0 text-[10px] font-semibold",
+          "h-5 w-5 flex-shrink-0 text-[10px] font-semibold active:scale-90 transition-all cursor-pointer",
           searchWholeWord
             ? "bg-accent text-foreground"
             : "text-muted-foreground",
@@ -182,7 +182,7 @@ export const TerminalSearchBar = memo(function TerminalSearchBar({
       <Button
         variant="ghost"
         size="icon"
-        className="h-5 w-5 flex-shrink-0"
+        className="h-5 w-5 flex-shrink-0 active:scale-90 transition-all cursor-pointer"
         onMouseDown={(e) => e.preventDefault()}
         onClick={onFindPrev}
         title={t("tm_search_prev")}
@@ -192,7 +192,7 @@ export const TerminalSearchBar = memo(function TerminalSearchBar({
       <Button
         variant="ghost"
         size="icon"
-        className="h-5 w-5 flex-shrink-0"
+        className="h-5 w-5 flex-shrink-0 active:scale-90 transition-all cursor-pointer"
         onMouseDown={(e) => e.preventDefault()}
         onClick={onFindNext}
         title={t("tm_search_next")}
@@ -202,7 +202,7 @@ export const TerminalSearchBar = memo(function TerminalSearchBar({
       <Button
         variant="ghost"
         size="icon"
-        className="h-5 w-5 flex-shrink-0"
+        className="h-5 w-5 flex-shrink-0 active:scale-90 transition-all cursor-pointer"
         onMouseDown={(e) => e.preventDefault()}
         onClick={onClose}
         title={t("tm_search_close")}

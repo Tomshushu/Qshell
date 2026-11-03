@@ -102,7 +102,7 @@ export function DeviceTypeFilterPopover({ value, onChange }: DeviceTypeFilterPop
               setOpen(false)
             }}
             className={cn(
-              'w-full flex items-center justify-between gap-1.5 rounded-md px-2 h-8 text-xs transition-colors',
+              'w-full flex items-center justify-between gap-1.5 rounded-md px-2 h-8 text-xs transition-all active:scale-[0.98] cursor-pointer',
               !value
                 ? (isAnime ? 'bg-pink-100/70 text-pink-700 font-semibold' : 'bg-primary/10 text-primary font-semibold')
                 : (isAnime ? 'text-foreground hover:bg-pink-100/40' : 'text-foreground hover:bg-accent/40'),
@@ -123,7 +123,7 @@ export function DeviceTypeFilterPopover({ value, onChange }: DeviceTypeFilterPop
                   setOpen(false)
                 }}
                 className={cn(
-                  'w-full flex items-center justify-between gap-1.5 rounded-md px-2 h-8 text-xs transition-colors',
+                  'w-full flex items-center justify-between gap-1.5 rounded-md px-2 h-8 text-xs transition-all active:scale-[0.98] cursor-pointer',
                   isSel
                     ? (isAnime ? 'bg-pink-100/70 text-pink-700 font-semibold' : 'bg-primary/10 text-primary font-semibold')
                     : (isAnime ? 'text-foreground hover:bg-pink-100/40' : 'text-foreground hover:bg-accent/40'),

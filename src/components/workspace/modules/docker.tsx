@@ -2478,7 +2478,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
     return (
       <div
         data-ctx-menu
-        className="fixed z-[200] min-w-[160px] glass-strong border border-border/60 rounded-xl shadow-lg py-1.5 text-xs"
+        className="fixed z-[200] min-w-[160px] rounded-xl border border-black/10 dark:border-white/10 bg-white/85 dark:bg-zinc-950/85 backdrop-blur-2xl backdrop-saturate-150 shadow-[0_16px_36px_-6px_rgba(0,0,0,0.18),inset_0_1px_0_0_rgba(255,255,255,0.8)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.7),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-1 text-xs origin-top-left animate-in fade-in-0 zoom-in-95 duration-100"
         style={{ left: adjX, top: adjY }}
         onClick={(e) => e.stopPropagation()}
         onContextMenu={(e) => e.preventDefault()}
@@ -2487,7 +2487,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
           <button
             key={i}
             className={cn(
-              'w-full flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-accent text-left transition-colors duration-150',
+              'w-full flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-accent text-left transition-all active:scale-[0.98] cursor-pointer duration-150',
               item.disabled && 'opacity-40 cursor-not-allowed hover:bg-transparent',
               item.danger && 'text-destructive hover:bg-destructive/10',
             )}
@@ -2547,7 +2547,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
     return (
       <div
         data-ctx-menu
-        className="fixed z-[200] min-w-[170px] glass-strong border border-border/60 rounded-xl shadow-lg py-1.5 text-xs"
+        className="fixed z-[200] min-w-[170px] rounded-xl border border-black/10 dark:border-white/10 bg-white/85 dark:bg-zinc-950/85 backdrop-blur-2xl backdrop-saturate-150 shadow-[0_16px_36px_-6px_rgba(0,0,0,0.18),inset_0_1px_0_0_rgba(255,255,255,0.8)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.7),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-1 text-xs origin-top-left animate-in fade-in-0 zoom-in-95 duration-100"
         style={{ left: adjX, top: adjY }}
         onClick={(e) => e.stopPropagation()}
         onContextMenu={(e) => e.preventDefault()}
@@ -2556,7 +2556,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
           <button
             key={i}
             className={cn(
-              'w-full flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-accent text-left transition-colors duration-150',
+              'w-full flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-accent text-left transition-all active:scale-[0.98] cursor-pointer duration-150',
               item.disabled && 'opacity-40 cursor-not-allowed hover:bg-transparent',
               item.danger && 'text-destructive hover:bg-destructive/10',
             )}

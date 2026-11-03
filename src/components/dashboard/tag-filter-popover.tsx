@@ -214,7 +214,7 @@ export function TagFilterPopover({ allTags, tagFilter, onSelectTag }: TagFilterP
                   setOpen(false)
                 }}
                 className={cn(
-                  'flex-1 flex items-center justify-between gap-1.5 rounded-md px-2 h-8 text-xs transition-colors',
+                  'flex-1 flex items-center justify-between gap-1.5 rounded-md px-2 h-8 text-xs transition-all active:scale-[0.98] cursor-pointer',
                   tagFilter === null
                     ? (isAnime ? 'bg-pink-100/70 text-pink-700 font-semibold' : 'bg-primary/10 text-primary font-semibold')
                     : (isAnime ? 'text-foreground hover:bg-pink-100/40' : 'text-foreground hover:bg-accent/40'),

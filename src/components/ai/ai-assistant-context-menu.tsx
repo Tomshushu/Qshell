@@ -132,10 +132,10 @@ export function AIAssistantContextMenu({
       ref={menuRef}
       data-testid="ai-assistant-context-menu"
       className={cn(
-        'fixed z-[70] min-w-[200px] max-w-[260px] rounded-xl select-none transition-all duration-150 animate-in fade-in zoom-in-95 p-1 ai-assistant-context-menu',
+        'fixed z-[70] min-w-[200px] max-w-[260px] rounded-xl select-none transition-all duration-150 animate-in fade-in zoom-in-95 origin-top-left p-1 ai-assistant-context-menu',
         isLightTerminal
-          ? 'bg-white/95 text-slate-800 border border-slate-200/80 shadow-[0_12px_32px_-6px_rgba(0,0,0,0.18),0_0_0_1px_rgba(0,0,0,0.04)] backdrop-blur-xl'
-          : 'bg-[#181a27]/96 text-slate-100 border border-white/10 shadow-[0_16px_36px_-8px_rgba(0,0,0,0.7),0_0_0_1px_rgba(255,255,255,0.06)] backdrop-blur-xl',
+          ? 'bg-white/85 text-slate-800 border border-black/10 shadow-[0_16px_36px_-6px_rgba(0,0,0,0.18),inset_0_1px_0_0_rgba(255,255,255,0.8)] backdrop-blur-2xl backdrop-saturate-150'
+          : 'bg-zinc-950/85 text-slate-100 border border-white/10 shadow-[0_20px_40px_-8px_rgba(0,0,0,0.7),inset_0_1px_0_0_rgba(255,255,255,0.12)] backdrop-blur-2xl backdrop-saturate-150',
       )}
       style={{ left: pos.left, top: pos.top }}
       onMouseDown={(e) => e.stopPropagation()}
@@ -160,7 +160,7 @@ export function AIAssistantContextMenu({
         type="button"
         data-testid="ai-ctx-copy-btn"
         className={cn(
-          'group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left',
+          'group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left',
           isLightTerminal
             ? 'text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900'
             : 'text-slate-300 hover:bg-white/[0.08] hover:text-slate-100',
@@ -190,7 +190,7 @@ export function AIAssistantContextMenu({
           disabled={!isInTerminal}
           title={!isInTerminal ? (t('ai_ctx_not_in_terminal') || '当前未处于终端窗口') : undefined}
           className={cn(
-            'group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 transition-colors text-xs font-mono w-full text-left',
+            'group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 transition-all active:scale-[0.98] text-xs font-mono w-full text-left',
             !isInTerminal
               ? 'opacity-40 cursor-not-allowed text-slate-400'
               : isLightTerminal
@@ -226,7 +226,7 @@ export function AIAssistantContextMenu({
           disabled={!isInTerminal}
           title={!isInTerminal ? (t('ai_ctx_not_in_terminal') || '当前未处于终端窗口') : undefined}
           className={cn(
-            'group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 transition-colors text-xs font-mono w-full text-left',
+            'group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 transition-all active:scale-[0.98] text-xs font-mono w-full text-left',
             !isInTerminal
               ? 'opacity-40 cursor-not-allowed text-slate-400'
               : isLightTerminal
