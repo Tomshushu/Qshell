@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useAppStore } from "@/store";
 import { ModuleTabs, type SerialToolbarState } from "@/components/workspace/module-tabs";
 import { OverviewModule } from "@/components/workspace/modules/overview";
+import { FloatingMetricsHud } from "@/components/workspace/floating-metrics-hud";
 import { TerminalModule } from "@/components/workspace/modules/terminal";
 import { ServicesModule } from "@/components/workspace/modules/services";
 import { ProcessesModule } from "@/components/workspace/modules/processes";
@@ -89,6 +90,28 @@ export function WorkspacePage({
   const [showConnectionDiagnostics, setShowConnectionDiagnostics] = useState(false);
   // 终端全屏：由 ModuleTabs 触发，TerminalModule 消费
   const [isTerminalFullscreen, setIsTerminalFullscreen] = useState(false);
+  const FLOATING_MONITOR_KEY = "qshell_floating_monitor_visible_v1";
+  const [floatingMonitorVisible, setFloatingMonitorVisible] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem(FLOATING_MONITOR_KEY);
+      return saved !== null ? saved === "true" : true;
+    } catch {
+      return true;
+    }
+  });
+
+  const handleToggleFloatingMonitor = useCallback(() => {
+    setFloatingMonitorVisible((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(FLOATING_MONITOR_KEY, String(next));
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }, []);
+
   // 终端搜索触发器：ModuleTabs 触发，TerminalModule 注册实现（toggleSearch）
   const terminalSearchTriggerRef = useRef<(() => void) | null>(null);
   const registerTerminalSearchTrigger = useCallback(
@@ -169,6 +192,30 @@ export function WorkspacePage({
   const connId = tabId && serverId && !isSerialServer && !isRdpServer && !isBmcServer
     ? `ws:${serverId}:${tabId}`
     : serverId;
+
+  // 监听底栏胶囊点击切换监控卡片事件
+  useEffect(() => {
+    const handleToggle = () => {
+      handleToggleFloatingMonitor();
+    };
+    window.addEventListener("toggle-metrics-hud", handleToggle);
+    return () => window.removeEventListener("toggle-metrics-hud", handleToggle);
+  }, [handleToggleFloatingMonitor]);
+
+  // 广播悬浮监控卡片显示状态，供底栏胶囊同步高亮状态
+  const isTerminalActive = currentTab ? (isSplitPane ? "terminal" : currentTab.module) === "terminal" : false;
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent("metrics-hud-visibility-changed", {
+        detail: {
+          visible: floatingMonitorVisible && isTerminalActive,
+          serverId: connId,
+        },
+      }),
+    );
+  }, [floatingMonitorVisible, isTerminalActive, connId]);
+
+
   const reconnectState = useReconnectState(connId);
   const isConnected = useAppStore((s) =>
     connId ? (s.connectedServers[connId] ?? false) : false,
@@ -970,6 +1017,8 @@ export function WorkspacePage({
       toolbarPosition="top"
       serialToolbar={isSerialServer && currentTab.module === "terminal" ? null : serialToolbar}
       filesPanelOpen={filesPanelOpen}
+      floatingMonitorVisible={floatingMonitorVisible}
+      onToggleFloatingMonitor={handleToggleFloatingMonitor}
     />
   ) : null;
 
@@ -1146,6 +1195,24 @@ export function WorkspacePage({
             onCwdChange={notifyTerminalCwdChanged}
             onReconnect={handleConnect}
           />
+
+          {/* 实时性能悬浮监控卡片 (原生拖拽、FinalShell 经典监控、全交互波形与进程) */}
+          {!isSerialServer && !isRdpServer && !isBmcServer && (
+            <FloatingMetricsHud
+              serverId={connId}
+              isConnected={isConnected && isFullyReady}
+              visible={floatingMonitorVisible && effectiveModule === "terminal" && !isModalModule}
+              onClose={() => {
+                setFloatingMonitorVisible(false);
+                try {
+                  localStorage.setItem(FLOATING_MONITOR_KEY, "false");
+                } catch {
+                  /* ignore */
+                }
+              }}
+              onOpenFullOverview={() => handleModuleChange("overview")}
+            />
+          )}
         </div>
 
         {/* 文件模块：终端下方可折叠面板（边用终端边上传/管理文件）。

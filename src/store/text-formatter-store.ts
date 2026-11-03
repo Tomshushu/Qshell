@@ -7,6 +7,7 @@ interface TextFormatterState {
   seed: string;
   openTextFormatter: (seed?: string) => void;
   closeTextFormatter: () => void;
+  toggleTextFormatter: (seed?: string) => void;
 }
 
 export const useTextFormatterStore = create<TextFormatterState>((set) => ({
@@ -14,4 +15,6 @@ export const useTextFormatterStore = create<TextFormatterState>((set) => ({
   seed: "",
   openTextFormatter: (seed = "") => set({ open: true, seed }),
   closeTextFormatter: () => set({ open: false }),
+  toggleTextFormatter: (seed = "") =>
+    set((state) => (state.open ? { open: false } : { open: true, seed })),
 }));

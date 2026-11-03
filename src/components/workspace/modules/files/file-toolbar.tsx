@@ -120,7 +120,7 @@ export function FileToolbar({
         <Button
           variant="ghost"
           size="sm"
-          className="h-7 text-sm gap-1"
+          className="h-7 text-sm gap-1 active:scale-95 transition-all cursor-pointer"
           onClick={onRefresh}
           title={`${t('fs_refresh')} (F5)`}
         >
@@ -131,7 +131,7 @@ export function FileToolbar({
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 text-sm gap-1"
+            className="h-7 text-sm gap-1 active:scale-95 transition-all cursor-pointer"
             onClick={onToggleShowHidden}
             title={showHidden ? (t('sftp_hide_hidden') || 'Hide Hidden Files') : (t('sftp_show_hidden') || 'Show Hidden Files')}
           >
@@ -142,7 +142,7 @@ export function FileToolbar({
         <Button
           variant="ghost"
           size="sm"
-          className="h-7 text-sm gap-1"
+          className="h-7 text-sm gap-1 active:scale-95 transition-all cursor-pointer"
           disabled={transferLoading === 'upload'}
           onClick={() => onNativeUpload(false)}
           title={t('fs_upload_file')}
@@ -154,7 +154,7 @@ export function FileToolbar({
         <Button
           variant="ghost"
           size="sm"
-          className="h-7 text-sm gap-1"
+          className="h-7 text-sm gap-1 active:scale-95 transition-all cursor-pointer"
           disabled={transferLoading === 'upload'}
           onClick={() => onNativeUpload(true)}
           title={t('fs_upload_folder')}

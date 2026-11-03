@@ -62,7 +62,7 @@ import {
   type AIAssistantContextMenuState,
 } from './ai-assistant-context-menu'
 
-const MASCOT_SIZE = 44
+const MASCOT_SIZE = 48
 const STORAGE_MASCOT_OFFSET_KEY = 'qshell_ai_mascot_offset_v5'
 const CONTENT_TOP_OFFSET = 88 // 上面到主内容区域 (TabBar + 模块工具栏下方，8px呼吸间距)
 const STATUSBAR_BOTTOM_OFFSET = 32 // 下面到页脚 (StatusBar上方，8px呼吸间距)
@@ -1220,6 +1220,39 @@ export function FloatingAIAssistant() {
   }, [isInTerminal, terminalThemeId, customTerminalThemes, terminalThemeOverrides])
 
   const isLightTerminal = activeTerminalTheme?.type === 'light'
+  const appTheme = useAppStore((s) => s.theme)
+
+  // 智能识别当前环境是否为浅色模式 (终端模式由终端主题/底色判定，非终端由应用系统主题判定)
+  const isMascotLight = useMemo(() => {
+    if (isInTerminal && activeTerminalTheme) {
+      if (activeTerminalTheme.type === 'light') return true
+      const bg = activeTerminalTheme.ui?.background
+      if (bg && bg.startsWith('#') && bg.length >= 7) {
+        const r = parseInt(bg.slice(1, 3), 16) || 0
+        const g = parseInt(bg.slice(3, 5), 16) || 0
+        const b = parseInt(bg.slice(5, 7), 16) || 0
+        if ((0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.55) return true
+      }
+      return false
+    }
+    if (appTheme === 'light') return true
+    if (appTheme === 'dark') return false
+    if (typeof window !== 'undefined' && window.matchMedia) {
+      return !window.matchMedia('(prefers-color-scheme: dark)').matches
+    }
+    return false
+  }, [isInTerminal, activeTerminalTheme, appTheme])
+
+  // 提取终端主题专属荧光色 (优先提取终端 brightCyan / cyan / cursor，未处于终端则使用标准赛博青色)
+  const terminalMascotAccent = useMemo(() => {
+    if (!isInTerminal || !activeTerminalTheme) return '#38bdf8'
+    return (
+      activeTerminalTheme.ansi?.brightCyan ||
+      activeTerminalTheme.ansi?.cyan ||
+      activeTerminalTheme.ui?.cursor ||
+      '#38bdf8'
+    )
+  }, [isInTerminal, activeTerminalTheme])
 
   // 依据当前所在界面（终端 vs 其他界面）及终端明暗主题计算弹框各区域的配色风格
   const themeStyles = useMemo(() => {
@@ -1228,7 +1261,7 @@ export function FloatingAIAssistant() {
         isTerminalMode: false,
         dialogContainer: 'bg-background/95 backdrop-blur-2xl border border-border/80 shadow-2xl dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08),0_24px_50px_-12px_rgba(0,0,0,0.85)] ring-1 ring-white/5 text-foreground',
         header: 'border-b border-border/60 bg-muted/25 hover:bg-muted/40 text-foreground',
-        headerBtn: 'hover:bg-muted text-muted-foreground hover:text-foreground',
+        headerBtn: 'hover:bg-muted text-muted-foreground hover:text-foreground active:scale-95 transition-all',
         copilotBadge: 'bg-primary/10 text-primary',
         welcomeBanner: 'bg-gradient-to-r from-primary/5 via-primary/10 to-transparent border-primary/15',
         welcomeTitle: 'text-foreground',
@@ -1250,9 +1283,9 @@ export function FloatingAIAssistant() {
         modePillContainer: 'bg-muted/40 border-border/40',
         modeBtnActive: 'bg-background text-primary shadow-2xs font-semibold',
         modeBtnInactive: 'text-muted-foreground/80 hover:text-foreground',
-        sendBtnActive: 'bg-primary text-primary-foreground hover:bg-primary/90',
+        sendBtnActive: 'bg-primary text-primary-foreground hover:bg-primary/90 active:scale-95 transition-all',
         sendBtnDisabled: 'bg-muted text-muted-foreground/40 cursor-not-allowed',
-        copyActionBtn: 'hover:bg-muted text-muted-foreground/80 hover:text-foreground',
+        copyActionBtn: 'hover:bg-muted text-muted-foreground/80 hover:text-foreground active:scale-95 transition-all',
       }
     }
 
@@ -1262,7 +1295,7 @@ export function FloatingAIAssistant() {
         isTerminalMode: true,
         dialogContainer: 'bg-white/92 backdrop-blur-xl border border-slate-200/80 shadow-[0_16px_36px_-6px_rgba(0,0,0,0.18),0_0_0_1px_rgba(0,0,0,0.04)] text-slate-800',
         header: 'border-b border-slate-200/80 bg-slate-900/[0.03] hover:bg-slate-900/[0.06] text-slate-800',
-        headerBtn: 'hover:bg-slate-900/[0.06] text-slate-600 hover:text-slate-900',
+        headerBtn: 'hover:bg-slate-900/[0.06] text-slate-600 hover:text-slate-900 active:scale-95 transition-all',
         copilotBadge: 'bg-sky-50 text-sky-600 border border-sky-200',
         welcomeBanner: 'bg-slate-900/[0.03] border-slate-200/80',
         welcomeTitle: 'text-slate-800',
@@ -1284,9 +1317,9 @@ export function FloatingAIAssistant() {
         modePillContainer: 'bg-slate-900/[0.05] border-slate-200/60',
         modeBtnActive: 'bg-white text-sky-600 shadow-2xs font-semibold border border-slate-200/60',
         modeBtnInactive: 'text-slate-500 hover:text-slate-800',
-        sendBtnActive: 'bg-sky-600 text-white hover:bg-sky-500',
+        sendBtnActive: 'bg-sky-600 text-white hover:bg-sky-500 active:scale-95 transition-all',
         sendBtnDisabled: 'bg-slate-100 text-slate-400 cursor-not-allowed',
-        copyActionBtn: 'hover:bg-slate-100 text-slate-500 hover:text-slate-800',
+        copyActionBtn: 'hover:bg-slate-100 text-slate-500 hover:text-slate-800 active:scale-95 transition-all',
       }
     }
 
@@ -1295,7 +1328,7 @@ export function FloatingAIAssistant() {
       isTerminalMode: true,
       dialogContainer: 'dark bg-[#22263a]/96 backdrop-blur-2xl border border-white/[0.14] shadow-[0_24px_50px_-8px_rgba(0,0,0,0.85),inset_0_1px_0_0_rgba(255,255,255,0.08),0_0_0_1px_rgba(255,255,255,0.08)] ring-1 ring-white/5 text-slate-100',
       header: 'border-b border-white/10 bg-white/[0.04] hover:bg-white/[0.06] text-slate-100',
-      headerBtn: 'hover:bg-white/[0.08] text-slate-300 hover:text-white',
+      headerBtn: 'hover:bg-white/[0.08] text-slate-300 hover:text-white active:scale-95 transition-all',
       copilotBadge: 'bg-sky-500/15 text-sky-400 border border-sky-500/25',
       welcomeBanner: 'bg-white/[0.05] border-white/10 shadow-xs',
       welcomeTitle: 'text-white font-bold',
@@ -1317,9 +1350,9 @@ export function FloatingAIAssistant() {
       modePillContainer: 'bg-white/[0.06] border-white/10',
       modeBtnActive: 'bg-white/15 text-sky-400 shadow-2xs font-semibold ring-1 ring-white/15',
       modeBtnInactive: 'text-slate-400 hover:text-slate-200',
-      sendBtnActive: 'bg-sky-500 text-white hover:bg-sky-400 shadow-sm',
+      sendBtnActive: 'bg-sky-500 text-white hover:bg-sky-400 shadow-sm active:scale-95 transition-all',
       sendBtnDisabled: 'bg-white/[0.06] text-slate-500 border border-white/5 cursor-not-allowed',
-      copyActionBtn: 'hover:bg-white/10 text-slate-400 hover:text-slate-200',
+      copyActionBtn: 'hover:bg-white/10 text-slate-400 hover:text-slate-200 active:scale-95 transition-all',
     }
   }, [isInTerminal, isLightTerminal])
 
@@ -1508,13 +1541,7 @@ export function FloatingAIAssistant() {
     return detectUserIntent(assistantInput)
   }, [assistantInput])
 
-  if (!enableAiGlobal) {
-    return null
-  }
 
-  if (!showFloatingMascot && !isFloatingAssistantOpen) {
-    return null
-  }
 
   // 点击助手小人图标切换显隐状态（退出时重置卡片位置）
   const handleToggle = () => {
@@ -2106,6 +2133,11 @@ export function FloatingAIAssistant() {
     { text: 'Linux 生产环境安全基线加固', prompt: '请为这台 Linux 服务器提供一份基础安全加固方案（禁止 root 直连、SSH 密钥登录、开启防火墙）。' },
   ]
 
+  // 必须在所有 React Hooks 执行完毕后才进行条件渲染判断，严格遵守 Rules of Hooks，避免开关切换时出现 "Rendered more hooks than during the previous render"
+  if (!enableAiGlobal || (!showFloatingMascot && !isFloatingAssistantOpen)) {
+    return null
+  }
+
   const dialogLayout = getEffectiveDialogPosition()
 
   return (
@@ -2124,33 +2156,39 @@ export function FloatingAIAssistant() {
           onPointerDown={handleMascotPointerDown}
           onDoubleClick={handleMascotDoubleClick}
           className={cn(
-            'select-none touch-none rounded-full',
+            'select-none touch-none',
             isMascotDragging ? 'cursor-grabbing transition-none' : 'cursor-grab transition-transform duration-200',
             isFloatingAssistantOpen
               ? 'scale-90 opacity-40 hover:opacity-100'
               : 'scale-100 opacity-100 hover:scale-105 active:scale-95',
           )}
         >
-          <div className="relative rounded-full">
-            {/* 外圈微光呼吸光晕 (纯圆形柔光，无任何方形投影) */}
-            <div className="absolute inset-0 rounded-full bg-gradient-to-r from-blue-600 to-cyan-400 opacity-30 blur-md pointer-events-none animate-pulse" />
+          <div className="relative flex items-center justify-center">
+            {/* 核心向外辐射的柔和环境霓虹微光晕 (纯向外扩散柔光，无硬边，让小人在深色或浅色背景上极度醒目耀眼) */}
+            <div
+              className={cn(
+                'absolute -inset-3 rounded-full pointer-events-none transition-all duration-300',
+                isMascotLight
+                  ? 'bg-sky-400/25 blur-lg'
+                  : 'bg-radial from-cyan-400/40 via-sky-500/20 to-transparent blur-xl animate-pulse'
+              )}
+            />
 
-            {/* 纯圆形吉祥物主体 */}
+            {/* 纯净悬浮 Q-Bitz 吉祥物主体，带双重轮廓发光 */}
             <AIMascotAvatar
               size={MASCOT_SIZE}
               mood={assistantMascotMood}
-              showGlowRing={true}
+              isLight={isMascotLight}
+              terminalAccentColor={terminalMascotAccent}
+              showGlowRing={false}
               interactive={!isMascotDragging}
-              className="relative rounded-full drop-shadow-lg"
+              className={cn(
+                'relative filter transition-all duration-300',
+                isMascotLight
+                  ? 'drop-shadow-[0_0_12px_rgba(14,165,233,0.45)] drop-shadow-[0_6px_16px_rgba(0,0,0,0.18)]'
+                  : 'drop-shadow-[0_0_12px_rgba(56,189,248,0.75)] drop-shadow-[0_0_28px_rgba(14,165,233,0.45)] drop-shadow-[0_4px_12px_rgba(0,0,0,0.8)]'
+              )}
             />
-
-            {/* 待机小呼吸点 */}
-            {!isFloatingAssistantOpen && (
-              <span className="absolute top-0 right-0 flex h-2.5 w-2.5 pointer-events-none">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan-500 ring-2 ring-background" />
-              </span>
-            )}
           </div>
         </div>
       )}
@@ -2225,7 +2263,7 @@ export function FloatingAIAssistant() {
           >
             {/* 左侧：小人微标 + 标题 + 拖拽手柄指示器 */}
             <div className="flex items-center gap-2">
-              <AIMascotAvatar size={24} mood={assistantMascotMood} showGlowRing={false} interactive={false} />
+              <AIMascotAvatar size={24} mood={assistantMascotMood} isLight={isMascotLight} terminalAccentColor={terminalMascotAccent} showGlowRing={false} interactive={false} />
               <span className="text-xs font-bold text-inherit">
                 {t('ai_assistant_title') || '运维小助手'}
               </span>
@@ -2515,7 +2553,7 @@ export function FloatingAIAssistant() {
                 {/* 顶部欢迎区：机器人插图 + 醒目标题 */}
                 <div className={cn('relative overflow-hidden flex items-center gap-3.5 p-3.5 rounded-xl border', themeStyles.welcomeBanner)}>
                   <div className="pointer-events-none absolute -left-6 -top-6 h-28 w-28 rounded-full bg-primary/15 blur-2xl dark:bg-sky-500/15" />
-                  <AIMascotAvatar size={60} mood={assistantMascotMood} showGlowRing={false} />
+                  <AIMascotAvatar size={60} mood={assistantMascotMood} isLight={isMascotLight} terminalAccentColor={terminalMascotAccent} showGlowRing={false} />
                   <div>
                     <h2 className={cn('text-sm font-bold tracking-tight', themeStyles.welcomeTitle)}>
                       您好，欢迎使用
@@ -2616,6 +2654,8 @@ export function FloatingAIAssistant() {
                           <AIMascotAvatar
                             size={28}
                             mood={msg.status === 'error' ? 'blink' : 'idle'}
+                            isLight={isMascotLight}
+                            terminalAccentColor={terminalMascotAccent}
                             showGlowRing={false}
                             interactive={false}
                           />
@@ -2782,7 +2822,7 @@ export function FloatingAIAssistant() {
                   ) && (
                     <div className="flex gap-2.5 items-start">
                       <div className="shrink-0 mt-0.5">
-                        <AIMascotAvatar size={28} mood="thinking" showGlowRing={false} interactive={false} />
+                        <AIMascotAvatar size={28} mood="thinking" isLight={isMascotLight} terminalAccentColor={terminalMascotAccent} showGlowRing={false} interactive={false} />
                       </div>
                       <div className={cn('p-2 px-3 rounded-2xl rounded-tl-xs text-xs flex items-center justify-between gap-2.5', themeStyles.aiBubble)}>
                         <div className="flex items-center gap-2">

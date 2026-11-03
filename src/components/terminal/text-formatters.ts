@@ -12,12 +12,12 @@ export interface TextFormatter {
   format(text: string): string | null;
 }
 
-/** 将 Base64 解码为 UTF-8 文本 */
+/** 将 Base64 解码为 UTF-8 文本（严格模式：非法 UTF-8 会抛错） */
 function base64ToUtf8(b64: string): string {
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new TextDecoder("utf-8").decode(bytes);
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
 /** 将 Base64URL（JWT 段）解码为 UTF-8 文本 */
@@ -27,29 +27,38 @@ function base64UrlToUtf8(input: string): string {
   return base64ToUtf8(padded);
 }
 
-/** 将十六进制字符串解码为 UTF-8 文本 */
+/** 将十六进制字符串解码为 UTF-8 文本（严格模式：非法 UTF-8 会抛错） */
 function hexToUtf8(hex: string): string {
   const clean = hex.replace(/\s/g, "");
   const bytes = new Uint8Array(clean.length / 2);
   for (let i = 0; i < clean.length; i += 2) {
     bytes[i / 2] = parseInt(clean.slice(i, i + 2), 16);
   }
-  return new TextDecoder("utf-8").decode(bytes);
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
-/** 判断解码结果是否像可读文本（可打印字符占比 > 90%） */
+/** 判断解码结果是否像可读文本（排除替换符 \uFFFD、DEL 0x7F 和 C1 控制符 0x80-0x9F，可打印字符占比 > 90%） */
 function looksLikeText(decoded: string): boolean {
-  if (!decoded) return false;
+  if (!decoded || decoded.length === 0) return false;
   let printable = 0;
-  for (const ch of decoded) {
-    const code = ch.charCodeAt(0);
-    if (
-      code === 0x09 ||
-      code === 0x0a ||
-      code === 0x0d ||
-      code >= 0x20
-    ) {
+  for (let i = 0; i < decoded.length; i++) {
+    const code = decoded.charCodeAt(i);
+    // 过滤 Unicode 替换字符 \uFFFD
+    if (code === 0xfffd) return false;
+    // 空格、制表符、回车换行
+    if (code === 0x09 || code === 0x0a || code === 0x0d) {
       printable++;
+      continue;
+    }
+    // 标准可打印 ASCII
+    if (code >= 0x20 && code <= 0x7e) {
+      printable++;
+      continue;
+    }
+    // 扩展字符（排除了 0x7F-0x9F 控制符）
+    if (code >= 0xa0) {
+      printable++;
+      continue;
     }
   }
   return printable / decoded.length > 0.9;
@@ -113,6 +122,97 @@ function formatXml(xml: string): string {
   return lines.join("\n");
 }
 
+/** 格式化单个纯数字时间戳字符串（支持 10/13/16/19 位） */
+export function formatSingleTimestamp(s: string): { local: string; utc: string; unit: string } | null {
+  if (
+    !/^\d{10}$/.test(s) &&
+    !/^\d{13}$/.test(s) &&
+    !/^\d{16}$/.test(s) &&
+    !/^\d{19}$/.test(s)
+  ) {
+    return null;
+  }
+  const num = parseInt(s.slice(0, 13), 10);
+  const ms = s.length === 10 ? num * 1000 : num;
+  const year = new Date(ms).getFullYear();
+  if (year < 1970 || year > 2100) return null;
+
+  let unit = "秒";
+  if (s.length === 10) {
+    unit = "秒";
+  } else if (s.length === 13) {
+    unit = "毫秒";
+  } else if (s.length === 16) {
+    unit = "微秒";
+  } else if (s.length === 19) {
+    unit = "纳秒";
+  }
+  const d = new Date(ms);
+  return {
+    local: d.toLocaleString(),
+    utc: d.toISOString(),
+    unit,
+  };
+}
+
+/** 格式化时间戳：支持纯时间戳，也支持从 JSON / 复杂文本中提取所有时间戳 */
+export function formatTimestamp(t: string): string | null {
+  const s = t.trim();
+  // Case 1: 纯时间戳
+  const single = formatSingleTimestamp(s);
+  if (single) {
+    return [
+      `本地时间: ${single.local}`,
+      `UTC: ${single.utc}`,
+      `原始值: ${s}（${single.unit}）`,
+    ].join("\n");
+  }
+
+  // Case 2: 从 JSON、对象或日志文本中匹配所有潜在时间戳
+  const regex = /(?:(["']?)([a-zA-Z0-9_.-]+)\1\s*[:=]\s*)?(\b\d{10}\b|\b\d{13}\b|\b\d{16}\b|\b\d{19}\b)/g;
+  const items: { key?: string; raw: string; local: string; utc: string; unit: string }[] = [];
+  let m: RegExpExecArray | null;
+
+  while ((m = regex.exec(s)) !== null) {
+    const rawVal = m[3];
+    const info = formatSingleTimestamp(rawVal);
+    if (info) {
+      items.push({
+        key: m[2],
+        raw: rawVal,
+        local: info.local,
+        utc: info.utc,
+        unit: info.unit,
+      });
+    }
+  }
+
+  if (items.length === 0) {
+    return null;
+  }
+
+  if (items.length === 1 && !items[0].key) {
+    return [
+      `本地时间: ${items[0].local}`,
+      `UTC: ${items[0].utc}`,
+      `原始值: ${items[0].raw}（${items[0].unit}）`,
+    ].join("\n");
+  }
+
+  const resultLines = [`共提取到 ${items.length} 处时间戳:`, ""];
+  items.forEach((item, idx) => {
+    const title = item.key
+      ? `${idx + 1}. [${item.key}]: ${item.raw}（${item.unit}）`
+      : `${idx + 1}. ${item.raw}（${item.unit}）`;
+    resultLines.push(title);
+    resultLines.push(`   本地时间: ${item.local}`);
+    resultLines.push(`   UTC:     ${item.utc}`);
+    resultLines.push("");
+  });
+
+  return resultLines.join("\n").trimEnd();
+}
+
 const FORMATTERS: TextFormatter[] = [
   {
     id: "json",
@@ -145,8 +245,8 @@ const FORMATTERS: TextFormatter[] = [
       if (lines.length < 2) return false;
       return lines.every((l) => {
         try {
-          JSON.parse(l);
-          return true;
+          const parsed = JSON.parse(l);
+          return typeof parsed === "object" && parsed !== null;
         } catch {
           return false;
         }
@@ -208,7 +308,12 @@ const FORMATTERS: TextFormatter[] = [
     labelKey: "fmt_xml",
     detect: (t) => {
       const s = t.trim();
-      return s.startsWith("<") && /<\/[A-Za-z][\w:.-]*\s*>/.test(s);
+      if (!s.startsWith("<")) return false;
+      return (
+        /<\/[A-Za-z][\w:.-]*\s*>/.test(s) ||
+        /<[A-Za-z][\w:.-]*[^>]*\/>/.test(s) ||
+        s.startsWith("<?xml")
+      );
     },
     format: (t) => formatXml(t),
   },
@@ -217,45 +322,122 @@ const FORMATTERS: TextFormatter[] = [
     labelKey: "fmt_timestamp",
     detect: (t) => {
       const s = t.trim();
-      if (!/^\d{10}$/.test(s) && !/^\d{13}$/.test(s)) return false;
-      const num = parseInt(s, 10);
-      const ms = s.length === 13 ? num : num * 1000;
-      const year = new Date(ms).getFullYear();
-      return year >= 2000 && year <= 2100;
+      return formatSingleTimestamp(s) !== null;
     },
-    format: (t) => {
-      const s = t.trim();
-      const num = parseInt(s, 10);
-      const ms = s.length === 13 ? num : num * 1000;
-      const d = new Date(ms);
-      const unit = s.length === 13 ? "毫秒" : "秒";
-      return [
-        `本地时间: ${d.toLocaleString()}`,
-        `UTC: ${d.toISOString()}`,
-        `原始值: ${s}（${unit}）`,
-      ].join("\n");
-    },
+    format: (t) => formatTimestamp(t),
   },
   {
     id: "unix-permission",
     labelKey: "fmt_unix_permission",
-    detect: (t) => /^[0-7]{3,4}$/.test(t.trim()),
+    detect: (t) => {
+      const s = t.trim();
+      // 形式 1: 八进制数字（3 或 4 位，如 755 或 0755）
+      if (/^[0-7]{3,4}$/.test(s)) return true;
+      // 形式 2: 符号权限字符串（9 或 10 位，如 rwxr-xr-x 或 -rwxr-xr-x 或 drwxrwxrwx）
+      if (/^[-dlcbsp]?([r\-][w\-][xsS\-]){2}[r\-][w\-][xtT\-]$/.test(s)) return true;
+      return false;
+    },
     format: (t) => {
       const s = t.trim();
-      const digits = s.split("").map(Number);
-      const rwx = (n: number) =>
-        `${n & 4 ? "r" : "-"}${n & 2 ? "w" : "-"}${n & 1 ? "x" : "-"}`;
-      const special = digits.length === 4 ? digits[0] : 0;
-      const body = digits.slice(-3);
-      const perm = body.map(rwx).join("");
-      const specials: string[] = [];
-      if (special & 4) specials.push("setuid");
-      if (special & 2) specials.push("setgid");
-      if (special & 1) specials.push("sticky");
-      return [
-        `权限: ${perm}${specials.length ? "（" + specials.join("、") + "）" : ""}`,
-        `八进制: ${s}`,
-      ].join("\n");
+      // Case 1: 符号权限串转八进制（如 -rwxr-xr-x -> 0755）
+      const symMatch = s.match(/^([-dlcbsp])?([r\-][w\-][xsS\-])([r\-][w\-][xsS\-])([r\-][w\-][xtT\-])$/);
+      if (symMatch) {
+        const fileTypeChar = symMatch[1];
+        const triplets = [symMatch[2], symMatch[3], symMatch[4]];
+        let specialBits = 0;
+        const octalDigits: number[] = [];
+
+        triplets.forEach((triplet, idx) => {
+          let val = 0;
+          if (triplet[0] === "r") val += 4;
+          if (triplet[1] === "w") val += 2;
+          const x = triplet[2];
+          if (x === "x") {
+            val += 1;
+          } else if (x === "s" || x === "t") {
+            val += 1;
+            if (idx === 0) specialBits += 4; // setuid
+            if (idx === 1) specialBits += 2; // setgid
+            if (idx === 2) specialBits += 1; // sticky
+          } else if (x === "S" || x === "T") {
+            if (idx === 0) specialBits += 4;
+            if (idx === 1) specialBits += 2;
+            if (idx === 2) specialBits += 1;
+          }
+          octalDigits.push(val);
+        });
+
+        const octalBody = octalDigits.join("");
+        const fullOctal = specialBits > 0 ? `${specialBits}${octalBody}` : `0${octalBody}`;
+
+        const fileTypeDesc: Record<string, string> = {
+          "-": "普通文件 (-)",
+          d: "目录文件 (d)",
+          l: "符号链接 (l)",
+          c: "字符设备 (c)",
+          b: "块设备 (b)",
+          s: "Socket 套接字 (s)",
+          p: "FIFO 管道 (p)",
+        };
+
+        const specials: string[] = [];
+        if (specialBits & 4) specials.push("setuid");
+        if (specialBits & 2) specials.push("setgid");
+        if (specialBits & 1) specials.push("sticky");
+
+        const lines = [
+          `八进制: ${fullOctal}（chmod ${specialBits > 0 ? fullOctal : octalBody} <文件>）`,
+          `符号权限: ${triplets.join("")}${specials.length ? "（" + specials.join("、") + "）" : ""}`,
+          `拥有者 (User): ${triplets[0]} (${octalDigits[0]})`,
+          `所属组 (Group): ${triplets[1]} (${octalDigits[1]})`,
+          `其他人 (Other): ${triplets[2]} (${octalDigits[2]})`,
+        ];
+        if (fileTypeChar && fileTypeDesc[fileTypeChar]) {
+          lines.unshift(`文件类型: ${fileTypeDesc[fileTypeChar]}`);
+        }
+        return lines.join("\n");
+      }
+
+      // Case 2: 八进制转符号权限（如 755 或 0755 -> rwxr-xr-x）
+      if (/^[0-7]{3,4}$/.test(s)) {
+        const digits = s.split("").map(Number);
+        const special = digits.length === 4 ? digits[0] : 0;
+        const body = digits.slice(-3);
+
+        const rwx = (n: number, isLast: boolean, spec: number) => {
+          let r = `${n & 4 ? "r" : "-"}${n & 2 ? "w" : "-"}`;
+          if (spec) {
+            if (isLast) {
+              r += n & 1 ? "t" : "T";
+            } else {
+              r += n & 1 ? "s" : "S";
+            }
+          } else {
+            r += n & 1 ? "x" : "-";
+          }
+          return r;
+        };
+
+        const uPerm = rwx(body[0], false, special & 4);
+        const gPerm = rwx(body[1], false, special & 2);
+        const oPerm = rwx(body[2], true, special & 1);
+        const perm = `${uPerm}${gPerm}${oPerm}`;
+
+        const specials: string[] = [];
+        if (special & 4) specials.push("setuid");
+        if (special & 2) specials.push("setgid");
+        if (special & 1) specials.push("sticky");
+
+        return [
+          `符号权限: ${perm}${specials.length ? "（" + specials.join("、") + "）" : ""}`,
+          `八进制: ${digits.length === 3 ? "0" + s : s}（chmod ${s} <文件>）`,
+          `拥有者 (User): ${uPerm} (${body[0]})`,
+          `所属组 (Group): ${gPerm} (${body[1]})`,
+          `其他人 (Other): ${oPerm} (${body[2]})`,
+        ].join("\n");
+      }
+
+      return null;
     },
   },
   {
@@ -264,55 +446,73 @@ const FORMATTERS: TextFormatter[] = [
     detect: (t) => {
       const s = t.trim();
       return (
-        /^0x[0-9a-fA-F]+$/.test(s) ||
-        /^0b[01]+$/.test(s) ||
-        /^0o[0-7]+$/.test(s)
+        /^0x[0-9a-fA-F]+$/i.test(s) ||
+        /^0b[01]+$/i.test(s) ||
+        /^0o[0-7]+$/i.test(s)
       );
     },
     format: (t) => {
       const s = t.trim();
-      let num: number;
-      if (s.startsWith("0x") || s.startsWith("0X")) {
-        num = parseInt(s.slice(2), 16);
-      } else if (s.startsWith("0b") || s.startsWith("0B")) {
-        num = parseInt(s.slice(2), 2);
-      } else if (s.startsWith("0o") || s.startsWith("0O")) {
-        num = parseInt(s.slice(2), 8);
-      } else {
+      try {
+        const bi = BigInt(s);
+        return [
+          `十进制: ${bi.toString(10)}`,
+          `十六进制: 0x${bi.toString(16).toUpperCase()}`,
+          `二进制: 0b${bi.toString(2)}`,
+          `八进制: 0o${bi.toString(8)}`,
+        ].join("\n");
+      } catch {
         return null;
       }
-      if (Number.isNaN(num)) return null;
-      return [
-        `十进制: ${num}`,
-        `十六进制: 0x${num.toString(16)}`,
-        `二进制: 0b${num.toString(2)}`,
-        `八进制: 0o${num.toString(8)}`,
-      ].join("\n");
     },
   },
   {
     id: "url-query",
     labelKey: "fmt_url_query",
     detect: (t) => {
-      const s = t.trim().replace(/^[?#&]+/, "");
-      if (!s.includes("=")) return false;
+      const s = t.trim();
+      // 排除多行文本，避免误判环境变量或配置文本
+      if (s.includes("\n") || s.includes("\r")) return false;
+      const qIdx = s.indexOf("?");
+      const queryPart = qIdx !== -1 ? s.slice(qIdx + 1) : s.replace(/^[#&]+/, "");
+      if (!queryPart.includes("=")) return false;
       try {
-        const params = new URLSearchParams(s);
-        return Array.from(params.keys()).filter((k) => k.length > 0).length > 0;
+        const params = new URLSearchParams(queryPart);
+        return Array.from(params.keys()).some((k) => k.length > 0);
       } catch {
         return false;
       }
     },
     format: (t) => {
-      const s = t.trim().replace(/^[?#&]+/, "");
+      const s = t.trim();
+      const qIdx = s.indexOf("?");
+      const urlBase = qIdx !== -1 ? s.slice(0, qIdx) : null;
+      const queryPart = qIdx !== -1 ? s.slice(qIdx + 1) : s.replace(/^[#&]+/, "");
       try {
-        const params = new URLSearchParams(s);
+        const params = new URLSearchParams(queryPart);
         const entries = Array.from(params.entries());
         if (entries.length === 0) return null;
         const maxKey = Math.max(...entries.map(([k]) => k.length), 0);
-        return entries
-          .map(([k, v]) => `${k.padEnd(maxKey)} = ${v}`)
+        const formattedEntries = entries
+          .map(([k, v]) => {
+            let decodedVal = v;
+            try {
+              decodedVal = decodeURIComponent(v);
+            } catch {
+              /* 保留原值 */
+            }
+            return `${k.padEnd(maxKey)} = ${decodedVal}`;
+          })
           .join("\n");
+
+        if (urlBase) {
+          return [
+            `URL 基础路径: ${urlBase}`,
+            `查询参数 (共 ${entries.length} 个):`,
+            formattedEntries,
+          ].join("\n");
+        }
+        return formattedEntries;
       } catch {
         return null;
       }
@@ -433,7 +633,37 @@ const FORMATTERS: TextFormatter[] = [
       }
     },
   },
+  {
+    id: "mac",
+    labelKey: "fmt_mac",
+    detect: (t) => {
+      const s = t.trim();
+      return (
+        /^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$/.test(s) ||
+        /^[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}$/.test(s) ||
+        /^\{?\s*(0x[0-9a-fA-F]{2}\s*,\s*){5}0x[0-9a-fA-F]{2}\s*\}?$/.test(s)
+      );
+    },
+    format: (t) => {
+      const clean = t.trim().replace(/[^0-9A-Fa-f]/g, "");
+      if (clean.length !== 12) return null;
+      const bytes: string[] = [];
+      for (let i = 0; i < 12; i += 2) {
+        bytes.push(clean.slice(i, i + 2).toUpperCase());
+      }
+      const colon = bytes.join(":");
+      const rev = [...bytes].reverse().join(":");
+      return [
+        `标准格式 (大端): ${colon}`,
+        `无冒号紧凑:     ${clean.toUpperCase()}`,
+        `小端字节序翻转:   ${rev}`,
+      ].join("\n");
+    },
+  },
 ];
+
+/** 所有支持的格式化器清单 */
+export const ALL_FORMATTERS: TextFormatter[] = FORMATTERS;
 
 /** 按优先级返回所有匹配的格式化器（数组顺序即优先级） */
 export function detectFormatters(text: string): TextFormatter[] {

@@ -4226,7 +4226,11 @@ export function SftpPanel() {
         t('sftp_rename_overwrite_title'),
         t('sftp_rename_overwrite_desc').replace('{location}', parentPath).replace('{name}', newName)
       )
-      if (!ok) return // 用户取消，保留对话框供修改名称
+      if (!ok) {
+        setRenameTarget(null)
+        setRenameValue('')
+        return
+      }
     }
     try {
       // 使用 getParentPath 同时处理 / 和 \ 分隔符，避免 lastIndexOf 在混合分隔符路径上错位
@@ -4519,7 +4523,12 @@ export function SftpPanel() {
         t('sftp_rename_overwrite_title'),
         t('sftp_rename_overwrite_desc').replace('{location}', parent).replace('{name}', newName)
       )
-      if (!ok) return // 用户取消，保留对话框供修改名称
+      if (!ok) {
+        setRenameTarget(null)
+        setRenameValue('')
+        setRenameServerId('')
+        return
+      }
     }
     const parent = getParentPath(renameTarget.path) || '/'
     // 远程路径分隔符恒为 /

@@ -1,18 +1,28 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+const mocks = vi.hoisted(() => {
+  return {
+    stateListener: null as ((data: any) => void) | null,
+  }
+})
+
 import {
   reconnectManager,
   MAX_RECONNECT_ATTEMPTS,
   RETRY_DELAYS_SEC,
 } from '../reconnect-manager'
 import { sshService } from '../ssh-service'
-import { SshErrorKind } from '../ssh-connection-state'
+import { ConnectionState, SshErrorKind } from '../ssh-connection-state'
 
 vi.mock('@/services/ssh-service', () => ({
   sshService: {
     isAvailable: vi.fn(() => true),
     connect: vi.fn(),
     probeConnections: vi.fn().mockResolvedValue([]),
-    onStateChanged: vi.fn(() => () => {}),
+    onStateChanged: vi.fn((cb) => {
+      mocks.stateListener = cb
+      return () => {}
+    }),
   },
 }))
 
@@ -29,6 +39,7 @@ vi.mock('@/store', () => ({
 describe('ReconnectManager', () => {
   beforeEach(() => {
     vi.useFakeTimers()
+    vi.clearAllMocks()
     reconnectManager.reset('srv-1')
   })
 
@@ -88,6 +99,52 @@ describe('ReconnectManager', () => {
 
     reconnectManager.cancelRetry('srv-1')
     expect(reconnectManager.getState('srv-1').status).toBe('idle')
+  })
+
+  it('连接服务器失败 (ConnectionState.Failed) 时不触发自动重连，保持 idle 状态', () => {
+    expect(mocks.stateListener).toBeDefined()
+    mocks.stateListener!({
+      serverId: 'srv-1',
+      state: ConnectionState.Failed,
+      error: 'Host unreachable',
+      errorKind: SshErrorKind.NetworkError,
+    })
+
+    const state = reconnectManager.getState('srv-1')
+    expect(state.status).toBe('idle')
+    expect(state.remainingSec).toBe(0)
+    expect(state.error).toBe('Host unreachable')
+
+    // 时间推进不触发任何重连
+    const connectSpy = vi.spyOn(sshService, 'connect')
+    vi.advanceTimersByTime(1000)
+    vi.advanceTimersByTime(1000)
+    expect(connectSpy).not.toHaveBeenCalled()
+  })
+
+  it('重连执行时若连接失败，不再继续重试，停止并保持 idle 状态', async () => {
+    const connectSpy = vi.spyOn(sshService, 'connect').mockResolvedValue({
+      success: false,
+      error: 'Connection refused',
+    })
+
+    // 调度一次重试（例如原由意外断开事件触发）
+    reconnectManager.scheduleNextAttempt('srv-1', 'initial error', SshErrorKind.Timeout)
+    expect(reconnectManager.getState('srv-1').status).toBe('countdown')
+
+    // 倒计时到达 0 执行重连
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(connectSpy).toHaveBeenCalledWith('srv-1')
+
+    // 连接失败后状态应为 idle，且不再安排下一次重试
+    const state = reconnectManager.getState('srv-1')
+    expect(state.status).toBe('idle')
+    expect(state.error).toBe('Connection refused')
+
+    // 继续推进时间，不会发起下一次自动重试
+    connectSpy.mockClear()
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(connectSpy).not.toHaveBeenCalled()
   })
 
   it('系统休眠唤醒探测能够打断倒计时立即触发重试', async () => {

@@ -37,6 +37,7 @@ import {
   isUniversalPreviewSupported,
   isLogFileName,
   isBinaryContent,
+  getFileTypeLabel,
 } from './local-file-picker-utils'
 import { UniversalFileViewer } from '@/components/ui/universal-file-viewer'
 import { ResizablePreviewDialog } from '@/components/ui/resizable-preview-dialog'
@@ -73,6 +74,8 @@ import { FilePropertiesDialog } from './files/file-properties-dialog'
 import { FileContextMenu } from './files/file-context-menu'
 import { FileDirectoryTree } from './files/file-directory-tree'
 import { FileToolbar } from './files/file-toolbar'
+import { InlineRenameInput } from '@/components/sftp/inline-rename-input'
+import { validateFileName } from '@/components/sftp/sftp-utils'
 
 function findTreeNode(root: TreeNode, path: string): TreeNode | null {
   if (root.path === path) return root
@@ -318,8 +321,6 @@ export function FilesModule({
   useEffect(() => { getTerminalCwdPropRef.current = getTerminalCwd }, [getTerminalCwd])
   const subscribeTerminalCwdRef = useRef(subscribeTerminalCwd)
   useEffect(() => { subscribeTerminalCwdRef.current = subscribeTerminalCwd }, [subscribeTerminalCwd])
-  // E4: 标记重命名是否已通过 Enter 提交,避免卸载 input 触发 onBlur 重复提交/取消
-  const renameCommittedRef = useRef(false)
   // 「再次点击重命名」：点击前已选中该文件时，标记待重命名，onClick 延时触发
   const pendingRenameRef = useRef<string | null>(null)
   // 双击标志：用于消歧「再次点击重命名」与「双击进入目录/打开文件」
@@ -1005,7 +1006,8 @@ export function FilesModule({
     count: sortedFiles.length,
     getScrollElement: () => scrollContainerRef.current,
     // 紧凑行高初值（text-sm 20px + py-1×2 8px + 边框 1px ≈ 29px，动态测量会自动校正）
-    estimateSize: () => 30,
+    // 文件列表行固定高度 36px，与 SFTP 面板 h-9 严格对齐
+    estimateSize: () => 36,
     overscan: 10,
   })
 
@@ -1348,30 +1350,62 @@ export function FilesModule({
   }
 
   const handleRename = async (oldPath: string, newName: string) => {
-    if (!newName.trim()) return
-    // B1: 校验名称不能包含路径分隔符,也不能为 . 或 ..
-    if (newName.includes('/') || newName.includes('\\')) {
-      toastRef.current.error(t('common_name_too_long_separator'))
+    const trimmed = newName.trim()
+    if (!trimmed) {
+      setRenamingFile(null)
+      setRenameValue('')
       return
     }
-    if (newName === '.' || newName === '..') {
-      toastRef.current.error(t('common_name_too_long_separator'))
+
+    // 校验文件名合法性（与 SFTP 逻辑统一）
+    const validateErr = validateFileName(trimmed, t, 'remote')
+    if (validateErr) {
+      toastRef.current.error(validateErr)
+      setRenamingFile(null)
+      setRenameValue('')
       return
     }
+
     const parentPath = oldPath.substring(0, oldPath.lastIndexOf('/')) || '/'
-    const newPath = parentPath === '/' ? `/${newName}` : `${parentPath}/${newName}`
+    const oldName = oldPath.substring(oldPath.lastIndexOf('/') + 1)
+
+    // 名称未改变：直接退出重命名，避免无意义且在 Linux 下会报错的 mv 调用
+    if (trimmed === oldName) {
+      setRenamingFile(null)
+      setRenameValue('')
+      return
+    }
+
+    // 冲突检查：目标文件名已存在
+    const conflict = files.some(f => f.name === trimmed && f.path !== oldPath)
+    if (conflict) {
+      toastRef.current.warning(t('sftp_create_folder_exists').replace('{name}', trimmed))
+      setRenamingFile(null)
+      setRenameValue('')
+      return
+    }
+
+    const newPath = parentPath === '/' ? `/${trimmed}` : `${parentPath}/${trimmed}`
     try {
       const result = await sshService.renameFile(serverId, oldPath, newPath)
       if (result.exitCode !== 0) {
-        setError(`${t('fs_err_rename')}: ${result.stderr || t('common_unknown_error')}`)
+        const errMsg = result.stderr || t('common_unknown_error')
+        setError(`${t('fs_err_rename')}: ${errMsg}`)
+        toastRef.current.error(`${t('fs_err_rename')}: ${errMsg}`)
       } else {
-        fetchFiles(currentPath, { isRefresh: true })
+        await fetchFiles(currentPath, { isRefresh: true })
         if (expandedPaths.has(parentPath)) {
           loadNodeChildren(parentPath, true)
         }
+        setSelectedFiles([newPath])
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('fs_err_rename'))
+      const msg = err instanceof Error ? err.message : t('fs_err_rename')
+      setError(msg)
+      toastRef.current.error(msg)
+    } finally {
+      setRenamingFile(null)
+      setRenameValue('')
     }
   }
 
@@ -1854,37 +1888,47 @@ export function FilesModule({
               )}
             <table className="w-full text-sm">
               <thead className="workspace-table-head">
-                <tr className="text-left text-muted-foreground border-b">
+                <tr className="h-9 border-b border-border/60 bg-muted/30 text-[13px] text-muted-foreground/80 font-semibold tracking-wider text-left select-none">
                   <th
-                    className="px-2 py-1 font-medium cursor-pointer hover:bg-accent/50 transition-colors select-none"
+                    className="px-4 py-1.5 font-medium cursor-pointer hover:text-foreground transition-colors select-none"
                     onClick={() => toggleSort('name')}
                   >
                     <div className="flex items-center gap-1.5">
-                      {t('fs_th_name')}
+                      <span>{t('fs_th_name')}</span>
                       <SortIcon field="name" />
                     </div>
                   </th>
                   <th
-                    className="px-2 py-1 font-medium cursor-pointer hover:bg-accent/50 transition-colors select-none w-24"
+                    className="px-4 py-1.5 font-medium cursor-pointer hover:text-foreground transition-colors select-none w-28 text-right"
                     onClick={() => toggleSort('size')}
                   >
-                    <div className="flex items-center gap-1.5">
-                      {t('fs_th_size')}
+                    <div className="flex items-center justify-end gap-1.5">
+                      <span>{t('fs_th_size')}</span>
                       <SortIcon field="size" />
                     </div>
                   </th>
+                  <th className="px-4 py-1.5 font-medium select-none w-28 text-right">
+                    <div className="flex items-center justify-end gap-1.5">
+                      <span>{t('sftp_col_type') || 'Type'}</span>
+                    </div>
+                  </th>
                   <th
-                    className="px-2 py-1 font-medium cursor-pointer hover:bg-accent/50 transition-colors select-none w-40"
+                    className="px-4 py-1.5 font-medium cursor-pointer hover:text-foreground transition-colors select-none w-44 text-right"
                     onClick={() => toggleSort('modifiedTime')}
                   >
-                    <div className="flex items-center gap-1.5">
-                      {t('fs_th_modified')}
+                    <div className="flex items-center justify-end gap-1.5">
+                      <span>{t('fs_th_modified')}</span>
                       <SortIcon field="modifiedTime" />
                     </div>
                   </th>
-                  <th className="px-2 py-1 font-medium select-none w-32">
-                    <div className="flex items-center gap-1.5">
-                      {t('fs_th_perm')}
+                  <th className="px-4 py-1.5 font-medium select-none w-32 text-right">
+                    <div className="flex items-center justify-end gap-1.5">
+                      <span>{t('fs_th_perm')}</span>
+                    </div>
+                  </th>
+                  <th className="px-4 py-1.5 font-medium select-none w-28 text-right">
+                    <div className="flex items-center justify-end gap-1.5">
+                      <span>{t('sftp_col_owner') || 'Owner'}</span>
                     </div>
                   </th>
                 </tr>
@@ -1892,7 +1936,7 @@ export function FilesModule({
               <tbody>
                 {rowVirtualizer.getVirtualItems().length > 0 && (
                   <tr>
-                    <td colSpan={4} style={{ height: `${rowVirtualizer.getVirtualItems()[0].start}px` }} />
+                    <td colSpan={6} style={{ height: `${rowVirtualizer.getVirtualItems()[0].start}px` }} />
                   </tr>
                 )}
                 {rowVirtualizer.getVirtualItems().map((virtualRow) => {
@@ -1904,7 +1948,7 @@ export function FilesModule({
                       ref={rowVirtualizer.measureElement}
                       data-file-path={file.path}
                       className={cn(
-                        'workspace-table-row border-b cursor-pointer select-none',
+                        'workspace-table-row border-b border-border/40 cursor-pointer select-none h-9',
                         selectedFiles.includes(file.path) && 'is-selected'
                       )}
                       onMouseDown={(e) => {
@@ -1947,12 +1991,13 @@ export function FilesModule({
                           pendingRenameTimerRef.current = null
                           if (rowDblClickedRef.current) return
                           startRename(file)
-                        }, 500)
+                        }, 250)
                       }}
                       onDoubleClick={() => {
                         // 标记为双击，抑制「再次点击重命名」的延时触发
                         rowDblClickedRef.current = true
                         pendingRenameRef.current = null
+                        if (renamingFile === file.path) return
                         if (file.isDirectory) {
                           navigateTo(file.path)
                         } else {
@@ -1982,70 +2027,58 @@ export function FilesModule({
                         setCtxMenu({ x: e.clientX, y: e.clientY, file })
                       }}
                     >
-                      <td className="px-2 py-1">
-                        {renamingFile === file.path ? (
-                          <Input
-                            ref={(el) => {
-                              if (el) {
-                                setTimeout(() => {
-                                  el.focus()
-                                  el.select()
-                                }, 0)
-                              }
-                            }}
-                            value={renameValue}
-                            onChange={(e) => setRenameValue(e.target.value)}
-                            onFocus={(e) => e.target.select()}
-                            className="h-7 text-sm w-48"
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                // E4: 标记已提交,onBlur 不再重复处理
-                                renameCommittedRef.current = true
-                                handleRename(file.path, renameValue)
+                      <td className="px-4 py-1">
+                        <div className="flex items-center gap-2 max-w-full">
+                          {openingPath === file.path ? (
+                            <Loader2 className="h-5 w-5 animate-spin text-primary shrink-0" />
+                          ) : (
+                            renderFileIcon(toIconFile(file), 'h-6 w-6')
+                          )}
+                          {renamingFile === file.path ? (
+                            <InlineRenameInput
+                              value={renameValue}
+                              onChange={setRenameValue}
+                              onCommit={() => void handleRename(file.path, renameValue)}
+                              onCancel={() => {
                                 setRenamingFile(null)
-                              }
-                              if (e.key === 'Escape') {
-                                // E4: Escape 也视为已提交(取消),阻止 onBlur 再次触发
-                                renameCommittedRef.current = true
-                                setRenamingFile(null)
-                              }
-                            }}
-                            onBlur={() => {
-                              // E4: 若由 Enter/Escape 触发的卸载,跳过 onBlur 处理
-                              if (renameCommittedRef.current) {
-                                renameCommittedRef.current = false
-                                return
-                              }
-                              if (renameValue.trim() && renameValue !== file.name) {
-                                handleRename(file.path, renameValue)
-                              }
-                              setRenamingFile(null)
-                            }}
-                            autoFocus
-                            onClick={(e) => e.stopPropagation()}
-                          />
+                                setRenameValue('')
+                              }}
+                            />
+                          ) : (
+                            <span className={cn(
+                              'truncate tracking-tight',
+                              file.isDirectory
+                                ? 'font-medium text-foreground'
+                                : !selectedFiles.includes(file.path) && 'text-foreground/80',
+                              selectedFiles.includes(file.path) && 'font-semibold text-foreground',
+                              openingPath === file.path && 'text-primary font-medium'
+                            )}>
+                              {file.name}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-1 text-right text-muted-foreground font-mono tabular-nums text-sm">
+                        {file.isDirectory ? (
+                          <span className="text-xs text-muted-foreground/40 font-sans uppercase">dir</span>
                         ) : (
-                          <div className="flex items-center gap-2">
-                            {openingPath === file.path ? (
-                              <Loader2 className="h-4 w-4 animate-spin text-primary shrink-0" />
-                            ) : (
-                              renderFileIcon(toIconFile(file), 'h-4 w-4')
-                            )}
-                            <span className={cn('truncate', file.isDirectory && 'font-medium', openingPath === file.path && 'text-primary font-medium')}>{file.name}</span>
-                          </div>
+                          formatSize(file.size)
                         )}
                       </td>
-                      <td className="px-2 py-1 text-muted-foreground tabular-nums">
-                        {file.isDirectory ? '-' : formatSize(file.size)}
+                      <td className="px-4 py-1 text-right text-sm text-muted-foreground font-mono truncate">
+                        {t(getFileTypeLabel(file))}
                       </td>
-                      <td className="px-2 py-1 text-muted-foreground">{file.modifiedTime}</td>
-                      <td className="px-2 py-1">{permissionBadge(file.permissions)}</td>
+                      <td className="px-4 py-1 text-right text-muted-foreground font-mono text-sm">{file.modifiedTime || '-'}</td>
+                      <td className="px-4 py-1 text-right">{permissionBadge(file.permissions)}</td>
+                      <td className="px-4 py-1 text-right text-sm text-muted-foreground font-mono truncate">
+                        {file.owner || (file.uid === 0 ? 'root' : (file.uid != null ? String(file.uid) : '-'))}
+                      </td>
                     </tr>
                   )
                 })}
                 {rowVirtualizer.getVirtualItems().length > 0 && (
                   <tr>
-                    <td colSpan={4} style={{ height: `${rowVirtualizer.getTotalSize() - rowVirtualizer.getVirtualItems()[rowVirtualizer.getVirtualItems().length - 1].end}px` }} />
+                    <td colSpan={6} style={{ height: `${rowVirtualizer.getTotalSize() - rowVirtualizer.getVirtualItems()[rowVirtualizer.getVirtualItems().length - 1].end}px` }} />
                   </tr>
                 )}
               </tbody>

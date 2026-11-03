@@ -203,6 +203,38 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
     expect(container.firstChild).toBeNull()
   })
 
+  it('toggles enableAiGlobal dynamically without violating React rules of hooks', () => {
+    useAIStore.setState({ enableAiGlobal: false, showFloatingMascot: true })
+    const { container, rerender } = renderWithProviders(<FloatingAIAssistant />)
+    expect(container.firstChild).toBeNull()
+
+    // 动态开启 AI 运维总开关：测试此前因 early return 导致 "Rendered more hooks than during the previous render" 彻底根治
+    act(() => {
+      useAIStore.setState({ enableAiGlobal: true })
+    })
+    rerender(
+      <I18nProvider>
+        <TooltipProvider>
+          <FloatingAIAssistant />
+        </TooltipProvider>
+      </I18nProvider>
+    )
+    expect(container.querySelector('[data-testid="ai-mascot-trigger"]')).not.toBeNull()
+
+    // 动态关闭 AI 运维总开关
+    act(() => {
+      useAIStore.setState({ enableAiGlobal: false })
+    })
+    rerender(
+      <I18nProvider>
+        <TooltipProvider>
+          <FloatingAIAssistant />
+        </TooltipProvider>
+      </I18nProvider>
+    )
+    expect(container.firstChild).toBeNull()
+  })
+
   it('renders offline mode banner when no AI provider is configured and fires open-settings', () => {
     const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
     useAIStore.setState({

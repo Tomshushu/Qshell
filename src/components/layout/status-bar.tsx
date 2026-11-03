@@ -7,6 +7,7 @@ import { collectGroupIds } from '@/utils/split-layout'
 import { playSound, SoundType } from '@/lib/sound'
 import { extractBaseServerId } from '@/services/ssh-connection-state'
 import { cn } from '@/lib/utils'
+import { StatusBarMetricsPill } from '@/components/workspace/floating-metrics-hud'
 
 /** 复制成功对勾的显示时长（ms） */
 const COPY_FEEDBACK_MS = 1500
@@ -25,9 +26,6 @@ export function StatusBar() {
 
   const activeTab = tabs.find((t) => t.id === activeTabId)
   const serverId = activeTab?.serverId
-  const isConnected = serverId
-    ? ((activeTab ? connectedServers[`ws:${serverId}:${activeTab.id}`] : undefined) ?? connectedServers[serverId] ?? false)
-    : false
   const server = servers.find((s) => s.id === serverId)
 
   // 分屏判定：底部状态栏只反映当前活动 tab，分屏下没有代表性（各窗格状态由
@@ -64,6 +62,18 @@ export function StatusBar() {
   const isBmcServer = server?.targetType === 'bmc'
   const isRdpServer = server?.targetType === 'rdp' || server?.protocol === 'rdp'
   const isSerialServer = server?.targetType === 'serial' || server?.protocol === 'serial'
+
+  const connId =
+    activeTab?.id && serverId && !isSerialServer && !isRdpServer && !isBmcServer
+      ? `ws:${serverId}:${activeTab.id}`
+      : serverId
+  const isConnected = connId
+    ? ((activeTab ? connectedServers[`ws:${serverId}:${activeTab.id}`] : undefined) ??
+        connectedServers[connId] ??
+        connectedServers[serverId || ''] ??
+        false)
+    : false
+
   const [serialStats, setSerialStats] = useState({ rxBytes: 0, txBytes: 0, rxRate: 0, txRate: 0 })
 
   useEffect(() => {
@@ -136,6 +146,7 @@ export function StatusBar() {
   }, [server?.host])
 
   // 分屏模式下不渲染底部状态栏（此处为本组件最后一个 hook 之后，hook 数量恒定）
+  // 分屏模式下不渲染底部状态栏（此处为本组件最后一个 hook 之后，hook 数量恒定）
   if (isSplitMode) return null
 
   // 复制 IP 按钮：仅在状态栏确实展示 host 时挂载
@@ -146,7 +157,7 @@ export function StatusBar() {
       title={copiedIp ? t('status_ip_copied') : t('status_copy_ip')}
       aria-label={copiedIp ? t('status_ip_copied') : t('status_copy_ip')}
       className={cn(
-        'flex h-4 w-4 flex-shrink-0 items-center justify-center rounded transition-colors',
+        'flex h-4 w-4 flex-shrink-0 items-center justify-center rounded transition-all active:scale-90',
         copiedIp
           ? 'text-success'
           : 'text-muted-foreground/60 hover:bg-accent/50 hover:text-foreground',
@@ -220,6 +231,14 @@ export function StatusBar() {
             TX {formatSerialBytes(serialStats.txRate)}/s
           </span>
         </span>
+      )}
+
+      {/* 实时监控底栏触发胶囊 */}
+      {isConnected && !isSftpTab && !isSerialServer && !isRdpServer && !isBmcServer && connId && (
+        <StatusBarMetricsPill
+          serverId={connId}
+          isConnected={isConnected}
+        />
       )}
 
       {/* Workspace mode */}

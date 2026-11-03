@@ -1977,6 +1977,9 @@ export function TerminalModule({
       try {
         navigator.clipboard.writeText(selection);
         playSound(SoundType.Click);
+        if (useTextFormatterStore.getState().open) {
+          useTextFormatterStore.getState().openTextFormatter(selection);
+        }
       } catch {
         toastRef.current?.warning(t("tm_toast_copy_failed"));
       }
@@ -3578,10 +3581,7 @@ export function TerminalModule({
           });
           reconnectingRef.current.delete(termId);
           onShellReady?.();
-          // 自动重连失败：由全局 ReconnectManager 调度下一次尝试
-          if (isAutoReconnect && !isTelnet && !isSerial) {
-            reconnectManager.scheduleNextAttempt(serverId, result.error, null);
-          }
+          // 连接服务器失败：不自动重连，等待用户手动操作
           return;
         }
 
@@ -4179,10 +4179,7 @@ export function TerminalModule({
         });
         reconnectingRef.current.delete(termId);
         onShellReady?.();
-        // 自动重连失败：由全局 ReconnectManager 调度下一次尝试
-        if (isAutoReconnect && !isTelnet && !isSerial) {
-          reconnectManager.scheduleNextAttempt(serverId, errMsg, null);
-        }
+        // 连接服务器失败：不自动重连，等待用户手动操作
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -8914,7 +8911,10 @@ export function TerminalModule({
       {/* Terminal area */}
       <div
         ref={terminalContainerRef}
-        className="flex-1 h-full w-full relative overflow-hidden"
+        className={cn(
+          "flex-1 h-full w-full relative overflow-hidden",
+          selectionToolbar?.visible && "terminal-has-selection",
+        )}
         onContextMenu={(e) => {
           // 处于连接中、重连中或连接失败等覆盖层界面时，彻底禁止弹出终端右键菜单
           const activeInst = activeTermId ? terminals.get(activeTermId) : undefined;

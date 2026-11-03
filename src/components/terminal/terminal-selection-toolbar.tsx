@@ -48,18 +48,20 @@ function clampToolbarPosition(x: number, y: number, width = 148, height = 205) {
   const vh = typeof window !== "undefined" ? window.innerHeight : 800;
 
   // 弹框左边缘与选区右边缘对齐（留 6px 呼吸间隙）
-  let left = x + 6;
+  // 弹框左边缘与选区右边缘留 14px 呼吸间隙，绝不遮挡鼠标落点
+  let left = x + 14;
   // 如果超出右视口，自动摆放在选区左侧
   if (left + width > vw - padding) {
-    left = Math.max(padding, x - width - 6);
+    left = Math.max(padding, x - width - 14);
   }
   left = Math.max(padding, Math.min(left, vw - width - padding));
 
   // 弹框左上角从选区当前行位置顺着向下展开
-  let top = y + 4;
+  // 弹框从光标下方 16px 展开，留出光标与行文本视野
+  let top = y + 16;
   // 底部溢出处理：如果底部放不下，则向上翻折
   if (top + height > vh - padding) {
-    top = Math.max(padding, y - height - 4);
+    top = Math.max(padding, y - height - 16);
   }
   // 视口边界严格夹紧（防止超出版界或被完全隐藏）
   top = Math.max(padding, Math.min(top, vh - height - padding));
@@ -147,10 +149,10 @@ export const TerminalSelectionToolbar = memo(function TerminalSelectionToolbar({
       role="toolbar"
       aria-label="Selection Toolbar"
       className={cn(
-        "fixed z-50 flex flex-col w-[148px] rounded-xl overflow-hidden select-none transition-all duration-150 animate-in fade-in zoom-in-95 p-1",
+        "fixed z-50 flex flex-col w-[148px] rounded-xl overflow-hidden select-none transition-all duration-150 animate-in fade-in zoom-in-95 origin-top-left p-1",
         isLightTerminal
-          ? "bg-white/90 text-slate-800 border border-slate-200/80 shadow-[0_12px_32px_-6px_rgba(0,0,0,0.18),0_0_0_1px_rgba(0,0,0,0.04)] backdrop-blur-xl"
-          : "bg-[#13141f]/92 text-slate-100 border border-white/10 shadow-[0_16px_36px_-8px_rgba(0,0,0,0.7),0_0_0_1px_rgba(255,255,255,0.06)] backdrop-blur-xl",
+          ? "bg-white/85 text-slate-800 border border-black/10 shadow-[0_16px_36px_-6px_rgba(0,0,0,0.18),inset_0_1px_0_0_rgba(255,255,255,0.8)] backdrop-blur-2xl backdrop-saturate-150"
+          : "bg-zinc-950/85 text-slate-100 border border-white/10 shadow-[0_20px_40px_-8px_rgba(0,0,0,0.7),inset_0_1px_0_0_rgba(255,255,255,0.12)] backdrop-blur-2xl backdrop-saturate-150",
       )}
       style={{ left: pos.left, top: pos.top }}
       onMouseDown={(e) => e.stopPropagation()}
@@ -169,7 +171,7 @@ export const TerminalSelectionToolbar = memo(function TerminalSelectionToolbar({
         type="button"
         onClick={handleCopy}
         className={cn(
-          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.97] text-xs font-mono w-full text-left",
           isLightTerminal
             ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
             : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
@@ -187,7 +189,7 @@ export const TerminalSelectionToolbar = memo(function TerminalSelectionToolbar({
         type="button"
         onClick={handlePaste}
         className={cn(
-          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.97] text-xs font-mono w-full text-left",
           isLightTerminal
             ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
             : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
@@ -200,26 +202,30 @@ export const TerminalSelectionToolbar = memo(function TerminalSelectionToolbar({
         </span>
       </button>
 
-      {/* 格式化文本（选中内容可识别为 JSON / JWT / Base64 等格式时显示） */}
-      {primaryFormatter && (
-        <button
-          type="button"
-          data-testid="selection-toolbar-format-text"
-          onClick={handleFormatJson}
-          className={cn(
-            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
-            isLightTerminal
-              ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
-              : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
-          )}
-          title={t("fmt_format_tooltip", { type: t(primaryFormatter.labelKey) })}
-        >
-          <Braces className="h-3.5 w-3.5 text-sky-400 shrink-0" />
-          <span className="truncate tracking-tight font-sans text-[11.5px]">
-            {t("fmt_format_action", { type: t(primaryFormatter.labelKey) })}
-          </span>
-        </button>
-      )}
+      {/* 格式化/工具箱转换：有专属类型展示专属标签，其余文本展示通用工具箱转换 */}
+      <button
+        type="button"
+        data-testid="selection-toolbar-format-text"
+        onClick={handleFormatJson}
+        className={cn(
+          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.97] text-xs font-mono w-full text-left",
+          isLightTerminal
+            ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+            : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+        )}
+        title={
+          primaryFormatter
+            ? t("fmt_format_tooltip", { type: t(primaryFormatter.labelKey) })
+            : "在开发者工具箱中识别并转换"
+        }
+      >
+        <Braces className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+        <span className="truncate tracking-tight font-sans text-[11.5px]">
+          {primaryFormatter
+            ? t("fmt_format_action", { type: t(primaryFormatter.labelKey) })
+            : "工具箱识别转换"}
+        </span>
+      </button>
 
       {/* AI 智能诊断 */}
       {enableAiGlobal && (
@@ -227,7 +233,7 @@ export const TerminalSelectionToolbar = memo(function TerminalSelectionToolbar({
           type="button"
           onClick={handleAIDiagnosis}
           className={cn(
-            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.97] text-xs font-mono w-full text-left",
             isLightTerminal
               ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
               : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
@@ -248,7 +254,7 @@ export const TerminalSelectionToolbar = memo(function TerminalSelectionToolbar({
           data-testid="selection-toolbar-explain-shell"
           onClick={handleExplainShell}
           className={cn(
-            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.97] text-xs font-mono w-full text-left",
             isLightTerminal
               ? "text-sky-700 hover:bg-sky-50 hover:text-sky-900"
               : "text-sky-300 hover:bg-sky-500/15 hover:text-sky-200",
@@ -275,7 +281,7 @@ export const TerminalSelectionToolbar = memo(function TerminalSelectionToolbar({
         type="button"
         onClick={handleSearch}
         className={cn(
-          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.97] text-xs font-mono w-full text-left",
           isLightTerminal
             ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
             : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
@@ -293,7 +299,7 @@ export const TerminalSelectionToolbar = memo(function TerminalSelectionToolbar({
         type="button"
         onClick={handleWebSearch}
         className={cn(
-          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-colors text-xs font-mono w-full text-left",
+          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.97] text-xs font-mono w-full text-left",
           isLightTerminal
             ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
             : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",

@@ -251,7 +251,11 @@ pub fn parse_meminfo(core_raw: &str) -> MemInfo {
             mem_map.insert(key, parts[1].parse().unwrap_or(0));
         }
         // Stop at df header line
-        if line.starts_with("Filesystem") {
+        if line.starts_with("Filesystem")
+            || line.starts_with("文件系统")
+            || line.contains("1024-blocks")
+            || line.contains("1024-块")
+        {
             break;
         }
     }
@@ -336,6 +340,40 @@ pub fn parse_net_dev(net_raw: &str) -> HashMap<String, NetDev> {
         }
     }
     map
+}
+
+/// 稳定排序网卡名称：eth 开头优先排在最前，其次 en (ens/enp)，虚拟网卡排在最后，其余字典序
+pub fn sort_interfaces(ifaces: &mut Vec<&String>) {
+    ifaces.sort_by(|a, b| {
+        let a_eth = a.starts_with("eth");
+        let b_eth = b.starts_with("eth");
+        if a_eth != b_eth {
+            return if a_eth {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            };
+        }
+        let a_en = a.starts_with("en");
+        let b_en = b.starts_with("en");
+        if a_en != b_en {
+            return if a_en {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            };
+        }
+        let a_vir = a.starts_with("docker") || a.starts_with("br-") || a.starts_with("veth") || *a == "lo";
+        let b_vir = b.starts_with("docker") || b.starts_with("br-") || b.starts_with("veth") || *b == "lo";
+        if a_vir != b_vir {
+            return if a_vir {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Less
+            };
+        }
+        a.cmp(b)
+    });
 }
 
 /// Parse /proc/net/snmp Tcp lines → TcpSnmp
@@ -508,6 +546,10 @@ pub fn parse_system_info(core_raw: &str, mounts_raw: &str) -> SystemInfo {
         hide_fs: &std::collections::HashSet<&str>,
         hide_mount_prefix: &[&str],
     ) -> &'static str {
+        // 根挂载点 "/" 和核心引导分区 "/boot" 永远作为主物理磁盘，绝不被任何规则过滤
+        if mount_point == "/" || mount_point.starts_with("/boot") {
+            return "disk";
+        }
         // hide: container/snapshot mounts
         if hide_fs.contains(fstype) {
             return "hide";
@@ -523,11 +565,11 @@ pub fn parse_system_info(core_raw: &str, mounts_raw: &str) -> SystemInfo {
             return "virtual";
         }
         // tmpfs: memory filesystems
-        if fstype == "tmpfs" {
+        if fstype == "tmpfs" || device == "tmpfs" || device.starts_with("tmpfs") {
             return "tmpfs";
         }
-        // disk: real physical partitions
-        if device.starts_with("/dev/") {
+        // disk: real physical partitions or network mounts
+        if device.starts_with("/dev/") || device.contains(":/") || device.starts_with("//") {
             return "disk";
         }
         // fallback: has fstype but not in above categories → disk
@@ -537,58 +579,72 @@ pub fn parse_system_info(core_raw: &str, mounts_raw: &str) -> SystemInfo {
         "virtual"
     }
 
-    // 3. Parse df -Pk
-    let df_started = lines.iter().position(|l| l.starts_with("Filesystem"));
-    if let Some(df_start) = df_started {
-        for line in lines.iter().skip(df_start + 1) {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() != 6 {
-                continue;
-            }
-            let device = parts[0];
-            let total_kb: u64 = match parts[1].parse() {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            let used_kb: u64 = match parts[2].parse() {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            let avail_kb: u64 = match parts[3].parse() {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            let use_pct_str = parts[4];
-            let mount_point = parts[5];
+    // 3. Parse df -Pk (多语言容错 + 格式兼容)
+    let is_df_header = |l: &str| -> bool {
+        let trimmed = l.trim();
+        trimmed.starts_with("Filesystem")
+            || trimmed.starts_with("文件系统")
+            || trimmed.contains("1024-blocks")
+            || trimmed.contains("1024-块")
+            || ((trimmed.contains("Mounted on") || trimmed.contains("挂载点")) && trimmed.contains('%'))
+    };
 
-            if !mount_point.starts_with('/') {
-                continue;
-            }
-            if !use_pct_str.ends_with('%') {
-                continue;
-            }
+    let df_started = lines.iter().position(|l| is_df_header(l));
+    let df_lines_iter: Box<dyn Iterator<Item = &&str>> = if let Some(df_start) = df_started {
+        Box::new(lines.iter().skip(df_start + 1))
+    } else {
+        // 兜底：若表头因各种原因未识别，直接遍历所有行进行特征匹配
+        Box::new(lines.iter())
+    };
 
-            let fstype = mounts_map.get(mount_point).map(|s| s.as_str()).unwrap_or("");
-            let category = tag_category(device, fstype, mount_point, &virtual_fs, &hide_fs, &hide_mount_prefix);
-
-            // Only return disk and tmpfs
-            if category == "virtual" || category == "hide" {
-                continue;
-            }
-
-            let use_percent_str = use_pct_str.trim_end_matches('%');
-            let use_percent: u64 = use_percent_str.parse().unwrap_or(0);
-
-            result.disks.push(DiskInfo {
-                filesystem: device.to_string(),
-                mount_point: mount_point.to_string(),
-                total: total_kb as f64 / (1024.0 * 1024.0),
-                used: used_kb as f64 / (1024.0 * 1024.0),
-                available: avail_kb as f64 / (1024.0 * 1024.0),
-                use_percent,
-                category: category.to_string(),
-            });
+    for line in df_lines_iter {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 6 {
+            continue;
         }
+        let device = parts[0];
+        let total_kb: u64 = match parts[1].parse() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let used_kb: u64 = match parts[2].parse() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let avail_kb: u64 = match parts[3].parse() {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let use_pct_str = parts[4];
+        let mount_point = parts[5..].join(" ");
+
+        if !mount_point.starts_with('/') {
+            continue;
+        }
+        if !use_pct_str.ends_with('%') {
+            continue;
+        }
+
+        let fstype = mounts_map.get(&mount_point).map(|s| s.as_str()).unwrap_or("");
+        let category = tag_category(device, fstype, &mount_point, &virtual_fs, &hide_fs, &hide_mount_prefix);
+
+        // Only return disk and tmpfs (根目录强制保留)
+        if (category == "virtual" || category == "hide") && mount_point != "/" {
+            continue;
+        }
+
+        let use_percent_str = use_pct_str.trim_end_matches('%');
+        let use_percent: u64 = use_percent_str.parse().unwrap_or(0);
+
+        result.disks.push(DiskInfo {
+            filesystem: device.to_string(),
+            mount_point,
+            total: total_kb as f64 / (1024.0 * 1024.0),
+            used: used_kb as f64 / (1024.0 * 1024.0),
+            available: avail_kb as f64 / (1024.0 * 1024.0),
+            use_percent,
+            category: category.to_string(),
+        });
     }
 
     result
@@ -722,7 +778,10 @@ pub fn parse_snapshot_only(cur_raw: &RawSnapshot) -> SystemMetrics {
 
     // Network interfaces - first snapshot returns list with rate=0
     let cur_net = parse_net_dev(&cur_raw.net);
-    for (iface, snap) in &cur_net {
+    let mut ifaces: Vec<&String> = cur_net.keys().collect();
+    sort_interfaces(&mut ifaces);
+    for iface in ifaces {
+        let snap = &cur_net[iface];
         result.network.push(NetworkInfo {
             interface: iface.clone(),
             rx_kbps: 0.0,
@@ -844,8 +903,11 @@ pub fn parse_metrics_diff(prev: &RawSnapshot, cur: &RawSnapshot, dt_secs: f64) -
     // ---- Network diff metrics ----
     let prev_net = parse_net_dev(&prev.net);
     let cur_net = parse_net_dev(&cur.net);
+    let mut ifaces: Vec<&String> = cur_net.keys().collect();
+    sort_interfaces(&mut ifaces);
 
-    for (iface, cur_snap) in &cur_net {
+    for iface in ifaces {
+        let cur_snap = &cur_net[iface];
         let (rx_kbps, tx_kbps, drop_rate) = match prev_net.get(iface) {
             Some(prev_snap) => {
                 let d_rx_bytes = cur_snap.rx_bytes as f64 - prev_snap.rx_bytes as f64;
@@ -997,5 +1059,63 @@ mod tests {
         assert_eq!(round2(1.236), 1.24);
         assert_eq!(round3(1.2346), 1.235);
         assert_eq!(round4(1.23456), 1.2346);
+    }
+
+    #[test]
+    fn test_parse_system_info_chinese_df() {
+        let core_raw = "\
+cpu  100 20 30 500 10 0 5 0 0 0
+0.01 0.02 0.05 1/146 1234
+MemTotal:        8000000 kB
+MemFree:         2000000 kB
+MemAvailable:    4500000 kB
+文件系统           1024-块      已用      可用 容量 挂载点
+/dev/vda1        476837120  41943040 434894080   9% /
+tmpfs              4096000         0   4096000   0% /dev/shm
+/dev/vda2          1024000    102400    921600  10% /boot
+overlay          476837120  41943040 434894080   9% /var/lib/docker/overlay2/abc12345
+Linux ubuntu 5.15.0-generic #1 SMP x86_64
+PRETTY_NAME=\"Ubuntu 22.04 LTS\"
+ 19:00:00 up 348 days,  3:24,  1 user,  load average: 0.01, 0.02, 0.05";
+
+        let mounts_raw = "\
+/dev/vda1 / ext4 rw,relatime 0 0
+tmpfs /dev/shm tmpfs rw,nosuid,nodev 0 0
+/dev/vda2 /boot ext4 rw,relatime 0 0
+overlay /var/lib/docker/overlay2/abc12345 overlay rw,relatime 0 0";
+
+        let sys = parse_system_info(core_raw, mounts_raw);
+        assert_eq!(sys.disks.len(), 3); // /, /dev/shm, /boot (overlay2 is cleanly hidden)
+
+        let root_disk = sys.disks.iter().find(|d| d.mount_point == "/").unwrap();
+        assert_eq!(root_disk.filesystem, "/dev/vda1");
+        assert_eq!(root_disk.use_percent, 9);
+        assert_eq!(root_disk.category, "disk");
+
+        let shm_disk = sys.disks.iter().find(|d| d.mount_point == "/dev/shm").unwrap();
+        assert_eq!(shm_disk.use_percent, 0);
+        assert_eq!(shm_disk.category, "tmpfs");
+
+        let boot_disk = sys.disks.iter().find(|d| d.mount_point == "/boot").unwrap();
+        assert_eq!(boot_disk.use_percent, 10);
+        assert_eq!(boot_disk.category, "disk");
+    }
+
+    #[test]
+    fn test_parse_system_info_english_df() {
+        let core_raw = "\
+Filesystem     1024-blocks      Used Available Capacity Mounted on
+/dev/nvme0n1p2   500000000 100000000 400000000      20% /
+tmpfs              8000000         0   8000000       0% /run";
+
+        let mounts_raw = "\
+/dev/nvme0n1p2 / ext4 rw,relatime 0 0
+tmpfs /run tmpfs rw,nosuid,nodev 0 0";
+
+        let sys = parse_system_info(core_raw, mounts_raw);
+        assert_eq!(sys.disks.len(), 2);
+        assert_eq!(sys.disks[0].mount_point, "/");
+        assert_eq!(sys.disks[0].use_percent, 20);
+        assert_eq!(sys.disks[1].mount_point, "/run");
     }
 }

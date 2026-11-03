@@ -120,19 +120,19 @@ pub async fn collect_metrics(server_id: String) -> Result<String, String> {
     let (core, disk_io, net, proc_full) = tokio::join!(
         ssh_exec_ok(
             &server_id,
-            "cat /proc/stat | head -1 && cat /proc/loadavg && \
-             cat /proc/meminfo && \
-             df -Pk && \
-             uname -a && cat /etc/os-release 2>/dev/null && uptime && \
-             cat /proc/net/snmp | grep '^Tcp:' && \
-             echo '::TCP_STATES::' && \
+            "cat /proc/stat 2>/dev/null | head -1; cat /proc/loadavg 2>/dev/null; \
+             cat /proc/meminfo 2>/dev/null; \
+             (LC_ALL=C df -Pk 2>/dev/null || df -Pk 2>/dev/null || true); \
+             uname -a 2>/dev/null; cat /etc/os-release 2>/dev/null; uptime 2>/dev/null; \
+             (cat /proc/net/snmp 2>/dev/null | grep '^Tcp:' || true); \
+             echo '::TCP_STATES::'; \
              awk 'NR > 1 {print $4}' /proc/net/tcp /proc/net/tcp6 2>/dev/null"
         ),
         ssh_exec_ok(&server_id, &disk_cmd),
         ssh_exec_ok(&server_id, &net_cmd),
         ssh_exec_ok(
             &server_id,
-            "ps -eo state 2>/dev/null | sort | uniq -c | sort -rn && echo '::MOUNTS::' && cat /proc/mounts"
+            "(ps -eo state 2>/dev/null | sort | uniq -c | sort -rn || true); echo '::MOUNTS::'; cat /proc/mounts 2>/dev/null"
         ),
     );
 

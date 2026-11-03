@@ -137,7 +137,7 @@ export interface AIPromptContext {
 
 export type AIAssistantMode = 'agent' | 'chat'
 
-export type AIMascotMood = 'idle' | 'happy' | 'thinking' | 'blink'
+export type AIMascotMood = 'idle' | 'happy' | 'thinking' | 'blink' | 'error' | 'typing'
 
 export interface AIAssistantExecutionCard {
   id: string

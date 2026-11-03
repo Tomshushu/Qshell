@@ -119,7 +119,18 @@ class ReconnectManager {
         return
       }
 
-      if (data.state === ConnectionState.Disconnected || data.state === ConnectionState.Failed) {
+      if (data.state === ConnectionState.Failed) {
+        // 连接服务器失败：不自动重连，清空倒计时，状态重置为 idle 并记录错误
+        this.clearTimer(serverId)
+        this.setState(serverId, {
+          ...DEFAULT_STATE,
+          error: data.error,
+          errorKind: data.errorKind as SshErrorKind | null,
+        })
+        return
+      }
+
+      if (data.state === ConnectionState.Disconnected) {
         const store = useAppStore.getState()
         const baseServerId = serverId.startsWith('ws:')
           ? serverId.slice(3).split(':')[0]
@@ -323,12 +334,22 @@ class ReconnectManager {
       if (res.success) {
         this.reset(serverId)
       } else {
-        // 连接返回失败，继续退避下一轮
-        this.scheduleNextAttempt(serverId, res.error, null)
+        // 连接服务器失败：不进行自动重连，清空计时器并重置为 idle
+        this.clearTimer(serverId)
+        this.setState(serverId, {
+          ...DEFAULT_STATE,
+          error: res.error,
+          errorKind: null,
+        })
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
-      this.scheduleNextAttempt(serverId, msg, null)
+      this.clearTimer(serverId)
+      this.setState(serverId, {
+        ...DEFAULT_STATE,
+        error: msg,
+        errorKind: null,
+      })
     }
   }
 

@@ -4,7 +4,6 @@ import type { WorkspaceModule } from "@/types";
 import { useTranslation } from "@/i18n";
 import { isModuleAvailable } from "@/services/connection-targets";
 import {
-  LayoutDashboard,
   Terminal,
   Wrench,
   Cpu,
@@ -22,6 +21,7 @@ import {
   Maximize2,
   Minimize2,
   Search,
+  Activity,
   ServerCog,
   Zap,
   Binary,
@@ -52,7 +52,6 @@ const modules: {
   icon: React.ComponentType<{ className?: string }>;
 }[] = [
   { key: "terminal", icon: Terminal },
-  { key: "overview", icon: LayoutDashboard },
   { key: "files", icon: FolderOpen },
   { key: "rdp", icon: Monitor },
   { key: "docker", icon: Container },
@@ -123,6 +122,10 @@ interface ModuleTabsProps {
   serialToolbar?: SerialToolbarState | null;
   /** 文件面板（终端下方）是否展开：用于高亮文件按钮、展示传输进度 */
   filesPanelOpen?: boolean;
+  /** 实时监控悬浮窗是否显示 */
+  floatingMonitorVisible?: boolean;
+  /** 切换实时监控悬浮窗显示/隐藏 */
+  onToggleFloatingMonitor?: () => void;
 }
 
 export function ModuleTabs({
@@ -143,8 +146,12 @@ export function ModuleTabs({
   toolbarPosition = "top",
   serialToolbar,
   filesPanelOpen,
+  floatingMonitorVisible,
+  onToggleFloatingMonitor,
 }: ModuleTabsProps) {
   const { t } = useTranslation();
+  const isFormatterOpen = useTextFormatterStore((s) => s.open);
+  const toggleTextFormatter = useTextFormatterStore((s) => s.toggleTextFormatter);
   const openTextFormatter = useTextFormatterStore((s) => s.openTextFormatter);
   const [showThemeDialog, setShowThemeDialog] = useState(false);
   const [customBreakInput, setCustomBreakInput] = useState("");
@@ -223,7 +230,7 @@ export function ModuleTabs({
           <button
             key={key}
             className={cn(
-              "theme-module-item flex flex-shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap text-[11px] rounded-lg",
+              "theme-module-item flex flex-shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap text-[11px] rounded-lg transition-all active:scale-[0.97]",
               vertical
                 ? "w-full justify-start px-3.5 py-2 is-vertical"
                 : "mx-0.5 my-0.5 px-2.5 py-1 is-horizontal",
@@ -240,14 +247,31 @@ export function ModuleTabs({
         {/* 文本格式化器：全局浮动弹框入口 */}
         <button
           className={cn(
-            "theme-module-item flex flex-shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap text-[11px] rounded-lg",
+            "theme-module-item flex flex-shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap text-[11px] rounded-lg transition-all active:scale-[0.97]",
             vertical
               ? "w-full justify-start px-3.5 py-2 is-vertical"
               : "mx-0.5 my-0.5 px-2.5 py-1 is-horizontal",
+            isFormatterOpen && "is-active",
           )}
-          onClick={() => {
-            openTextFormatter();
-            playSound(SoundType.Open);
+          onClick={async () => {
+            if (!isFormatterOpen) {
+              let clip = "";
+              try {
+                if (navigator.clipboard?.readText) {
+                  clip = await navigator.clipboard.readText();
+                }
+              } catch {
+                /* ignore */
+              }
+              if (clip && clip.trim().length > 0 && clip.trim().length <= 50000) {
+                openTextFormatter(clip.trim());
+              } else {
+                toggleTextFormatter();
+              }
+            } else {
+              toggleTextFormatter();
+            }
+            playSound(isFormatterOpen ? SoundType.Close : SoundType.Open);
           }}
           title={t("fmt_dialog_title")}
         >
@@ -276,7 +300,7 @@ export function ModuleTabs({
             </button>
 
             <div
-              className="flex h-5.5 items-center gap-1.5 rounded border border-border/40 bg-muted/25 px-1.5 font-mono text-[9.5px] text-muted-foreground"
+              className="flex h-5.5 items-center gap-1.5 rounded border border-border/40 bg-muted/25 px-1.5 font-mono text-[9.5px] text-muted-foreground tabular-nums"
               title={`${t("serial_rx_total")}: ${serialToolbar.stats.rxBytes.toLocaleString()} B\n${t("serial_tx_total")}: ${serialToolbar.stats.txBytes.toLocaleString()} B`}
             >
               <span className="text-emerald-600 dark:text-emerald-400">RX {formatSerialMetric(serialToolbar.stats.rxRate, "/s")}</span>
@@ -450,7 +474,7 @@ export function ModuleTabs({
             {!isConnected ? (
               <Button
                 size="sm"
-                className="h-6 text-[10px] gap-1 px-2 flex-shrink-0 overflow-hidden"
+                className="h-6 text-[10px] gap-1 px-2 flex-shrink-0 overflow-hidden active:scale-95 transition-all"
                 onClick={onConnect}
                 disabled={connecting}
               >
@@ -470,7 +494,7 @@ export function ModuleTabs({
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-6 w-6 flex-shrink-0 text-success"
+                className="h-6 w-6 flex-shrink-0 text-success active:scale-95 transition-all"
                 onClick={onDisconnect}
                 title={t("btn_connected")}
               >
@@ -480,7 +504,7 @@ export function ModuleTabs({
             <Button
               variant="ghost"
               size="icon"
-              className="h-6 w-6 flex-shrink-0"
+              className="h-6 w-6 flex-shrink-0 active:scale-95 transition-all"
               onClick={onShowSnapshot}
               disabled={!isConnected}
               title={t("btn_snapshot")}
@@ -493,7 +517,7 @@ export function ModuleTabs({
           <Button
             variant="ghost"
             size="icon"
-            className="h-6 w-6 flex-shrink-0"
+            className="h-6 w-6 flex-shrink-0 active:scale-95 transition-all"
             onClick={() => onShowSearch?.()}
             title={t("tm_search")}
           >
@@ -504,7 +528,7 @@ export function ModuleTabs({
           <Button
             variant="ghost"
             size="icon"
-            className="h-6 w-6 flex-shrink-0 text-emerald-400 hover:text-emerald-500 hover:bg-emerald-500/5"
+            className="h-6 w-6 flex-shrink-0 text-emerald-400 hover:text-emerald-500 hover:bg-emerald-500/5 active:scale-95 transition-all"
             onClick={() => {
               setShowThemeDialog(true);
               playSound(SoundType.Open);
@@ -514,12 +538,28 @@ export function ModuleTabs({
             <Palette className="h-3 w-3" />
           </Button>
         )}
+        {activeModule === "terminal" && onToggleFloatingMonitor && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className={cn(
+              "h-6 w-6 flex-shrink-0 transition-all active:scale-95",
+              floatingMonitorVisible
+                ? "text-primary bg-primary/10 hover:bg-primary/20"
+                : "text-muted-foreground/70 hover:text-muted-foreground hover:bg-accent/40"
+            )}
+            onClick={onToggleFloatingMonitor}
+            title={floatingMonitorVisible ? "隐藏实时监控悬浮窗" : "显示实时监控悬浮窗"}
+          >
+            <Activity className="h-3 w-3" />
+          </Button>
+        )}
         {filesPanelOpen && <TransferPanel />}
         {activeModule === "terminal" && (
           <Button
             variant="ghost"
             size="icon"
-            className="h-6 w-6 flex-shrink-0"
+            className="h-6 w-6 flex-shrink-0 active:scale-95 transition-all"
             onClick={() => {
               onToggleTerminalFullscreen();
               playSound(SoundType.Toggle);

@@ -66,6 +66,7 @@ export interface RestoreStats {
   bookmarks?: number
   backgrounds?: number
   pathBookmarks?: number
+  serialMacros?: number
 }
 
 export interface SyncPayload {
@@ -88,6 +89,8 @@ export interface SyncPayload {
   aiSettings?: unknown
   aiConfiguredProviders?: unknown[]
   aiMasterEnabled?: boolean
+  serialMacroSequences?: unknown[]
+  serialSendHistory?: string[]
 }
 
 export interface SyncState {
@@ -700,6 +703,15 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         appLockType: appState.appLockType,
         appLockPasswordHash: appState.appLockPasswordHash,
         appLockIdleMinutes: appState.appLockIdleMinutes,
+        terminalPasteWarnEnabled: appState.terminalPasteWarnEnabled,
+        floatingMonitorVisible: (() => {
+          try {
+            const fmv = localStorage.getItem('qshell_floating_monitor_visible_v1')
+            return fmv !== null ? fmv === 'true' : true
+          } catch {
+            return true
+          }
+        })(),
       }
 
       let favorites: unknown[] = []
@@ -745,6 +757,22 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         /* ignore */
       }
 
+      let serialMacroSequences: unknown[] = []
+      try {
+        const smsRaw = localStorage.getItem('serial-macro-sequences')
+        if (smsRaw) serialMacroSequences = JSON.parse(smsRaw)
+      } catch {
+        /* ignore */
+      }
+
+      let serialSendHistory: string[] = []
+      try {
+        const sshRaw = localStorage.getItem('serial-send-history')
+        if (sshRaw) serialSendHistory = JSON.parse(sshRaw)
+      } catch {
+        /* ignore */
+      }
+
       const payload: SyncPayload = {
         format: 'qshell-backup-package',
         version: '2.0.0',
@@ -765,6 +793,8 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         aiSettings,
         aiConfiguredProviders,
         aiMasterEnabled,
+        serialMacroSequences,
+        serialSendHistory,
       }
 
       // 2. 本地 AES-256-GCM 加密
@@ -1083,6 +1113,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
           appLockType: (prefs.appLockType as typeof prev.appLockType) ?? prev.appLockType,
           appLockPasswordHash: (prefs.appLockPasswordHash as string) ?? prev.appLockPasswordHash,
           appLockIdleMinutes: (prefs.appLockIdleMinutes as number) ?? prev.appLockIdleMinutes,
+          terminalPasteWarnEnabled: (prefs.terminalPasteWarnEnabled as boolean) ?? prev.terminalPasteWarnEnabled,
         }))
       }
 
@@ -1112,6 +1143,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
           if (p.workspaceFileSortField) localStorage.setItem('qshell.workspace.files.sortField', String(p.workspaceFileSortField))
           if (p.workspaceFileSortDirection) localStorage.setItem('qshell.workspace.files.sortDirection', String(p.workspaceFileSortDirection))
           if (typeof p.workspaceFileShowHidden === 'boolean') localStorage.setItem('qshell.workspace.files.showHidden', String(p.workspaceFileShowHidden))
+          if (typeof p.floatingMonitorVisible === 'boolean') localStorage.setItem('qshell_floating_monitor_visible_v1', String(p.floatingMonitorVisible))
         } catch {}
       }
       if (payload.aiSettings) {
@@ -1148,6 +1180,24 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       if (Array.isArray(payload.commandHistory)) {
         try {
           localStorage.setItem('trae:command-history', JSON.stringify(payload.commandHistory))
+        } catch {
+          /* ignore */
+        }
+      }
+
+      // 6.5 还原串口宏指令与历史记录
+      let restoredSerialMacrosCount = 0
+      if (Array.isArray(payload.serialMacroSequences)) {
+        try {
+          localStorage.setItem('serial-macro-sequences', JSON.stringify(payload.serialMacroSequences))
+          restoredSerialMacrosCount = payload.serialMacroSequences.length
+        } catch {
+          /* ignore */
+        }
+      }
+      if (Array.isArray(payload.serialSendHistory)) {
+        try {
+          localStorage.setItem('serial-send-history', JSON.stringify(payload.serialSendHistory))
         } catch {
           /* ignore */
         }
@@ -1203,6 +1253,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
           favCmds: restoredFavCmdsCount,
           bookmarks: restoredBookmarksCount,
           backgrounds: restoredBgCount,
+          serialMacros: restoredSerialMacrosCount,
         },
       }
     } catch (err: unknown) {

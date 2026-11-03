@@ -473,6 +473,48 @@ describe('Sync Store (Dual Engine Gitee + GitHub & Full Profile E2EE)', () => {
     expect(JSON.parse(localStorage.getItem('qshell_ai_settings') || '{}')).toEqual({ provider: 'deepseek', apiKey: 'sk-test-ai' })
     expect(localStorage.getItem('qshell_ai_master_enabled')).toBe('true')
   })
+it('successfully backs up and restores serial macro sequences, serial send history, paste warning, and floating monitor visibility', async () => {
+    useSyncStore.setState({
+      provider: 'gitee',
+      currentToken: 'valid_gitee_token',
+      currentUser: { id: 1, login: 'gitee_user', name: 'Gitee Tester', avatar_url: '', html_url: '' },
+      masterPassword: 'sync_test_pwd_123456',
+    })
+
+    // Setup initial serial macros, send history, paste warn, and floating monitor
+    const mockMacros = [
+      { id: 'seq-1', name: 'AT Handshake', command: 'AT\r\n', delayMs: 100 },
+      { id: 'seq-2', name: 'Get Version', command: 'AT+GMR\r\n', delayMs: 200 },
+    ]
+    const mockSendHistory = ['AT', 'AT+CIPSTATUS', 'AT+RST']
+
+    localStorage.setItem('serial-macro-sequences', JSON.stringify(mockMacros))
+    localStorage.setItem('serial-send-history', JSON.stringify(mockSendHistory))
+    localStorage.setItem('qshell_floating_monitor_visible_v1', 'false')
+
+    useAppStore.setState({
+      terminalPasteWarnEnabled: true,
+    })
+
+    // 1. Backup
+    const backupRes = await useSyncStore.getState().backup()
+    expect(backupRes.success).toBe(true)
+
+    // 2. Clear local states
+    localStorage.clear()
+    useAppStore.setState({
+      terminalPasteWarnEnabled: false,
+    })
+
+    // 3. Restore
+    const restoreRes = await useSyncStore.getState().restore('sync_test_pwd_123456')
+    expect(restoreRes.success).toBe(true)
+    expect(restoreRes.stats?.serialMacros).toBe(2)
+
+    // 4. Verify restored state
+    expect(JSON.parse(localStorage.getItem('serial-macro-sequences') || '[]')).toEqual(mockMacros)
+    expect(JSON.parse(localStorage.getItem('serial-send-history') || '[]')).toEqual(mockSendHistory)
+    expect(localStorage.getItem('qshell_floating_monitor_visible_v1')).toBe('false')
+    expect(useAppStore.getState().terminalPasteWarnEnabled).toBe(true)
+  })
 })
-
-

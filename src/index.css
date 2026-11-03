@@ -4075,6 +4075,14 @@
   background-color: color-mix(in oklch, var(--color-primary) 88%, white) !important;
 }
 
+/* 选中行内的输入框（如内联重命名）保持自身的前景色与背景色，防止继承文字反色导致白底白字看不清 */
+.workspace-table-row input,
+.workspace-table-row.is-selected input,
+[data-ui-style] .workspace-table-row.is-selected input {
+  color: var(--color-foreground) !important;
+  background-color: var(--color-background) !important;
+}
+
 [data-ui-style="ubuntu"] .workspace-table-row,
 [data-theme="ubuntu"] .workspace-table-row {
   border-bottom: 1px solid var(--color-border);
@@ -5423,6 +5431,16 @@ body.sftp-dragging * {
   /* 终端 cell 宽度必须由 xterm 自己控制，不能继承全局负字距；
    * 否则 helper textarea/DOM 测量与 canvas 网格可能不一致，首字符选区会偏移。 */
   letter-spacing: 0;
+}
+
+/* 划词选中激活态：光标转为高对比度系统默认指针 (Arrow)，防止 I-beam 细条在彩色/灰色选区背景上隐形 */
+.terminal-has-selection .xterm,
+.terminal-has-selection .xterm-screen,
+.terminal-has-selection .xterm *:not(.xterm-scrollable-element):not(.scrollbar):not(.slider),
+[data-custom-cursor="true"] .terminal-has-selection .xterm,
+[data-custom-cursor="true"] .terminal-has-selection .xterm-screen,
+[data-custom-cursor="true"] .terminal-has-selection .xterm *:not(.xterm-scrollable-element):not(.scrollbar):not(.slider) {
+  cursor: default !important;
 }
 
 /* === 终端背景图模式：背景媒体渲染在 xterm 父容器 .term-host 上 ===

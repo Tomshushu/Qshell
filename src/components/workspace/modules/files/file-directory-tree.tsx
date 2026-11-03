@@ -38,12 +38,12 @@ export function FileDirectoryTree({
         className="bg-card/95 rounded-xl border border-border/70 dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.06),0_1px_3px_rgba(0,0,0,0.35)] shadow-xs flex flex-col overflow-hidden shrink-0"
         style={{ width: `${treeWidth}px` }}
       >
-        <div className="flex items-center justify-between px-2 py-1 border-b">
-          <span className="text-sm font-medium">{t('fs_dir_tree')}</span>
+        <div className="h-9 px-3 border-b border-border/60 bg-muted/30 flex items-center justify-between text-[13px] text-muted-foreground/80 font-semibold tracking-wider select-none">
+          <span>{t('fs_dir_tree')}</span>
           <Button
             variant="ghost"
             size="icon"
-            className="h-7 w-7"
+            className="h-7 w-7 text-muted-foreground hover:text-foreground"
             onClick={onRefreshRoot}
           >
             <RefreshCw className={`h-3.5 w-3.5 ${treeRoot.loading ? 'animate-spin' : ''}`} />
@@ -58,7 +58,7 @@ export function FileDirectoryTree({
                 <div
                   key={node.path}
                   className={cn(
-                    'flex items-center gap-1.5 py-1 pr-2 rounded-md cursor-pointer hover:bg-accent/80 dark:hover:bg-accent/70',
+                    'flex items-center gap-2 py-1.5 pr-2 rounded-md cursor-pointer hover:bg-accent/80 dark:hover:bg-accent/70 transition-colors',
                     isActive && 'bg-primary/15 text-primary font-medium border border-primary/25 shadow-2xs'
                   )}
                   style={{ paddingLeft: `${depth * 14 + 6}px` }}
@@ -83,9 +83,9 @@ export function FileDirectoryTree({
                   </span>
                   {renderFileIcon(
                     { name: node.name, path: node.path, isDirectory: true, size: 0, modified: '' },
-                    'h-4 w-4'
+                    'h-4.5 w-4.5'
                   )}
-                  <span className="text-sm truncate">{node.name}</span>
+                  <span className="text-sm truncate select-none">{node.name}</span>
                 </div>
               )
             })}

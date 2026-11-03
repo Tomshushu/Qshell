@@ -337,7 +337,14 @@ pub fn parse_process_list_linux(output: &str) -> Vec<ProcessInfo> {
 
         // cgroup 采集自 args 之后，恒为最后一个 token；args 吸收其余所有 token，
         // 即使命令为空（内核线程）也能正确切分。
-        let last = parts.len() - 1;
+        // args 置于最末尾，避免 procps-ng 将命令截断为 27 字符（如 redis-server 截为 redis-）
+        // parts[10] 为 cgroup，parts[11..] 为完整 command
+        let cgroup = parts[10].to_string();
+        let command = if parts.len() > 11 {
+            parts[11..].join(" ")
+        } else {
+            String::new()
+        };
         let process = ProcessInfo {
             user: parts[2].to_string(),
             pid,
@@ -350,8 +357,8 @@ pub fn parse_process_list_linux(output: &str) -> Vec<ProcessInfo> {
             nice: parts[8].parse().unwrap_or(0),
             start_time_ticks: parts[9].parse().unwrap_or(0),
             start: String::new(),
-            cgroup: parts[last].to_string(),
-            command: parts[10..last].join(" "),
+            cgroup,
+            command,
         };
         if let Some(existing) = map.get_mut(&pid) {
             // CPU/内存双排序采集会让同一 PID 出现两次，保留两个维度的最高观测值。
@@ -956,5 +963,27 @@ SW_TEST_END\r
         assert_eq!(result[1].size, 123);
         assert!(!result[1].is_directory);
         assert_eq!(result[1].modified_time, "2023-01-01 12:00:00");
+    }
+#[test]
+    fn test_parse_process_list_linux_full_command() {
+        let input = "\
+    PID    PPID USER                             %CPU %MEM    VSZ   RSS STAT  NI ELAPSED CGROUP                                                                                                                           COMMAND
+      1       0 root                              3.4  0.1  21712 12144 Ss     0      16 0::/init.scope                                                                                                                   /sbin/init
+   1234       1 redis                             0.3  2.5  50000 310100 S     0    1000 0::/system.slice/redis-server.service                                                                                           /usr/bin/redis-server *:6379
+   5678       1 mysql                             1.2  4.8 120000 560600 Sl    0    2000 0::/system.slice/mysqld.service                                                                                                 mysqld --daemonize --pid-file=/run/mysqld/mysqld.pid
+      2       0 root                              0.0  0.0      0      0 S     0    5000 0::/init.scope";
+        let result = parse_process_list_linux(input);
+        assert_eq!(result.len(), 4);
+
+        let redis = result.iter().find(|p| p.pid == 1234).unwrap();
+        assert_eq!(redis.user, "redis");
+        assert_eq!(redis.cgroup, "0::/system.slice/redis-server.service");
+        assert_eq!(redis.command, "/usr/bin/redis-server *:6379");
+
+        let mysql = result.iter().find(|p| p.pid == 5678).unwrap();
+        assert_eq!(mysql.command, "mysqld --daemonize --pid-file=/run/mysqld/mysqld.pid");
+
+        let kthread = result.iter().find(|p| p.pid == 2).unwrap();
+        assert_eq!(kthread.command, "");
     }
 }

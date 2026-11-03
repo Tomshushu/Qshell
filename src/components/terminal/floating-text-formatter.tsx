@@ -1,15 +1,23 @@
 import { useState, useRef, useEffect, useMemo } from "react";
-import { Braces, Copy, Check, X, Wand2 } from "lucide-react";
+import {
+  X,
+  Maximize2,
+  Minimize2,
+  Search,
+  Wrench,
+  Terminal,
+  Sparkles,
+  ClipboardPaste,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useTranslation } from "@/i18n";
 import { playSound, SoundType } from "@/lib/sound";
 import { useTextFormatterStore } from "@/store/text-formatter-store";
-import { detectFormatters } from "./text-formatters";
+import { DEV_TOOLS, guessBestToolId, type ToolItem } from "./tools/tool-registry";
 
-const DEFAULT_WIDTH = 800;
-const DEFAULT_HEIGHT = 600;
-const MIN_WIDTH = 400;
-const MIN_HEIGHT = 300;
+const DEFAULT_WIDTH = 980;
+const DEFAULT_HEIGHT = 650;
+const MIN_WIDTH = 640;
+const MIN_HEIGHT = 440;
 const VIEWPORT_PADDING = 16;
 
 type ResizeDirection = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
@@ -20,19 +28,17 @@ interface PanelSize {
 }
 
 export function FloatingTextFormatter() {
-  const { t } = useTranslation();
   const open = useTextFormatterStore((s) => s.open);
   const seed = useTextFormatterStore((s) => s.seed);
   const closeTextFormatter = useTextFormatterStore((s) => s.closeTextFormatter);
 
-  const [input, setInput] = useState("");
+  const [activeToolId, setActiveToolId] = useState<string>("json");
+  const [searchQuery, setSearchQuery] = useState("");
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const [size, setSize] = useState<PanelSize | null>(null);
+  const [isMaximized, setIsMaximized] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [resizing, setResizing] = useState(false);
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [lastTypeKey, setLastTypeKey] = useState<string | null>(null);
 
   const dragRef = useRef<{
     startX: number;
@@ -51,54 +57,58 @@ export function FloatingTextFormatter() {
     direction: ResizeDirection;
   } | null>(null);
 
-  // 打开时注入预填充内容：终端选中文本直接格式化，无需再点按钮
+  // 监听 Escape 键快速关闭弹窗，以及 Ctrl+F 聚焦搜索
   useEffect(() => {
     if (!open) return;
-    setActiveId(null);
-    setCopied(false);
-    if (seed.trim()) {
-      const f = detectFormatters(seed)[0];
-      if (f) {
-        setLastTypeKey(f.labelKey);
-        try {
-          const result = f.format(seed);
-          if (result !== null && result !== seed) {
-            setInput(result);
-            return;
-          }
-        } catch {
-          /* 格式化失败则原样显示 */
-        }
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        playSound(SoundType.Close);
+        closeTextFormatter();
       }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [open, closeTextFormatter]);
+
+  // 打开时根据 seed 智能推荐激活的工具
+  useEffect(() => {
+    if (!open) return;
+    if (seed && seed.trim()) {
+      const bestId = guessBestToolId(seed);
+      setActiveToolId(bestId);
+    } else {
+      setActiveToolId("json");
     }
-    setLastTypeKey(null);
-    setInput(seed);
+    setSearchQuery("");
   }, [open, seed]);
 
-  const formatters = useMemo(() => detectFormatters(input), [input]);
-  const active =
-    formatters.find((f) => f.id === activeId) ?? formatters[0] ?? null;
-
-  // 手动格式化：粘贴内容后点击按钮触发
-  const handleFormat = () => {
-    if (!input.trim()) return;
-    const fs = detectFormatters(input);
-    const f = fs.find((x) => x.id === activeId) ?? fs[0];
-    if (!f) return;
-    setLastTypeKey(f.labelKey);
-    playSound(SoundType.Click);
+  const handlePasteAndJump = async () => {
     try {
-      const result = f.format(input);
-      if (result !== null && result !== input) {
-        setInput(result);
-        setCopied(false);
+      const text = await navigator.clipboard.readText();
+      if (text && text.trim()) {
+        const clean = text.trim();
+        useTextFormatterStore.getState().openTextFormatter(clean);
+        const best = guessBestToolId(clean);
+        setActiveToolId(best);
+        playSound(SoundType.Click);
       }
     } catch {
-      /* 格式化失败保持原样 */
+      /* ignore */
     }
   };
 
+  const getDefaultPos = () => {
+    if (typeof window === "undefined") return { x: 80, y: 80 };
+    const w = size?.width ?? DEFAULT_WIDTH;
+    const h = size?.height ?? DEFAULT_HEIGHT;
+    const x = Math.max(VIEWPORT_PADDING, (window.innerWidth - w) / 2);
+    const y = Math.max(VIEWPORT_PADDING, (window.innerHeight - h) / 2);
+    return { x, y };
+  };
+
   const handleDragStart = (e: React.PointerEvent) => {
+    if (isMaximized) return;
     e.preventDefault();
     const cur = pos ?? getDefaultPos();
     dragRef.current = {
@@ -113,10 +123,19 @@ export function FloatingTextFormatter() {
       if (!dragRef.current) return;
       const dx = ev.clientX - dragRef.current.startX;
       const dy = ev.clientY - dragRef.current.startY;
-      setPos({
-        x: dragRef.current.startPosX + dx,
-        y: dragRef.current.startPosY + dy,
-      });
+      const curW = size?.width ?? DEFAULT_WIDTH;
+      const curH = size?.height ?? DEFAULT_HEIGHT;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const clampedX = Math.max(
+        VIEWPORT_PADDING,
+        Math.min(vw - curW - VIEWPORT_PADDING, dragRef.current.startPosX + dx),
+      );
+      const clampedY = Math.max(
+        VIEWPORT_PADDING,
+        Math.min(vh - curH - VIEWPORT_PADDING, dragRef.current.startPosY + dy),
+      );
+      setPos({ x: clampedX, y: clampedY });
     };
     const onUp = () => {
       setDragging(false);
@@ -128,11 +147,11 @@ export function FloatingTextFormatter() {
     window.addEventListener("pointerup", onUp);
   };
 
-  // 8 方向拖拽调整大小
   const handleResizePointerDown = (
     direction: ResizeDirection,
     e: React.PointerEvent,
   ) => {
+    if (isMaximized) return;
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
@@ -150,14 +169,15 @@ export function FloatingTextFormatter() {
     setResizing(true);
 
     const onMove = (ev: PointerEvent) => {
-      if (!resizeRef.current) return;
       const r = resizeRef.current;
+      if (!r) return;
       const dx = ev.clientX - r.startX;
       const dy = ev.clientY - r.startY;
+
       const vw = window.innerWidth;
       const vh = window.innerHeight;
-      const maxW = Math.max(MIN_WIDTH, vw - VIEWPORT_PADDING * 2);
-      const maxH = Math.max(MIN_HEIGHT, vh - VIEWPORT_PADDING * 2);
+      const maxW = vw - VIEWPORT_PADDING * 2;
+      const maxH = vh - VIEWPORT_PADDING * 2;
 
       let newW = r.startW;
       let newH = r.startH;
@@ -210,193 +230,235 @@ export function FloatingTextFormatter() {
     closeTextFormatter();
   };
 
-  const handleCopy = async () => {
-    if (!input) return;
-    try {
-      await navigator.clipboard.writeText(input);
-      playSound(SoundType.Click);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* 剪贴板不可用时静默失败 */
-    }
-  };
+  // 搜索过滤工具
+  const filteredTools = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return DEV_TOOLS;
+    return DEV_TOOLS.filter(
+      (t) =>
+        t.name.toLowerCase().includes(q) ||
+        t.description.toLowerCase().includes(q) ||
+        t.keywords.some((k) => k.toLowerCase().includes(q))
+    );
+  }, [searchQuery]);
+
+  // 按分类分组
+  const groupedTools = useMemo(() => {
+    const groups: Array<{ categoryLabel: string; items: ToolItem[] }> = [];
+    const catMap = new Map<string, ToolItem[]>();
+
+    filteredTools.forEach((tool) => {
+      const list = catMap.get(tool.categoryLabel) || [];
+      list.push(tool);
+      catMap.set(tool.categoryLabel, list);
+    });
+
+    catMap.forEach((items, categoryLabel) => {
+      groups.push({ categoryLabel, items });
+    });
+
+    return groups;
+  }, [filteredTools]);
+
+  const activeTool = DEV_TOOLS.find((t) => t.id === activeToolId) || DEV_TOOLS[0];
+  const ActiveComponent = activeTool.component;
 
   if (!open) return null;
 
-  const finalPos = pos ?? getDefaultPos();
   const width = size?.width ?? DEFAULT_WIDTH;
   const height = size?.height ?? DEFAULT_HEIGHT;
+  const rawPos = pos ?? getDefaultPos();
+  const finalPos = {
+    x:
+      typeof window !== "undefined"
+        ? Math.max(
+            VIEWPORT_PADDING,
+            Math.min(window.innerWidth - width - VIEWPORT_PADDING, rawPos.x),
+          )
+        : rawPos.x,
+    y:
+      typeof window !== "undefined"
+        ? Math.max(
+            VIEWPORT_PADDING,
+            Math.min(window.innerHeight - height - VIEWPORT_PADDING, rawPos.y),
+          )
+        : rawPos.y,
+  };
 
   return (
     <div
       className={cn(
-        "fixed z-[60] flex flex-col overflow-hidden rounded-2xl border border-border/70 bg-background/95 backdrop-blur-xl shadow-[0_16px_48px_-8px_rgba(0,0,0,0.6)] select-text animate-in fade-in zoom-in-95",
+        "fixed z-[60] flex flex-col overflow-hidden rounded-2xl",
+        "border border-black/10 dark:border-white/10",
+        "bg-white/90 dark:bg-zinc-950/90 backdrop-blur-2xl backdrop-saturate-150",
+        "shadow-[0_24px_70px_-12px_rgba(0,0,0,0.35),inset_0_1px_0_0_rgba(255,255,255,0.4)] dark:shadow-[0_24px_70px_-12px_rgba(0,0,0,0.7),inset_0_1px_0_0_rgba(255,255,255,0.08)]",
+        "select-text transition-all duration-150 ease-out",
         (dragging || resizing) && "transition-none select-none",
+        isMaximized && "rounded-none border-none inset-3"
       )}
-      style={{
-        left: `${finalPos.x}px`,
-        top: `${finalPos.y}px`,
-        width: `${width}px`,
-        height: `${height}px`,
-        maxWidth: `calc(100vw - ${VIEWPORT_PADDING * 2}px)`,
-        maxHeight: `calc(100vh - ${VIEWPORT_PADDING * 2}px)`,
-      }}
+      style={
+        isMaximized
+          ? {
+              left: `${VIEWPORT_PADDING}px`,
+              top: `${VIEWPORT_PADDING}px`,
+              width: `calc(100vw - ${VIEWPORT_PADDING * 2}px)`,
+              height: `calc(100vh - ${VIEWPORT_PADDING * 2}px)`,
+            }
+          : {
+              left: `${finalPos.x}px`,
+              top: `${finalPos.y}px`,
+              width: `${width}px`,
+              height: `${height}px`,
+              maxWidth: `calc(100vw - ${VIEWPORT_PADDING * 2}px)`,
+              maxHeight: `calc(100vh - ${VIEWPORT_PADDING * 2}px)`,
+            }
+      }
     >
-      {/* Header 拖拽栏 */}
+      {/* 顶部标题与控制栏 (苹果液态玻璃与极简视窗控件) */}
       <div
         onPointerDown={handleDragStart}
-        className="flex items-center justify-between px-3 py-2.5 border-b border-border/60 select-none cursor-move shrink-0 bg-muted/30"
+        onDoubleClick={() => setIsMaximized((m) => !m)}
+        className="flex items-center justify-between px-3.5 py-2 border-b border-black/5 dark:border-white/10 select-none cursor-move shrink-0 bg-black/[0.02] dark:bg-white/[0.02]"
       >
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <Braces className="h-4 w-4 text-sky-400" />
-          <span>{t("fmt_dialog_title")}</span>
+        <div className="flex items-center gap-2 text-xs font-medium text-foreground tracking-tight">
+          <Terminal className="h-3.5 w-3.5 text-primary/80" />
+          <span>开发运维工具箱</span>
+          <span className="text-[10px] font-mono text-muted-foreground/50 border-l border-black/10 dark:border-white/10 pl-2">DevTools</span>
         </div>
-        <button
-          type="button"
-          onClick={handleClose}
-          className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer"
-          title={t("tab_cancel_btn")}
-        >
-          <X className="h-4 w-4" />
-        </button>
+
+        <div className="flex items-center gap-1" onPointerDown={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            onClick={() => setIsMaximized((m) => !m)}
+            className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-black/5 dark:hover:bg-white/10 hover:text-foreground active:scale-90 transition-all cursor-pointer"
+            title={isMaximized ? "还原窗口" : "最大化"}
+          >
+            {isMaximized ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+          </button>
+          <button
+            type="button"
+            onClick={handleClose}
+            className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive active:scale-90 transition-all cursor-pointer"
+            title="关闭 (Escape)"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
 
-      {/* 类型 tab（多类型命中时切换） */}
-      {formatters.length > 1 && (
-        <div className="flex flex-wrap gap-1.5 px-3 pt-2 shrink-0">
-          {formatters.map((f) => (
-            <button
-              key={f.id}
-              type="button"
-              onClick={() => {
-                setActiveId(f.id);
-                setCopied(false);
-              }}
-              className={cn(
-                "rounded-full px-2.5 py-1 text-[11px] transition-colors cursor-pointer border",
-                active?.id === f.id
-                  ? "bg-primary/15 text-primary border-primary/40 font-medium"
-                  : "text-muted-foreground border-border/60 hover:bg-accent/50",
-              )}
-            >
-              {t(f.labelKey)}
-            </button>
-          ))}
+      {/* 工作台双栏主体 */}
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+        {/* 左侧：搜索与工具分类导航栏 (紧凑高密设计，消除AI塑料感) */}
+        <div className="w-48 shrink-0 border-r border-black/5 dark:border-white/10 bg-black/[0.015] dark:bg-white/[0.015] flex flex-col min-h-0">
+          {/* 单行紧凑搜索栏 + 剪贴板识别按钮 */}
+          <div className="p-2 border-b border-black/5 dark:border-white/10">
+            <div className="relative flex items-center">
+              <Search className="absolute left-2.5 h-3.5 w-3.5 text-muted-foreground/50 pointer-events-none" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="搜索工具..."
+                className="w-full rounded-md border border-black/10 dark:border-white/10 bg-black/[0.03] dark:bg-white/[0.04] pl-8 pr-7 py-1 text-xs text-foreground placeholder:text-muted-foreground/45 outline-none focus:border-primary/50 transition-colors"
+              />
+              <button
+                type="button"
+                onClick={handlePasteAndJump}
+                className="absolute right-1.5 flex h-5 w-5 items-center justify-center rounded text-muted-foreground/60 hover:text-foreground hover:bg-black/5 dark:hover:bg-white/10 active:scale-90 transition-all cursor-pointer"
+                title="读取剪贴板自动跳转对应工具"
+              >
+                <ClipboardPaste className="h-3 w-3" />
+              </button>
+            </div>
+          </div>
+
+          {/* 分组工具菜单列表 */}
+          <div className="flex-1 overflow-y-auto p-1.5 space-y-2.5">
+            {groupedTools.map((group) => (
+              <div key={group.categoryLabel} className="space-y-0.5">
+                <div className="px-2 py-0.5 text-[9.5px] font-mono font-medium text-muted-foreground/50 uppercase tracking-wider">
+                  {group.categoryLabel}
+                </div>
+                <div className="space-y-0.5">
+                  {group.items.map((tool) => {
+                    const Icon = tool.icon;
+                    const isActive = tool.id === activeToolId;
+                    return (
+                      <button
+                        key={tool.id}
+                        type="button"
+                        onClick={() => {
+                          setActiveToolId(tool.id);
+                          playSound(SoundType.Click);
+                        }}
+                        className={cn(
+                          "w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-all cursor-pointer select-none active:scale-[0.98]",
+                          isActive
+                            ? "bg-black/5 dark:bg-white/10 text-foreground font-medium shadow-2xs"
+                            : "text-muted-foreground hover:text-foreground hover:bg-black/[0.03] dark:hover:bg-white/[0.05]"
+                        )}
+                      >
+                        <Icon className={cn("h-3.5 w-3.5 shrink-0", isActive ? "text-primary" : "text-muted-foreground/70")} />
+                        <span className="truncate">{tool.name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+
+            {filteredTools.length === 0 && (
+              <div className="py-6 text-center text-xs text-muted-foreground/50">
+                无匹配工具
+              </div>
+            )}
+          </div>
+
+          {/* 底部极简小贴士 */}
+          <div className="p-2 border-t border-black/5 dark:border-white/10 text-[10px] text-muted-foreground/50 flex items-center justify-between select-none">
+            <span className="font-mono">Esc 关闭</span>
+            <span className="font-mono text-[9px] tabular-nums">{filteredTools.length} 项</span>
+          </div>
         </div>
+
+        {/* 右侧：主工具交互区域 */}
+        <div className="flex-1 min-w-0 flex flex-col min-h-0 bg-transparent">
+          {/* 工具顶栏单行轻量标题 */}
+          <div className="flex items-center justify-between px-3.5 py-1.5 border-b border-black/5 dark:border-white/10 shrink-0 bg-black/[0.01] dark:bg-white/[0.01]">
+            <div className="flex items-center gap-2 truncate">
+              {(() => {
+                const ActiveIcon = activeTool.icon;
+                return <ActiveIcon className="h-3.5 w-3.5 text-primary/80 shrink-0" />;
+              })()}
+              <span className="font-medium text-xs text-foreground truncate">
+                {activeTool.name}
+              </span>
+              <span className="text-[11px] text-muted-foreground/50 hidden sm:inline truncate">
+                · {activeTool.description}
+              </span>
+            </div>
+          </div>
+
+          {/* 工具组件容器 */}
+          <div className="flex-1 overflow-y-auto">
+            <ActiveComponent initialSeed={seed} />
+          </div>
+        </div>
+      </div>
+
+      {/* 8 个方向拖拽手柄 (非最大化状态下) */}
+      {!isMaximized && (
+        <>
+          <div onPointerDown={(e) => handleResizePointerDown("n", e)} className="absolute top-0 left-2 right-2 h-1 cursor-ns-resize" />
+          <div onPointerDown={(e) => handleResizePointerDown("s", e)} className="absolute bottom-0 left-2 right-2 h-1 cursor-ns-resize" />
+          <div onPointerDown={(e) => handleResizePointerDown("w", e)} className="absolute left-0 top-2 bottom-2 w-1 cursor-ew-resize" />
+          <div onPointerDown={(e) => handleResizePointerDown("e", e)} className="absolute right-0 top-2 bottom-2 w-1 cursor-ew-resize" />
+          <div onPointerDown={(e) => handleResizePointerDown("nw", e)} className="absolute top-0 left-0 w-3 h-3 cursor-nwse-resize" />
+          <div onPointerDown={(e) => handleResizePointerDown("ne", e)} className="absolute top-0 right-0 w-3 h-3 cursor-nesw-resize" />
+          <div onPointerDown={(e) => handleResizePointerDown("sw", e)} className="absolute bottom-0 left-0 w-3 h-3 cursor-nesw-resize" />
+          <div onPointerDown={(e) => handleResizePointerDown("se", e)} className="absolute bottom-0 right-0 w-3 h-3 cursor-nwse-resize" />
+        </>
       )}
-
-      {/* 单输入框：粘贴内容，点击格式化按钮就地格式化 */}
-      <div className="mx-3 mt-2.5 flex-1 min-h-0">
-        <textarea
-          value={input}
-          onChange={(e) => {
-            setInput(e.target.value);
-            setActiveId(null);
-            setCopied(false);
-            setLastTypeKey(null);
-          }}
-          placeholder={t("fmt_input_placeholder")}
-          spellCheck={false}
-          className="h-full w-full resize-none rounded-lg border border-border/60 bg-muted/30 px-3 py-2.5 font-mono text-xs leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/60 focus:border-primary/40"
-        />
-      </div>
-
-      {/* 底部操作栏 */}
-      <div className="flex items-center justify-between px-3 py-2.5 border-t border-border/60 shrink-0">
-        <span className="truncate text-[11px] text-muted-foreground">
-          {lastTypeKey
-            ? t("fmt_detected_type", { type: t(lastTypeKey) })
-            : active
-              ? t("fmt_detected_type", { type: t(active.labelKey) })
-              : t("fmt_no_type")}
-        </span>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={handleFormat}
-            disabled={!input.trim()}
-            className="flex items-center gap-1.5 rounded-lg border border-border/60 bg-muted/30 px-3 py-1.5 text-xs font-medium text-foreground hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
-            title={t("fmt_format_btn_tooltip")}
-          >
-            <Wand2 className="h-3.5 w-3.5 text-sky-400" />
-            {t("fmt_format_btn")}
-          </button>
-          <button
-            type="button"
-            onClick={handleCopy}
-            disabled={!input}
-            className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
-          >
-            {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-            {copied ? t("fmt_copied") : t("fmt_copy")}
-          </button>
-        </div>
-      </div>
-
-      {/* 四边 resize 手柄 */}
-      <div
-        className="absolute top-0 left-3 right-3 h-2 cursor-ns-resize z-20"
-        onPointerDown={(e) => handleResizePointerDown("n", e)}
-      />
-      <div
-        className="absolute bottom-0 left-3 right-3 h-2 cursor-ns-resize z-20"
-        onPointerDown={(e) => handleResizePointerDown("s", e)}
-      />
-      <div
-        className="absolute top-3 bottom-3 left-0 w-2 cursor-ew-resize z-20"
-        onPointerDown={(e) => handleResizePointerDown("w", e)}
-      />
-      <div
-        className="absolute top-3 bottom-3 right-0 w-2 cursor-ew-resize z-20"
-        onPointerDown={(e) => handleResizePointerDown("e", e)}
-      />
-
-      {/* 四角 resize 手柄，右下角带视觉把手 */}
-      <div
-        className="absolute top-0 left-0 w-3.5 h-3.5 cursor-nwse-resize z-30"
-        onPointerDown={(e) => handleResizePointerDown("nw", e)}
-      />
-      <div
-        className="absolute top-0 right-0 w-3.5 h-3.5 cursor-nesw-resize z-30"
-        onPointerDown={(e) => handleResizePointerDown("ne", e)}
-      />
-      <div
-        className="absolute bottom-0 left-0 w-3.5 h-3.5 cursor-nesw-resize z-30"
-        onPointerDown={(e) => handleResizePointerDown("sw", e)}
-      />
-      <div
-        className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize z-30 flex items-end justify-end p-0.5"
-        onPointerDown={(e) => handleResizePointerDown("se", e)}
-        title={t("fmt_resize_hint")}
-      >
-        <svg
-          viewBox="0 0 10 10"
-          className="h-2.5 w-2.5 text-muted-foreground/50"
-        >
-          <path
-            d="M9 1L1 9M9 5L5 9"
-            stroke="currentColor"
-            strokeWidth="1.2"
-            fill="none"
-          />
-        </svg>
-      </div>
     </div>
   );
-}
-
-function getDefaultPos(): { x: number; y: number } {
-  const vw = typeof window !== "undefined" ? window.innerWidth : 1200;
-  const vh = typeof window !== "undefined" ? window.innerHeight : 800;
-  return {
-    x: Math.max(
-      VIEWPORT_PADDING,
-      Math.round((vw - DEFAULT_WIDTH) / 2),
-    ),
-    y: Math.max(
-      VIEWPORT_PADDING,
-      Math.round((vh - DEFAULT_HEIGHT) / 4),
-    ),
-  };
 }

@@ -45,6 +45,7 @@ import {
 import { sshService } from "@/services/ssh-service";
 import { extractBaseServerId } from "@/services/ssh-connection-state";
 import { useAppStore } from "@/store";
+import { useMetricsStore, useMetricsSubscription } from "@/store/metrics-store";
 import { useTranslation } from "@/i18n";
 import type { SystemMetrics, ProcessInfo } from "@/types";
 
@@ -173,10 +174,18 @@ export function OverviewModule({
   const autoRefresh = useAppStore((s) => s.autoRefresh);
   const refreshInterval = useAppStore((s) => s.refreshInterval);
   const isWindows = targetType === "windows";
-  const [metrics, setMetrics] = useState<SystemMetrics | null>(null);
+  // 订阅单例共享监控 Store（大盘激活时 1s 高速采样，杜绝与悬浮框并发采集冲突）
+  useMetricsSubscription(serverId, isActive, "high");
+
+  const serverMetricsState = useMetricsStore((s) => s.serverStates[serverId]);
+  const metrics = serverMetricsState?.metrics ?? null;
+  const cpuHistory = serverMetricsState?.cpuHistory ?? [];
+  const diskIoHistory = serverMetricsState?.diskIoHistory ?? [];
+  const rawError = serverMetricsState?.error ?? null;
+  const error = rawError ? `${t("ov_err_metrics")}: ${rawError}` : null;
+  const lastUpdatedAt = serverMetricsState?.lastUpdatedAt ?? null;
+
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
   const [topProcesses, setTopProcesses] = useState<ProcessInfo[]>([]);
   const [processLoading, setProcessLoading] = useState(false);
   const [processSortKey, setProcessSortKey] = useState<
@@ -185,28 +194,44 @@ export function OverviewModule({
   const [processSortDirection, setProcessSortDirection] = useState<
     "asc" | "desc"
   >("desc");
-  // CPU 折线图历史数据
-  const [cpuHistory, setCpuHistory] = useState<number[]>([]);
-  // 网络折线图历史数据（选中网卡的速度序列）
-  const [netHistory, setNetHistory] = useState<NetHistoryPoint[]>([]);
-  const [diskIoHistory, setDiskIoHistory] = useState<DiskIoHistoryPoint[]>([]);
+
   // 选中的网卡名称，默认 eth0（后续根据实际列表调整）
   const [selectedIface, setSelectedIface] = useState<string>("eth0");
-  const selectedIfaceRef = useRef(selectedIface);
-  useEffect(() => {
-    selectedIfaceRef.current = selectedIface;
-  }, [selectedIface]);
+
+  // 根据当前选中网卡获取历史序列（共享 Store 独立维护各网卡历史）
+  const netHistory = useMemo(() => {
+    return serverMetricsState?.netHistoryByIface?.[selectedIface] ?? [];
+  }, [serverMetricsState?.netHistoryByIface, selectedIface]);
 
   // 记住已初始化过的网卡名列表，避免每秒数据刷新时重复触发自动切换
   const ifaceListInitializedRef = useRef(false);
-  // 缓存网卡名列表，依赖 metrics 引用变化时重算；用 JSON.stringify 简化依赖比较
+  // 缓存网卡名列表，依赖 metrics 引用变化时重算；eth 开头置顶，其次 en*，虚拟网卡置底
   const ifaceNames = useMemo(() => {
     const names = (metrics?.network ?? []).map((n) => n.interface);
     return names.sort((a, b) => {
-      const aEns = a.toLowerCase().startsWith("ens");
-      const bEns = b.toLowerCase().startsWith("ens");
-      if (aEns !== bEns) return aEns ? -1 : 1;
-      return a.localeCompare(b);
+      const aName = a.toLowerCase();
+      const bName = b.toLowerCase();
+      const aEth = aName.startsWith("eth");
+      const bEth = bName.startsWith("eth");
+      if (aEth !== bEth) return aEth ? -1 : 1;
+
+      const aEn = aName.startsWith("en");
+      const bEn = bName.startsWith("en");
+      if (aEn !== bEn) return aEn ? -1 : 1;
+
+      const aVir =
+        aName.startsWith("docker") ||
+        aName.startsWith("br-") ||
+        aName.startsWith("veth") ||
+        aName === "lo";
+      const bVir =
+        bName.startsWith("docker") ||
+        bName.startsWith("br-") ||
+        bName.startsWith("veth") ||
+        bName === "lo";
+      if (aVir !== bVir) return aVir ? 1 : -1;
+
+      return aName.localeCompare(bName);
     });
   }, [metrics?.network]);
   const sortedNetwork = useMemo(
@@ -230,9 +255,7 @@ export function OverviewModule({
 
   const [chartReady, setChartReady] = useState(false);
   const chartContainerRef = useRef<HTMLDivElement>(null);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const cpuInfoFetchedRef = useRef(false); // 防止重复获取 CPU 信息
-  const refreshingRef = useRef(false); // 防止并发刷新 metrics 造成竞态
 
   // 切换服务器时重置采集状态
   // 重置动作延后到宏任务执行，避免在 effect 内同步 setState / 渲染期写 ref
@@ -240,7 +263,6 @@ export function OverviewModule({
     const timer = setTimeout(() => {
       cpuInfoFetchedRef.current = false;
       ifaceListInitializedRef.current = false;
-      setDiskIoHistory([]);
     }, 0);
     return () => clearTimeout(timer);
   }, [serverId]);
@@ -345,63 +367,10 @@ export function OverviewModule({
     [topProcesses, processSortKey, processSortDirection],
   );
 
-  // 刷新核心指标 - 1秒刷新
+  // 刷新核心指标（委托共享 Store 统一采集，同步更新所有只读视图）
   const refreshMetrics = useCallback(async () => {
-    // 并发保护：上一次刷新未完成时直接跳过，避免竞态导致历史数据错乱
-    if (refreshingRef.current) return;
-    refreshingRef.current = true;
-    try {
-      const data = await sshService.collectMetrics(serverId);
-      setMetrics(data);
-      // 追加 CPU 使用率到历史数据（用于折线图）
-      setCpuHistory((prev) => {
-        const next = [...prev, data.cpuUsage];
-        return next.length > MAX_CPU_HISTORY
-          ? next.slice(-MAX_CPU_HISTORY)
-          : next;
-      });
-      // 追加选中网卡的速度到历史数据（用于网络折线图）
-      setNetHistory((prev) => {
-        const net = (data.network ?? []).find(
-          (n) => n.interface === selectedIfaceRef.current,
-        );
-        const point: NetHistoryPoint = {
-          rxKbps: net?.rxKbps ?? 0,
-          txKbps: net?.txKbps ?? 0,
-        };
-        const next = [...prev, point];
-        return next.length > MAX_NET_HISTORY
-          ? next.slice(-MAX_NET_HISTORY)
-          : next;
-      });
-      setDiskIoHistory((prev) => {
-        const point: DiskIoHistoryPoint = { idx: prev.length };
-        for (const disk of data.diskIo ?? []) {
-          point[`${disk.device}:throughput`] =
-            Math.max(0, disk.readMbps) + Math.max(0, disk.writeMbps);
-          point[`${disk.device}:read`] = Math.max(0, disk.readMbps);
-          point[`${disk.device}:write`] = Math.max(0, disk.writeMbps);
-          point[`${disk.device}:util`] = Math.max(0, disk.util * 100);
-        }
-        const next = [...prev, point].map((item, index) => ({
-          ...item,
-          idx: index,
-        }));
-        return next.length > MAX_DISK_IO_HISTORY
-          ? next
-              .slice(-MAX_DISK_IO_HISTORY)
-              .map((item, index) => ({ ...item, idx: index }))
-          : next;
-      });
-      setError(null);
-      setLastUpdatedAt(Date.now());
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : t("common_unknown_error");
-      setError(`${t("ov_err_metrics")}: ${msg}`);
-    } finally {
-      refreshingRef.current = false;
-    }
-  }, [serverId, t]);
+    await useMetricsStore.getState().refreshServerMetrics(serverId);
+  }, [serverId]);
 
   const refreshProcesses = useCallback(async () => {
     setProcessLoading(true);
@@ -465,10 +434,9 @@ export function OverviewModule({
     }
   }, [serverId, isWindows]);
 
-  // 切换网卡时清空历史数据
+  // 切换网卡时更新选中项
   const handleIfaceChange = useCallback((iface: string) => {
     setSelectedIface(iface);
-    setNetHistory([]);
   }, []);
 
   const handleRefreshAll = useCallback(() => {
@@ -522,18 +490,7 @@ export function OverviewModule({
     }
   }, [ifaceNames, selectedIface]);
 
-  // 1秒定时刷新核心指标（CPU/内存/磁盘/网络 — 纯 /proc 单文件读取，极轻量）
-  // 仅在标签页可见时运行，隐藏时暂停轮询以减少 SSH 请求
-  useEffect(() => {
-    if (!isActive) return;
-    if (timerRef.current) clearInterval(timerRef.current);
-    timerRef.current = setInterval(() => {
-      refreshMetrics();
-    }, 1000);
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [refreshMetrics, isActive]);
+
 
   // 检测图表容器尺寸是否有效（ResizeObserver 持续监听，tab 切换时自动重置）
   // 注意：依赖 loading，因为首次渲染时 loading=true 不会渲染 chart 容器，需等 loading 结束后重新挂载 observer

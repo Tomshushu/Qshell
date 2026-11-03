@@ -15,7 +15,7 @@ use crate::parsers;
 ///
 /// 返回 JSON 字符串（ProcessInfo[]）
 pub async fn processes_list(server_id: String) -> Result<String, String> {
-    let cmd = "(ps -eo pid,ppid,user:32,%cpu,%mem,vsz,rss,stat,nice,etimes,args,cgroup --sort=-%cpu | head -101; ps -eo pid,ppid,user:32,%cpu,%mem,vsz,rss,stat,nice,etimes,args,cgroup --sort=-%mem | head -101)".to_string();
+    let cmd = "(ps -eo pid,ppid,user:32,%cpu,%mem,vsz,rss,stat,nice,etimes,cgroup:128,args --sort=-%cpu | head -101; ps -eo pid,ppid,user:32,%cpu,%mem,vsz,rss,stat,nice,etimes,cgroup:128,args --sort=-%mem | head -101)".to_string();
     let res = ssh_execute_command(&server_id, &cmd).await;
     let processes = parsers::parse_process_list_linux(&res.stdout);
     serde_json::to_string(&processes).map_err(|e| format!("Serialize error: {}", e))
