@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Copy, Check, Clock, Calendar, CheckCircle2, AlertTriangle, Sparkles } from "lucide-react";
+import { Copy, Check, Clock, Calendar, CheckCircle2, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { parseCronExpression, CRON_PRESETS, type CronParseResult } from "./tool-cron";

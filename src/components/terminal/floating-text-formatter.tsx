@@ -4,9 +4,7 @@ import {
   Maximize2,
   Minimize2,
   Search,
-  Wrench,
   Terminal,
-  Sparkles,
   ClipboardPaste,
 } from "lucide-react";
 import { cn } from "@/lib/utils";

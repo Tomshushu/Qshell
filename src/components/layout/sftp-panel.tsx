@@ -974,12 +974,12 @@ export function SftpPanel() {
       setSftpLocalShowHidden(next)
       try {
         localStorage.setItem('qshell.sftp.local.showHidden', String(next))
-      } catch {}
+      } catch { /* ignore */ }
       if (prev && !next) {
         setSelectedLocalPaths(s => {
           const filtered = new Set<string>()
           for (const p of s) {
-            const name = p.split(/[\/\\]/).pop() || ''
+            const name = p.split(/[/\\]/).pop() || ''
             if (!isHiddenName(name)) filtered.add(p)
           }
           return filtered
@@ -996,12 +996,12 @@ export function SftpPanel() {
       setSftpRemoteShowHidden(next)
       try {
         localStorage.setItem('qshell.sftp.remote.showHidden', String(next))
-      } catch {}
+      } catch { /* ignore */ }
       if (prev && !next) {
         setSelectedRemotePaths(s => {
           const filtered = new Set<string>()
           for (const p of s) {
-            const name = p.split(/[\/\\]/).pop() || ''
+            const name = p.split(/[/\\]/).pop() || ''
             if (!isHiddenName(name)) filtered.add(p)
           }
           return filtered

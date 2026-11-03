@@ -5,7 +5,6 @@ import {
   ArrowLeftRight,
   ArrowDownUp,
   Cpu,
-  Sparkles,
   AlertCircle,
   ShieldCheck,
   Globe,

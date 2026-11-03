@@ -699,7 +699,7 @@ export function FloatingMetricsHud({
                       onClick={() => {
                         setSelectedIface('all')
                         setIfaceMenuOpen(false)
-                        try { localStorage.setItem('qshell_floating_hud_iface', 'all') } catch {}
+                        try { localStorage.setItem('qshell_floating_hud_iface', 'all') } catch { /* ignore */ }
                       }}
                       className={cn(
                         'w-full flex items-center justify-between px-2 py-1.5 rounded text-[11px] font-mono text-left transition-colors cursor-pointer',
@@ -720,7 +720,7 @@ export function FloatingMetricsHud({
                         onClick={() => {
                           setSelectedIface(n.interface)
                           setIfaceMenuOpen(false)
-                          try { localStorage.setItem('qshell_floating_hud_iface', n.interface) } catch {}
+                          try { localStorage.setItem('qshell_floating_hud_iface', n.interface) } catch { /* ignore */ }
                         }}
                         className={cn(
                           'w-full flex items-center justify-between px-2 py-1.5 rounded text-[11px] font-mono text-left transition-colors cursor-pointer',

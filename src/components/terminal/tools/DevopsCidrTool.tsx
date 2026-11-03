@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Copy, Check, Network, AlertCircle, Sparkles } from "lucide-react";
+import { Copy, Check, Network, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { calculateCidr, type CidrResult } from "./tool-cidr";

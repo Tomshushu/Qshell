@@ -1144,22 +1144,22 @@ export const useSyncStore = create<SyncState>((set, get) => ({
           if (p.workspaceFileSortDirection) localStorage.setItem('qshell.workspace.files.sortDirection', String(p.workspaceFileSortDirection))
           if (typeof p.workspaceFileShowHidden === 'boolean') localStorage.setItem('qshell.workspace.files.showHidden', String(p.workspaceFileShowHidden))
           if (typeof p.floatingMonitorVisible === 'boolean') localStorage.setItem('qshell_floating_monitor_visible_v1', String(p.floatingMonitorVisible))
-        } catch {}
+        } catch { /* ignore */ }
       }
       if (payload.aiSettings) {
         try {
           localStorage.setItem('qshell_ai_settings', JSON.stringify(payload.aiSettings))
-        } catch {}
+        } catch { /* ignore */ }
       }
       if (Array.isArray(payload.aiConfiguredProviders)) {
         try {
           localStorage.setItem('qshell_ai_configured_providers', JSON.stringify(payload.aiConfiguredProviders))
-        } catch {}
+        } catch { /* ignore */ }
       }
       if (typeof payload.aiMasterEnabled === 'boolean') {
         try {
           localStorage.setItem('qshell_ai_master_enabled', String(payload.aiMasterEnabled))
-        } catch {}
+        } catch { /* ignore */ }
       }
 
       // 6. 还原命令收藏、最近连接与历史记录到本地

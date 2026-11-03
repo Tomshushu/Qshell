@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Copy, Check, Braces, Minimize2, ArrowUpDown, Code, Sparkles, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Copy, Check, Braces, Minimize2, ArrowUpDown, AlertCircle, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface JsonStudioToolProps {

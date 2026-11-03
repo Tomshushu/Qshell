@@ -3,7 +3,6 @@ import {
   Copy,
   Check,
   Binary,
-  Sparkles,
   ClipboardPaste,
   Hash,
   ArrowLeftRight,

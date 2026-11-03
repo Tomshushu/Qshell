@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Copy, Check, ShieldCheck, ShieldAlert, KeyRound, Sparkles } from "lucide-react";
+import { Copy, Check, ShieldCheck, ShieldAlert, KeyRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface JwtToolProps {

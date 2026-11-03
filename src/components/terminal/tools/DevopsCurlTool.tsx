@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Copy, Check, Terminal, Globe, FileCode, AlertCircle, Sparkles } from "lucide-react";
+import { Copy, Check, Terminal, Globe, FileCode, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { parseCurlCommand, type ParsedCurl } from "./tool-curl";
 
