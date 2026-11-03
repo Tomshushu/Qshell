@@ -90,7 +90,7 @@ export function ConnectionsTab({
           <div className="flex items-center rounded-lg border bg-muted/30 p-0.5 text-xs">
             <button
               onClick={() => setStateFilter('ALL')}
-              className={`px-2.5 py-1 rounded-md transition-colors ${
+              className={`px-2.5 py-1 rounded-md transition-all active:scale-[0.97] cursor-pointer ${
                 stateFilter === 'ALL' ? 'bg-background font-semibold shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'
               }`}
             >
@@ -98,7 +98,7 @@ export function ConnectionsTab({
             </button>
             <button
               onClick={() => setStateFilter('LISTEN')}
-              className={`px-2.5 py-1 rounded-md transition-colors ${
+              className={`px-2.5 py-1 rounded-md transition-all active:scale-[0.97] cursor-pointer ${
                 stateFilter === 'LISTEN' ? 'bg-background font-semibold shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'
               }`}
             >
@@ -106,7 +106,7 @@ export function ConnectionsTab({
             </button>
             <button
               onClick={() => setStateFilter('ESTAB')}
-              className={`px-2.5 py-1 rounded-md transition-colors ${
+              className={`px-2.5 py-1 rounded-md transition-all active:scale-[0.97] cursor-pointer ${
                 stateFilter === 'ESTAB' ? 'bg-background font-semibold shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'
               }`}
             >
@@ -114,7 +114,7 @@ export function ConnectionsTab({
             </button>
             <button
               onClick={() => setStateFilter('OTHER')}
-              className={`px-2.5 py-1 rounded-md transition-colors ${
+              className={`px-2.5 py-1 rounded-md transition-all active:scale-[0.97] cursor-pointer ${
                 stateFilter === 'OTHER' ? 'bg-background font-semibold shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'
               }`}
             >
@@ -126,7 +126,7 @@ export function ConnectionsTab({
           <div className="flex items-center rounded-lg border bg-muted/30 p-0.5 text-xs">
             <button
               onClick={() => setProtoFilter('ALL')}
-              className={`px-2 py-1 rounded-md transition-colors ${
+              className={`px-2 py-1 rounded-md transition-all active:scale-[0.97] cursor-pointer ${
                 protoFilter === 'ALL' ? 'bg-background font-semibold shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'
               }`}
             >
@@ -134,7 +134,7 @@ export function ConnectionsTab({
             </button>
             <button
               onClick={() => setProtoFilter('tcp')}
-              className={`px-2 py-1 rounded-md transition-colors uppercase font-mono ${
+              className={`px-2 py-1 rounded-md transition-all active:scale-[0.97] cursor-pointer uppercase font-mono ${
                 protoFilter === 'tcp' ? 'bg-background font-semibold shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'
               }`}
             >
@@ -142,7 +142,7 @@ export function ConnectionsTab({
             </button>
             <button
               onClick={() => setProtoFilter('udp')}
-              className={`px-2 py-1 rounded-md transition-colors uppercase font-mono ${
+              className={`px-2 py-1 rounded-md transition-all active:scale-[0.97] cursor-pointer uppercase font-mono ${
                 protoFilter === 'udp' ? 'bg-background font-semibold shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'
               }`}
             >
@@ -184,7 +184,7 @@ export function ConnectionsTab({
                   <th className="py-2.5 px-3 text-right">{t('common_action')}</th>
                 </tr>
               </thead>
-              <tbody className="divide-y font-mono text-[11px]">
+              <tbody className="divide-y font-mono tabular-nums text-[11px]">
                 {filteredItems.map((s, idx) => (
                   <tr key={idx} className="hover:bg-muted/30 transition-colors">
                     <td className="py-2.5 px-3 font-semibold uppercase text-foreground">

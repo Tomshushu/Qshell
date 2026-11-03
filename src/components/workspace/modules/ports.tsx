@@ -176,7 +176,7 @@ export function PortsModule({ serverId, initialSearchQuery, initialSubTab = 'lis
                       <th className="px-3 py-2 font-medium">{t('prts_th_action')}</th>
                     </tr>
                   </thead>
-                  <tbody>
+                  <tbody className="tabular-nums">
                     {filteredPorts.map((port, i) => (
                       <tr key={`${port.protocol}-${port.port}-${i}`} className="border-b hover:bg-accent/30 cursor-pointer" onClick={() => setExpandedPort(expandedPort === i ? null : i)}>
                         <td className="px-3 py-1.5">

@@ -55,7 +55,7 @@ export function LayerPipeline({ steps }: LayerPipelineProps) {
                         {step.layer}
                       </Badge>
                       {step.durationMs != null && step.durationMs > 0 && (
-                        <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-mono font-medium">
+                        <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-mono tabular-nums font-medium">
                           {step.durationMs}ms
                         </span>
                       )}

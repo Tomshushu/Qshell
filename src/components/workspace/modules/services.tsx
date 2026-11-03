@@ -456,7 +456,7 @@ export function ServicesModule({ serverId, onNavigate, initialSearchQuery }: Ser
                 <th className="px-3 py-2 w-10" />
               </tr>
             </thead>
-            <tbody>
+            <tbody className="tabular-nums">
               {filteredServices.map((service) => (
                 <tr key={service.name} className="border-b hover:bg-accent/30" onDoubleClick={() => openDetail(service)}>
                   <td className="px-3 py-2">

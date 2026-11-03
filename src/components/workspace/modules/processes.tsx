@@ -610,7 +610,7 @@ export function ProcessesModule({ serverId, onNavigate }: ProcessesModuleProps) 
                 </TabsList>
 
                 <TabsContent value="overview">
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs py-2">
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs py-2 font-mono tabular-nums">
                     <Field label={t('proc_th_user')} value={detail.user} />
                     <Field label="PID" value={String(detail.pid)} />
                     <Field label={t('proc_th_ppid')} value={String(detail.ppid)} />

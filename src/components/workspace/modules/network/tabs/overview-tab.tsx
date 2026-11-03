@@ -97,7 +97,7 @@ export function OverviewTab({
           <CardContent className="p-3.5 flex items-center justify-between">
             <div className="space-y-0.5">
               <div className="text-xs text-muted-foreground font-medium">{t('net_ov_interfaces')}</div>
-              <div className="text-xl font-bold font-mono text-foreground">
+              <div className="text-xl font-bold font-mono tabular-nums text-foreground">
                 {overview?.interfaces.length ?? 0}
               </div>
               <div className="text-[10px] text-green-600 dark:text-green-400 font-medium">
@@ -127,7 +127,7 @@ export function OverviewTab({
           <CardContent className="p-3.5 flex items-center justify-between">
             <div className="space-y-0.5">
               <div className="text-xs text-muted-foreground font-medium">{t('net_ov_listening_ports')}</div>
-              <div className="text-xl font-bold font-mono text-foreground">
+              <div className="text-xl font-bold font-mono tabular-nums text-foreground">
                 {overview?.listeningPortsCount ?? 0}
               </div>
               <div className="text-[10px] text-muted-foreground font-medium">
@@ -142,7 +142,7 @@ export function OverviewTab({
           <CardContent className="p-3.5 flex items-center justify-between">
             <div className="space-y-0.5">
               <div className="text-xs text-muted-foreground font-medium">{t('net_ov_active_conns')}</div>
-              <div className="text-xl font-bold font-mono text-foreground">
+              <div className="text-xl font-bold font-mono tabular-nums text-foreground">
                 {overview?.establishedConnCount ?? 0}
               </div>
               <div className="text-[10px] text-muted-foreground font-medium">
@@ -197,7 +197,7 @@ export function OverviewTab({
 
                   <div className="text-[11px] space-y-1">
                     {iface.ipv4.length > 0 ? (
-                      <div className="flex items-center gap-1.5 text-foreground font-mono">
+                      <div className="flex items-center gap-1.5 text-foreground font-mono tabular-nums">
                         <span className="text-muted-foreground text-[10px]">IPv4:</span>
                         <span className="truncate">{iface.ipv4.join(', ')}</span>
                       </div>
@@ -212,7 +212,7 @@ export function OverviewTab({
                     )}
                   </div>
 
-                  <div className="pt-2 border-t flex items-center justify-between text-[10px] text-muted-foreground font-mono">
+                  <div className="pt-2 border-t flex items-center justify-between text-[10px] text-muted-foreground font-mono tabular-nums">
                     <span className="flex items-center gap-1">
                       <ArrowDownUp className="h-2.5 w-2.5" />
                       RX: {formatBytes(iface.rxBytes)}

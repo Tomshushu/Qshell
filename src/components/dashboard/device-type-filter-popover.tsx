@@ -69,7 +69,7 @@ export function DeviceTypeFilterPopover({ value, onChange }: DeviceTypeFilterPop
         type="button"
         onClick={() => setOpen((v) => !v)}
         className={cn(
-          'h-8 min-w-[126px] flex items-center justify-between gap-1.5 rounded-lg border pl-2.5 pr-7 text-xs font-medium outline-none transition-colors cursor-pointer relative',
+          'h-8 min-w-[126px] flex items-center justify-between gap-1.5 rounded-lg border pl-2.5 pr-7 text-xs font-medium outline-none transition-all active:scale-[0.98] cursor-pointer relative',
           isAnime
             ? value
               ? 'border-pink-400 bg-pink-100/60 text-pink-700 shadow-[0_2px_8px_rgba(255,107,161,0.18)]'
@@ -91,7 +91,7 @@ export function DeviceTypeFilterPopover({ value, onChange }: DeviceTypeFilterPop
           ref={panelRef}
           style={{ left: pos.left, top: pos.top }}
           className={cn(
-            'fixed z-[100] w-52 rounded-lg border border-border/60 glass-strong shadow-md p-1.5 space-y-0.5',
+            'fixed z-[100] w-52 rounded-xl border border-border/60 glass-strong shadow-lg p-1.5 space-y-0.5 animate-in fade-in-0 zoom-in-95 origin-top duration-150',
             isAnime && 'border-pink-300/60 shadow-[0_8px_28px_rgba(255,107,161,0.18)]',
           )}
         >

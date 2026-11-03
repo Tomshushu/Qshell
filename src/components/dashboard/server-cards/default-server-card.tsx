@@ -33,7 +33,7 @@ export const DefaultServerCard = memo(function DefaultServerCard({
       data-server-id={server.id}
       draggable
       className={cn(
-        "server-card bg-card border group/card select-none transition-colors duration-150 cursor-pointer",
+        "server-card bg-card border group/card select-none transition-all duration-150 cursor-pointer active:scale-[0.985]",
         selected && "is-selected",
         rest.className,
       )}
@@ -75,7 +75,7 @@ export const DefaultServerCard = memo(function DefaultServerCard({
                 <button
                   onClick={handleToggleFavorite}
                   className={cn(
-                    "p-0.5 rounded hover:bg-accent text-muted-foreground/20 hover:text-amber-500 transition-colors cursor-pointer flex-shrink-0 ml-auto",
+                    "p-0.5 rounded hover:bg-accent text-muted-foreground/20 hover:text-amber-500 transition-all active:scale-75 cursor-pointer flex-shrink-0 ml-auto",
                     !server.favorite && "opacity-0 group-hover/card:opacity-100 transition-opacity"
                   )}
                   title={server.favorite ? t('dash_unfavorite') : t('dash_favorite')}
@@ -88,11 +88,11 @@ export const DefaultServerCard = memo(function DefaultServerCard({
 
           {/* Second Line: IP + Copy Button */}
           <div className="text-[11px] text-muted-foreground flex items-center gap-1 mt-0.5 font-sans min-w-0">
-            <span className="font-mono truncate">{server.host}</span>
+            <span className="font-mono tabular-nums truncate">{server.host}</span>
             {/* Copy Button (only appears on card hover) */}
             <button
               onClick={handleCopyIp}
-              className="inline-flex items-center justify-center h-4 w-4 rounded hover:bg-accent transition-colors flex-shrink-0 cursor-pointer text-muted-foreground/30 hover:text-foreground opacity-0 group-hover/card:opacity-100 focus:opacity-100 transition-opacity"
+              className="inline-flex items-center justify-center h-4 w-4 rounded hover:bg-accent transition-all active:scale-75 flex-shrink-0 cursor-pointer text-muted-foreground/30 hover:text-foreground opacity-0 group-hover/card:opacity-100 focus:opacity-100 transition-opacity"
               title={t('dash_copy_ip')}
             >
               {copied ? <Check className="h-3 w-3 text-success" /> : <Copy className="h-3 w-3" />}

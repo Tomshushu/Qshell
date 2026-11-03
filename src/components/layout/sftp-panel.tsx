@@ -6105,7 +6105,7 @@ export function SftpPanel() {
                     >
                       <button 
                         onClick={() => handleLocalSort('name')}
-                        className="relative flex items-center gap-1 hover:text-foreground text-left cursor-pointer font-medium tracking-wider pr-3 h-full transition-colors"
+                        className="relative flex items-center gap-1 hover:text-foreground text-left cursor-pointer font-medium tracking-wider pr-3 h-full transition-all active:scale-[0.98]"
                       >
                         <span>{t('sftp_col_name')}</span>
                         {localSortField === 'name' && (
@@ -6115,7 +6115,7 @@ export function SftpPanel() {
                       </button>
                       <button 
                         onClick={() => handleLocalSort('size')}
-                        className="relative flex items-center justify-end gap-1 hover:text-foreground text-right cursor-pointer font-medium tracking-wider px-3 h-full transition-colors"
+                        className="relative flex items-center justify-end gap-1 hover:text-foreground text-right cursor-pointer font-medium tracking-wider px-3 h-full transition-all active:scale-[0.98]"
                       >
                         <span>{t('sftp_col_size')}</span>
                         {localSortField === 'size' && (
@@ -6129,7 +6129,7 @@ export function SftpPanel() {
                       </span>
                       <button 
                         onClick={() => handleLocalSort('modified')}
-                        className="relative flex items-center justify-end gap-1 hover:text-foreground text-right cursor-pointer font-medium tracking-wider px-3 h-full transition-colors"
+                        className="relative flex items-center justify-end gap-1 hover:text-foreground text-right cursor-pointer font-medium tracking-wider px-3 h-full transition-all active:scale-[0.98]"
                       >
                         <span>{t('sftp_col_modified')}</span>
                         {localSortField === 'modified' && (
@@ -6385,18 +6385,18 @@ export function SftpPanel() {
                                       </span>
                                     ) : (file.isDirectory ? <span className="text-xs text-muted-foreground/40 font-sans uppercase">dir</span> : formatFileSize(file.size))}
                                   </span>
-                                  <span className="text-right text-sm text-muted-foreground font-mono truncate px-3">
+                                  <span className="text-right text-sm text-muted-foreground font-mono tabular-nums truncate px-3">
                                     {file.name === '..' ? '' : t(getFileTypeLabel(file))}
                                   </span>
-                                  <span className="text-right text-sm text-muted-foreground font-mono truncate px-3">
+                                  <span className="text-right text-sm text-muted-foreground font-mono tabular-nums truncate px-3">
                                     {file.name === '..' ? '' : (leftSideType === 'remote' ? ((file as unknown as FileEntry).modifiedTime || '-') : (file.modified || '-'))}
                                   </span>
                                   {leftSideType === 'remote' && (
                                     <>
-                                      <span className="text-right text-sm text-muted-foreground font-mono truncate px-3">
+                                      <span className="text-right text-sm text-muted-foreground font-mono tabular-nums truncate px-3">
                                         {file.name === '..' ? '' : ((file as unknown as FileEntry).permissions || '-')}
                                       </span>
-                                      <span className="text-right text-sm text-muted-foreground font-mono truncate px-3">
+                                      <span className="text-right text-sm text-muted-foreground font-mono tabular-nums truncate px-3">
                                         {file.name === '..' ? '' : ((file as unknown as FileEntry).owner || ((file as unknown as FileEntry).uid === 0 ? 'root' : ((file as unknown as FileEntry).uid != null ? String((file as unknown as FileEntry).uid) : '-')))}
                                       </span>
                                     </>
@@ -7460,7 +7460,7 @@ export function SftpPanel() {
                       >
                         <button 
                           onClick={() => handleRemoteSort('name')}
-                          className="relative flex items-center gap-1 hover:text-foreground text-left cursor-pointer font-medium tracking-wider pr-3 h-full transition-colors"
+                          className="relative flex items-center gap-1 hover:text-foreground text-left cursor-pointer font-medium tracking-wider pr-3 h-full transition-all active:scale-[0.98]"
                         >
                           <span>{t('sftp_col_name')}</span>
                           {remoteSortField === 'name' && (
@@ -7470,7 +7470,7 @@ export function SftpPanel() {
                         </button>
                         <button 
                           onClick={() => handleRemoteSort('size')}
-                          className="relative flex items-center justify-end gap-1 hover:text-foreground text-right cursor-pointer font-medium tracking-wider px-3 h-full transition-colors"
+                          className="relative flex items-center justify-end gap-1 hover:text-foreground text-right cursor-pointer font-medium tracking-wider px-3 h-full transition-all active:scale-[0.98]"
                         >
                           <span>{t('sftp_col_size')}</span>
                           {remoteSortField === 'size' && (
@@ -7484,7 +7484,7 @@ export function SftpPanel() {
                         </span>
                         <button 
                           onClick={() => handleRemoteSort('modified')}
-                          className="relative flex items-center justify-end gap-1 hover:text-foreground text-right cursor-pointer font-medium tracking-wider px-3 h-full transition-colors"
+                          className="relative flex items-center justify-end gap-1 hover:text-foreground text-right cursor-pointer font-medium tracking-wider px-3 h-full transition-all active:scale-[0.98]"
                         >
                           <span>{t('sftp_col_modified')}</span>
                           {remoteSortField === 'modified' && (
@@ -7728,16 +7728,16 @@ export function SftpPanel() {
                                       </span>
                                     ) : (file.isDirectory ? <span className="text-xs text-muted-foreground/40 font-sans uppercase">dir</span> : formatFileSize(file.size))}
                                   </span>
-                                  <span className="text-right text-sm text-muted-foreground font-mono truncate px-3">
+                                  <span className="text-right text-sm text-muted-foreground font-mono tabular-nums truncate px-3">
                                     {file.name === '..' ? '' : t(getFileTypeLabel(file))}
                                   </span>
-                                  <span className="text-right text-sm text-muted-foreground font-mono truncate px-3">
+                                  <span className="text-right text-sm text-muted-foreground font-mono tabular-nums truncate px-3">
                                     {file.name === '..' ? '' : (file.modifiedTime || '-')}
                                   </span>
-                                  <span className="text-right text-sm text-muted-foreground font-mono truncate px-3">
+                                  <span className="text-right text-sm text-muted-foreground font-mono tabular-nums truncate px-3">
                                     {file.name === '..' ? '' : (file.permissions || '-')}
                                   </span>
-                                  <span className="text-right text-sm text-muted-foreground font-mono truncate px-3">
+                                  <span className="text-right text-sm text-muted-foreground font-mono tabular-nums truncate px-3">
                                     {file.name === '..' ? '' : (file.owner || (file.uid === 0 ? 'root' : (file.uid != null ? String(file.uid) : '-')))}
                                   </span>
                                 </div>

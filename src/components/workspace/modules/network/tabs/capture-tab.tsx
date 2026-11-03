@@ -128,7 +128,7 @@ export function CaptureTab({ serverId, interfaces }: CaptureTabProps) {
                 value={maxPackets}
                 onChange={(e) => setMaxPackets(e.target.value)}
                 disabled={isCapturing}
-                className="h-8 text-xs font-mono"
+                className="h-8 text-xs font-mono tabular-nums"
               />
             </div>
 
@@ -141,7 +141,7 @@ export function CaptureTab({ serverId, interfaces }: CaptureTabProps) {
                 value={durationSecs}
                 onChange={(e) => setDurationSecs(e.target.value)}
                 disabled={isCapturing}
-                className="h-8 text-xs font-mono"
+                className="h-8 text-xs font-mono tabular-nums"
               />
             </div>
           </div>
@@ -157,28 +157,28 @@ export function CaptureTab({ serverId, interfaces }: CaptureTabProps) {
                 <button
                   type="button"
                   onClick={() => setBpfFilter('port 80 or port 443')}
-                  className="px-1.5 py-0.5 rounded bg-muted hover:bg-accent text-foreground text-[10px]"
+                  className="px-1.5 py-0.5 rounded bg-muted hover:bg-accent text-foreground text-[10px] active:scale-[0.97] transition-all cursor-pointer"
                 >
                   Web (80/443)
                 </button>
                 <button
                   type="button"
                   onClick={() => setBpfFilter('icmp')}
-                  className="px-1.5 py-0.5 rounded bg-muted hover:bg-accent text-foreground text-[10px]"
+                  className="px-1.5 py-0.5 rounded bg-muted hover:bg-accent text-foreground text-[10px] active:scale-[0.97] transition-all cursor-pointer"
                 >
                   ICMP
                 </button>
                 <button
                   type="button"
                   onClick={() => setBpfFilter('port 53')}
-                  className="px-1.5 py-0.5 rounded bg-muted hover:bg-accent text-foreground text-[10px]"
+                  className="px-1.5 py-0.5 rounded bg-muted hover:bg-accent text-foreground text-[10px] active:scale-[0.97] transition-all cursor-pointer"
                 >
                   DNS (53)
                 </button>
                 <button
                   type="button"
                   onClick={() => setBpfFilter('')}
-                  className="px-1.5 py-0.5 rounded bg-muted hover:bg-accent text-muted-foreground text-[10px]"
+                  className="px-1.5 py-0.5 rounded bg-muted hover:bg-accent text-muted-foreground text-[10px] active:scale-[0.97] transition-all cursor-pointer"
                 >
                   {t('common_clear')}
                 </button>
@@ -223,7 +223,7 @@ export function CaptureTab({ serverId, interfaces }: CaptureTabProps) {
                 <span className="text-sm font-semibold text-foreground">
                   {t('net_cap_success')}
                 </span>
-                <Badge variant="outline" className="text-[10px] font-mono">
+                <Badge variant="outline" className="text-[10px] font-mono tabular-nums">
                   {captureResult.fileSizeBytes} Bytes
                 </Badge>
               </div>
@@ -240,7 +240,7 @@ export function CaptureTab({ serverId, interfaces }: CaptureTabProps) {
               )}
             </div>
 
-            <div className="p-2.5 rounded bg-muted/40 font-mono text-[11px] text-muted-foreground space-y-1">
+            <div className="p-2.5 rounded bg-muted/40 font-mono tabular-nums text-[11px] text-muted-foreground space-y-1">
               <div>远端临时文件路径: <span className="text-foreground">{captureResult.remotePath}</span></div>
               <div>包大小: <span className="text-foreground">{captureResult.fileSizeBytes} 字节</span></div>
             </div>

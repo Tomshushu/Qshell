@@ -488,7 +488,7 @@ export function SettingsDialog({ open, onOpenChange, defaultTab }: SettingsDialo
   return (
     <TooltipProvider delayDuration={200}>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-5xl h-[min(680px,calc(100vh-2rem))] flex flex-col p-0 overflow-hidden bg-background border rounded-xl gap-0">
+        <DialogContent className="max-w-5xl h-[min(680px,calc(100vh-2rem))] flex flex-col p-0 overflow-hidden border border-border/60 glass-strong shadow-2xl dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08),0_24px_48px_-12px_rgba(0,0,0,0.7)] ring-1 ring-white/5 rounded-2xl gap-0">
           <SettingsPanel defaultTab={defaultTab} onOpenThemeDialog={() => setShowThemeDialog(true)} />
         </DialogContent>
       {/* 主题弹框嵌套进设置 Dialog 内（而非兄弟节点），共享 DismissableLayer 作用域，
@@ -1107,7 +1107,7 @@ function SettingsPanel({
   return (
     <div className="flex h-full w-full bg-background overflow-hidden">
       {/* 1. 左侧设置侧边栏（增加纵向滚动与 min-h-full 弹性容器，解决小屏或内容过长时底部选项被裁切遮挡问题） */}
-      <div className="w-56 flex-shrink-0 border-r bg-slate-50 dark:bg-zinc-900 select-none overflow-y-auto overscroll-contain h-full min-h-0 p-3">
+      <div className="w-56 flex-shrink-0 border-r border-border/60 bg-muted/20 backdrop-blur-md select-none overflow-y-auto overscroll-contain h-full min-h-0 p-3">
         <div className="flex flex-col min-h-full">
           <div className="flex items-center gap-2 mb-3 px-2 shrink-0">
             <div className="h-5 w-5 rounded-md overflow-hidden flex items-center justify-center flex-shrink-0 bg-slate-900 ring-1 ring-border/50">
@@ -1122,9 +1122,9 @@ function SettingsPanel({
           <div className="flex flex-col gap-1.5 shrink-0">
             <button
               onClick={() => setSubTab("general")}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-all active:scale-[0.98] cursor-pointer text-left shrink-0 ${
                 subTab === "general"
-                  ? "bg-accent/80 text-foreground font-semibold"
+                  ? "bg-background text-foreground font-medium shadow-xs border border-border/40"
                   : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
               }`}
             >
@@ -1133,9 +1133,9 @@ function SettingsPanel({
             </button>
             <button
               onClick={() => setSubTab("security")}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-all active:scale-[0.98] cursor-pointer text-left shrink-0 ${
                 subTab === "security"
-                  ? "bg-accent/80 text-foreground font-semibold"
+                  ? "bg-background text-foreground font-medium shadow-xs border border-border/40"
                   : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
               }`}
             >
@@ -1144,9 +1144,9 @@ function SettingsPanel({
             </button>
             <button
               onClick={() => setSubTab("account")}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-all active:scale-[0.98] cursor-pointer text-left shrink-0 ${
                 subTab === "account"
-                  ? "bg-accent/80 text-foreground font-semibold"
+                  ? "bg-background text-foreground font-medium shadow-xs border border-border/40"
                   : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
               }`}
             >
@@ -1155,9 +1155,9 @@ function SettingsPanel({
             </button>
             <button
               onClick={() => setSubTab("ai")}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-all active:scale-[0.98] cursor-pointer text-left shrink-0 ${
                 subTab === "ai"
-                  ? "bg-accent/80 text-foreground font-semibold"
+                  ? "bg-background text-foreground font-medium shadow-xs border border-border/40"
                   : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
               }`}
             >
@@ -1166,9 +1166,9 @@ function SettingsPanel({
             </button>
             <button
               onClick={() => setSubTab("terminal")}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-all active:scale-[0.98] cursor-pointer text-left shrink-0 ${
                 subTab === "terminal"
-                  ? "bg-accent/80 text-foreground font-semibold"
+                  ? "bg-background text-foreground font-medium shadow-xs border border-border/40"
                   : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
               }`}
             >
@@ -1177,9 +1177,9 @@ function SettingsPanel({
             </button>
             <button
               onClick={() => setSubTab("sftp")}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-all active:scale-[0.98] cursor-pointer text-left shrink-0 ${
                 subTab === "sftp"
-                  ? "bg-accent/80 text-foreground font-semibold"
+                  ? "bg-background text-foreground font-medium shadow-xs border border-border/40"
                   : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
               }`}
             >
@@ -1188,9 +1188,9 @@ function SettingsPanel({
             </button>
             <button
               onClick={() => setSubTab("logs")}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-all active:scale-[0.98] cursor-pointer text-left shrink-0 ${
                 subTab === "logs"
-                  ? "bg-accent/80 text-foreground font-semibold"
+                  ? "bg-background text-foreground font-medium shadow-xs border border-border/40"
                   : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
               }`}
             >
@@ -1199,9 +1199,9 @@ function SettingsPanel({
             </button>
             <button
               onClick={() => setSubTab("shortcuts")}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-all active:scale-[0.98] cursor-pointer text-left shrink-0 ${
                 subTab === "shortcuts"
-                  ? "bg-accent/80 text-foreground font-semibold"
+                  ? "bg-background text-foreground font-medium shadow-xs border border-border/40"
                   : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
               }`}
             >
@@ -1210,9 +1210,9 @@ function SettingsPanel({
             </button>
             <button
               onClick={() => setSubTab("known_hosts")}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-xs transition-colors text-left shrink-0 ${
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-all active:scale-[0.98] cursor-pointer text-left shrink-0 ${
                 subTab === "known_hosts"
-                  ? "bg-accent/80 text-foreground font-semibold"
+                  ? "bg-background text-foreground font-medium shadow-xs border border-border/40"
                   : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
               }`}
             >

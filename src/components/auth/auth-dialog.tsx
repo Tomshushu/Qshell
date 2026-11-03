@@ -295,7 +295,7 @@ export function AuthDialog() {
       if (res.error) {
         toast.error(`设置密码失败: ${res.error}`)
       } else {
-        toast.success('🎉 独立登录密码已设置成功！后续您可使用密码或验证码直接登录')
+        toast.success('独立登录密码已设置成功，后续可使用密码或验证码直接登录')
         setShowSetPassword(false)
         setNewPasswordInput('')
         setConfirmNewPasswordInput('')
@@ -436,10 +436,10 @@ export function AuthDialog() {
         if (fallback.error) {
           setErrorMessage(res.error)
         } else {
-          toast.success('🎉 注册验证成功，已自动登录！')
+          toast.success('注册验证成功，已自动登录')
         }
       } else {
-        toast.success('🎉 注册验证成功，已自动登录！')
+        toast.success('注册验证成功，已自动登录')
       }
     } finally {
       setIsSubmitting(false)
@@ -1046,7 +1046,7 @@ export function AuthDialog() {
 
                         <div className="pt-0.5 text-center">
                           <p className="text-[10px] text-muted-foreground leading-normal">
-                            💡 提示：若收到的邮件仅包含链接而无数字验证码，请在 Supabase 邮件模板中配置 <code className="text-primary font-mono text-[10px]">{`{{ .Token }}`}</code>，或改用密码登录
+                            提示：若收到的邮件仅包含链接而无数字验证码，请在 Supabase 邮件模板中配置 <code className="text-primary font-mono text-[10px]">{`{{ .Token }}`}</code>，或改用密码登录
                           </p>
                         </div>
                       </div>
@@ -1271,7 +1271,7 @@ export function AuthDialog() {
                     邮件中只有激活链接？在浏览器激活后点此登录
                   </button>
                   <p className="text-[10px] text-muted-foreground/80 leading-normal">
-                    💡 提示：若未收到邮件，请检查邮箱垃圾箱；如需直接接收 8 位验证码，请在 Supabase 邮件模板中配置 <code className="text-primary font-mono text-[10px]">{`{{ .Token }}`}</code>
+                    提示：若未收到邮件，请检查邮箱垃圾箱；如需直接接收 8 位验证码，请在 Supabase 邮件模板中配置 <code className="text-primary font-mono text-[10px]">{`{{ .Token }}`}</code>
                   </p>
                 </div>
               </div>

@@ -31,7 +31,7 @@ export function EthtoolDrawer({ info, open, onClose }: EthtoolDrawerProps) {
               <Activity className="h-3.5 w-3.5 text-primary" />
               {t('net_if_speed')}
             </span>
-            <div className="flex items-center gap-1.5 mt-1 font-mono text-sm font-semibold">
+            <div className="flex items-center gap-1.5 mt-1 font-mono tabular-nums text-sm font-semibold">
               {info.speed || 'N/A'}
               {info.duplex && (
                 <Badge variant="outline" className="text-[10px] uppercase px-1.5 py-0">

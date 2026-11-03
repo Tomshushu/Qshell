@@ -69,7 +69,7 @@ export function RoutesDnsTab({
               placeholder={t('net_route_test_target_placeholder')}
               value={testTarget}
               onChange={(e) => setTestTarget(e.target.value)}
-              className="h-8 text-xs font-mono"
+              className="h-8 text-xs font-mono tabular-nums"
             />
             <Button
               type="submit"
@@ -144,7 +144,7 @@ export function RoutesDnsTab({
                   <th className="py-2 px-3">Scope / Proto</th>
                 </tr>
               </thead>
-              <tbody className="divide-y font-mono text-[11px]">
+              <tbody className="divide-y font-mono tabular-nums text-[11px]">
                 {routeView?.routes.map((r, idx) => (
                   <tr key={idx} className={`hover:bg-muted/30 transition-colors ${r.isDefault ? 'bg-primary/5' : ''}`}>
                     <td className="py-2 px-3 font-semibold text-foreground flex items-center gap-1.5">
@@ -237,7 +237,7 @@ export function RoutesDnsTab({
               ) : (
                 <div className="max-h-56 overflow-auto space-y-1">
                   {neighbors.map((n, idx) => (
-                    <div key={idx} className="p-2 rounded border bg-card/60 text-xs font-mono space-y-1">
+                    <div key={idx} className="p-2 rounded border bg-card/60 text-xs font-mono tabular-nums space-y-1">
                       <div className="flex items-center justify-between">
                         <span className="font-semibold text-foreground">{n.ip}</span>
                         <Badge

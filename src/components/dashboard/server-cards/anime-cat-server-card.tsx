@@ -83,7 +83,7 @@ export const AnimeCatServerCard = memo(function AnimeCatServerCard({
         data-server-id={server.id}
         draggable
         className={cn(
-          "server-card anime-cat-card relative rounded-[20px] p-3.5 cursor-pointer overflow-visible transition-all duration-200",
+          "server-card anime-cat-card relative rounded-[20px] p-3.5 cursor-pointer overflow-visible transition-all duration-200 active:scale-[0.985]",
           "border-2 border-pink-300/60 dark:border-pink-500/40 bg-card/95 hover:border-pink-400 dark:hover:border-pink-400",
           "shadow-[0_4px_16px_rgba(255,107,161,0.09)] hover:shadow-[0_10px_26px_rgba(255,107,161,0.22)] hover:-translate-y-1",
           selected && "is-selected border-pink-500 ring-2 ring-pink-400/40 shadow-[0_10px_28px_rgba(255,80,150,0.28)]"
@@ -192,7 +192,7 @@ export const AnimeCatServerCard = memo(function AnimeCatServerCard({
                   <button
                     onClick={handleToggleFavorite}
                     className={cn(
-                      "p-0.5 rounded-md hover:bg-pink-500/10 text-muted-foreground/30 hover:text-pink-500 transition-all cursor-pointer flex-shrink-0 ml-auto",
+                      "p-0.5 rounded-md hover:bg-pink-500/10 text-muted-foreground/30 hover:text-pink-500 transition-all active:scale-75 cursor-pointer flex-shrink-0 ml-auto",
                       !server.favorite && "opacity-0 group-hover/card:opacity-100 transition-opacity"
                     )}
                     title={server.favorite ? t('dash_unfavorite') : t('dash_favorite')}
@@ -209,12 +209,12 @@ export const AnimeCatServerCard = memo(function AnimeCatServerCard({
 
             {/* 第二行：IP + 复制按钮 */}
             <div className="text-[11px] text-muted-foreground flex items-center gap-1.5 mt-0.5 font-sans min-w-0">
-              <span className="font-mono truncate">{server.host}</span>
+              <span className="font-mono tabular-nums truncate">{server.host}</span>
 
               {/* 复制按钮 */}
               <button
                 onClick={handleCopyIp}
-                className="inline-flex items-center justify-center h-4 w-4 rounded-md hover:bg-pink-500/15 transition-colors flex-shrink-0 cursor-pointer text-muted-foreground/30 hover:text-pink-500 opacity-0 group-hover/card:opacity-100 focus:opacity-100 transition-opacity"
+                className="inline-flex items-center justify-center h-4 w-4 rounded-md hover:bg-pink-500/15 transition-all active:scale-75 flex-shrink-0 cursor-pointer text-muted-foreground/30 hover:text-pink-500 opacity-0 group-hover/card:opacity-100 focus:opacity-100 transition-opacity"
                 title={t('dash_copy_ip')}
               >
                 {copied ? <Check className="h-3 w-3 text-pink-500" /> : <Copy className="h-3 w-3" />}

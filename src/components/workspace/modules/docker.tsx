@@ -2939,11 +2939,11 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
                                   style={{ width: `${cpuPercent}%` }}
                                 />
                               </div>
-                              <span className="text-[10px] font-mono text-muted-foreground w-12 text-right">
+                              <span className="text-[10px] font-mono tabular-nums text-muted-foreground w-12 text-right">
                                 {row.cpu.toFixed(1)}%
                               </span>
                             </div>
-                            <span className="text-[10px] font-mono text-muted-foreground/80 flex-shrink-0 w-24 text-right">
+                            <span className="text-[10px] font-mono tabular-nums text-muted-foreground/80 flex-shrink-0 w-24 text-right">
                               {t('dk_mem')} {row.memUsed}
                             </span>
                           </button>
@@ -3040,7 +3040,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
                 <th className="px-3 py-2.5 font-medium tracking-wider text-[10px] uppercase w-10 text-right">{t('dk_th_action')}</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="tabular-nums">
               {filteredContainers.map((c) => (
                 <tr
                   key={c.id}
@@ -3073,7 +3073,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
                       </div>
                       <div className="flex items-center gap-1.5 min-w-0 truncate">
                         <span className="truncate font-semibold text-foreground text-[13px]">{c.name}</span>
-                        <span className="text-[11px] text-muted-foreground/60 font-mono flex-shrink-0">({c.id.slice(0, 12)})</span>
+                        <span className="text-[11px] text-muted-foreground/60 font-mono tabular-nums flex-shrink-0">({c.id.slice(0, 12)})</span>
                       </div>
                     </div>
                   </td>
@@ -3181,7 +3181,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
                         <div className="flex flex-col min-w-0">
                           <div className="flex items-center gap-1.5 min-w-0">
                             <span className="font-semibold text-xs text-foreground truncate max-w-[110px]" title={c.name}>{c.name}</span>
-                            <span className="text-[11px] text-muted-foreground/60 font-mono">({c.id.slice(0, 12)})</span>
+                            <span className="text-[11px] text-muted-foreground/60 font-mono tabular-nums">({c.id.slice(0, 12)})</span>
                           </div>
                         </div>
                       </div>
@@ -3220,7 +3220,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
                           </button>
                         )}
                       </div>
-                      <span className="font-mono text-[11px] text-muted-foreground bg-accent/40 border border-border/40 px-1.5 py-0.5 rounded truncate max-w-[130px]" title={c.ports || t('dk_no_ports')}>
+                      <span className="font-mono tabular-nums text-[11px] text-muted-foreground bg-accent/40 border border-border/40 px-1.5 py-0.5 rounded truncate max-w-[130px]" title={c.ports || t('dk_no_ports')}>
                         {c.ports || '-'}
                       </span>
                     </div>
@@ -3263,7 +3263,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
                   <th className="px-3 py-2.5 font-medium tracking-wider text-[10px] uppercase w-20 text-right">{t('dk_th_action')}</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="tabular-nums">
                 {images.map((img) => {
                   // 镜像状态分类（统一 StatusPill 色系）：
                   // - 运行中（被运行中容器引用）：绿
@@ -3365,7 +3365,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
                   <th className="px-3 py-2.5 font-medium tracking-wider text-[10px] uppercase w-20 text-right">{t('dk_th_action')}</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="tabular-nums">
                 {networks.map((n) => {
                   // 内置网络（bridge/host/none）不可删除，按钮禁用并提示
                   const isBuiltin = ['bridge', 'host', 'none'].includes(n.name)
@@ -3421,7 +3421,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
                   <th className="px-3 py-2.5 font-medium tracking-wider text-[10px] uppercase w-20 text-right">{t('dk_th_action')}</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="tabular-nums">
                 {volumes.map((v) => (
                   <tr key={v.name} className={cn('border-b border-border/30 transition-all duration-200 group', v.dangling ? 'bg-rose-500/[0.04] hover:bg-rose-500/10' : 'hover:bg-muted/30')}>
                     <td className="px-4 py-3 font-medium max-w-[300px] truncate font-mono text-[11px]" title={v.name}>{v.name}</td>
@@ -4111,7 +4111,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
                 <div className="text-muted-foreground text-center py-6">{t('docker_volume_browse_empty')}</div>
               ) : (
                 <table className="w-full">
-                  <tbody>
+                  <tbody className="tabular-nums">
                     {volumeBrowseModal.entries.map((e) => (
                       <tr key={e.name} className="border-b border-border/30 hover:bg-muted/30 cursor-pointer"
                         onClick={() => e.isDir && openVolumeBrowse({ name: volumeBrowseModal.name, driver: '', dangling: false }, volumeBrowseModal.subPath ? `${volumeBrowseModal.subPath}/${e.name}` : e.name)}>

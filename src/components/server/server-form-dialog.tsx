@@ -1283,7 +1283,7 @@ export function ServerFormDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
-        <DialogContent className="max-w-[880px] w-[min(880px,calc(100vw-2rem))] h-[min(680px,calc(100vh-2rem))] flex flex-col p-0 gap-0 overflow-hidden border border-border/80 bg-background rounded-xl shadow-2xl">
+        <DialogContent className="max-w-[880px] w-[min(880px,calc(100vw-2rem))] h-[min(680px,calc(100vh-2rem))] flex flex-col p-0 gap-0 overflow-hidden border border-border/60 glass-strong shadow-2xl dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08),0_24px_48px_-12px_rgba(0,0,0,0.7)] ring-1 ring-white/5 rounded-2xl">
           {/* 顶部标题栏（FinalShell 风格） */}
           <DialogHeader className="px-5 py-3 border-b border-border/60 flex-shrink-0 bg-muted/20 flex flex-row items-center justify-between">
             <div className="flex min-w-0 items-center gap-3">
@@ -1321,7 +1321,7 @@ export function ServerFormDialog({
                 <button
                   type="button"
                   onClick={() => setActiveCategory('connection')}
-                  className={`w-full text-left px-2.5 py-1.5 rounded text-xs font-medium transition-colors ${
+                  className={`w-full text-left px-2.5 py-1.5 rounded-md text-xs font-medium transition-all active:scale-[0.98] cursor-pointer ${
                     activeCategory === 'connection'
                       ? 'bg-primary text-primary-foreground font-semibold'
                       : 'text-foreground hover:bg-muted'
@@ -1333,7 +1333,7 @@ export function ServerFormDialog({
                   <button
                     type="button"
                     onClick={() => setActiveCategory('proxy')}
-                    className={`w-full text-left px-2.5 py-1.5 rounded text-xs font-medium transition-colors ${
+                    className={`w-full text-left px-2.5 py-1.5 rounded-md text-xs font-medium transition-all active:scale-[0.98] cursor-pointer ${
                       activeCategory === 'proxy'
                         ? 'bg-primary text-primary-foreground font-semibold'
                         : 'text-foreground hover:bg-muted'
@@ -1346,7 +1346,7 @@ export function ServerFormDialog({
                   <button
                     type="button"
                     onClick={() => setActiveCategory('tunnels')}
-                    className={`w-full text-left px-2.5 py-1.5 rounded text-xs font-medium transition-colors ${
+                    className={`w-full text-left px-2.5 py-1.5 rounded-md text-xs font-medium transition-all active:scale-[0.98] cursor-pointer ${
                       activeCategory === 'tunnels'
                         ? 'bg-primary text-primary-foreground font-semibold'
                         : 'text-foreground hover:bg-muted'
@@ -1358,7 +1358,7 @@ export function ServerFormDialog({
                 <button
                   type="button"
                   onClick={() => setActiveCategory('advanced')}
-                  className={`w-full text-left px-2.5 py-1.5 rounded text-xs font-medium transition-colors ${
+                  className={`w-full text-left px-2.5 py-1.5 rounded-md text-xs font-medium transition-all active:scale-[0.98] cursor-pointer ${
                     activeCategory === 'advanced'
                       ? 'bg-primary text-primary-foreground font-semibold'
                       : 'text-foreground hover:bg-muted'

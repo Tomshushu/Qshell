@@ -122,7 +122,7 @@ export function InterfacesTab({
                   </div>
 
                   {/* Middle: Traffic stats */}
-                  <div className="flex items-center gap-4 text-xs font-mono bg-muted/20 p-2.5 rounded-lg border border-border/40 shrink-0">
+                  <div className="flex items-center gap-4 text-xs font-mono tabular-nums bg-muted/20 p-2.5 rounded-lg border border-border/40 shrink-0">
                     <div className="space-y-0.5">
                       <div className="text-[10px] text-muted-foreground flex items-center gap-1">
                         <ArrowDownUp className="h-3 w-3 text-primary" />

@@ -150,7 +150,7 @@ export function HistoryTab({
                   <th className="py-2.5 px-3 text-right">{t('net_hist_actions')}</th>
                 </tr>
               </thead>
-              <tbody className="divide-y font-mono text-[11px]">
+              <tbody className="divide-y font-mono tabular-nums text-[11px]">
                 {runs.map((r) => {
                   const isChecked = selectedIds.includes(r.id)
                   const dateStr = new Date(r.startedAt).toLocaleString()
