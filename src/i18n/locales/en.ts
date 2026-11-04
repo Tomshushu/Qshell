@@ -4284,7 +4284,7 @@ export default {
 
   // Local MCP Server & Client Authorization
   ai_mcp_title: "Local MCP Server & Client Authorization",
-  ai_mcp_desc: "Qshell natively integrates a standard Model Context Protocol (MCP) server, enabling mainstream AI agents like Cursor, OpenAI Codex, Claude Desktop, Claude Code, Windsurf, VS Code, and Zed to probe and run read-only commands on authorized servers.",
+  ai_mcp_desc: "Qshell natively integrates a standard Model Context Protocol (MCP) server, enabling external AI agents like Cursor, Claude Desktop, VS Code, and Claude Code to probe and run read-only commands on authorized servers.",
   ai_mcp_badge_ready: "127.0.0.1 Isolated",
   ai_mcp_enable_label: "Enable Local MCP Server",
   ai_mcp_enable_desc: "Binds strictly to local 127.0.0.1:45680. Zero LAN or public exposure, enforcing native zero-trust isolation.",
@@ -4301,10 +4301,7 @@ export default {
   ai_mcp_client_cursor: "Cursor",
   ai_mcp_client_claude_desktop: "Claude Desktop",
   ai_mcp_client_claude_code: "Claude Code",
-  ai_mcp_client_codex: "Codex",
-  ai_mcp_client_windsurf: "Windsurf",
   ai_mcp_client_vscode: "VS Code / Cline",
-  ai_mcp_client_zed: "Zed",
   ai_mcp_copy_snippet: "Copy Snippet",
   ai_mcp_hosts_title: "Zero-Trust Host Authorization Whitelist",
   ai_mcp_hosts_desc: "External agents (e.g. Cursor / Claude) can only inspect and connect to servers selected here. Requests to unauthorized servers are rejected with unknown-host.",

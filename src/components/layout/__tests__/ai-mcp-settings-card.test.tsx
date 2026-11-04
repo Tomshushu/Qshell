@@ -11,7 +11,6 @@ import { AiMcpSettingsCard } from '../ai-mcp-settings-card'
 import { useAppStore } from '@/store'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { I18nProvider } from '@/i18n/i18n-provider'
-import type { Server } from '@/types'
 
 const { mockMcp } = vi.hoisted(() => {
   return {
@@ -73,37 +72,25 @@ describe('AiMcpSettingsCard', () => {
     mockMcp.setAuthorizedHosts.mockResolvedValue(undefined)
 
     // 模拟服务器资产
-    const mockServers: Server[] = [
-      {
-        id: 'srv-1',
-        name: '生产 Web 节点 A',
-        host: '192.168.1.10',
-        port: 22,
-        username: 'root',
-        authType: 'password',
-        tags: [],
-        favorite: false,
-        status: 'offline',
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      },
-      {
-        id: 'srv-2',
-        name: '数据库主节点 B',
-        host: '192.168.1.20',
-        port: 22,
-        username: 'ubuntu',
-        authType: 'password',
-        tags: [],
-        favorite: false,
-        status: 'offline',
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      },
-    ]
-
     useAppStore.setState({
-      servers: mockServers,
+      servers: [
+        {
+          id: 'srv-1',
+          name: '生产 Web 节点 A',
+          host: '192.168.1.10',
+          port: 22,
+          username: 'root',
+          authType: 'password',
+        },
+        {
+          id: 'srv-2',
+          name: '数据库主节点 B',
+          host: '192.168.1.20',
+          port: 22,
+          username: 'ubuntu',
+          authType: 'password',
+        },
+      ],
     })
 
     // 模拟剪贴板
@@ -136,7 +123,7 @@ describe('AiMcpSettingsCard', () => {
     })
   })
 
-  it('switches client snippet tabs between Cursor, Codex, Claude Desktop, Claude Code, Windsurf, VS Code, and Zed', async () => {
+  it('switches client snippet tabs between Cursor, Claude Desktop, Claude Code, and VS Code', async () => {
     renderWithProviders(<AiMcpSettingsCard />)
 
     await waitFor(() => {
@@ -150,18 +137,6 @@ describe('AiMcpSettingsCard', () => {
     const claudeCodeTab = screen.getByText('Claude Code')
     fireEvent.click(claudeCodeTab)
     expect(screen.getByText(/claude mcp add qshell/)).toBeTruthy()
-
-    const codexTab = screen.getByText('Codex')
-    fireEvent.click(codexTab)
-    expect(screen.getByText(/codex mcp add qshell/)).toBeTruthy()
-
-    const windsurfTab = screen.getByText('Windsurf')
-    fireEvent.click(windsurfTab)
-    expect(screen.getByText(/serverUrl/)).toBeTruthy()
-
-    const zedTab = screen.getByText('Zed')
-    fireEvent.click(zedTab)
-    expect(screen.getByText(/context_servers/)).toBeTruthy()
   })
 
   it('allows toggling host authorization and displays authorized badges', async () => {

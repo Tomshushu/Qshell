@@ -36,7 +36,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-type ClientSnippetType = 'cursor' | 'codex' | 'claude_desktop' | 'claude_code' | 'windsurf' | 'vscode' | 'zed'
+type ClientSnippetType = 'cursor' | 'claude_desktop' | 'claude_code' | 'vscode'
 
 export function AiMcpSettingsCard() {
   const { t } = useTranslation()
@@ -253,38 +253,6 @@ export function AiMcpSettingsCard() {
         )
       case 'claude_code':
         return `claude mcp add qshell node "packages/qshell-mcp/dist/index.js" --env QSHELL_MCP_TOKEN="${currentToken}"`
-      case 'codex':
-        return `# 方式一：Codex CLI 命令行一键添加\ncodex mcp add qshell --env QSHELL_MCP_TOKEN="${currentToken}" -- node "packages/qshell-mcp/dist/index.js"\n\n# 方式二：写入 ~/.codex/config.toml\n[mcp_servers.qshell]\ncommand = "node"\nargs = ["packages/qshell-mcp/dist/index.js"]\nenabled = true\n\n[mcp_servers.qshell.env]\nQSHELL_MCP_TOKEN = "${currentToken}"`
-      case 'windsurf':
-        return JSON.stringify(
-          {
-            mcpServers: {
-              qshell: {
-                serverUrl: currentEndpoint,
-                headers: {
-                  Authorization: `Bearer ${currentToken}`,
-                },
-              },
-            },
-          },
-          null,
-          2
-        )
-      case 'zed':
-        return JSON.stringify(
-          {
-            context_servers: {
-              qshell: {
-                url: currentEndpoint,
-                headers: {
-                  Authorization: `Bearer ${currentToken}`,
-                },
-              },
-            },
-          },
-          null,
-          2
-        )
       case 'vscode':
         return JSON.stringify(
           {
@@ -461,12 +429,9 @@ export function AiMcpSettingsCard() {
                 {(
                   [
                     { id: 'cursor', label: t('ai_mcp_client_cursor') || 'Cursor' },
-                    { id: 'codex', label: t('ai_mcp_client_codex') || 'Codex' },
                     { id: 'claude_desktop', label: t('ai_mcp_client_claude_desktop') || 'Claude Desktop' },
                     { id: 'claude_code', label: t('ai_mcp_client_claude_code') || 'Claude Code' },
-                    { id: 'windsurf', label: t('ai_mcp_client_windsurf') || 'Windsurf' },
                     { id: 'vscode', label: t('ai_mcp_client_vscode') || 'VS Code / Cline' },
-                    { id: 'zed', label: t('ai_mcp_client_zed') || 'Zed' },
                   ] as const
                 ).map((tab) => (
                   <button
