@@ -648,7 +648,10 @@ export function FloatingMetricsHud({
         </div>
 
         {/* 4. 网络速率与实时波形直方图 (紧凑精简表头 + 交互标度指示) */}
-        <div className="border border-black/5 dark:border-white/10 rounded-xl p-1.5 bg-black/[0.02] dark:bg-white/[0.03] flex flex-col gap-1 backdrop-blur-md">
+        <div className={cn(
+          "border border-black/5 dark:border-white/10 rounded-xl p-1.5 bg-black/[0.02] dark:bg-white/[0.03] flex flex-col gap-1",
+          ifaceMenuOpen ? "relative z-30" : "relative z-10",
+        )}>
           <div className="flex items-center justify-between text-[10px] font-mono leading-none">
             <div className="flex items-center gap-1.5">
               <span className="flex items-center gap-0.5 text-orange-500 font-medium">
@@ -667,7 +670,7 @@ export function FloatingMetricsHud({
             </div>
 
             {/* 网卡选择下拉菜单 (FinalShell 样式: eth0 ▼, 更加小巧精致) */}
-            <div className="relative" data-no-drag>
+            <div className="relative z-30" data-no-drag>
               <button
                 type="button"
                 onClick={() => setIfaceMenuOpen((v) => !v)}
@@ -832,7 +835,7 @@ export function FloatingMetricsHud({
         </div>
 
         {/* 5. 完整磁盘分区列表 (FinalShell 样式: 路径 | 可用/大小) */}
-        <div className="border border-black/5 dark:border-white/10 rounded-xl overflow-hidden bg-black/[0.02] dark:bg-white/[0.03] backdrop-blur-md">
+        <div className="border border-black/5 dark:border-white/10 rounded-xl overflow-hidden bg-black/[0.02] dark:bg-white/[0.03] relative z-0">
           <div className="grid grid-cols-[1fr_96px] bg-black/[0.03] dark:bg-white/[0.05] text-[10px] font-medium text-center border-b border-black/5 dark:border-white/10 py-1 px-2 text-muted-foreground font-sans">
             <span className="text-left">路径</span>
             <span className="text-right">可用/大小</span>
@@ -868,7 +871,7 @@ export function FloatingMetricsHud({
         </div>
 
         {/* 6. 底部操作栏 */}
-        <div className="flex items-center justify-between pt-1 border-t border-black/5 dark:border-white/10 text-[10px]">
+        <div className="flex items-center justify-between pt-1 border-t border-black/5 dark:border-white/10 text-[10px] relative z-0">
           <Button
             variant="link"
             size="sm"
