@@ -49,6 +49,7 @@ import type {
   ConnectionStateData,
   ImportResult,
   AuditLog,
+  McpStatus,
   GenerateKeyRequest,
   GenerateKeyResult,
   SshAgentIdentity,
@@ -2296,6 +2297,25 @@ export const tauriAdapter: BackendAdapter = {
     },
     async stopAll(serverId: string): Promise<OperationResult> {
       return safeInvoke<OperationResult>("port_forward_stop_all", { serverId });
+    },
+  },
+
+  // ==================== 本地 MCP 服务端与授权 ====================
+  mcp: {
+    async getStatus(): Promise<McpStatus> {
+      return safeInvoke<McpStatus>("mcp_get_status");
+    },
+    async setEnabled(enabled: boolean): Promise<McpStatus> {
+      return safeInvoke<McpStatus>("mcp_set_enabled", { enabled });
+    },
+    async regenerateToken(): Promise<string> {
+      return safeInvoke<string>("mcp_regenerate_token");
+    },
+    async getAuthorizedHosts(): Promise<string[]> {
+      return safeInvoke<string[]>("mcp_get_authorized_hosts");
+    },
+    async setAuthorizedHosts(hostIds: string[]): Promise<void> {
+      return safeInvoke<void>("mcp_set_authorized_hosts", { hostIds });
     },
   },
 };

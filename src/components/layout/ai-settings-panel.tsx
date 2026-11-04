@@ -23,6 +23,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { AiMcpSettingsCard } from './ai-mcp-settings-card'
 import { useTranslation } from '@/i18n'
 import {
   useAIStore,
@@ -1445,7 +1446,10 @@ export function AISettingsPanel() {
         </CardContent>
       </Card>
 
-      {/* 5. 全局悬浮 AI 助手 (Global Floating AI Assistant) */}
+      {/* 5. 本地 MCP 服务端与客户端授权 (Local MCP Server & Client Authorization) */}
+      <AiMcpSettingsCard />
+
+      {/* 6. 全局悬浮 AI 助手 (Global Floating AI Assistant) */}
       <Card className="border border-border/60 bg-muted/15 dark:bg-card/40 rounded-xl overflow-hidden shadow-2xs">
         <CardContent className="p-5 space-y-4">
           <div className="font-semibold text-xs text-foreground flex items-center justify-between">
@@ -1475,7 +1479,7 @@ export function AISettingsPanel() {
         </CardContent>
       </Card>
 
-      {/* 6. AI 问答记录存储与滚动淘汰策略 (AI Chat Storage & Rolling Retention) */}
+      {/* 7. AI 问答记录存储与滚动淘汰策略 (AI Chat Storage & Rolling Retention) */}
       <Card className="border border-border/60 bg-muted/15 dark:bg-card/40 rounded-xl overflow-hidden shadow-2xs">
         <CardContent className="p-5 space-y-4">
           <div className="font-semibold text-xs text-foreground flex items-center justify-between">
