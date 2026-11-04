@@ -244,7 +244,7 @@ export function GroupTreeSelect({
   const label = currentName ?? ungroupedLabel ?? placeholder ?? t('group_ungrouped')
 
   return (
-    <div className="relative" ref={wrapRef}>
+    <div className={cn('relative', open && 'z-30')} ref={wrapRef}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -264,7 +264,7 @@ export function GroupTreeSelect({
       </button>
 
       {open && (
-        <div className="absolute z-50 mt-1 rounded-lg border bg-popover shadow-md p-1 w-56 max-h-64 overflow-auto">
+        <div className="absolute z-50 mt-1 rounded-lg border border-slate-200/90 dark:border-white/15 bg-popover shadow-xl p-1 w-56 max-h-64 overflow-auto">
           <GroupTreePicker
             groups={groups}
             value={value}
@@ -334,7 +334,7 @@ export function GroupFilterChip({
   }
 
   return (
-    <div className={cn('relative', className)} ref={wrapRef}>
+    <div className={cn('relative', open && 'z-30', className)} ref={wrapRef}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -352,7 +352,7 @@ export function GroupFilterChip({
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-1.5 w-56 rounded-lg border bg-popover shadow-md p-1.5">
+        <div className="absolute left-0 top-full z-50 mt-1.5 w-56 rounded-lg border border-slate-200/90 dark:border-white/15 bg-popover shadow-xl p-1.5">
           {/* 全部分组：清除分组筛选 */}
           <button
             type="button"

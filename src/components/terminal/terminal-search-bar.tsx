@@ -67,7 +67,7 @@ export const TerminalSearchBar = memo(function TerminalSearchBar({
 
   return (
     <div
-      className="absolute top-2 right-2 z-10 flex items-center gap-1 rounded-xl border border-slate-200/90 dark:border-white/15 bg-white/98 dark:bg-zinc-950/98 backdrop-blur-2xl shadow-[0_16px_36px_-6px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.9)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-1.5 terminal-search-bar select-none animate-in fade-in-0 zoom-in-95 origin-top-right duration-100"
+      className="absolute top-2 right-2 z-30 flex items-center gap-1 rounded-xl border border-slate-200/90 dark:border-white/15 bg-white/98 dark:bg-zinc-950/98 backdrop-blur-2xl shadow-[0_16px_36px_-6px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.9)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-1.5 terminal-search-bar select-none animate-in fade-in-0 zoom-in-95 origin-top-right duration-100"
       data-terminal-search="true"
       onMouseDown={(e) => {
         e.stopPropagation();

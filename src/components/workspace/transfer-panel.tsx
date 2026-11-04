@@ -274,7 +274,7 @@ export function TransferPanel() {
     .reduce((sum, t) => sum + t.rate, 0)
 
   return (
-    <div className="relative" ref={panelRef}>
+    <div className={cn('relative', isOpen && 'z-40')} ref={panelRef}>
       {/* 切换按钮 */}
       <button
         onClick={() => setIsOpen(!isOpen)}
@@ -294,7 +294,7 @@ export function TransferPanel() {
 
       {/* 面板 */}
       {isOpen && (
-        <Card className="theme-floating-panel absolute top-full right-0 mt-1 z-50 w-96 border-border/60 h-[520px] flex flex-col">
+        <Card className="theme-floating-panel absolute top-full right-0 mt-1 z-50 w-96 border-border/60 h-[520px] flex flex-col bg-popover/98 backdrop-blur-xl shadow-2xl">
           {/* Tab 切换 */}
           <div className="flex border-b flex-shrink-0">
             <TabButton

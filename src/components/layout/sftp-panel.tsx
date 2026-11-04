@@ -7158,7 +7158,7 @@ export function SftpPanel() {
                   />
 
                   {/* 文件搜索（路径之后，刷新之前） */}
-                  <div className="relative w-40 flex-shrink-0">
+                  <div className={cn("relative w-40 flex-shrink-0", searchMode === 'recursive' && "z-30")}>
                     <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground/60" />
                     <Input
                       type="text"
@@ -7222,7 +7222,7 @@ export function SftpPanel() {
                     )}
                     {/* 递归搜索结果浮层 */}
                     {searchMode === 'recursive' && (
-                      <div className="absolute top-full left-0 right-0 mt-1 z-50 bg-background border border-border rounded-md shadow-lg max-h-72 overflow-y-auto">
+                      <div className="absolute top-full left-0 right-0 mt-1 z-50 bg-popover border border-slate-200/90 dark:border-white/15 rounded-md shadow-xl max-h-72 overflow-y-auto">
                         {recursiveSearching && (
                           <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
                             <Loader2 className="h-3 w-3 animate-spin" />

@@ -211,7 +211,7 @@ function ServerTagInput({
   }, [])
 
   return (
-    <div ref={containerRef} className="flex-1 relative">
+    <div ref={containerRef} className={cn("flex-1 relative", isOpen && "z-30")}>
       {/* 直接在输入框内呈现已添加的标签胶囊 */}
       <div
         onClick={() => inputRef.current?.focus()}
@@ -278,7 +278,7 @@ function ServerTagInput({
 
       {/* 下拉候选菜单 */}
       {isOpen && availableTags.length > 0 && (
-        <div className="absolute top-full mt-1 left-0 right-0 z-50 max-h-36 overflow-y-auto rounded-md border border-border bg-popover text-popover-foreground shadow-md p-1 space-y-0.5 animate-in fade-in-50">
+        <div className="absolute top-full mt-1 left-0 right-0 z-50 max-h-36 overflow-y-auto rounded-md border border-slate-200/90 dark:border-white/15 bg-popover text-popover-foreground shadow-xl p-1 space-y-0.5 animate-in fade-in-50">
           <div className="px-2 py-1 text-[10px] text-muted-foreground font-medium border-b border-border/40">
             已有标签（点击直接添加）：
           </div>

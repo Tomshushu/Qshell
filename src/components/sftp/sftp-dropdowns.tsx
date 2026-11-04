@@ -89,7 +89,7 @@ export function GroupFilterChip({
   };
 
   return (
-    <div className="relative" ref={wrapRef}>
+    <div className={cn("relative", open && "z-30")} ref={wrapRef}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -112,7 +112,7 @@ export function GroupFilterChip({
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-1.5 w-56 rounded-lg border bg-popover shadow-md p-1.5">
+        <div className="absolute left-0 top-full z-50 mt-1.5 w-56 rounded-lg border border-slate-200/90 dark:border-white/15 bg-popover shadow-xl p-1.5">
           <button
             type="button"
             onClick={() => pick(null)}
