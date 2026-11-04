@@ -4215,7 +4215,7 @@ export default {
 
   // 本地 MCP 服务端与客户端授权 (Local MCP Server & Client Authorization)
   ai_mcp_title: "本地 MCP 服务端与客户端授权",
-  ai_mcp_desc: "Qshell 原生集成标准 Model Context Protocol (MCP) 服务端，支持 Cursor、Claude Desktop、VS Code、Claude Code 等外部 Agent 跨进程调用已授权服务器的巡检与只读命令执行。",
+  ai_mcp_desc: "Qshell 原生集成标准 Model Context Protocol (MCP) 服务端，支持 Cursor、OpenAI Codex、Claude Desktop、Claude Code、Windsurf、VS Code、Zed 等主流 Agent 跨进程调用已授权服务器的巡检与只读命令执行。",
   ai_mcp_badge_ready: "127.0.0.1 闭环",
   ai_mcp_enable_label: "启用本地 MCP 服务",
   ai_mcp_enable_desc: "开启后仅监听本机 127.0.0.1:45680 端口，严格杜绝局域网与公网暴露，提供零信任原生安全防护。",
@@ -4232,7 +4232,10 @@ export default {
   ai_mcp_client_cursor: "Cursor",
   ai_mcp_client_claude_desktop: "Claude Desktop",
   ai_mcp_client_claude_code: "Claude Code",
+  ai_mcp_client_codex: "Codex",
+  ai_mcp_client_windsurf: "Windsurf",
   ai_mcp_client_vscode: "VS Code / Cline",
+  ai_mcp_client_zed: "Zed",
   ai_mcp_copy_snippet: "复制配置片段",
   ai_mcp_hosts_title: "零信任服务器白名单授权",
   ai_mcp_hosts_desc: "外部 Agent（如 Cursor / Claude）仅能探查和连接在此勾选授权的服务器。未授权的服务器请求将被零信任安全网关立即阻断并返回 unknown-host。",
