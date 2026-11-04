@@ -1748,27 +1748,6 @@ export interface BackendAdapter {
     /** 监听串口 IAP 固件升级实时进度事件 */
     onIapProgress: (callback: (data: SerialIapProgress) => void) => () => void;
   };
-
-  /** MCP (Model Context Protocol) 本地服务与授权 */
-  mcp: {
-    getStatus: () => Promise<McpStatus>;
-    setEnabled: (enabled: boolean) => Promise<McpStatus>;
-    regenerateToken: () => Promise<string>;
-    getAuthorizedHosts: () => Promise<string[]>;
-    setAuthorizedHosts: (hostIds: string[]) => Promise<void>;
-  };
-}
-
-/** MCP 运行状态 */
-export interface McpStatus {
-  enabled: boolean;
-  port: number;
-  token: string;
-  hostCount: number;
-  activeLeases: number;
-  endpointUrl: string;
-  authorizedHostCount: number;
-  authorizedHostIds: string[];
 }
 
 /** 审计日志记录 */

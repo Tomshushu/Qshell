@@ -23,7 +23,6 @@ mod telnet;
 pub mod serial;
 pub mod network;
 mod oauth;
-pub mod mcp;
 
 use tauri::Manager;
 
@@ -62,7 +61,6 @@ pub fn run() {
 
             // 启动本地 OAuth 授权监听器（接收外部浏览器授权回传并自动激活聚焦桌面端）
             oauth::start_oauth_loopback(app.handle().clone());
-            mcp::init_mcp(app.handle());
 
             // 确保所有窗口显式应用 Qshell 品牌图标
             if let Some(icon) = app.default_window_icon() {
@@ -478,12 +476,6 @@ pub fn run() {
             // 自动更新通道测速与优选
             commands::updater::probe_updater_mirrors,
             commands::updater::check_update_with_mirror,
-            // 本地 MCP 服务端及主机授权
-            commands::mcp::mcp_get_status,
-            commands::mcp::mcp_set_enabled,
-            commands::mcp::mcp_regenerate_token,
-            commands::mcp::mcp_get_authorized_hosts,
-            commands::mcp::mcp_set_authorized_hosts,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

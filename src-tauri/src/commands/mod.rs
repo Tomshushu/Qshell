@@ -38,7 +38,6 @@ pub mod serial;
 pub mod tags;
 pub mod updater;
 pub mod backgrounds;
-pub use crate::mcp as mcp;
 
 // ============================================================================
 // 公共辅助类型与函数
