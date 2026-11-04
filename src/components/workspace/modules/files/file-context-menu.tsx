@@ -158,7 +158,7 @@ export function FileContextMenu({
   return createPortal(
     <div
       ref={ctxMenuRef}
-      className="fixed z-[9999] min-w-[13rem] rounded-xl border border-black/10 dark:border-white/10 bg-white/85 dark:bg-zinc-950/85 backdrop-blur-2xl backdrop-saturate-150 shadow-[0_16px_36px_-6px_rgba(0,0,0,0.18),inset_0_1px_0_0_rgba(255,255,255,0.8)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.7),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-1 text-xs text-popover-foreground select-none animate-in fade-in-0 zoom-in-95 origin-top-left duration-100"
+      className="fixed z-[9999] min-w-[13rem] rounded-xl border border-slate-200/90 dark:border-white/15 bg-white/98 dark:bg-[#13141f]/98 backdrop-blur-2xl shadow-[0_16px_36px_-6px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.9)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-1 text-xs text-popover-foreground select-none animate-in fade-in-0 zoom-in-95 origin-top-left duration-100"
       style={{ left: mainPos.left, top: mainPos.top }}
       onClick={(e) => e.stopPropagation()}
     >
@@ -231,7 +231,7 @@ export function FileContextMenu({
             {activeSubMenu === 'new' && (
               <div
                 className={cn(
-                  'absolute -top-1.5 flex flex-col min-w-[12rem] rounded-xl border border-black/10 dark:border-white/10 bg-white/90 dark:bg-zinc-950/90 backdrop-blur-2xl backdrop-saturate-150 shadow-[0_16px_36px_-6px_rgba(0,0,0,0.18),inset_0_1px_0_0_rgba(255,255,255,0.8)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.7),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-1 text-xs text-popover-foreground select-none animate-in fade-in-0 zoom-in-95 duration-100',
+                  'absolute -top-1.5 flex flex-col min-w-[12rem] rounded-xl border border-slate-200/90 dark:border-white/15 bg-white/98 dark:bg-[#13141f]/98 backdrop-blur-2xl shadow-[0_16px_36px_-6px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.9)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-1 text-xs text-popover-foreground select-none animate-in fade-in-0 zoom-in-95 duration-100',
                   newSub.side === 'right' ? 'left-full ml-1 origin-top-left' : 'right-full mr-1 origin-top-right'
                 )}
                 onMouseEnter={keepSubMenuOpen}
@@ -278,7 +278,7 @@ export function FileContextMenu({
             {activeSubMenu === 'upload' && (
               <div
                 className={cn(
-                  'absolute -top-1.5 flex flex-col min-w-[10rem] rounded-xl border border-black/10 dark:border-white/10 bg-white/90 dark:bg-zinc-950/90 backdrop-blur-2xl backdrop-saturate-150 shadow-[0_16px_36px_-6px_rgba(0,0,0,0.18),inset_0_1px_0_0_rgba(255,255,255,0.8)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.7),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-1 text-xs text-popover-foreground select-none animate-in fade-in-0 zoom-in-95 duration-100',
+                  'absolute -top-1.5 flex flex-col min-w-[10rem] rounded-xl border border-slate-200/90 dark:border-white/15 bg-white/98 dark:bg-[#13141f]/98 backdrop-blur-2xl shadow-[0_16px_36px_-6px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.9)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-1 text-xs text-popover-foreground select-none animate-in fade-in-0 zoom-in-95 duration-100',
                   uploadSub.side === 'right' ? 'left-full ml-1 origin-top-left' : 'right-full mr-1 origin-top-right'
                 )}
                 onMouseEnter={keepSubMenuOpen}
@@ -463,7 +463,7 @@ export function FileContextMenu({
                   {activeSubMenu === 'archive' && (
                     <div
                       className={cn(
-                        'absolute -top-1.5 flex flex-col min-w-[12rem] max-h-[300px] overflow-y-auto rounded-xl border border-black/10 dark:border-white/10 bg-white/90 dark:bg-zinc-950/90 backdrop-blur-2xl backdrop-saturate-150 shadow-[0_16px_36px_-6px_rgba(0,0,0,0.18),inset_0_1px_0_0_rgba(255,255,255,0.8)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.7),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-1 text-xs text-popover-foreground select-none animate-in fade-in-0 zoom-in-95 duration-100',
+                        'absolute -top-1.5 flex flex-col min-w-[12rem] max-h-[300px] overflow-y-auto rounded-xl border border-slate-200/90 dark:border-white/15 bg-white/98 dark:bg-[#13141f]/98 backdrop-blur-2xl shadow-[0_16px_36px_-6px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.9)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-1 text-xs text-popover-foreground select-none animate-in fade-in-0 zoom-in-95 duration-100',
                         archiveSub.side === 'right' ? 'left-full ml-1 origin-top-left' : 'right-full mr-1 origin-top-right'
                       )}
                       onMouseEnter={keepSubMenuOpen}

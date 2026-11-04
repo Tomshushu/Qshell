@@ -687,8 +687,8 @@ export function FloatingMetricsHud({
                     className="fixed inset-0 z-40"
                     onClick={() => setIfaceMenuOpen(false)}
                   />
-                  <div className="absolute right-0 top-full mt-1 z-50 min-w-[160px] max-w-[220px] max-h-60 overflow-y-auto bg-white/85 dark:bg-zinc-900/85 backdrop-blur-xl border border-white/30 dark:border-white/15 rounded-xl shadow-2xl p-1 text-xs animate-in fade-in-0 zoom-in-95">
-                    <div className="px-2 py-1 text-[10px] font-medium text-muted-foreground border-b border-black/5 dark:border-white/10 mb-1 flex items-center justify-between sticky top-0 bg-white/90 dark:bg-zinc-900/90 backdrop-blur-md z-10">
+                  <div className="absolute right-0 top-full mt-1.5 z-50 min-w-[170px] max-w-[230px] max-h-60 overflow-y-auto bg-white dark:bg-zinc-950 border border-slate-200/90 dark:border-white/15 rounded-xl shadow-[0_16px_40px_-6px_rgba(0,0,0,0.3),0_0_0_1px_rgba(0,0,0,0.06)] dark:shadow-[0_20px_50px_-8px_rgba(0,0,0,0.9),0_0_0_1px_rgba(255,255,255,0.1)] p-1 text-xs animate-in fade-in-0 zoom-in-95 origin-top-right select-none">
+                    <div className="px-2 py-1 text-[10px] font-medium text-slate-500 dark:text-slate-400 border-b border-black/5 dark:border-white/10 mb-1 flex items-center justify-between sticky top-0 bg-white dark:bg-zinc-950 z-10">
                       <span>选择监控网卡</span>
                       <span className="text-[9px] opacity-70">共 {sortedNetwork.length} 个</span>
                     </div>
@@ -702,10 +702,10 @@ export function FloatingMetricsHud({
                         try { localStorage.setItem('qshell_floating_hud_iface', 'all') } catch { /* ignore */ }
                       }}
                       className={cn(
-                        'w-full flex items-center justify-between px-2 py-1.5 rounded text-[11px] font-mono text-left transition-colors cursor-pointer',
+                        'w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-[11px] font-mono text-left transition-all active:scale-[0.98] cursor-pointer',
                         selectedIface === 'all'
-                          ? 'bg-primary text-primary-foreground font-semibold'
-                          : 'hover:bg-muted text-foreground',
+                          ? 'bg-primary text-primary-foreground font-semibold shadow-xs'
+                          : 'hover:bg-slate-100 dark:hover:bg-white/10 text-slate-800 dark:text-slate-200',
                       )}
                     >
                       <span>全部 (总流量)</span>
@@ -723,15 +723,15 @@ export function FloatingMetricsHud({
                           try { localStorage.setItem('qshell_floating_hud_iface', n.interface) } catch { /* ignore */ }
                         }}
                         className={cn(
-                          'w-full flex items-center justify-between px-2 py-1.5 rounded text-[11px] font-mono text-left transition-colors cursor-pointer',
+                          'w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-[11px] font-mono text-left transition-all active:scale-[0.98] cursor-pointer',
                           selectedIface === n.interface
-                            ? 'bg-primary text-primary-foreground font-semibold'
-                            : 'hover:bg-muted text-foreground',
+                            ? 'bg-primary text-primary-foreground font-semibold shadow-xs'
+                            : 'hover:bg-slate-100 dark:hover:bg-white/10 text-slate-800 dark:text-slate-200',
                         )}
                       >
                         <span className="truncate">{n.interface}</span>
                         <div className="flex items-center gap-1.5 ml-2 shrink-0">
-                          <span className="text-[9px] opacity-60 w-14 text-right tabular-nums">
+                          <span className={cn('text-[9px] w-14 text-right tabular-nums', selectedIface === n.interface ? 'text-primary-foreground/80' : 'text-slate-500 dark:text-slate-400')}>
                             ↓{formatNetRate(n.rxKbps)}
                           </span>
                           {selectedIface === n.interface && <Check className="h-3 w-3 shrink-0" />}

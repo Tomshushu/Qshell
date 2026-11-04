@@ -151,8 +151,8 @@ export const TerminalSelectionToolbar = memo(function TerminalSelectionToolbar({
       className={cn(
         "fixed z-50 flex flex-col w-[148px] rounded-xl overflow-hidden select-none transition-all duration-150 animate-in fade-in zoom-in-95 origin-top-left p-1",
         isLightTerminal
-          ? "bg-white/85 text-slate-800 border border-black/10 shadow-[0_16px_36px_-6px_rgba(0,0,0,0.18),inset_0_1px_0_0_rgba(255,255,255,0.8)] backdrop-blur-2xl backdrop-saturate-150"
-          : "bg-zinc-950/85 text-slate-100 border border-white/10 shadow-[0_20px_40px_-8px_rgba(0,0,0,0.7),inset_0_1px_0_0_rgba(255,255,255,0.12)] backdrop-blur-2xl backdrop-saturate-150",
+          ? "bg-white/98 text-slate-900 border border-slate-200/90 shadow-[0_16px_36px_-6px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.9)] backdrop-blur-2xl"
+          : "bg-[#13141f]/98 text-slate-100 border border-white/15 shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)] backdrop-blur-2xl",
       )}
       style={{ left: pos.left, top: pos.top }}
       onMouseDown={(e) => e.stopPropagation()}

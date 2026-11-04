@@ -150,7 +150,7 @@ export function SelectPopover({
             }
           }}
           className={cn(
-            'z-[100] rounded-lg border bg-popover shadow-md p-1 flex flex-col',
+            'z-[100] rounded-xl border border-slate-200/90 dark:border-white/15 bg-popover shadow-xl p-1 flex flex-col',
             panelClassName ?? 'w-52',
           )}
         >
@@ -182,7 +182,7 @@ export function SelectPopover({
                   setOpen(false)
                 }}
                 className={cn(
-                  'w-full flex items-center justify-between gap-1.5 rounded-md px-2 h-8 text-xs transition-colors',
+                  'w-full flex items-center justify-between gap-1.5 rounded-md px-2 h-8 text-xs transition-all active:scale-[0.98] cursor-pointer',
                   !value ? 'bg-primary/10 text-primary font-semibold' : 'text-foreground hover:bg-accent/40',
                 )}
               >
@@ -209,7 +209,7 @@ export function SelectPopover({
                         setOpen(false)
                       }}
                       className={cn(
-                        'w-full flex items-center justify-between gap-1.5 rounded-md px-2 h-8 text-xs transition-colors',
+                        'w-full flex items-center justify-between gap-1.5 rounded-md px-2 h-8 text-xs transition-all active:scale-[0.98] cursor-pointer',
                         opt.disabled && 'opacity-40 cursor-not-allowed',
                         isSel ? 'bg-primary/10 text-primary font-semibold' : 'text-foreground hover:bg-accent/40',
                       )}

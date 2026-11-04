@@ -91,7 +91,7 @@ export function DeviceTypeFilterPopover({ value, onChange }: DeviceTypeFilterPop
           ref={panelRef}
           style={{ left: pos.left, top: pos.top }}
           className={cn(
-            'fixed z-[100] w-52 rounded-xl border border-border/60 glass-strong shadow-lg p-1.5 space-y-0.5 animate-in fade-in-0 zoom-in-95 origin-top duration-150',
+            'fixed z-[100] w-52 rounded-xl border border-slate-200/90 dark:border-white/15 bg-white/98 dark:bg-zinc-950/98 backdrop-blur-2xl shadow-xl p-1.5 space-y-0.5 animate-in fade-in-0 zoom-in-95 origin-top duration-150',
             isAnime && 'border-pink-300/60 shadow-[0_8px_28px_rgba(255,107,161,0.18)]',
           )}
         >
