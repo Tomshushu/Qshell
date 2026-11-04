@@ -13,10 +13,14 @@ import type { Server, ServerGroup } from '@/types'
 vi.mock('@/services/api', () => ({
   backend: {
     ssh: {
-      execute: vi.fn().mockResolvedValue({
-        exitCode: 0,
-        stdout: 'active (running)',
-        stderr: '',
+      execute: vi.fn().mockImplementation((_connId: string, cmd: string) => {
+        return Promise.resolve({
+          exitCode: 0,
+          stdout: cmd.includes('head')
+            ? 'fallback content from head'
+            : 'active (running)',
+          stderr: '',
+        })
       }),
       batchExecute: vi.fn().mockResolvedValue({
         items: [
@@ -32,6 +36,26 @@ vi.mock('@/services/api', () => ({
         ],
       }),
     },
+    files: {
+      setExclusionConfig: vi.fn(),
+      read: vi.fn().mockImplementation((_serverId: string, path: string) => {
+        if (path.includes('fail-sftp')) {
+          return Promise.reject(new Error('SFTP subsystem disabled'))
+        }
+        if (path.includes('with-secret')) {
+          return Promise.resolve({
+            exitCode: 0,
+            stdout: 'server {\n  ssl_certificate_key /etc/ssl/private/cert.key;\n  password="SuperSecretPassword123";\n}',
+            stderr: '',
+          })
+        }
+        return Promise.resolve({
+          exitCode: 0,
+          stdout: 'server {\n  listen 80;\n  server_name localhost;\n}',
+          stderr: '',
+        })
+      }),
+    },
     metrics: {
       collect: vi.fn(),
     },
@@ -40,7 +64,7 @@ vi.mock('@/services/api', () => ({
 
 describe('AGENT_TOOLS schema', () => {
   it('defines standard OpenAI-compatible tool specifications', () => {
-    expect(AGENT_TOOLS).toHaveLength(2)
+    expect(AGENT_TOOLS).toHaveLength(3)
 
     const probeTool = AGENT_TOOLS.find((t) => t.function.name === 'probe_server')
     expect(probeTool).toBeDefined()
@@ -51,6 +75,11 @@ describe('AGENT_TOOLS schema', () => {
     expect(execTool).toBeDefined()
     expect(execTool?.type).toBe('function')
     expect(execTool?.function.parameters.required).toContain('command')
+
+    const sftpTool = AGENT_TOOLS.find((t) => t.function.name === 'sftp_read_file')
+    expect(sftpTool).toBeDefined()
+    expect(sftpTool?.type).toBe('function')
+    expect(sftpTool?.function.parameters.required).toContain('remotePath')
   })
 })
 
@@ -203,6 +232,69 @@ describe('executeAgentTool', () => {
     expect(res.commandRan).toContain('df -h /tmp')
     expect(res.explanation).toBeDefined()
   })
+
+  describe('sftp_read_file tool execution', () => {
+    it('successfully reads allowed config file via SFTP', async () => {
+      const res = await executeAgentTool(
+        'sftp_read_file',
+        { remotePath: '/etc/nginx/nginx.conf' },
+        baseContext,
+      )
+      expect(res.success).toBe(true)
+      expect(res.output).toContain('listen 80')
+      expect(res.explanation).toContain('/etc/nginx/nginx.conf')
+    })
+
+    it('blocks sensitive files like SSH keys and shadow', async () => {
+      const res1 = await executeAgentTool(
+        'sftp_read_file',
+        { remotePath: '/root/.ssh/id_rsa' },
+        baseContext,
+      )
+      expect(res1.success).toBe(false)
+      expect(res1.output).toContain('[安全网关拦截]')
+
+      const res2 = await executeAgentTool(
+        'sftp_read_file',
+        { remotePath: '/etc/shadow' },
+        baseContext,
+      )
+      expect(res2.success).toBe(false)
+      expect(res2.output).toContain('[安全网关拦截]')
+    })
+
+    it('blocks paths outside the allowed whitelist', async () => {
+      const res = await executeAgentTool(
+        'sftp_read_file',
+        { remotePath: '/boot/grub/grub.cfg' },
+        baseContext,
+      )
+      expect(res.success).toBe(false)
+      expect(res.output).toContain('[安全网关拦截]')
+    })
+
+    it('sanitizes outbound DLP secrets in file content', async () => {
+      const res = await executeAgentTool(
+        'sftp_read_file',
+        { remotePath: '/etc/nginx/conf.d/with-secret.conf' },
+        baseContext,
+      )
+      expect(res.success).toBe(true)
+      expect(res.output).toContain('[REDACTED_SECRET]')
+      expect(res.output).not.toContain('SuperSecretPassword123')
+    })
+
+    it('falls back to safe head/cat if SFTP fails', async () => {
+      const res = await executeAgentTool(
+        'sftp_read_file',
+        { remotePath: '/etc/nginx/fail-sftp.conf' },
+        baseContext,
+      )
+      expect(res.success).toBe(true)
+      expect(res.output).toContain('fallback content from head')
+      expect(res.explanation).toContain('降级')
+    })
+  })
 })
 
 describe('normalizeToolName & stripDsmlTags / stripAllToolCallMarkup & extractTextToolCalls', () => {
@@ -210,6 +302,7 @@ describe('normalizeToolName & stripDsmlTags / stripAllToolCallMarkup & extractTe
     expect(normalizeToolName('probe_server')).toBe('probe_server')
     expect(normalizeToolName('probe_serverprobe_server')).toBe('probe_server')
     expect(normalizeToolName('execute_readonly_commandexecute_readonly_command')).toBe('execute_readonly_command')
+    expect(normalizeToolName('sftp_read_filesftp_read_file')).toBe('sftp_read_file')
     expect(normalizeToolName('custom_tool')).toBe('custom_tool')
   })
 

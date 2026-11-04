@@ -18,6 +18,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(import.meta.dirname, './src'),
+      '@qshell/policy': path.resolve(import.meta.dirname, './packages/qshell-policy/src'),
       '@napi-rs/canvas': path.resolve(import.meta.dirname, './src/lib/empty-module.ts'),
       // Node 内置 buffer → npm buffer polyfill（iconv-lite 编码转换依赖；
       // 带斜杠的后缀避免被当作 Node 内置模块外部化）

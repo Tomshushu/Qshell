@@ -19,7 +19,9 @@
     "baseUrl": ".",
     "ignoreDeprecations": "6.0",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@qshell/policy": ["./packages/qshell-policy/src/index.ts"],
+      "@qshell/policy/*": ["./packages/qshell-policy/src/*"]
     },
 
     /* Linting */
@@ -27,5 +29,5 @@
     "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src", "packages"]
 }
