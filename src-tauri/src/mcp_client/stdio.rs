@@ -236,14 +236,32 @@ impl StdioMcpSession {
         }
     }
 
-    /// 优雅终止子进程
+    /// 优雅终止子进程（Windows 下连同子进程树一并清理，防止 cmd.exe / npx 残留孤儿 node 进程）
     pub async fn shutdown(&self) {
         let mut child = self.child.lock().await;
+        #[cfg(windows)]
+        if let Some(pid) = child.id() {
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            let _ = Command::new("taskkill")
+                .args(["/F", "/T", "/PID", &pid.to_string()])
+                .creation_flags(CREATE_NO_WINDOW)
+                .status()
+                .await;
+        }
         let _ = child.kill().await;
     }
 
     fn kill_sync(&mut self) -> Result<(), String> {
         if let Ok(mut child) = self.child.try_lock() {
+            #[cfg(windows)]
+            if let Some(pid) = child.id() {
+                use std::os::windows::process::CommandExt;
+                const CREATE_NO_WINDOW: u32 = 0x08000000;
+                let _ = std::process::Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .spawn();
+            }
             let _ = child.start_kill();
         }
         Ok(())

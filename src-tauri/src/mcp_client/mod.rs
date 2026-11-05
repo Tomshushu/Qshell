@@ -12,8 +12,9 @@ pub mod types;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 
 use self::http::HttpMcpSession;
@@ -73,10 +74,20 @@ impl ActiveSession {
     }
 }
 
+/// 外部插件连接失败后的熔断冷却期（避免异常插件在每次 AI 对话时重复阻塞）
+const RECONNECT_COOLDOWN: Duration = Duration::from_secs(30);
+/// list_active_tools 热路径上对单个外部插件自愈重连的最大等待时间
+const AUTO_HEAL_TIMEOUT: Duration = Duration::from_secs(5);
+static SAVE_SEQ: AtomicU64 = AtomicU64::new(1);
+
 pub struct McpClientManager {
     config_path: PathBuf,
     plugins: RwLock<Vec<McpPluginConfig>>,
     sessions: Mutex<HashMap<String, Arc<ActiveSession>>>,
+    /// 按插件 ID 串行化启停操作，防止并发请求同时拉起重复子进程
+    connect_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// 记录外部插件最近一次启动失败时间，用于熔断冷却短路
+    last_failed_at: Mutex<HashMap<String, Instant>>,
 }
 
 static GLOBAL_MCP_CLIENT: OnceLock<Arc<McpClientManager>> = OnceLock::new();
@@ -89,6 +100,8 @@ pub fn init_mcp_client(app_data_dir: PathBuf) {
         config_path,
         plugins: RwLock::new(loaded_plugins),
         sessions: Mutex::new(HashMap::new()),
+        connect_locks: Mutex::new(HashMap::new()),
+        last_failed_at: Mutex::new(HashMap::new()),
     });
     let _ = GLOBAL_MCP_CLIENT.set(mgr.clone());
 
@@ -255,8 +268,9 @@ fn save_plugins_to_disk(path: &PathBuf, plugins: &[McpPluginConfig]) -> Result<(
     }
     let json = serde_json::to_string_pretty(&cloned).map_err(|e| e.to_string())?;
 
-    // 同目录临时文件 + 原子替换，避免写入中途崩溃留下半截 JSON
-    let tmp = path.with_extension(format!("json.tmp-{}", std::process::id()));
+    // 同目录临时文件 + 原子替换（附带进程 ID 与自增序号，避免并发落盘竞争同名临时文件）
+    let seq = SAVE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp = path.with_extension(format!("json.tmp-{}-{}", std::process::id(), seq));
     std::fs::write(&tmp, json).map_err(|e| format!("写入临时插件配置失败: {}", e))?;
     std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
@@ -443,6 +457,8 @@ impl McpClientManager {
     /// 删除插件
     pub async fn remove_plugin(&self, plugin_id: &str) -> Result<(), String> {
         self.stop_plugin(plugin_id).await;
+        self.last_failed_at.lock().await.remove(plugin_id);
+        self.connect_locks.lock().await.remove(plugin_id);
         let mut list = self.plugins.write().await;
         list.retain(|p| p.id != plugin_id);
         save_plugins_to_disk(&self.config_path, &list)
@@ -544,8 +560,25 @@ impl McpClientManager {
         self.get_plugin_view(plugin_id).await
     }
 
+    /// 获取指定插件的串行连接互斥锁，防止并发请求同时拉起重复子进程
+    async fn plugin_connect_lock(&self, plugin_id: &str) -> Arc<Mutex<()>> {
+        let mut locks = self.connect_locks.lock().await;
+        locks
+            .entry(plugin_id.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
+    /// 清除指定插件的失败冷却记录（用户显式操作时允许立即重连）
+    pub async fn clear_failure_cooldown(&self, plugin_id: &str) {
+        self.last_failed_at.lock().await.remove(plugin_id);
+    }
+
     /// 启动并连接指定插件，发现其工具清单
     pub async fn start_plugin(&self, plugin_id: &str) -> Result<Vec<McpToolInfo>, String> {
+        let lock = self.plugin_connect_lock(plugin_id).await;
+        let _guard = lock.lock().await;
+
         let cfg = {
             let list = self.plugins.read().await;
             list.iter()
@@ -566,6 +599,7 @@ impl McpClientManager {
                     let mut sessions = self.sessions.lock().await;
                     sessions.insert(plugin_id.to_string(), Arc::new(session));
                 }
+                self.last_failed_at.lock().await.remove(plugin_id);
 
                 {
                     let mut list = self.plugins.write().await;
@@ -580,6 +614,10 @@ impl McpClientManager {
                 Ok(tools)
             }
             Err(err) => {
+                self.last_failed_at
+                    .lock()
+                    .await
+                    .insert(plugin_id.to_string(), Instant::now());
                 let mut list = self.plugins.write().await;
                 if let Some(p) = list.iter_mut().find(|p| p.id == plugin_id) {
                     p.last_error = Some(err.clone());
@@ -667,6 +705,8 @@ impl McpClientManager {
 
         // 外部 Stdio / HTTP 插件必须持有存活会话；会话缺失或进程已退出时重建一次，
         // 避免仅凭磁盘缓存把已失效插件的工具注入给模型。
+        // 高可用保护：对处于 RECONNECT_COOLDOWN (30s) 冷却期内的故障插件直接短路跳过，
+        // 并限制单次自愈重连上限为 AUTO_HEAL_TIMEOUT (5s)，杜绝外部故障插件拖慢 AI 对话与内置 SSH 排障。
         for (id, transport) in &enabled {
             if transport == "ssh_native" {
                 continue;
@@ -679,8 +719,32 @@ impl McpClientManager {
                 }
             };
             if !alive {
-                if let Err(err) = self.start_plugin(id).await {
-                    tracing::warn!("[MCP Client] 刷新插件 {} 会话失败: {}", id, err);
+                let in_cooldown = {
+                    let failed_map = self.last_failed_at.lock().await;
+                    failed_map
+                        .get(id)
+                        .map(|t| t.elapsed() < RECONNECT_COOLDOWN)
+                        .unwrap_or(false)
+                };
+                if in_cooldown {
+                    continue;
+                }
+                match tokio::time::timeout(AUTO_HEAL_TIMEOUT, self.start_plugin(id)).await {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(err)) => {
+                        tracing::warn!("[MCP Client] 刷新插件 {} 会话失败: {}", id, err);
+                    }
+                    Err(_) => {
+                        self.last_failed_at
+                            .lock()
+                            .await
+                            .insert(id.clone(), Instant::now());
+                        tracing::warn!(
+                            "[MCP Client] 刷新插件 {} 会话超时 ({}s)，已进入冷却保护",
+                            id,
+                            AUTO_HEAL_TIMEOUT.as_secs()
+                        );
+                    }
                 }
             }
         }

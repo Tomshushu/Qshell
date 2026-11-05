@@ -61,6 +61,7 @@ pub async fn mcp_client_set_tool_disabled(
 #[tauri::command]
 pub async fn mcp_client_refresh_plugin(plugin_id: String) -> Result<McpPluginView, String> {
     let mgr = global_manager()?;
+    mgr.clear_failure_cooldown(&plugin_id).await;
     mgr.start_plugin(&plugin_id).await?;
     let views = mgr.list_plugins().await;
     views

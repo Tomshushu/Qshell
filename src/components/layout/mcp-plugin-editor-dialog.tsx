@@ -91,7 +91,7 @@ function buildInitialForm(target: McpEditorTarget): FormState {
     icon: p?.icon || 'custom',
     category: p?.category || 'custom',
     enabled: p?.enabled ?? true,
-    transport: isBuiltin ? 'ssh_native' : 'stdio',
+    transport: (p?.transport === 'ssh_native' || p?.transport === 'http' || p?.transport === 'sse') ? p.transport : 'stdio',
     command: p?.command || '',
     argsText: (p?.args || []).join('\n'),
     url: p?.url || '',

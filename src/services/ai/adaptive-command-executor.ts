@@ -43,8 +43,8 @@ export async function executeWithAdaptiveRetry(
   })
 
   // 把原命令的失败也转成结果对象，避免 Promise.race 后残留未处理的 rejection
-  const primaryTask = run(primary, hardTimeoutMs)
-    .then((result) => ({ result }))
+  const primaryTask = run(primary, softTimeoutMs)
+    .then((result) => (result.error ? { error: result.error } : { result }))
     .catch((err: unknown) => ({ error: (err as Error)?.message || String(err) }))
 
   let raced: { result?: CommandExecResult; error?: string } | 'timeout'

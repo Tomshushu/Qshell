@@ -119,7 +119,7 @@ async function runRemoteReadCommand(
         res &&
         res.exitCode !== 0 &&
         !res.stdout &&
-        /^(Not connected|SSH session|Channel open|Connection closed|Send failed)/i.test(
+        /^(Not connected|Connection lost|SSH connection failed|Channel open|Connection closed|SSH session|SSH error:|SSH send error|IO error:|Send failed)/i.test(
           res.stderr || '',
         )
       if (res && !isConnClosedErr) {
