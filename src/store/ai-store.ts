@@ -1585,7 +1585,7 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
           customBlacklist: settings.customBlacklist ?? [],
           allowWriteMcpTools: settings.allowWriteMcpTools === true,
         }
-      : settings
+      : { ...settings, executionMode: get().getEffectiveExecutionMode() }
 
     const hasApiKeyOrOllama =
       Boolean(effectiveSettings.apiKey?.trim()) ||

@@ -7180,7 +7180,7 @@ export function TerminalModule({
         // 统一裁决点：所有「在终端运行 / 右键执行」事件都经过这里。
         // 只读问答与询问确认模式下，一键执行降级为「仅填入」，由用户回车完成显式确认，
         // 避免任何派发入口绕过 AI 执行模式。
-        const aiMode = useAIStore.getState().settings.executionMode || "auto_readonly";
+        const aiMode = useAIStore.getState().getEffectiveExecutionMode();
         const wantsExecute = customEvent.detail.execute === true;
         const shouldExecute = shouldAutoRunTerminalCommand(aiMode, wantsExecute);
         writePasteText(cmd, targetSessionId, {

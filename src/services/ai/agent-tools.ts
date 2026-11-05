@@ -30,8 +30,6 @@ import {
   isBinaryContent,
   clipFileLines,
   toMcpToolDefinition,
-  recordAudit,
-  sanitize,
   type AdaptiveRetryPlan,
 } from '@qshell/policy'
 import { executeWithAdaptiveRetry } from './adaptive-command-executor'
@@ -117,11 +115,18 @@ async function runRemoteReadCommand(
   if (activeConnId && backend?.ssh?.execute) {
     try {
       const res = await withTimeout(backend.ssh.execute(activeConnId, command))
-      if (res && (res.exitCode === 0 || res.stdout || res.stderr)) {
+      const isConnClosedErr =
+        res &&
+        res.exitCode !== 0 &&
+        !res.stdout &&
+        /^(Not connected|SSH session|Channel open|Connection closed|Send failed)/i.test(
+          res.stderr || '',
+        )
+      if (res && !isConnClosedErr) {
         return {
           stdout: res.stdout || '',
           stderr: res.stderr || '',
-          exitCode: res.exitCode,
+          exitCode: res.exitCode ?? 0,
         }
       }
     } catch {
@@ -620,6 +625,7 @@ async function executeExternalMcpTool(
   context: AgentToolExecutionContext,
   startTime: number,
 ): Promise<AgentToolExecutionResult> {
+  const isDangerMode = context.executionMode === 'danger'
   // 每次执行前重新读取后端权威清单：用户可能在对话过程中刚禁用插件/工具，
   // 不能信任请求开始时生成的 activeMcpToolsMap 快照（SSH-Native 分支会绕过 Rust call_tool）。
   let toolMeta = context.activeMcpToolsMap?.get(qualifiedName)
@@ -635,7 +641,7 @@ async function executeExternalMcpTool(
   if (!toolMeta) {
     const errRes = respondError(
       `安全策略拒绝：工具「${qualifiedName}」未注册或已被禁用，仅允许调用当前已启用的 MCP 插件工具。`,
-      { tool: qualifiedName, durationMs: Date.now() - startTime },
+      { tool: qualifiedName, durationMs: Date.now() - startTime, dangerous: isDangerMode },
     )
     return { success: false, output: errRes.content[0].text }
   }
@@ -647,6 +653,7 @@ async function executeExternalMcpTool(
         tool: qualifiedName,
         hostId: `mcp:${toolMeta.pluginId}`,
         durationMs: Date.now() - startTime,
+        dangerous: isDangerMode,
       },
     )
     return { success: false, output: errRes.content[0].text }
@@ -701,6 +708,7 @@ async function executeExternalMcpTool(
         hostId: targetServer.id,
         command: commandLabel,
         durationMs: Date.now() - startTime,
+        dangerous: isDangerMode,
       })
 
       return {
@@ -717,6 +725,7 @@ async function executeExternalMcpTool(
         hostId: targetServer.id,
         command: commandLabel,
         durationMs: Date.now() - startTime,
+        dangerous: isDangerMode,
       })
       return {
         success: false,
@@ -731,6 +740,7 @@ async function executeExternalMcpTool(
     const errRes = respondError('当前环境未初始化 MCP Client 引擎，无法调用外部插件工具。', {
       tool: qualifiedName,
       durationMs: Date.now() - startTime,
+      dangerous: isDangerMode,
     })
     return { success: false, output: errRes.content[0].text }
   }
@@ -752,6 +762,7 @@ async function executeExternalMcpTool(
         hostId: `mcp:${toolMeta.pluginId}`,
         command: commandLabel,
         durationMs: callRes.durationMs || Date.now() - startTime,
+        dangerous: isDangerMode,
       })
       return {
         success: false,
@@ -768,6 +779,7 @@ async function executeExternalMcpTool(
       hostId: `mcp:${toolMeta.pluginId}`,
       command: commandLabel,
       durationMs: callRes.durationMs || Date.now() - startTime,
+      dangerous: isDangerMode,
     })
 
     return {
@@ -783,6 +795,7 @@ async function executeExternalMcpTool(
       tool: qualifiedName,
       hostId: `mcp:${toolMeta.pluginId}`,
       durationMs: Date.now() - startTime,
+      dangerous: isDangerMode,
     })
     return {
       success: false,
@@ -802,6 +815,7 @@ export async function executeAgentTool(
 ): Promise<AgentToolExecutionResult> {
   const startTime = Date.now()
   const executionMode = context.executionMode || 'auto_readonly'
+  const isDangerMode = executionMode === 'danger'
 
   // 模式裁决前置兜底：模型侧已按档控制工具下发，这里防止残留/伪造 tool call 绕过模式
   if (executionMode === 'ask' || executionMode === 'disabled') {
@@ -813,24 +827,6 @@ export async function executeAgentTool(
 
   const { servers, activeServerId, customBlacklist = [], signal } = context
   const normName = normalizeToolName(toolName)
-
-  // 危险模式：所有工具执行（含只读与插件）统一写入审计标记，满足全量审计要求
-  if (executionMode === 'danger') {
-    recordAudit({
-      ts: Date.now(),
-      requestId: `danger_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-      transport: 'internal',
-      hostId: 'default',
-      tool: normName,
-      command: sanitize(String(args.command || args.remotePath || JSON.stringify(args))).text,
-      policyLevel: 'danger',
-      dangerous: true,
-      approvalState: 'ACCEPT',
-      durationMs: 0,
-      outputBytes: 0,
-      truncated: false,
-    })
-  }
 
   // 0. 优先路由外部 MCP 插件工具（mcp__<plugin>__<tool>）
   // 外部 MCP 工具（如 Kubernetes、Prometheus、Redis、PostgreSQL、GitHub、Fetch）
@@ -906,6 +902,7 @@ export async function executeAgentTool(
         tool: 'probe_server',
         hostId: targetServer.id,
         durationMs: Date.now() - startTime,
+        dangerous: isDangerMode,
       })
 
       return {
@@ -920,6 +917,7 @@ export async function executeAgentTool(
         tool: 'probe_server',
         hostId: targetServer.id,
         durationMs: Date.now() - startTime,
+        dangerous: isDangerMode,
       })
       return {
         success: false,
@@ -935,6 +933,7 @@ export async function executeAgentTool(
       const errRes = respondError('错误：未提供需要执行的命令。', {
         tool: 'execute_readonly_command',
         hostId: targetServer.id,
+        dangerous: isDangerMode,
       })
       return { success: false, output: errRes.content[0].text }
     }
@@ -959,6 +958,7 @@ export async function executeAgentTool(
           hostId: targetServer.id,
           command: rawCmd,
           durationMs: Date.now() - startTime,
+          dangerous: isDangerMode,
         },
       )
       return {
@@ -997,7 +997,7 @@ export async function executeAgentTool(
         command: safeCmd,
         verdict: decision.verdict,
         durationMs: Date.now() - startTime,
-        dangerous: Boolean(decision.isDangerous),
+        dangerous: isDangerMode || Boolean(decision.isDangerous),
       })
 
       return {
@@ -1012,6 +1012,7 @@ export async function executeAgentTool(
         tool: 'execute_readonly_command',
         hostId: targetServer.id,
         command: safeCmd,
+        dangerous: isDangerMode,
       })
       return {
         success: false,
@@ -1030,6 +1031,7 @@ export async function executeAgentTool(
       const errRes = respondError('错误：未提供需要读取的文件绝对路径。', {
         tool: 'sftp_read_file',
         hostId: targetServer.id,
+        dangerous: isDangerMode,
       })
       return { success: false, output: errRes.content[0].text }
     }
@@ -1050,6 +1052,7 @@ export async function executeAgentTool(
           hostId: targetServer.id,
           remotePath: rawPath,
           durationMs: Date.now() - startTime,
+          dangerous: isDangerMode,
         },
       )
       return {
@@ -1098,6 +1101,7 @@ export async function executeAgentTool(
           tool: 'sftp_read_file',
           hostId: targetServer.id,
           remotePath: normalizedPath,
+          dangerous: isDangerMode,
         })
         return {
           success: false,
@@ -1116,6 +1120,7 @@ export async function executeAgentTool(
             tool: 'sftp_read_file',
             hostId: targetServer.id,
             remotePath: normalizedPath,
+            dangerous: isDangerMode,
           })
           return {
             success: false,
@@ -1128,6 +1133,7 @@ export async function executeAgentTool(
           tool: 'sftp_read_file',
           hostId: targetServer.id,
           remotePath: normalizedPath,
+          dangerous: isDangerMode,
         })
         return {
           success: false,
@@ -1143,6 +1149,7 @@ export async function executeAgentTool(
         tool: 'sftp_read_file',
         hostId: targetServer.id,
         remotePath: normalizedPath,
+        dangerous: isDangerMode,
       })
       return {
         success: false,
@@ -1159,6 +1166,7 @@ export async function executeAgentTool(
       hostId: targetServer.id,
       remotePath: normalizedPath,
       durationMs: Date.now() - startTime,
+      dangerous: isDangerMode,
     })
 
     return {
@@ -1171,6 +1179,7 @@ export async function executeAgentTool(
   const unknownMsg = `未知工具名称: ${toolName}`
   respondError(unknownMsg, {
     tool: toolName,
+    dangerous: isDangerMode,
   })
   return {
     success: false,

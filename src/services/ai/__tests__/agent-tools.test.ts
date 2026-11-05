@@ -301,8 +301,8 @@ describe('executeAgentTool', () => {
   })
 
   describe('auto-connect with saved credentials (no terminal session required)', () => {
-    const batchExecuteMock = backend.ssh.batchExecute as unknown as ReturnType<typeof vi.fn>
-    const executeMock = backend.ssh.execute as unknown as ReturnType<typeof vi.fn>
+    const batchExecuteMock = backend!.ssh.batchExecute as unknown as ReturnType<typeof vi.fn>
+    const executeMock = backend!.ssh.execute as unknown as ReturnType<typeof vi.fn>
     const noTerminalContext: AgentToolExecutionContext = {
       servers: [mockServers[0]],
       serverGroups: mockGroups,
@@ -339,6 +339,26 @@ describe('executeAgentTool', () => {
       expect(batchExecuteMock).toHaveBeenCalledTimes(1)
       expect(res.success).toBe(true)
       expect(res.output).toContain('Filesystem 50G')
+    })
+
+    it('does not re-run via batchExecute when an active session command exits non-zero with empty output', async () => {
+      useAppStore.setState({
+        tabs: [{ id: 'tab-1', serverId: 'srv-1' } as never],
+        connectedServers: { 'srv-1': 'srv-1' } as never,
+        activeTabId: 'tab-1',
+      })
+      executeMock.mockResolvedValueOnce({
+        exitCode: 1,
+        stdout: '',
+        stderr: '',
+      })
+      const res = await executeAgentTool(
+        'execute_readonly_command',
+        { command: 'grep -i "ERROR_NOT_FOUND" /var/log/syslog' },
+        baseContext,
+      )
+      expect(batchExecuteMock).not.toHaveBeenCalled()
+      expect(res.success).toBe(false)
     })
 
     it('runs ssh_native MCP plugin diagnostics without an open terminal', async () => {
