@@ -265,6 +265,12 @@ npm run build
 
 ---
 
+## 📚 문서
+
+- [MCP 플러그인 허브 가이드](./MCP_PLUGIN_HUB.md): AI 운영 어시스턴트 플러그인 구조, IPC 명령, 보안 모델 및 사용자 지정 MCP Server 설정.
+
+---
+
 ## 📄 라이선스 (License)
 
 본 프로젝트는 [Apache License 2.0](../LICENSE)에 따라 오픈소스로 배포됩니다. 저작권은 Qshell 커뮤니티에 있습니다.

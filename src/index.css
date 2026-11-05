@@ -5719,27 +5719,34 @@ button.ofv-toolbar-icon-button[title*="下载"] {
 }
 
 /* AI Assistant Chat 气泡富文本排版样式 */
+.ai-chat-content h1,
+.ai-chat-content h2,
+.ai-chat-content h3 {
+  letter-spacing: -0.01em;
+  line-height: 1.4;
+  color: inherit;
+}
+.ai-chat-content > :first-child {
+  margin-top: 0;
+}
 .ai-chat-content h1 {
   font-size: 0.95rem;
   font-weight: 700;
-  margin: 0.5rem 0 0.35rem;
-  color: inherit;
+  margin: 0.6rem 0 0.35rem;
 }
 .ai-chat-content h2 {
   font-size: 0.875rem;
   font-weight: 700;
-  margin: 0.5rem 0 0.3rem;
-  color: inherit;
+  margin: 0.6rem 0 0.3rem;
 }
 .ai-chat-content h3 {
   font-size: 0.8rem;
   font-weight: 600;
-  margin: 0.4rem 0 0.25rem;
-  color: inherit;
+  margin: 0.5rem 0 0.25rem;
 }
 .ai-chat-content p {
-  margin-bottom: 0.45rem;
-  line-height: 1.6;
+  margin-bottom: 0.55rem;
+  line-height: 1.7;
 }
 .ai-chat-content p:last-child {
   margin-bottom: 0;
@@ -5761,21 +5768,21 @@ button.ofv-toolbar-icon-button[title*="下载"] {
   opacity: 0.6;
 }
 .ai-chat-content code:not(pre code) {
-  padding: 0.15rem 0.35rem;
-  border-radius: 0.25rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 0.35rem;
+  border: 1px solid var(--border);
   background-color: var(--muted);
   font-family: monospace;
   font-size: 0.82em;
   color: var(--primary);
 }
 .ai-chat-content blockquote {
-  margin: 0.5rem 0;
-  padding: 0.4rem 0.75rem;
-  border-left: 3px solid rgb(56 189 248 / 0.7);
-  background-color: rgb(56 189 248 / 0.08);
-  border-radius: 0 0.5rem 0.5rem 0;
+  margin: 0.6rem 0;
+  padding: 0.15rem 0 0.15rem 0.85rem;
+  border-left: 2px solid var(--primary);
+  background-color: transparent;
   font-size: 0.85em;
-  color: inherit;
+  color: var(--muted-foreground);
 }
 .ai-chat-content blockquote p {
   margin-bottom: 0;

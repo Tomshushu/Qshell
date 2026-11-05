@@ -3,7 +3,7 @@
  *
  * Qshell AIOps 工业级智能体提示词引擎 (Inspired by Claude Code Architecture)
  * 1. 深度借鉴 Claude Code 的 Action-Oriented / Zero-Fluff 核心工程哲学
- * 2. 注入针对 SRE 典型场景的四大黄金排障标准工作流 (Investigation Playbooks)
+ * 2. 注入针对 SRE 典型场景的四大黄金排障标准工作流 (Investigation Playbooks) 与外部 MCP 插件多源联合排障能力
  * 3. 严格践行「工具验证优先、绝不凭空臆测」与「证据链驱动的三段式输出规范」
  * 4. 完整保留 DLP 数据脱敏、操作系统原生兼容、多义词保护与优雅跨领域引导规则
  */
@@ -11,22 +11,63 @@
 import type { AIPromptContext } from '@/types/ai'
 import { sanitizeLogContent } from './dlp-sanitizer'
 
+export interface ActiveMcpToolPromptSummary {
+  pluginName: string
+  qualifiedName: string
+  toolName: string
+  description: string
+  isReadOnly: boolean
+}
+
 export interface BuildSystemPromptOptions {
   mode: 'chat' | 'agent'
   context?: AIPromptContext
   enableDlp?: boolean
   maskPrivateIps?: boolean
+  activeMcpTools?: ActiveMcpToolPromptSummary[]
+  /** 执行模式：让模型明确当前档位能做什么，与执行层裁决保持一致 */
+  executionMode?: 'ask' | 'auto_readonly' | 'disabled' | 'danger'
 }
 
 /**
  * 构建完整的 AIOps System Prompt
  */
 export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
-  const { mode, context = {}, enableDlp = false, maskPrivateIps = false } = options
+  const {
+    mode,
+    context = {},
+    enableDlp = false,
+    maskPrivateIps = false,
+    activeMcpTools = [],
+    executionMode,
+  } = options
   const isAgent = mode === 'agent'
 
   const basePrompt = isAgent ? buildAgentPrompt() : buildChatPrompt()
   let fullSystemPrompt = basePrompt
+
+  // 组装已挂载的外部 MCP 插件工具上下文（仅 Agent 模式且存在活跃插件时注入）
+  if (isAgent && activeMcpTools.length > 0) {
+    const grouped = new Map<string, ActiveMcpToolPromptSummary[]>()
+    for (const t of activeMcpTools) {
+      const list = grouped.get(t.pluginName) || []
+      list.push(t)
+      grouped.set(t.pluginName, list)
+    }
+    const pluginLines: string[] = []
+    for (const [pluginName, tools] of grouped.entries()) {
+      const toolSummary = tools
+        .slice(0, 15)
+        .map((t) => `${t.qualifiedName}${t.isReadOnly ? '' : '(写)'}`)
+        .join(', ')
+      pluginLines.push(`- 🔌 **${pluginName}** (${tools.length} 个工具): ${toolSummary}`)
+    }
+    fullSystemPrompt +=
+      `\n\n[当前会话已启用的扩展插件工具箱]\n` +
+      `以下为本轮真实下发给你的可用插件工具，未列出的工具名一律不可调用。当用户问题落入对应领域时，请优先调用下列工具取证，不要凭空臆测：\n` +
+      pluginLines.join('\n') +
+      `\n说明：标注 (写) 的工具包含状态变更操作，未经用户授权会被安全策略拒绝；内置 \`mcp__builtin_*\` 工具复用目标服务器 SSH 连接取证，其余工具经 MCP 插件引擎调用。\n`
+  }
 
   // 组装环境上下文信息
   if (
@@ -59,7 +100,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
     if (context.isExplainShell) {
       contextItems.push(
         `【指令拆解与管道流转分析】：当前用户正在咨询 Shell 指令的语法含义与管道原理。请优先给出专业拆解与各段坑点分析。\n` +
-          `【排版要求】：首段首句直奔主题给出核心作用与业务总结，严禁在开头放未连接声明！若当前未连接终端且需建议线上实操验证，请统一在正文最末尾简要提示“若需针对真实服务器日志采样验证，可在下方点选目标主机一键下发”，以便与下方卡片紧密承接。`,
+          `【排版要求】：首段首句直奔主题给出核心作用与业务总结，严禁在开头放未连接声明！若当前未指定目标主机且需建议线上实操验证，请统一在正文最末尾简要提示“若需针对真实服务器日志采样验证，可在下方点选目标主机一键下发（已纳管主机会自动用已保存凭据连接）”，以便与下方卡片紧密承接。`,
       )
     }
 
@@ -69,7 +110,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
       )
     } else {
       contextItems.push(
-        `当前活跃连接目标: 【未连接任何终端】（当前处于首页或未打开任何 SSH 终端标签页。\n` +
+        `当前活跃连接目标: 【未打开终端标签页】（当前处于首页或未打开任何 SSH 终端标签页；Qshell 已纳管主机可用已保存的账号密码 / 密钥自动建立 SSH 连接，无需用户先打开终端。若只纳管一台主机，Agent 工具会自动选取，多台时需用户指定目标主机）。\n` +
           `【重要排版原则】：首段首句严禁插入“未连接终端、请在下方选择服务器”等免责声明打断阅读！必须在正文最末尾提供后续实操建议段，顺畅引导用户在下方卡片中点选目标服务器发起执行）`,
       )
     }
@@ -110,6 +151,17 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
     fullSystemPrompt += `\n\n[环境上下文参考]\n${contextItems.join('\n')}`
   }
+
+  // 执行策略必须让模型感知：否则模型会声称「已执行」，或与执行层裁决结果冲突
+  const policyNotice =
+    executionMode === 'disabled'
+      ? '【只读问答】当前禁止任何远程执行：不要调用工具、不要声称命令已运行，只给出可直接复制的命令建议与排查思路。'
+      : executionMode === 'ask'
+        ? '【询问确认】当前不允许自动执行：给出命令建议，系统会在执行卡片上请求用户确认；不要声称命令已运行。'
+        : executionMode === 'danger'
+          ? '【危险模式（手动授权）】当前允许执行写操作命令（如 systemctl restart、mkdir、配置修改）；但 rm -rf、mkfs、reboot、磁盘裸写、远程脚本管道等红线仍绝对禁止。每条命令执行前会展示预览并全量审计，不要声称绕过审批；只有用户手动切换模式或关闭时才会退出。'
+          : null
+  if (policyNotice) fullSystemPrompt += `\n\n[当前执行策略]\n${policyNotice}`
 
   return fullSystemPrompt
 }
@@ -169,7 +221,7 @@ function buildAgentPrompt(): string {
 5. 【系统精准兼容与只读白名单规范】：
    - 必须优先识别【目标操作系统环境】（如 Ubuntu/Debian, CentOS/RHEL, Alpine, macOS, Windows 等），生成与该系统完全原生兼容的 Shell/PowerShell 指令，绝不在 Linux 下生成 Windows 专有命令，也绝不在 Windows 下生成 Linux 专有命令；
    - 排查与诊断时，推荐的命令行必须优先选用【只读白名单指令】（如查看状态、日志切片、端口监听、进程列表、资源占用、容器只读状态等，如 \`systemctl status\`、\`journalctl -n 50\`、\`ss -tulpn\`、\`docker ps\` 等）；
-   - 严禁提供导致系统 I/O 阻塞或卡死的无限制全盘递归遍历指令（如严禁使用 \`find /\`、\`du -sh /*\` 等，必须使用限制深度的安全命令如 \`du -h --max-depth=1 /var/log | sort -hr | head -n 5\`）；
+   - 严禁提供导致系统 I/O 阻塞或卡死的无限制全盘递归遍历指令（如严禁无深度限制的 \`find /\`、\`du -sh /*\` 等，必须使用限制深度的安全命令如 \`du -h --max-depth=1 /var/log | sort -hr | head -n 5\`）；若确需较深检索，可以直接给出带 \`-maxdepth N\` 的 find，系统会在约 4 秒无返回时自动改用 \`-maxdepth 1\` 重试，**不要因此中断回答或反复向用户解释拦截**；
    - 【严禁推荐持续阻塞式交互指令（如 watch, tail -f, htop）】：严禁在代码块中推荐持续循环、常驻阻塞或交互式 TUI 命令（如 \`watch\`、\`tail -f\`、\`htop\` 等），因为后台安全执行卡片无法交互且会超时挂起；若需监控进程或查看最新状态，必须推荐【单次即时采样指令】（例如直接使用 \`ps -p <PID> -o %cpu,%mem,cmd\`、\`top -b -n 1\`、\`tail -n 30\` 等）；
    - 严禁使用子 Shell 替换（\`$()\`、反引号）、未经授权的重定向写盘、或高危破坏性指令；
    - 若用户明确要求进行写操作（如重启服务、修改配置、终止进程），可以提供相应命令，但在回答中必须明确标识该操作具有变更性质与潜在风险，以便系统安全执行卡片进行二次授权；
@@ -183,12 +235,12 @@ function buildAgentPrompt(): string {
 7. 如果涉及命令行操作，请优先提供可直接执行的 Shell 命令，必须使用 \`\`\`bash 或 \`\`\`sh 独立代码块包裹；
 8. 语言简洁、直接、富有科技感与专家水准；
 
-9. 【未连接活动服务器与目标选择引导规范（消除首尾割裂）】：
-   - 当 [当前活跃连接目标] 为未连接任何终端且用户在问题中未指明具体服务器名称时（如用户点击了通用快捷入口、在首页直接提问或使用代词“当前连接的服务器”）：
-   - a. 【首行首段绝对纯净，严禁前置免责阻断】：正文首行必须专注于直接给出结论、分析结果或命令核心作用，**绝对严禁**在首段或开头插入“当前未连接任何活动终端”、“因此我无法执行”、“请在下方卡片中选择服务器”等前置免责声明打断阅读体验；
-   - b. 【引导文案统一收敛至文末实操段，消除上下割裂】：若涉及命令实操、故障排查或真实环境采样验证，**所有关于“引导在下方卡片中选择目标主机”的提示文案，必须且只能放置在回答的正文最末尾（作为实操建议段落）**，例如使用：“💡 **线上实机采样建议**：当前未连接任何活动终端。若您想在真实服务器（如您的生产集群）上实时跑出该命令的线上结果，可在下方卡片中直接点选目标主机一键下发执行。”
+9. 【未指定目标服务器与选择引导规范（消除首尾割裂）】：
+   - 当 [当前活跃连接目标] 为未打开终端标签页且用户在问题中未指明具体服务器名称时（如用户点击了通用快捷入口、在首页直接提问或使用代词“当前连接的服务器”）：
+   - a. 【首行首段绝对纯净，严禁前置免责阻断】：正文首行必须专注于直接给出结论、分析结果或命令核心作用，**绝对严禁**在首段或开头插入“当前未打开终端标签页”、“因此我无法执行”、“请在下方卡片中选择服务器”等前置免责声明打断阅读体验；**绝对严禁**声称“需要先打开终端才能执行”，Qshell 已纳管主机由工具层使用已保存的账号密码 / 密钥自动建连；
+   - b. 【引导文案统一收敛至文末实操段，消除上下割裂】：若涉及命令实操、故障排查或真实环境采样验证，**所有关于“引导在下方卡片中选择目标主机”的提示文案，必须且只能放置在回答的正文最末尾（作为实操建议段落）**，例如使用：“💡 **线上实机采样建议**：当前未指定目标主机。若您想在真实服务器（如您的生产集群）上实时跑出该命令的线上结果，可在下方卡片中直接点选目标主机一键下发执行，Qshell 会用已保存凭据自动连接，无需打开终端窗口。”
    - 这样用户的视线在读完全文后，正文末行与紧随其后的快捷选择主机卡片无缝衔接，视觉上浑然一体，绝不出现“提示在最顶、卡片在最底”的上下割裂感！
-   - c. **绝对严禁**擅自猜测或随机挑选一台默认服务器发起后台静默探测；
+   - c. **绝对严禁**擅自猜测或随机挑选一台默认服务器发起后台静默探测（仅当资产库中只有一台纳管主机时才由工具层自动选取，模型不得替用户猜测）；
 
 10. 【非运维、生活闲聊与跨领域提问处理规范（优雅回归与工具阻断）】：
    - 当用户提出与服务器运维、终端操作、编程脚本或系统技术无关的跨领域生活闲聊/百科问题时（例如询问宠物猫狗品种、生活常识、天气、菜谱、娱乐八卦等）：

@@ -30,6 +30,7 @@ export function formatAuditRecord(record: AuditRecord): string {
     remotePath: record.remotePath,
     verdict: record.verdict,
     policyLevel: record.policyLevel || 'read-only',
+    dangerous: Boolean(record.dangerous),
     approvalId: record.approvalId,
     approvalState: record.approvalState || 'NONE',
     durationMs: record.durationMs || 0,

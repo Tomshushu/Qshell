@@ -135,10 +135,85 @@ export const SFTP_READ_FILE_SCHEMA: McpToolDefinition = {
 }
 
 /**
- * 符合 MCP 与 OpenAI Function Calling 规范的工具清单
+ * Qshell 作为 MCP Server 对外暴露的「静态内置工具」清单。
+ *
+ * 注意：这不是 AI Agent 运行时的完整工具集。插件中心动态发现的 MCP 插件工具
+ * （mcp__<plugin>__<tool>）由 buildMcpTools() 在运行时合并进来，
+ * 不应在此处硬编码重复定义（Rust presets.rs 才是内置插件工具的唯一权威来源）。
  */
 export const MCP_TOOLS: McpToolDefinition[] = [
   PROBE_SERVER_SCHEMA,
   EXECUTE_READONLY_COMMAND_SCHEMA,
   SFTP_READ_FILE_SCHEMA,
 ]
+
+/**
+ * 运行时动态插件工具的精简描述。
+ * 与 src/services/api/types.ts 的 ActiveMcpTool 结构兼容，避免策略包反向依赖前端类型。
+ */
+export interface DynamicMcpToolDescriptor {
+  qualifiedName: string
+  toolName: string
+  description: string
+  inputSchema: Record<string, unknown>
+  isReadOnly: boolean
+  pluginName?: string
+  transport?: string
+}
+
+/**
+ * 将动态插件工具规范化为符合 MCP Tool Schema 的定义。
+ *
+ * 外部 MCP Server 返回的 inputSchema 质量参差不齐（缺 type / properties / required、
+ * required 含非字符串项等），直接下发给大模型容易触发 400。这里统一补齐，
+ * 并根据只读标记生成标准 annotations，让策略层与执行层使用同一份判定依据。
+ */
+export function toMcpToolDefinition(tool: DynamicMcpToolDescriptor): McpToolDefinition {
+  const rawSchema = (tool.inputSchema || {}) as Record<string, unknown>
+  const rawProperties = rawSchema.properties
+  const properties =
+    rawProperties && typeof rawProperties === 'object' && !Array.isArray(rawProperties)
+      ? (rawProperties as Record<string, unknown>)
+      : {}
+  const required = Array.isArray(rawSchema.required)
+    ? rawSchema.required.filter((item): item is string => typeof item === 'string')
+    : []
+
+  return {
+    name: tool.qualifiedName || tool.toolName,
+    description: tool.description || tool.toolName,
+    inputSchema: {
+      type: 'object',
+      properties,
+      required,
+      additionalProperties: rawSchema.additionalProperties !== false,
+    },
+    annotations: {
+      readOnlyHint: tool.isReadOnly,
+      // 写操作不可假定幂等；只读工具才标记幂等
+      idempotentHint: tool.isReadOnly,
+      // 本地子进程 / 远程端点对外部世界开放，ssh_native 内置工具只访问已纳管主机
+      openWorldHint: (tool.transport || 'ssh_native') !== 'ssh_native',
+    },
+  }
+}
+
+/**
+ * 构建完整工具清单：3 个静态内置工具 + 当前已启用的动态插件工具。
+ * 同名工具以静态内置为准，避免插件伪造 probe_server 等受保护工具名。
+ */
+export function buildMcpTools(
+  dynamicTools: DynamicMcpToolDescriptor[] = [],
+): McpToolDefinition[] {
+  const seen = new Set(MCP_TOOLS.map((tool) => tool.name))
+  const merged: McpToolDefinition[] = [...MCP_TOOLS]
+
+  for (const tool of dynamicTools) {
+    const definition = toMcpToolDefinition(tool)
+    if (!definition.name || seen.has(definition.name)) continue
+    seen.add(definition.name)
+    merged.push(definition)
+  }
+
+  return merged
+}

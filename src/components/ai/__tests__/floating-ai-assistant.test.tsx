@@ -57,7 +57,10 @@ describe('AIMascotAvatar', () => {
 describe('FloatingAIAssistant Component & Store Flow', () => {
   beforeEach(() => {
     useAIStore.setState({
+      enableAiGlobal: true,
       showFloatingMascot: true,
+      isMascotMinimized: false,
+      mascotPeekY: 400,
       isFloatingAssistantOpen: false,
       assistantMessages: [],
       assistantInput: '',
@@ -90,6 +93,131 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
       useAIStore.getState().openFloatingAssistant()
     })
     expect(useAIStore.getState().isFloatingAssistantOpen).toBe(true)
+  })
+
+  it('opens a context menu with open / settings / reset on right-clicking the mascot', () => {
+    renderWithProviders(<FloatingAIAssistant />)
+    act(() => {
+      fireEvent.contextMenu(screen.getByTestId('ai-mascot-trigger'), { clientX: 120, clientY: 120 })
+    })
+    expect(screen.getByTestId('ai-mascot-menu')).toBeTruthy()
+    expect(screen.getByTestId('ai-mascot-menu-open')).toBeTruthy()
+    expect(screen.getByTestId('ai-mascot-menu-config')).toBeTruthy()
+    expect(screen.getByTestId('ai-mascot-menu-reset')).toBeTruthy()
+    expect(screen.queryByTestId('ai-mascot-menu-hide')).toBeNull()
+  })
+
+  it('disables the AI master switch from the mascot context menu', () => {
+    renderWithProviders(<FloatingAIAssistant />)
+    act(() => {
+      fireEvent.contextMenu(screen.getByTestId('ai-mascot-trigger'), { clientX: 120, clientY: 120 })
+    })
+    expect(screen.getByTestId('ai-mascot-menu-disable-ai')).toBeTruthy()
+    act(() => {
+      fireEvent.click(screen.getByTestId('ai-mascot-menu-disable-ai'))
+    })
+    expect(useAIStore.getState().enableAiGlobal).toBe(false)
+    expect(screen.queryByTestId('ai-mascot-menu')).toBeNull()
+    expect(screen.queryByTestId('ai-mascot-trigger')).toBeNull()
+  })
+
+  it('anchors the mascot menu 4px below the pointer when there is room below', () => {
+    const prevW = window.innerWidth
+    const prevH = window.innerHeight
+    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1000 })
+    Object.defineProperty(window, 'innerHeight', { writable: true, configurable: true, value: 800 })
+    try {
+      renderWithProviders(<FloatingAIAssistant />)
+      act(() => {
+        fireEvent.contextMenu(screen.getByTestId('ai-mascot-trigger'), { clientX: 120, clientY: 120 })
+      })
+      const menu = screen.getByTestId('ai-mascot-menu')
+      expect(menu.style.top).toBe('124px')
+      expect(menu.style.bottom).toBe('')
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: prevW })
+      Object.defineProperty(window, 'innerHeight', { writable: true, configurable: true, value: prevH })
+    }
+  })
+
+  it('anchors the mascot menu 4px above the pointer when it flips up at the bottom right', () => {
+    const prevW = window.innerWidth
+    const prevH = window.innerHeight
+    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1000 })
+    Object.defineProperty(window, 'innerHeight', { writable: true, configurable: true, value: 800 })
+    try {
+      renderWithProviders(<FloatingAIAssistant />)
+      act(() => {
+        fireEvent.contextMenu(screen.getByTestId('ai-mascot-trigger'), { clientX: 980, clientY: 760 })
+      })
+      const menu = screen.getByTestId('ai-mascot-menu')
+      expect(menu.style.top).toBe('')
+      // bottom = 800 - 760 + 4 = 44px，菜单底边落在 y=756，紧贴鼠标上方 4px
+      expect(menu.style.bottom).toBe('44px')
+      expect(menu.style.left).toBe('780px')
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: prevW })
+      Object.defineProperty(window, 'innerHeight', { writable: true, configurable: true, value: prevH })
+    }
+  })
+
+  it('auto-hides at the right edge when dragged there and docks at the pointer Y', () => {
+    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1000 })
+    Object.defineProperty(window, 'innerHeight', { writable: true, configurable: true, value: 800 })
+
+    renderWithProviders(<FloatingAIAssistant />)
+    const trigger = screen.getByTestId('ai-mascot-trigger')
+    act(() => {
+      fireEvent.pointerDown(trigger, { clientX: 800, clientY: 300, button: 0 })
+      fireEvent.pointerMove(window, { clientX: 996, clientY: 420 })
+      fireEvent.pointerUp(window, { clientX: 996, clientY: 420 })
+    })
+
+    expect(useAIStore.getState().isMascotMinimized).toBe(true)
+    expect(useAIStore.getState().mascotPeekY).toBe(420)
+    expect(screen.getByTestId('ai-mascot-peek').style.top).toBe('420px')
+    expect(screen.queryByTestId('ai-mascot-trigger')).toBeNull()
+  })
+
+  it('restores the mascot when the peeking head is dragged', () => {
+    useAIStore.getState().setMascotMinimized(true, 360)
+    renderWithProviders(<FloatingAIAssistant />)
+    act(() => {
+      fireEvent.pointerDown(screen.getByTestId('ai-mascot-peek'), {
+        clientX: 960,
+        clientY: 360,
+        button: 0,
+      })
+    })
+    expect(useAIStore.getState().isMascotMinimized).toBe(false)
+    expect(screen.getByTestId('ai-mascot-trigger')).toBeTruthy()
+  })
+
+  it('restores the mascot when the peeking head is clicked', () => {
+    useAIStore.getState().setMascotMinimized(true, 420)
+    renderWithProviders(<FloatingAIAssistant />)
+    act(() => {
+      fireEvent.click(screen.getByTestId('ai-mascot-peek'), { clientX: 950, clientY: 420 })
+    })
+    expect(useAIStore.getState().isMascotMinimized).toBe(false)
+    expect(screen.getByTestId('ai-mascot-trigger')).toBeTruthy()
+  })
+
+  it('opens AI settings from the mascot context menu', () => {
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent')
+    renderWithProviders(<FloatingAIAssistant />)
+    act(() => {
+      fireEvent.contextMenu(screen.getByTestId('ai-mascot-trigger'), { clientX: 120, clientY: 120 })
+    })
+    act(() => {
+      fireEvent.click(screen.getByTestId('ai-mascot-menu-config'))
+    })
+    const matchingCall = dispatchSpy.mock.calls.find(
+      (c) => (c[0] as CustomEvent).type === 'open-settings'
+    )
+    expect(matchingCall).toBeTruthy()
+    expect((matchingCall![0] as CustomEvent).detail).toBe('ai')
+    dispatchSpy.mockRestore()
   })
 
   it('renders welcome cards and prompt pills when conversation is empty', () => {
@@ -829,11 +957,12 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
 
     renderWithProviders(<FloatingAIAssistant />)
 
-    // 验证停止生成按钮（微型精致尺寸 h-5 w-5，带有边框）
+    // 验证停止生成按钮（标准触控尺寸 h-7 w-7，圆角与边框统一）
     const stopBtn = screen.getByTestId('ai-stop-responding-btn')
     expect(stopBtn).toBeTruthy()
-    expect(stopBtn.className).toContain('h-5')
-    expect(stopBtn.className).toContain('w-5')
+    expect(stopBtn.className).toContain('h-7')
+    expect(stopBtn.className).toContain('w-7')
+    expect(stopBtn.className).toContain('rounded-lg')
 
     // 停止后切换回常规发送按钮
     act(() => {
@@ -898,6 +1027,50 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
     })
 
     unmount()
+  })
+
+  it('refuses a pending command card when the mode was later tightened to read-only Q&A', async () => {
+    const msgId = 'msg_test_card_mode_guard'
+    const originalSettings = useAIStore.getState().settings
+    useAIStore.setState({
+      isFloatingAssistantOpen: true,
+      settings: { ...originalSettings, executionMode: 'disabled' },
+      assistantMessages: [
+        {
+          id: msgId,
+          role: 'assistant',
+          content: '建议检查磁盘空间占用情况：',
+          createdAt: Date.now(),
+          status: 'done',
+          executionCard: {
+            id: 'exec_card_mode_guard',
+            command: 'df -h',
+            decision: {
+              allowed: true,
+              isReadOnly: true,
+              riskLevel: 'safe',
+              reason: '经过只读安全白名单校验',
+              safeToAutoExecute: false,
+            },
+            status: 'pending',
+          },
+        },
+      ],
+    })
+
+    try {
+      renderWithProviders(<FloatingAIAssistant />)
+      await act(async () => {
+        fireEvent.click(screen.getByTestId(`execute-cmd-${msgId}`))
+      })
+      await vi.waitFor(() => {
+        const card = useAIStore.getState().assistantMessages[0].executionCard
+        expect(card?.status).toBe('rejected')
+        expect(card?.error).toContain('只读问答')
+      })
+    } finally {
+      useAIStore.setState({ settings: originalSettings })
+    }
   })
 
   it('handles user rejecting Option C command execution card', async () => {
@@ -1142,7 +1315,7 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
 
     const { unmount } = renderWithProviders(<FloatingAIAssistant />)
 
-    const chatContainer = document.querySelector('.overflow-y-auto.p-4') as HTMLDivElement
+    const chatContainer = screen.getByTestId('ai-chat-scroll-container') as HTMLDivElement
     expect(chatContainer).toBeTruthy()
 
     Object.defineProperty(chatContainer, 'scrollHeight', { value: 1000, configurable: true, writable: true })
@@ -1448,7 +1621,7 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
     renderWithProviders(<FloatingAIAssistant />)
 
     const dialog = screen.getByTestId('ai-assistant-dialog')
-    expect(dialog.className).toContain('bg-background/95')
+    expect(dialog.className).toContain('bg-background/97')
   })
 
   it('follows terminal context menu color scheme when inside terminal module', () => {
@@ -1462,8 +1635,8 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
     renderWithProviders(<FloatingAIAssistant />)
 
     const dialog = screen.getByTestId('ai-assistant-dialog')
-    expect(dialog.className).toContain('bg-[#22263a]/96')
-    expect(dialog.className).toContain('border-white/[0.14]')
+    expect(dialog.className).toContain('bg-[#1c2030]/97')
+    expect(dialog.className).toContain('border-white/[0.10]')
   })
 
   it('renders agent decisions accordion collapsed by default and allows user to toggle expansion', () => {

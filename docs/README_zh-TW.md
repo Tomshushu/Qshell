@@ -268,6 +268,12 @@ npm run build
 
 ---
 
+## 📚 延伸文件
+
+- [MCP 插件中心指南](./MCP_PLUGIN_HUB.md)：AI 維運小助手的插件架構、IPC 指令、安全模型與自訂 MCP Server 設定。
+
+---
+
 ## 📄 開源許可證 (License)
 
 本專案採用 [Apache License 2.0](../LICENSE) 協議開源。版權歸 Qshell 社群所有。

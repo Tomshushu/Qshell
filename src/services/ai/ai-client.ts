@@ -24,6 +24,8 @@ import {
   normalizeToolName,
   stripAllToolCallMarkup,
   extractTextToolCalls,
+  loadActiveMcpTools,
+  isMcpToolName,
   type ExtractedToolCall,
 } from './agent-tools'
 
@@ -956,7 +958,7 @@ export async function generateCommand(
 
 安全与只读白名单规范：
 1. 涉及查询、诊断、排查、定位意图时，必须优先生成【只读安全命令】（如 status, ps, ss, lsof, df, free, cat, journalctl, docker ps 等），确保命令可直接在安全白名单中放行；
-2. 涉及全盘或大范围统计时，严禁无限制递归（如严禁使用 \`du -sh /*\` 或 \`find /\`，必须强制添加深度限制如 \`du -h --max-depth=1 /path\`）；
+2. 涉及全盘或大范围统计时，严禁无限制递归（如严禁 \`du -sh /*\` 或无深度限制的 \`find /\`，必须强制添加深度限制如 \`du -h --max-depth=1 /path\`）；较深的 find 可带 \`-maxdepth N\`，执行层会在短超时后自动降级为 \`-maxdepth 1\` 重试；
 3. 严禁生成隐蔽的子 Shell 执行（如 $() 或反引号）或未经确认的高危删除/清空/格式化等破坏性指令。
 
 输出要求：
@@ -1283,11 +1285,20 @@ export async function sendAssistantChat(
 }> {
   const isAgent = mode === 'agent'
 
+  // 动态加载已启用且握手的外部 MCP 插件工具箱（Kubernetes / Prometheus / Redis / PostgreSQL 等）
+  const mcpBundle =
+    isAgent && !context.isExplainShell
+      ? await loadActiveMcpTools()
+      : { openAiTools: [], activeToolsMap: new Map(), activeToolsList: [] }
+
+  const executionMode = settings.executionMode || 'auto_readonly'
   const fullSystemPrompt = buildSystemPrompt({
     mode,
     context,
     enableDlp: settings.enableDlp,
     maskPrivateIps: settings.maskPrivateIps,
+    activeMcpTools: mcpBundle.activeToolsList,
+    executionMode,
   })
 
   const messages: ChatMessage[] = [
@@ -1318,8 +1329,13 @@ export async function sendAssistantChat(
     if (signal?.aborted) break
 
     const isLastStep = currentStep === MAX_AGENT_STEPS - 1
-    // 最后一轮不传递工具，强制收敛模型给出终局诊断；若是纯指令拆解任务则不传递服务器探针工具
-    const tools = isAgent && !isLastStep && !context.isExplainShell ? AGENT_TOOLS : undefined
+    // 最后一轮不传递工具；只读问答/询问确认模式下不下发执行类工具，
+    // 由回复中的执行卡片承载用户确认，避免 Agent 循环绕过模式自动执行
+    const tools =
+      isAgent && !isLastStep && !context.isExplainShell &&
+      (executionMode === 'auto_readonly' || executionMode === 'danger')
+        ? [...AGENT_TOOLS, ...mcpBundle.openAiTools]
+        : undefined
 
     if (isLastStep && executedTools.length > 0) {
       messages.push({
@@ -1412,12 +1428,29 @@ export async function sendAssistantChat(
         parsedArgs = {}
       }
 
+      const mcpMeta = mcpBundle.activeToolsMap.get(normCallName)
+      const isExternalMcp = isMcpToolName(normCallName)
       const isCmd = Boolean(parsedArgs.command) || normCallName === 'execute_readonly_command'
-      const toolDisplayDesc = isCmd
-        ? `只读排障指令【${parsedArgs.command || ''}】`
-        : `安全探测【${parsedArgs.metric || '系统'}】指标`
+      const isSftp = normCallName === 'sftp_read_file'
 
-      const toolNotice = `> 🤖 **Agent 智能决策调用 (第 ${currentStepIndex} 步)：${toolDisplayDesc}...**\n\n`
+      let toolNotice = ''
+      if (isExternalMcp) {
+        const pluginLabel = mcpMeta?.pluginName || '外部 MCP 插件'
+        const toolLabel = mcpMeta?.toolName || normCallName
+        toolNotice = `> 🔌 **Agent 调用扩展插件 [${pluginLabel}] (第 ${currentStepIndex} 步)：${toolLabel}...**\n\n`
+      } else {
+        const toolDisplayDesc = isCmd
+          ? `只读排障指令【${parsedArgs.command || ''}】`
+          : isSftp
+            ? `SFTP 只读取证【${parsedArgs.remotePath || ''}】`
+            : `安全探测【${parsedArgs.metric || '系统'}】指标`
+        toolNotice = `> 🤖 **Agent 智能决策调用 (第 ${currentStepIndex} 步)：${toolDisplayDesc}...**\n\n`
+      }
+      // 危险模式：在真正下发前先向对话流输出完整命令预览与审计提示
+      if (executionMode === 'danger') {
+        const previewCmd = String(parsedArgs.command || parsedArgs.remotePath || normCallName)
+        toolNotice = `> ⚠️ **危险模式执行预览 (第 ${currentStepIndex} 步)**：\`${previewCmd}\`\n> 即将执行 · 已写入全量审计 · 红线命令仍会被拦截\n\n`
+      }
       accumulatedPrefix += toolNotice
       onChunk?.(toolNotice, accumulatedPrefix)
 
@@ -1426,7 +1459,10 @@ export async function sendAssistantChat(
         serverGroups: (context.serverGroups as any) || [],
         activeServerId: context.activeServerId || null,
         customBlacklist: settings.customBlacklist || [],
+        executionMode,
         signal,
+        activeMcpToolsMap: mcpBundle.activeToolsMap,
+        allowWriteMcpTools: settings.allowWriteMcpTools === true || executionMode === 'danger',
       }
 
       const execResult = await executeAgentTool(normCallName, parsedArgs, toolExecContext)

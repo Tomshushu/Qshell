@@ -170,9 +170,15 @@ export function SelectPopover({
           )}
 
           <div
+            data-testid="select-popover-list"
             className="max-h-60 overflow-y-auto overscroll-contain p-0.5 space-y-0.5"
             style={{ scrollbarWidth: 'thin' }}
             onScroll={handleScroll}
+            onWheel={(e) => {
+              // 弹层经 Portal 挂到 body，Radix 模态 Dialog 的 react-remove-scroll 会
+              // preventDefault wheel 默认滚动；这里手动驱动 scrollTop 让滚轮可用
+              e.currentTarget.scrollTop += e.deltaY
+            }}
           >
             {clearable && (
               <button

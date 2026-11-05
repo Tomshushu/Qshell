@@ -38,6 +38,7 @@ pub mod serial;
 pub mod tags;
 pub mod updater;
 pub mod backgrounds;
+pub mod mcp_client;
 
 // ============================================================================
 // 公共辅助类型与函数

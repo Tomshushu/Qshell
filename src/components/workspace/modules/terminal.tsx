@@ -41,6 +41,7 @@ import {
 import { sshService } from "@/services/ssh-service";
 import { backend } from "@/services/api";
 import { useAppStore } from "@/store";
+import { shouldAutoRunTerminalCommand } from "@/services/ai/terminal-execution-policy";
 import { ConnectionState } from "@/services/ssh-connection-state";
 import { reconnectManager } from "@/services/reconnect-manager";
 import { useTranslation } from "@/i18n";
@@ -7176,9 +7177,22 @@ export function TerminalModule({
       }
 
       if (targetSessionId) {
+        // 统一裁决点：所有「在终端运行 / 右键执行」事件都经过这里。
+        // 只读问答与询问确认模式下，一键执行降级为「仅填入」，由用户回车完成显式确认，
+        // 避免任何派发入口绕过 AI 执行模式。
+        const aiMode = useAIStore.getState().settings.executionMode || "auto_readonly";
+        const wantsExecute = customEvent.detail.execute === true;
+        const shouldExecute = shouldAutoRunTerminalCommand(aiMode, wantsExecute);
         writePasteText(cmd, targetSessionId, {
-          execute: customEvent.detail.execute,
+          execute: shouldExecute,
         });
+        if (wantsExecute && !shouldExecute) {
+          toastRef.current?.info(
+            aiMode === "disabled"
+              ? "当前为只读问答模式，命令已填入终端但不会自动执行"
+              : "当前为询问确认模式，命令已填入终端，请确认后按回车执行",
+          );
+        }
 
         const termToFocus = activeId
           ? xtermInstances.current.get(activeId)?.term

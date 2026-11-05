@@ -31,8 +31,17 @@ export interface GuardVerdict {
 
 export interface CommandGuardOptions {
   customBlacklist?: string[]
-  customWhitelist?: string[]
-  executionMode?: 'ask' | 'auto_readonly' | 'disabled'
+  executionMode?: 'ask' | 'auto_readonly' | 'disabled' | 'danger'
+}
+
+/**
+ * 自适应降级重试计划：只读命令先按原样下发，若在 timeoutMs 内仍无返回，
+ * 执行层自动改用 command（更浅的检索深度）重试，避免长时间卡住主机与 AI 问答。
+ */
+export interface AdaptiveRetryPlan {
+  command: string
+  timeoutMs: number
+  reason?: string
 }
 
 export interface CommandGuardDecision {
@@ -44,6 +53,11 @@ export interface CommandGuardDecision {
   isInteractive?: boolean
   blockedReason?: string
   suggestedSafeCommand?: string
+  adaptiveRetry?: AdaptiveRetryPlan
+  /** 危险模式下的写命令：已通过红线检查，允许执行但必须预览并全量审计 */
+  isDangerous?: boolean
+  /** 执行前置预览文本（供 UI 在真正下发前展示） */
+  preview?: string
   verdict?: GuardVerdict
 }
 
@@ -68,6 +82,8 @@ export interface AuditRecord {
     segment?: string
   }
   policyLevel?: string
+  /** 危险模式（会话级临时提权）执行标记，用于全量审计筛选 */
+  dangerous?: boolean
   approvalId?: string
   approvalState?: 'ACCEPT' | 'DECLINE' | 'CANCEL' | 'NONE'
   durationMs?: number
@@ -86,6 +102,8 @@ export interface PolicyResponseContext {
   transport?: 'stdio' | 'local-http' | 'internal'
   verdict?: GuardVerdict
   durationMs?: number
+  /** 是否为危险模式执行，审计记录会带上 policyLevel=dangerous */
+  dangerous?: boolean
 }
 
 export interface PolicyToolResponse {

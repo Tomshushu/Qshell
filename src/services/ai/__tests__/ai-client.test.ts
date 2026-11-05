@@ -274,6 +274,37 @@ describe('sendAssistantChat with Option A Native Tool Calling', () => {
     expect(capturedBody.tools).toBeUndefined()
   })
 
+  it('stops exposing execution tools and states the active execution policy', async () => {
+    let lastBody: any = null
+    globalThis.fetch = vi.fn().mockImplementation(async (_url: string, options: any) => {
+      lastBody = JSON.parse(options.body)
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { role: 'assistant', content: '建议先查看磁盘占用。' } }],
+        }),
+      }
+    })
+
+    await sendAssistantChat(
+      { ...baseSettings, executionMode: 'disabled' },
+      [{ role: 'user', content: '磁盘快满了怎么排查？' }],
+      'agent',
+      { activeServerId: null },
+    )
+    expect(lastBody.tools).toBeUndefined()
+    expect(lastBody.messages[0].content).toContain('【只读问答】')
+
+    await sendAssistantChat(
+      { ...baseSettings, executionMode: 'ask' },
+      [{ role: 'user', content: '磁盘快满了怎么排查？' }],
+      'agent',
+      { activeServerId: null },
+    )
+    expect(lastBody.tools).toBeUndefined()
+    expect(lastBody.messages[0].content).toContain('【询问确认】')
+  })
+
   it('injects Docker diagnosis mission and exit code attribution guidelines into system prompt', async () => {
     let capturedBody: any = null
     globalThis.fetch = vi.fn().mockImplementation(async (_url: string, options: any) => {

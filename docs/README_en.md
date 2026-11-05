@@ -267,6 +267,12 @@ We welcome contributions and feedback from the community!
 
 ---
 
+## 📚 Documentation
+
+- [MCP Plugin Hub Guide](./MCP_PLUGIN_HUB.md) — AI Ops assistant plugin architecture, IPC commands, security model and custom MCP Server setup.
+
+---
+
 ## 📄 License
 
 Licensed under [Apache License 2.0](../LICENSE). Free for commercial and non-commercial use with patent protection. Copyright © Qshell Community.

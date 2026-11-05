@@ -45,7 +45,13 @@ import {
   evaluateCommandForExecution,
   wrapSafeInspectionCommand,
   generateExecutionSummary,
+  recordAudit,
+  sanitize,
 } from '@/services/ai/command-guard'
+import {
+  executeWithAdaptiveRetry,
+  type CommandExecResult,
+} from '@/services/ai/adaptive-command-executor'
 import {
   explainShellCommand,
   detectUserIntent,
@@ -60,6 +66,8 @@ const AI_SETTINGS_STORAGE_KEY = 'qshell_ai_settings_v1'
 const AI_MODELS_CACHE_STORAGE_KEY = 'qshell_ai_models_cache_v1'
 const AI_CONFIGURED_PROVIDERS_KEY = 'qshell_ai_configured_providers_v1'
 const AI_SHOW_FLOATING_MASCOT_KEY = 'qshell_ai_show_floating_mascot_v1'
+const AI_MASCOT_MINIMIZED_KEY = 'qshell_ai_mascot_minimized_v1'
+const AI_MASCOT_PEEK_Y_KEY = 'qshell_ai_mascot_peek_y_v1'
 const AI_MASTER_ENABLED_KEY = 'qshell_ai_master_enabled_v1'
 const AI_ASSISTANT_SESSIONS_KEY = 'qshell_ai_assistant_sessions_v1'
 
@@ -322,6 +330,49 @@ function saveShowFloatingMascot(val: boolean): void {
   }
 }
 
+function loadSavedMascotMinimized(): boolean {
+  try {
+    const raw = localStorage.getItem(AI_MASCOT_MINIMIZED_KEY)
+    if (raw !== null) {
+      return raw === 'true'
+    }
+  } catch {
+    /* ignore */
+  }
+  return false
+}
+
+function saveMascotMinimized(val: boolean): void {
+  try {
+    localStorage.setItem(AI_MASCOT_MINIMIZED_KEY, String(val))
+  } catch {
+    /* ignore */
+  }
+}
+
+function loadSavedMascotPeekY(): number {
+  try {
+    const raw = localStorage.getItem(AI_MASCOT_PEEK_Y_KEY)
+    if (raw !== null) {
+      const parsed = Number(raw)
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return parsed
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return 400
+}
+
+function saveMascotPeekY(y: number): void {
+  try {
+    localStorage.setItem(AI_MASCOT_PEEK_Y_KEY, String(Math.round(y)))
+  } catch {
+    /* ignore */
+  }
+}
+
 const DEFAULT_SETTINGS: AISettings = {
   provider: 'deepseek',
   protocol: 'openai',
@@ -334,6 +385,7 @@ const DEFAULT_SETTINGS: AISettings = {
   maskPrivateIps: false,
   executionMode: 'auto_readonly',
   customBlacklist: [],
+  allowWriteMcpTools: false,
   maxAssistantSessions: DEFAULT_MAX_ASSISTANT_SESSIONS,
   maxMessagesPerSession: DEFAULT_MAX_MESSAGES_PER_SESSION,
 }
@@ -343,7 +395,12 @@ function loadSavedSettings(): AISettings {
     const raw = localStorage.getItem(AI_SETTINGS_STORAGE_KEY)
     if (raw) {
       const parsed = JSON.parse(raw)
-      return { ...DEFAULT_SETTINGS, ...parsed }
+      const merged: AISettings = { ...DEFAULT_SETTINGS, ...parsed }
+      // 防止旧版本或配置损坏写入非法执行模式，导致策略判定出现空档
+      if (!['ask', 'auto_readonly', 'disabled'].includes(merged.executionMode || '')) {
+        merged.executionMode = DEFAULT_SETTINGS.executionMode
+      }
+      return merged
     }
   } catch {
     /* ignore */
@@ -365,18 +422,26 @@ function loadSavedConfiguredProviders(fallbackSettings: AISettings): ConfiguredP
     if (raw) {
       const parsed = JSON.parse(raw)
       if (Array.isArray(parsed) && parsed.length > 0) {
+        // 同一个厂商只保留一条配置（优先保留已启用的那条），兼容历史重复数据
+        const byProvider = new Map<string, ConfiguredProvider>()
+        for (const p of parsed as ConfiguredProvider[]) {
+          if (!p?.provider) continue
+          const existing = byProvider.get(p.provider)
+          if (!existing || (p.isEnabled && !existing.isEnabled)) {
+            byProvider.set(p.provider, p)
+          }
+        }
         // Enforce single active provider constraint
         let hasActive = false
-        return parsed.map((p) => {
-          if (p.isEnabled) {
-            if (!hasActive) {
-              hasActive = true
-              return { ...p, isEnabled: true }
-            }
-            return { ...p, isEnabled: false }
+        const normalized = Array.from(byProvider.values()).map((p) => {
+          if (p.isEnabled && !hasActive) {
+            hasActive = true
+            return { ...p, isEnabled: true }
           }
-          return p
+          return { ...p, isEnabled: false }
         })
+        saveConfiguredProviders(normalized)
+        return normalized
       }
     }
   } catch {
@@ -477,6 +542,8 @@ export interface AIStoreState {
     activate?: boolean,
   ) => string
   removeConfiguredProvider: (id: string) => void
+  /** 行内切换模型：只改 model，保留其余配置与启用状态 */
+  updateConfiguredProviderModel: (id: string, model: string) => void
   toggleActiveProvider: (id: string) => void
   testConfiguredProvider: (id: string) => Promise<{ success: boolean; latencyMs?: number; error?: string }>
   testProviderConfig: (config: {
@@ -507,6 +574,10 @@ export interface AIStoreState {
   setEnableAiGlobal: (enabled: boolean) => void
 
   showFloatingMascot: boolean
+  /** 隐藏态：小人只露一个头趴在右边框，点击或拖动可恢复 */
+  isMascotMinimized: boolean
+  /** 隐藏态探头停靠的纵向位置（跟随拖到边界时的鼠标 Y） */
+  mascotPeekY: number
   isFloatingAssistantOpen: boolean
   assistantMode: AIAssistantMode
   assistantMessages: AIAssistantMessage[]
@@ -517,6 +588,7 @@ export interface AIStoreState {
   assistantMascotMood: AIMascotMood
 
   setShowFloatingMascot: (show: boolean) => void
+  setMascotMinimized: (minimized: boolean, peekY?: number) => void
   openFloatingAssistant: () => void
   closeFloatingAssistant: () => void
   toggleFloatingAssistant: () => void
@@ -532,6 +604,12 @@ export interface AIStoreState {
   clearAllAssistantSessions: () => void
   executeMessageCommand: (messageId: string) => Promise<void>
   rejectMessageCommand: (messageId: string) => void
+
+  // 危险模式：手动开关（仅手动切换模式或关闭时失效，不持久化）
+  dangerModeActive: boolean
+  activateDangerMode: () => void
+  deactivateDangerMode: () => void
+  getEffectiveExecutionMode: () => AIExecutionMode
 }
 
 let activeAssistantAbortController: AbortController | null = null
@@ -551,6 +629,19 @@ if (activeProv) {
   initialSettings.apiKey = ''
 }
 
+/**
+ * 回复里建议的命令是否自动执行：只读自动档与危险模式（会话级提权）均自动执行；
+ * 询问确认 / 只读问答档仍生成待确认卡片。抽成纯函数便于回归测试。
+ */
+export function shouldAutoExecuteSuggestedCommand(
+  mode: AIExecutionMode | undefined,
+  safeToAutoExecute: boolean,
+): boolean {
+  if (!safeToAutoExecute) return false
+  const effective = mode || 'auto_readonly'
+  return effective === 'auto_readonly' || effective === 'danger'
+}
+
 async function buildExecutionCard(
   commands: Array<{ command: string; explanation?: string }> | undefined,
   content: string,
@@ -564,9 +655,11 @@ async function buildExecutionCard(
     .filter((c) => c && c.command && isLikelyShellCommand(c.command))
   if (!rawCmds || rawCmds.length === 0) return undefined
 
-  // 在 auto_readonly 模式下，若存在多个候选命令，优先挑选可自动执行的只读安全命令
+  // 可自动执行的模式（只读自动 / 危险模式）下，多候选命令优先挑可自动执行的一条
+  const isDangerMode = executionMode === 'danger'
+  const autoExecuteMode = executionMode === 'auto_readonly' || isDangerMode
   let primaryCmd = rawCmds[0]
-  if (executionMode === 'auto_readonly' && rawCmds.length > 1) {
+  if (autoExecuteMode && rawCmds.length > 1) {
     const safeCmd = rawCmds.find((c) => {
       const d = evaluateCommandForExecution(c.command, { customBlacklist, executionMode })
       return d.safeToAutoExecute
@@ -581,8 +674,27 @@ async function buildExecutionCard(
     executionMode,
   })
 
-  if (executionMode === 'auto_readonly' && decision.safeToAutoExecute) {
+  if (shouldAutoExecuteSuggestedCommand(executionMode, decision.safeToAutoExecute)) {
     const safeCmd = wrapSafeInspectionCommand(decision.suggestedSafeCommand || primaryCmd.command)
+
+    // 危险模式：卡片自动执行同样前置写全量审计（命令经 DLP 脱敏后落盘）
+    if (isDangerMode) {
+      recordAudit({
+        ts: Date.now(),
+        requestId: `danger_auto_${Date.now()}`,
+        transport: 'internal',
+        hostId: 'default',
+        tool: 'auto_execution_card',
+        command: sanitize(safeCmd).text,
+        policyLevel: 'danger',
+        dangerous: true,
+        approvalState: 'ACCEPT',
+        durationMs: 0,
+        outputBytes: 0,
+        truncated: false,
+      })
+    }
+
     let autoOutput = ''
     const appState = useAppStore.getState()
     const tabs = (appState.tabs || []).map((t) => ({ id: t.id, serverId: t.serverId }))
@@ -612,6 +724,24 @@ async function buildExecutionCard(
       } catch (e) {
         autoOutput = (e as Error)?.message || '自动只读探测执行异常'
       }
+    } else if (backend?.ssh?.batchExecute) {
+      // 无终端会话：后端用已保存凭据自动建连采样（多台主机且未指定目标时不盲目猜测）
+      const managedServers = appState.servers || []
+      const fallbackServerId =
+        activeServerId || (managedServers.length === 1 ? managedServers[0].id : null)
+      if (fallbackServerId) {
+        try {
+          const batchRes = await backend.ssh.batchExecute([fallbackServerId], safeCmd, 10)
+          const item = batchRes?.items?.[0]
+          autoOutput = (item?.stdout || item?.stderr || item?.error || '').trim()
+        } catch (e) {
+          autoOutput = (e as Error)?.message || '自动只读探测执行异常'
+        }
+      } else {
+        autoOutput = isDangerMode
+          ? '（危险模式：当前环境未连接 SSH 执行引擎，命令未执行）'
+          : '（已通过严格只读白名单校验，就绪待执行）'
+      }
     } else {
       autoOutput = '（已通过严格只读白名单校验，就绪待执行）'
     }
@@ -623,8 +753,13 @@ async function buildExecutionCard(
       explanation: primaryCmd.explanation,
       decision,
       status: 'executed',
-      output: autoOutput || '⚡ 安全只读指令已完成内核执行采样',
+      output: autoOutput || (isDangerMode
+        ? '⚡ 危险模式命令已自动执行'
+        : '⚡ 安全只读指令已完成内核执行采样'),
       summary: autoSummary,
+      ...(decision.isDangerous
+        ? { dangerPreview: decision.preview, dangerAudited: true }
+        : {}),
       executedAt: Date.now(),
     }
   }
@@ -646,6 +781,9 @@ async function buildExecutionCard(
     explanation: primaryCmd.explanation,
     decision,
     status: 'pending',
+    ...(decision.isDangerous
+      ? { dangerPreview: decision.preview, dangerAudited: true }
+      : {}),
   }
 }
 
@@ -681,6 +819,8 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
   },
 
   showFloatingMascot: loadSavedShowFloatingMascot(),
+  isMascotMinimized: loadSavedMascotMinimized(),
+  mascotPeekY: loadSavedMascotPeekY(),
   isFloatingAssistantOpen: false,
   assistantMode: 'agent',
   assistantMessages: [],
@@ -692,6 +832,7 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
   isAssistantResponding: false,
   assistantInput: '',
   assistantMascotMood: 'idle',
+  dangerModeActive: false,
 
   updateSettings: (partial) => {
     const current = get().settings
@@ -776,7 +917,17 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
 
   saveConfiguredProvider: (providerData, activate = true) => {
     const providers = get().configuredProviders
-    const targetId = providerData.id || `prov_${providerData.provider}_${Date.now()}`
+    // 同一个厂商只保留一条：新增时若该厂商已有配置，直接覆盖而不是追加
+    const byIdIdx = providerData.id
+      ? providers.findIndex((p) => p.id === providerData.id)
+      : -1
+    const sameProviderIdx = byIdIdx >= 0
+      ? byIdIdx
+      : providers.findIndex((p) => p.provider === providerData.provider)
+    const targetId =
+      providerData.id ||
+      (sameProviderIdx >= 0 ? providers[sameProviderIdx].id : '') ||
+      `prov_${providerData.provider}_${Date.now()}`
     const existingIdx = providers.findIndex((p) => p.id === targetId)
 
     const preset = AI_PROVIDER_PRESETS[providerData.provider]
@@ -837,10 +988,31 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
     return targetId
   },
 
+  updateConfiguredProviderModel: (id: string, model: string) => {
+    const providers = get().configuredProviders
+    const target = providers.find((p) => p.id === id)
+    if (!target || !model || target.model === model) return
+
+    // 只改 model，保留 apiKey / baseUrl / 健康检测结果 / 启用状态
+    const updated = providers.map((p) => (p.id === id ? { ...p, model } : p))
+    set({ configuredProviders: updated })
+    saveConfiguredProviders(updated)
+
+    if (target.isEnabled) {
+      const nextSettings = { ...get().settings, model }
+      set({ settings: nextSettings })
+      saveSettings(nextSettings)
+    }
+  },
+
   removeConfiguredProvider: (id: string) => {
     const providers = get().configuredProviders
     const target = providers.find((p) => p.id === id)
-    const updated = providers.filter((p) => p.id !== id)
+    // 同一个厂商只应有一条配置：删除时一并清掉历史重复记录
+    const vendor = target?.provider
+    const updated = vendor
+      ? providers.filter((p) => p.provider !== vendor)
+      : providers.filter((p) => p.id !== id)
 
     const currentSettings = get().settings
     let nextSettings = { ...currentSettings }
@@ -1100,6 +1272,14 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
     set({ showFloatingMascot: show })
     saveShowFloatingMascot(show)
   },
+  setMascotMinimized: (minimized: boolean, peekY?: number) => {
+    set({
+      isMascotMinimized: minimized,
+      ...(peekY !== undefined ? { mascotPeekY: peekY } : {}),
+    })
+    saveMascotMinimized(minimized)
+    if (peekY !== undefined) saveMascotPeekY(peekY)
+  },
 
   openFloatingAssistant: () => {
     if (!get().enableAiGlobal) return
@@ -1113,7 +1293,17 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
   setAssistantMode: (mode) => set({ assistantMode: mode }),
   setAssistantInput: (text) => set({ assistantInput: text }),
   setAssistantMascotMood: (mood) => set({ assistantMascotMood: mood }),
-  clearAssistantMessages: () => set({ assistantMessages: [], currentAssistantSessionId: null }),
+
+  // 手动开关：只有用户手动切换模式或关闭时退出，时间与会话变化不影响
+  activateDangerMode: () => set({ dangerModeActive: true }),
+  deactivateDangerMode: () => set({ dangerModeActive: false }),
+  getEffectiveExecutionMode: () => {
+    const s = get()
+    return s.dangerModeActive ? 'danger' : (s.settings.executionMode || 'auto_readonly')
+  },
+
+  clearAssistantMessages: () =>
+    set({ assistantMessages: [], currentAssistantSessionId: null }),
 
   stopAssistantResponding: () => {
     if (activeAssistantAbortController) {
@@ -1391,8 +1581,9 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
           maxTokens: activeProv.maxTokens ?? settings.maxTokens ?? 8192,
           enableDlp: settings.enableDlp,
           maskPrivateIps: settings.maskPrivateIps,
-          executionMode: settings.executionMode ?? 'auto_readonly',
+          executionMode: get().getEffectiveExecutionMode(),
           customBlacklist: settings.customBlacklist ?? [],
+          allowWriteMcpTools: settings.allowWriteMcpTools === true,
         }
       : settings
 
@@ -1431,7 +1622,8 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
               ? [res.executedTool]
               : []
 
-        if (toolsList.length > 0) {
+        // 只读自动执行与危险模式（会话级提权）下，Agent 已执行工具可装配成 executed 卡片
+        if (toolsList.length > 0 && (currentExecMode === 'auto_readonly' || currentExecMode === 'danger')) {
           const combinedCommand = toolsList.map((t) => t.command).join(' && ')
           const combinedOutput =
             toolsList.length === 1
@@ -1459,6 +1651,9 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
             status: 'executed',
             output: combinedOutput || '⚡ 安全只读指令已完成内核执行采样',
             summary: autoSummary,
+            ...(decision.isDangerous
+              ? { dangerPreview: decision.preview, dangerAudited: true }
+              : {}),
             executedAt: Date.now(),
           }
         } else {
@@ -1752,10 +1947,68 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
     const card = targetMsg.executionCard
     if (card.status !== 'pending') return
 
+    // 按「当前」执行模式复核：历史待确认卡片不能绕过后来收紧的策略或新增黑名单
+    const currentMode = get().getEffectiveExecutionMode()
+    if (currentMode === 'disabled') {
+      const rejectedCard: AIAssistantExecutionCard = {
+        ...card,
+        status: 'rejected',
+        error: '当前为「只读问答」模式，执行命令已被禁止。请在设置中切换执行模式。',
+      }
+      set({
+        assistantMessages: assistantMessages.map((m) =>
+          m.id === messageId ? { ...m, executionCard: rejectedCard } : m,
+        ),
+        assistantMascotMood: 'idle',
+      })
+      return
+    }
+
+    const recheck = evaluateCommandForExecution(card.command, {
+      customBlacklist: get().settings.customBlacklist || [],
+      executionMode: currentMode,
+    })
+    if (!recheck.allowed) {
+      const blockedCard: AIAssistantExecutionCard = {
+        ...card,
+        status: 'blocked',
+        decision: recheck,
+        error: recheck.blockedReason || recheck.reason,
+      }
+      set({
+        assistantMessages: assistantMessages.map((m) =>
+          m.id === messageId ? { ...m, executionCard: blockedCard } : m,
+        ),
+        assistantMascotMood: 'idle',
+      })
+      return
+    }
+
+    // 危险模式：执行前置预览 + 全量审计标记（命令经 DLP 脱敏后落审计）
+    if (recheck.isDangerous) {
+      recordAudit({
+        ts: Date.now(),
+        requestId: `danger_${Date.now()}_${messageId}`,
+        transport: 'internal',
+        hostId: 'default',
+        tool: 'execute_message_command',
+        command: sanitize(card.command).text,
+        policyLevel: 'danger',
+        dangerous: true,
+        approvalState: 'ACCEPT',
+        durationMs: 0,
+        outputBytes: 0,
+        truncated: false,
+      })
+    }
+
     // 1. 设置执行中状态
     const executingCard: AIAssistantExecutionCard = {
       ...card,
       status: 'executing',
+      ...(recheck.isDangerous
+        ? { dangerPreview: recheck.preview, dangerAudited: true }
+        : {}),
     }
     const updatedMessages = assistantMessages.map((m) =>
       m.id === messageId ? { ...m, executionCard: executingCard } : m,
@@ -1763,7 +2016,7 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
     set({ assistantMessages: updatedMessages, assistantMascotMood: 'thinking' })
 
     const rawCmd = card.command
-    const safeCmd = wrapSafeInspectionCommand(rawCmd)
+    let safeCmd = wrapSafeInspectionCommand(rawCmd)
 
     // 2. 查找当前活跃工作区连接
     const appState = useAppStore.getState()
@@ -1789,40 +2042,78 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
     let stdout = ''
     let stderr = ''
     let isError = false
+    let notice: string | undefined
 
-    if (backend?.ssh?.execute && activeConnId) {
-      try {
-        const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('执行超时 (10s)')), 10000),
-        )
+    // 单次下发：优先复用活跃会话，无会话时用已保存凭据自动建连
+    const runOnce = async (cmd: string, hardTimeoutMs: number): Promise<CommandExecResult> => {
+      const timeoutSecs = Math.max(5, Math.round(hardTimeoutMs / 1000))
+
+      // 纯前端/无桌面引擎时保留原有的轻量模拟输出
+      if (!backend?.ssh?.execute && !backend?.ssh?.batchExecute) {
+        await new Promise((r) => setTimeout(r, 50))
+        return { stdout: `[只读执行]\n$ ${cmd}\n(执行完成)`, stderr: '', exitCode: 0 }
+      }
+
+      if (backend?.ssh?.execute && activeConnId) {
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error(`执行超时 (${timeoutSecs}s)`)), hardTimeoutMs)
+        })
         const cmdRes = await Promise.race([
-          backend.ssh.execute(activeConnId, safeCmd),
+          backend.ssh.execute(activeConnId, cmd),
           timeoutPromise,
         ])
-        stdout = cmdRes.stdout || ''
-        stderr = cmdRes.stderr || ''
-        if (cmdRes.exitCode !== 0 && !stdout && stderr) {
-          isError = true
+        return {
+          stdout: cmdRes.stdout || '',
+          stderr: cmdRes.stderr || '',
+          exitCode: cmdRes.exitCode,
         }
-      } catch (err: unknown) {
-        stderr = (err as Error)?.message || '执行异常'
-        isError = true
       }
-    } else if (!activeConnId) {
-      stderr = '未检测到目标服务器的活跃 SSH 终端连接，无法下发命令执行。请先在工作区连接目标服务器。'
+
+      const managedServers = appState.servers || []
+      const fallbackServerId =
+        activeServerId || (managedServers.length === 1 ? managedServers[0].id : null)
+      if (!fallbackServerId || !backend?.ssh?.batchExecute) {
+        throw new Error(
+          fallbackServerId
+            ? '当前环境未连接桌面 SSH 执行引擎，无法下发命令执行。'
+            : '当前已纳管多台主机且未指定目标服务器，请先选择目标主机再执行（Qshell 会用已保存凭据自动连接，无需打开终端）。',
+        )
+      }
+
+      const batchRes = await backend.ssh.batchExecute([fallbackServerId], cmd, timeoutSecs)
+      const item = batchRes?.items?.[0]
+      const batchStdout = item?.stdout || ''
+      return {
+        stdout: batchStdout,
+        stderr: item?.stderr || item?.error || '',
+        exitCode: item?.error ? -1 : (item?.success || batchStdout.trim().length > 0 ? 0 : -1),
+        error: item?.error,
+      }
+    }
+
+    // 带深度的 find 若在 4s 内未返回，自动改用 -maxdepth 1 重试，不中断问答
+    try {
+      const result = await executeWithAdaptiveRetry(safeCmd, card.decision.adaptiveRetry, runOnce)
+      stdout = result.stdout
+      stderr = result.stderr
+      notice = result.notice
+      isError = result.exitCode !== 0 && !stdout && Boolean(stderr)
+      if (result.usedFallback && card.decision.adaptiveRetry?.command) {
+        safeCmd = card.decision.adaptiveRetry.command
+      }
+    } catch (err: unknown) {
+      stderr = (err as Error)?.message || '执行异常'
       isError = true
-    } else {
-      await new Promise((r) => setTimeout(r, 50))
-      stdout = `[只读执行]\n$ ${safeCmd}\n(执行完成)`
     }
 
     const outputText = (stdout || stderr || '(执行完成，标准输出为空)').trim()
+    const finalOutput = notice ? `${notice}\n\n${outputText}` : outputText
     const summary = generateExecutionSummary(safeCmd, outputText)
     const executedCard: AIAssistantExecutionCard = {
       ...card,
       command: safeCmd,
       status: 'executed',
-      output: outputText,
+      output: finalOutput,
       summary,
       error: isError ? stderr : undefined,
       executedAt: Date.now(),

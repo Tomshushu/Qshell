@@ -46,6 +46,9 @@ import {
   Brain,
   Bot,
   CheckCircle2,
+  Settings2,
+  RotateCcw,
+  PowerOff,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
@@ -84,6 +87,39 @@ function clampMascotOffset(offset: MascotOffset): MascotOffset {
   return {
     right: Math.min(Math.max(minRight, offset.right), maxRight),
     bottom: Math.min(Math.max(minBottom, offset.bottom), maxBottom),
+  }
+}
+
+/** 隐藏态探头纵向位置：跟随拖到右边界时的鼠标 Y，但避开顶栏与状态栏 */
+function clampMascotPeekY(y: number): number {
+  if (typeof window === 'undefined') return y
+  const minY = CONTENT_TOP_OFFSET + 36
+  const maxY = Math.max(minY, window.innerHeight - STATUSBAR_BOTTOM_OFFSET - 36)
+  return Math.max(minY, Math.min(y, maxY))
+}
+
+const MASCOT_MENU_WIDTH = 196
+/** 仅用于判断是否需要向上翻转的预留高度（菜单为固定 3 项）；贴合位置不依赖它 */
+const MASCOT_MENU_RESERVE_HEIGHT = 132
+
+/** 小人右键菜单定位：始终紧贴鼠标 4px，视口放不下时向左/上翻转（划词菜单那种大间距定位不适用） */
+function clampMascotMenuPosition(x: number, y: number, width: number, height: number) {
+  if (typeof window === 'undefined') {
+    return { left: x, top: y + 4, bottom: undefined as number | undefined }
+  }
+  const padding = 8
+  const gap = 4
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  let left = x + gap
+  if (left + width > vw - padding) left = x - width - gap
+  const flipUp = y + gap + height > vh - padding
+  return {
+    left: Math.max(padding, left),
+    top: flipUp ? undefined : y + gap,
+    // 向上翻转时用 bottom 定位，浏览器按菜单真实高度向上生长，底边始终落在 y - gap 处，
+    // 避免用估算高度算 top 造成菜单与鼠标之间出现空隙。
+    bottom: flipUp ? Math.max(padding, vh - y + gap) : undefined,
   }
 }
 
@@ -301,65 +337,32 @@ function ThinkingAccordion({
   return (
     <div
       data-testid="ai-thinking-accordion"
-      className={cn(
-        'mb-2.5 rounded-xl overflow-hidden text-xs transition-all shadow-2xs relative',
-        isStreaming
-          ? isTerminal
-            ? 'border border-purple-500/40 bg-purple-500/10 text-slate-200 shadow-[0_0_15px_rgba(168,85,247,0.18)]'
-            : 'border border-indigo-500/40 bg-indigo-50/80 dark:bg-indigo-950/30 text-foreground shadow-[0_0_15px_rgba(99,102,241,0.18)]'
-          : isTerminal
-            ? 'border border-purple-500/25 bg-purple-500/5 hover:bg-purple-500/10 text-slate-200'
-            : 'border border-indigo-500/25 bg-indigo-50/60 dark:bg-indigo-950/20 text-foreground',
-      )}
+      className="relative mb-2 overflow-hidden rounded-lg border border-border/40 bg-muted/25 text-xs"
     >
-      {/* 顶部流式呼吸光效指示条 */}
       {isStreaming && (
-        <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-purple-400 to-transparent animate-pulse" />
+        <div className="absolute top-0 left-0 right-0 h-px bg-primary/40 animate-pulse" />
       )}
       <button
         type="button"
         onClick={handleToggleExpand}
-        className={cn(
-          'w-full flex items-center justify-between px-3 py-1.5 text-xs font-medium transition-colors select-none cursor-pointer',
-          isTerminal
-            ? 'text-purple-300 hover:text-purple-200 hover:bg-purple-500/10'
-            : 'text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 hover:bg-indigo-500/10',
-        )}
+        className="flex w-full items-center justify-between px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground hover:bg-muted/40 hover:text-foreground transition-colors select-none cursor-pointer"
       >
         <div className="flex items-center gap-1.5 min-w-0">
-          <div className="relative flex items-center justify-center shrink-0">
-            <Brain
-              className={cn(
-                'h-3.5 w-3.5 transition-transform duration-300',
-                isTerminal ? 'text-purple-400' : 'text-indigo-600 dark:text-indigo-400',
-                isStreaming && 'animate-pulse scale-110',
-              )}
-            />
-            {isStreaming && (
-              <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-purple-400 animate-ping" />
-            )}
-          </div>
-          <span className="font-semibold text-[11px] shrink-0">
+          <Brain className={cn('h-3.5 w-3.5 shrink-0 text-primary/80', isStreaming && 'animate-pulse')} />
+          <span className="shrink-0">
             {isStreaming
               ? t('ai_thinking_in_progress') || '正在深度思考...'
               : t('ai_thinking_process') || '深度思考过程'}
           </span>
           {isStreaming && (
             <span className="inline-flex items-center gap-0.5 ml-1 py-0.5 shrink-0">
-              <span className="w-1 h-1 rounded-full bg-purple-400 animate-bounce [animation-delay:-0.3s]" />
-              <span className="w-1 h-1 rounded-full bg-purple-400 animate-bounce [animation-delay:-0.15s]" />
-              <span className="w-1 h-1 rounded-full bg-purple-400 animate-bounce" />
+              <span className="w-1 h-1 rounded-full bg-primary/60 animate-bounce [animation-delay:-0.3s]" />
+              <span className="w-1 h-1 rounded-full bg-primary/60 animate-bounce [animation-delay:-0.15s]" />
+              <span className="w-1 h-1 rounded-full bg-primary/60 animate-bounce" />
             </span>
           )}
         </div>
-        <div
-          className={cn(
-            'flex items-center gap-1 text-[10.5px] shrink-0',
-            isTerminal
-              ? 'text-slate-400 hover:text-slate-200'
-              : 'text-zinc-500 dark:text-zinc-400 hover:text-foreground',
-          )}
-        >
+        <div className="flex items-center gap-1 text-[10.5px] shrink-0 opacity-70">
           <span>
             {isExpanded
               ? t('ai_thinking_collapse') || '收起思考'
@@ -376,24 +379,17 @@ function ThinkingAccordion({
             onScroll={handleThinkingScroll}
             data-testid="ai-thinking-content"
             className={cn(
-              'px-3.5 py-2.5 text-[11.5px] leading-relaxed border-t whitespace-pre-wrap font-sans select-text max-h-64 overflow-y-auto',
-              isTerminal
-                ? 'border-purple-500/20 bg-black/40 text-slate-200 selection:bg-purple-500/30'
-                : 'border-indigo-500/20 bg-indigo-50/40 dark:bg-black/40 text-zinc-800 dark:text-zinc-200 selection:bg-indigo-500/30',
+              'border-t border-border/30 px-3 py-2.5 text-[11.5px] leading-relaxed whitespace-pre-wrap font-sans select-text max-h-64 overflow-y-auto text-muted-foreground',
+              isTerminal ? 'bg-black/20' : 'bg-background/40',
             )}
           >
             {thinking}
             {isStreaming && (
-              <span
-                className={cn(
-                  'inline-block w-1.5 h-3.5 ml-0.5 align-middle rounded-xs animate-pulse',
-                  isTerminal ? 'bg-purple-400' : 'bg-indigo-500',
-                )}
-              />
+              <span className="inline-block w-1.5 h-3.5 ml-0.5 align-middle rounded-xs bg-primary/60 animate-pulse" />
             )}
             {isStreaming && (
-              <div className="mt-2.5 pt-2 border-t border-purple-500/15 flex items-center gap-1.5 text-[10.5px] text-purple-400/90 font-mono select-none">
-                <Sparkles className="w-3 h-3 text-purple-400 animate-spin shrink-0" />
+              <div className="mt-2.5 pt-2 border-t border-border/30 flex items-center gap-1.5 text-[10.5px] text-primary/80 select-none">
+                <Sparkles className="w-3 h-3 animate-spin shrink-0" />
                 <span>AI 正在深层次推导研判中，持续生成思维链...</span>
               </div>
             )}
@@ -402,9 +398,9 @@ function ThinkingAccordion({
             <button
               type="button"
               onClick={scrollToBottom}
-              className="absolute bottom-2 right-3 z-10 flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-purple-950/85 text-purple-200 border border-purple-500/40 shadow-xs hover:bg-purple-900 cursor-pointer backdrop-blur-xs transition-all animate-in fade-in"
+              className="absolute bottom-2 right-3 z-10 flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-background/90 text-foreground border border-border/50 shadow-sm hover:bg-muted cursor-pointer backdrop-blur-xs transition-all animate-in fade-in"
             >
-              <ArrowDown className="w-2.5 h-2.5 animate-bounce" />
+              <ArrowDown className="w-2.5 h-2.5 text-primary animate-bounce" />
               <span>追踪思考最新行</span>
             </button>
           )}
@@ -436,49 +432,27 @@ function AgentDecisionsAccordion({
   return (
     <div
       data-testid="ai-decisions-accordion"
-      className={cn(
-        'mb-2.5 rounded-xl overflow-hidden text-xs transition-all shadow-2xs relative',
-        isStreaming
-          ? isTerminal
-            ? 'border border-sky-500/40 bg-sky-500/10 text-slate-200 shadow-[0_0_15px_rgba(56,189,248,0.18)]'
-            : 'border border-sky-500/40 bg-sky-50/80 dark:bg-sky-950/30 text-foreground shadow-[0_0_15px_rgba(56,189,248,0.18)]'
-          : isTerminal
-            ? 'border border-sky-500/25 bg-sky-500/5 hover:bg-sky-500/10 text-slate-200'
-            : 'border border-sky-500/25 bg-sky-50/60 dark:bg-sky-950/20 text-foreground',
-      )}
+      className="relative mb-2 overflow-hidden rounded-lg border border-border/40 bg-muted/25 text-xs"
     >
       {isStreaming && (
-        <div className="absolute top-0 left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-sky-400 to-transparent animate-pulse" />
+        <div className="absolute top-0 left-0 right-0 h-px bg-primary/40 animate-pulse" />
       )}
       <button
         type="button"
         onClick={() => setIsExpanded((prev) => !prev)}
-        className={cn(
-          'w-full flex items-center justify-between px-3 py-1.5 text-xs font-medium transition-colors select-none cursor-pointer',
-          isTerminal
-            ? 'text-sky-400 hover:text-sky-300 hover:bg-sky-500/10'
-            : 'text-sky-600 dark:text-sky-400 hover:text-sky-700 dark:hover:text-sky-300 hover:bg-sky-500/10',
-        )}
+        className="flex w-full items-center justify-between px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground hover:bg-muted/40 hover:text-foreground transition-colors select-none cursor-pointer"
       >
         <div className="flex items-center gap-1.5 min-w-0">
-          <Bot className={cn('h-3.5 w-3.5 shrink-0 text-sky-400', isStreaming && 'animate-pulse')} />
-          <span className="font-semibold text-[11px] shrink-0">
+          <Bot className={cn('h-3.5 w-3.5 shrink-0 text-primary/80', isStreaming && 'animate-pulse')} />
+          <span className="shrink-0">
             {t('ai_agent_decisions_title') || 'Agent 智能决策调用'}
           </span>
-          <span className="px-1.5 py-0.2 rounded-full text-[9.5px] bg-sky-500/15 text-sky-400 border border-sky-500/25 shrink-0 inline-flex items-center gap-1">
+          <span className="inline-flex items-center gap-1 rounded-full border border-primary/15 bg-primary/10 px-1.5 py-0.5 text-[9.5px] text-primary shrink-0">
             {isStreaming && <QshellLoader size="xs" />}
             共 {decisions.length} 步调用{isStreaming ? ' · 远程探针执行中' : ''}
           </span>
-          {isStreaming && (
-            <span className="inline-block w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping ml-0.5 shrink-0" />
-          )}
         </div>
-        <div
-          className={cn(
-            'flex items-center gap-1 text-[10.5px]',
-            isTerminal ? 'text-slate-400 hover:text-slate-200' : 'text-zinc-500 dark:text-zinc-400 hover:text-foreground',
-          )}
-        >
+        <div className="flex items-center gap-1 text-[10.5px] shrink-0 opacity-70">
           <span>
             {isExpanded
               ? t('ai_decisions_collapse') || '收起调用'
@@ -492,26 +466,19 @@ function AgentDecisionsAccordion({
         <div
           data-testid="ai-decisions-content"
           className={cn(
-            'px-3 py-2 space-y-1.5 border-t text-[11px] max-h-60 overflow-y-auto select-text',
-            isTerminal
-              ? 'border-sky-500/20 bg-black/40 text-slate-200'
-              : 'border-sky-500/20 bg-sky-50/40 dark:bg-black/40 text-foreground',
+            'border-t border-border/30 px-3 py-2 space-y-1 text-[11px] max-h-60 overflow-y-auto select-text',
+            isTerminal ? 'bg-black/20' : 'bg-background/40',
           )}
         >
           {decisions.map((item, idx) => (
             <div
               key={idx}
-              className={cn(
-                'flex items-center gap-2 p-1.5 px-2 rounded-lg border font-mono text-[11px] leading-relaxed',
-                isTerminal
-                  ? 'bg-white/[0.04] border-white/5 text-slate-200'
-                  : 'bg-background/60 border-border/40 text-foreground',
-              )}
+              className="flex items-start gap-2 rounded-md px-2 py-1.5 text-foreground/85"
             >
-              <span className="shrink-0 px-1.5 py-0.2 rounded text-[9px] font-semibold bg-sky-500/20 text-sky-400 border border-sky-500/30">
+              <span className="shrink-0 rounded border border-primary/15 bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium text-primary">
                 第 {item.step ?? idx + 1} 步
               </span>
-              <span className="truncate text-inherit font-sans">
+              <span className="leading-snug break-words">
                 {item.description}
               </span>
             </div>
@@ -871,11 +838,28 @@ function CommandExecutionCard({
         </div>
       )}
 
+      {/* 危险模式：执行前置预览 + 全量审计标记 */}
+      {card.dangerPreview && (
+        <div className="p-2 rounded-md bg-destructive/10 border border-destructive/30 text-[11px] text-destructive space-y-1">
+          <div className="flex items-start gap-1.5 leading-snug">
+            <ShieldAlert className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+            <span className="break-all">{card.dangerPreview}</span>
+          </div>
+          {card.dangerAudited && (
+            <div className="pl-5 opacity-80">
+              {t('ai_danger_mode_audit') || '已写入全量审计（policyLevel=danger）'}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* 待授权操作按钮 */}
       {isPending && (
         <div className="flex items-center justify-between pt-1 gap-2">
           <span className="text-[10px] text-muted-foreground truncate">
-            🔒 严格防深度遍历卡死与修改保护
+            {card.decision.adaptiveRetry
+              ? (t('ai_card_adaptive_retry_hint', { seconds: Math.round(card.decision.adaptiveRetry.timeoutMs / 1000) }) || `${Math.round(card.decision.adaptiveRetry.timeoutMs / 1000)}s 未返回将自动改用浅深度查找`)
+              : '🔒 严格防深度遍历卡死与修改保护'}
           </span>
           <div className="flex items-center gap-1.5 shrink-0">
             <Button
@@ -1194,7 +1178,14 @@ export function FloatingAIAssistant() {
     rejectMessageCommand,
     configuredProviders,
     settings,
+    dangerModeActive,
+    deactivateDangerMode,
+    isMascotMinimized,
+    mascotPeekY,
+    setMascotMinimized,
   } = useAIStore()
+
+  // 危险模式由用户手动开启/关闭，时间与会话变化都不会让它失效
 
   const isAiConfigured = useMemo(
     () => hasActiveAIProvider(configuredProviders, settings),
@@ -1259,63 +1250,63 @@ export function FloatingAIAssistant() {
     if (!isInTerminal) {
       return {
         isTerminalMode: false,
-        dialogContainer: 'bg-background/95 backdrop-blur-2xl border border-border/80 shadow-2xl dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08),0_24px_50px_-12px_rgba(0,0,0,0.85)] ring-1 ring-white/5 text-foreground',
-        header: 'border-b border-border/60 bg-muted/25 hover:bg-muted/40 text-foreground',
-        headerBtn: 'hover:bg-muted text-muted-foreground hover:text-foreground active:scale-95 transition-all',
-        copilotBadge: 'bg-primary/10 text-primary',
-        welcomeBanner: 'bg-gradient-to-r from-primary/5 via-primary/10 to-transparent border-primary/15',
+        dialogContainer: 'bg-background/97 backdrop-blur-2xl border border-border/60 shadow-[0_0_0_1px_rgba(56,189,248,0.30),0_18px_48px_-12px_rgba(15,23,42,0.32),0_0_30px_-10px_rgba(56,189,248,0.40)] dark:shadow-[0_0_0_1px_rgba(56,189,248,0.38),0_20px_55px_-12px_rgba(0,0,0,0.85),0_0_34px_-10px_rgba(56,189,248,0.45)] text-foreground',
+        header: 'border-b border-border/50 bg-background/40 text-foreground',
+        headerBtn: 'hover:bg-muted/70 text-muted-foreground hover:text-foreground active:scale-95 transition-colors',
+        copilotBadge: 'bg-primary/10 text-primary border border-primary/15 font-medium',
+        welcomeBanner: 'bg-muted/30 border-border/40',
         welcomeTitle: 'text-foreground',
         welcomeSub: 'text-muted-foreground',
         cardTitle: 'text-foreground',
         cardDesc: 'text-muted-foreground',
-        iconBox: 'bg-background/80 border border-border/40',
+        iconBox: 'bg-primary/10 border border-primary/10 text-primary',
         pillText: 'text-inherit',
-        disclaimerText: 'text-muted-foreground/60',
+        disclaimerText: 'text-muted-foreground/55',
         body: 'bg-transparent text-foreground',
-        userBubble: 'bg-primary text-primary-foreground rounded-tr-xs font-normal',
-        userAvatar: 'bg-gradient-to-tr from-blue-600 to-indigo-600 text-white shadow-2xs',
-        aiBubble: 'bg-muted/40 border border-border/60 text-foreground',
-        aiBubbleHeader: 'border-b border-border/40 text-muted-foreground',
-        inputBar: 'border-t border-border/60 bg-muted/15',
-        inputCard: 'border border-border/80 bg-background focus-within:ring-primary/25 focus-within:border-primary text-foreground placeholder:text-muted-foreground/60',
-        historyPanel: 'bg-background/98 backdrop-blur-2xl border-border/60 text-foreground',
-        recommendPill: 'bg-muted/40 hover:bg-primary/10 hover:text-primary text-muted-foreground border-border/50 hover:border-primary/30',
-        modePillContainer: 'bg-muted/40 border-border/40',
-        modeBtnActive: 'bg-background text-primary shadow-2xs font-semibold',
-        modeBtnInactive: 'text-muted-foreground/80 hover:text-foreground',
+        userBubble: 'bg-primary/15 border border-primary/20 text-foreground rounded-tr-sm font-normal',
+        userAvatar: 'bg-primary/15 border border-primary/20 text-primary font-semibold',
+        aiBubble: 'bg-transparent text-foreground',
+        aiBubbleHeader: 'text-muted-foreground/70',
+        inputBar: 'border-t border-border/50 bg-background/60',
+        inputCard: 'border border-border/60 bg-muted/25 focus-within:ring-2 focus-within:ring-primary/20 focus-within:border-primary/40 focus-within:bg-background/60 text-foreground placeholder:text-muted-foreground/60',
+        historyPanel: 'bg-background/98 backdrop-blur-2xl border-border/50 text-foreground',
+        recommendPill: 'bg-muted/40 hover:bg-primary/10 hover:text-primary text-muted-foreground border-border/40 hover:border-primary/25',
+        modePillContainer: 'bg-muted/50 border-border/40',
+        modeBtnActive: 'bg-background text-foreground shadow-sm font-semibold',
+        modeBtnInactive: 'text-muted-foreground hover:text-foreground',
         sendBtnActive: 'bg-primary text-primary-foreground hover:bg-primary/90 active:scale-95 transition-all',
         sendBtnDisabled: 'bg-muted text-muted-foreground/40 cursor-not-allowed',
-        copyActionBtn: 'hover:bg-muted text-muted-foreground/80 hover:text-foreground active:scale-95 transition-all',
+        copyActionBtn: 'hover:bg-muted text-muted-foreground hover:text-foreground active:scale-95 transition-all',
       }
     }
 
     if (isLightTerminal) {
-      // 终端明亮主题模式：跟随亮色终端右键菜单风格 (bg-white/90 text-slate-800 border-slate-200/80)
+      // 终端明亮主题模式：跟随亮色终端右键菜单风格，保持与应用主题一致的层级
       return {
         isTerminalMode: true,
-        dialogContainer: 'bg-white/92 backdrop-blur-xl border border-slate-200/80 shadow-[0_16px_36px_-6px_rgba(0,0,0,0.18),0_0_0_1px_rgba(0,0,0,0.04)] text-slate-800',
-        header: 'border-b border-slate-200/80 bg-slate-900/[0.03] hover:bg-slate-900/[0.06] text-slate-800',
-        headerBtn: 'hover:bg-slate-900/[0.06] text-slate-600 hover:text-slate-900 active:scale-95 transition-all',
-        copilotBadge: 'bg-sky-50 text-sky-600 border border-sky-200',
-        welcomeBanner: 'bg-slate-900/[0.03] border-slate-200/80',
-        welcomeTitle: 'text-slate-800',
+        dialogContainer: 'bg-white/96 backdrop-blur-xl border border-slate-200 shadow-[0_0_0_1px_rgba(56,189,248,0.32),0_18px_45px_-12px_rgba(15,23,42,0.28),0_0_28px_-12px_rgba(56,189,248,0.40)] text-slate-800',
+        header: 'border-b border-slate-200/80 bg-slate-50/60 text-slate-800',
+        headerBtn: 'hover:bg-slate-100 text-slate-500 hover:text-slate-900 active:scale-95 transition-colors',
+        copilotBadge: 'bg-sky-50 text-sky-700 border border-sky-200/80',
+        welcomeBanner: 'bg-slate-50 border-slate-200/80',
+        welcomeTitle: 'text-slate-900',
         welcomeSub: 'text-slate-500',
         cardTitle: 'text-slate-800',
         cardDesc: 'text-slate-500',
-        iconBox: 'bg-slate-900/[0.05] border border-slate-200/60',
+        iconBox: 'bg-sky-50 border border-sky-100 text-sky-600',
         pillText: 'text-slate-700 font-medium',
-        disclaimerText: 'text-slate-500',
+        disclaimerText: 'text-slate-400',
         body: 'bg-transparent text-slate-800',
-        userBubble: 'bg-sky-600 text-white rounded-tr-xs font-normal shadow-sm',
-        userAvatar: 'bg-sky-600 text-white shadow-2xs',
-        aiBubble: 'bg-slate-900/[0.04] border border-slate-200/80 text-slate-800',
-        aiBubbleHeader: 'border-b border-slate-200/80 text-slate-500',
-        inputBar: 'border-t border-slate-200/80 bg-slate-900/[0.02]',
-        inputCard: 'border border-slate-200/80 bg-white focus-within:ring-sky-500/25 focus-within:border-sky-500 text-slate-800 placeholder:text-slate-400',
+        userBubble: 'bg-sky-50 border border-sky-200/80 text-slate-800 rounded-tr-sm font-normal',
+        userAvatar: 'bg-sky-100 text-sky-700 font-semibold',
+        aiBubble: 'bg-transparent text-slate-800',
+        aiBubbleHeader: 'text-slate-400',
+        inputBar: 'border-t border-slate-200/80 bg-white/70',
+        inputCard: 'border border-slate-200 bg-white focus-within:ring-2 focus-within:ring-sky-500/20 focus-within:border-sky-400 text-slate-800 placeholder:text-slate-400',
         historyPanel: 'bg-white/98 backdrop-blur-xl border-slate-200/80 text-slate-800',
-        recommendPill: 'bg-slate-900/[0.04] hover:bg-sky-500/10 hover:text-sky-600 text-slate-600 border-slate-200/80 hover:border-sky-500/30',
+        recommendPill: 'bg-slate-900/[0.04] hover:bg-sky-500/10 hover:text-sky-700 text-slate-600 border-slate-200/80 hover:border-sky-400/40',
         modePillContainer: 'bg-slate-900/[0.05] border-slate-200/60',
-        modeBtnActive: 'bg-white text-sky-600 shadow-2xs font-semibold border border-slate-200/60',
+        modeBtnActive: 'bg-white text-slate-800 shadow-sm font-semibold border border-slate-200/60',
         modeBtnInactive: 'text-slate-500 hover:text-slate-800',
         sendBtnActive: 'bg-sky-600 text-white hover:bg-sky-500 active:scale-95 transition-all',
         sendBtnDisabled: 'bg-slate-100 text-slate-400 cursor-not-allowed',
@@ -1323,34 +1314,34 @@ export function FloatingAIAssistant() {
       }
     }
 
-    // 终端暗色主题模式：背景明度适度提升至 #22263a，与较暗的终端背景 (#181824 / #1e1e1e) 形成鲜明悬浮层级区分
+    // 终端暗色主题模式：低对比中性面板 + 单一 sky 强调色，弱化装饰性发光与渐变
     return {
       isTerminalMode: true,
-      dialogContainer: 'dark bg-[#22263a]/96 backdrop-blur-2xl border border-white/[0.14] shadow-[0_24px_50px_-8px_rgba(0,0,0,0.85),inset_0_1px_0_0_rgba(255,255,255,0.08),0_0_0_1px_rgba(255,255,255,0.08)] ring-1 ring-white/5 text-slate-100',
-      header: 'border-b border-white/10 bg-white/[0.04] hover:bg-white/[0.06] text-slate-100',
-      headerBtn: 'hover:bg-white/[0.08] text-slate-300 hover:text-white active:scale-95 transition-all',
-      copilotBadge: 'bg-sky-500/15 text-sky-400 border border-sky-500/25',
-      welcomeBanner: 'bg-white/[0.05] border-white/10 shadow-xs',
-      welcomeTitle: 'text-white font-bold',
-      welcomeSub: 'text-slate-300 font-semibold',
-      cardTitle: 'text-white font-bold',
-      cardDesc: 'text-slate-300 font-normal',
-      iconBox: 'bg-white/[0.08] border border-white/10',
-      pillText: 'text-slate-100 font-medium',
-      disclaimerText: 'text-slate-400/80',
+      dialogContainer: 'dark bg-[#1c2030]/97 backdrop-blur-2xl border border-white/[0.10] shadow-[0_0_0_1px_rgba(56,189,248,0.32),0_20px_55px_-12px_rgba(0,0,0,0.85),0_0_34px_-8px_rgba(56,189,248,0.40)] text-slate-100',
+      header: 'border-b border-white/[0.08] bg-white/[0.02] text-slate-100',
+      headerBtn: 'hover:bg-white/[0.08] text-slate-400 hover:text-white active:scale-95 transition-colors',
+      copilotBadge: 'bg-sky-500/12 text-sky-300 border border-sky-400/20',
+      welcomeBanner: 'bg-white/[0.04] border-white/[0.08]',
+      welcomeTitle: 'text-white font-semibold',
+      welcomeSub: 'text-slate-400',
+      cardTitle: 'text-slate-100 font-medium',
+      cardDesc: 'text-slate-400',
+      iconBox: 'bg-sky-500/12 border border-sky-400/15 text-sky-300',
+      pillText: 'text-slate-200',
+      disclaimerText: 'text-slate-500',
       body: 'bg-transparent text-slate-100',
-      userBubble: 'bg-gradient-to-r from-sky-600 to-blue-600 text-white shadow-sm border border-sky-400/20 rounded-tr-xs font-normal',
-      userAvatar: 'bg-gradient-to-tr from-sky-600 to-blue-600 text-white ring-1 ring-white/20 shadow-2xs',
-      aiBubble: 'bg-[#181b2b]/90 border border-white/10 text-slate-200 shadow-sm',
-      aiBubbleHeader: 'border-b border-white/10 text-slate-400',
-      inputBar: 'border-t border-white/10 bg-black/15',
-      inputCard: 'border border-white/12 bg-black/25 hover:border-white/20 focus-within:border-sky-400/60 focus-within:bg-black/35 focus-within:ring-1 focus-within:ring-sky-400/30 text-slate-100 placeholder:text-slate-400',
-      historyPanel: 'bg-[#22263a]/98 backdrop-blur-2xl border-white/12 text-slate-100',
-      recommendPill: 'bg-white/[0.06] hover:bg-white/[0.12] hover:text-sky-300 text-slate-100 border-white/10 hover:border-white/20',
-      modePillContainer: 'bg-white/[0.06] border-white/10',
-      modeBtnActive: 'bg-white/15 text-sky-400 shadow-2xs font-semibold ring-1 ring-white/15',
+      userBubble: 'bg-sky-500/15 border border-sky-400/20 text-slate-100 rounded-tr-sm font-normal',
+      userAvatar: 'bg-sky-500/15 border border-sky-400/20 text-sky-300 font-semibold',
+      aiBubble: 'bg-transparent text-slate-200',
+      aiBubbleHeader: 'text-slate-500',
+      inputBar: 'border-t border-white/[0.08] bg-black/10',
+      inputCard: 'border border-white/[0.10] bg-black/20 focus-within:border-sky-400/40 focus-within:bg-black/30 focus-within:ring-2 focus-within:ring-sky-400/15 text-slate-100 placeholder:text-slate-500',
+      historyPanel: 'bg-[#1c2030]/98 backdrop-blur-2xl border-white/[0.10] text-slate-100',
+      recommendPill: 'bg-white/[0.05] hover:bg-sky-500/10 hover:text-sky-300 text-slate-300 border-white/[0.08] hover:border-sky-400/25',
+      modePillContainer: 'bg-white/[0.05] border-white/[0.08]',
+      modeBtnActive: 'bg-white/[0.12] text-white shadow-sm font-semibold',
       modeBtnInactive: 'text-slate-400 hover:text-slate-200',
-      sendBtnActive: 'bg-sky-500 text-white hover:bg-sky-400 shadow-sm active:scale-95 transition-all',
+      sendBtnActive: 'bg-sky-500 text-white hover:bg-sky-400 active:scale-95 transition-all',
       sendBtnDisabled: 'bg-white/[0.06] text-slate-500 border border-white/5 cursor-not-allowed',
       copyActionBtn: 'hover:bg-white/10 text-slate-400 hover:text-slate-200 active:scale-95 transition-all',
     }
@@ -1360,6 +1351,7 @@ export function FloatingAIAssistant() {
   const [copiedCode, setCopiedCode] = useState<string | null>(null)
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<AIAssistantContextMenuState | null>(null)
+  const [mascotMenu, setMascotMenu] = useState<{ x: number; y: number } | null>(null)
   const [dialogSize, setDialogSize] = useState<{ width: number; height: number } | null>(null)
   const [isDialogResizing, setIsDialogResizing] = useState(false)
   const dialogResizeRef = useRef<{
@@ -1554,9 +1546,12 @@ export function FloatingAIAssistant() {
     }
   }
 
-  // 鼠标拖拽小人事件（按右/底相对偏移拖动）
+  // 鼠标拖拽小人事件（按右/底相对偏移拖动；拖到右边应用边界松手即隐藏）
   const handleMascotPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return
+
+    let reachedRightEdge = false
+    let lastPointerY = e.clientY
 
     mascotDragRef.current = {
       startX: e.clientX,
@@ -1569,6 +1564,10 @@ export function FloatingAIAssistant() {
     const onPointerMove = (moveEv: PointerEvent) => {
       const dx = moveEv.clientX - mascotDragRef.current.startX
       const dy = moveEv.clientY - mascotDragRef.current.startY
+
+      // 一直往右拖到应用边界时记录当前鼠标高度，松手后隐藏到该高度
+      reachedRightEdge = moveEv.clientX >= window.innerWidth - 10
+      lastPointerY = moveEv.clientY
 
       if (!mascotDragRef.current.hasMoved && Math.hypot(dx, dy) > 4) {
         mascotDragRef.current.hasMoved = true
@@ -1590,10 +1589,22 @@ export function FloatingAIAssistant() {
 
       if (mascotDragRef.current.hasMoved) {
         setIsMascotDragging(false)
-        setMascotOffset((latest) => {
-          saveMascotOffset(latest)
-          return latest
-        })
+        if (reachedRightEdge) {
+          // 恢复拖动前的停靠点，隐藏态探头停在鼠标当前高度
+          const original = {
+            right: mascotDragRef.current.startRight,
+            bottom: mascotDragRef.current.startBottom,
+          }
+          setMascotOffset(original)
+          saveMascotOffset(original)
+          setMascotMinimized(true, clampMascotPeekY(lastPointerY))
+          playSound(SoundType.Click)
+        } else {
+          setMascotOffset((latest) => {
+            saveMascotOffset(latest)
+            return latest
+          })
+        }
       } else {
         handleToggle()
       }
@@ -1611,6 +1622,74 @@ export function FloatingAIAssistant() {
     saveMascotOffset(def)
     resetDialogCardPosition()
     playSound(SoundType.Click)
+  }
+
+  // 小人右键菜单：打开 / 配置 / 关闭（隐藏）/ 重置位置
+  const handleMascotContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setContextMenu(null)
+    setMascotMenu({ x: e.clientX, y: e.clientY })
+  }
+
+  useEffect(() => {
+    if (!mascotMenu) return
+    const close = () => setMascotMenu(null)
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close()
+    }
+    window.addEventListener('pointerdown', close)
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('resize', close)
+    return () => {
+      window.removeEventListener('pointerdown', close)
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('resize', close)
+    }
+  }, [mascotMenu])
+
+  const closeMascotMenu = () => setMascotMenu(null)
+
+  const handleMascotMenuOpen = () => {
+    closeMascotMenu()
+    setMascotMinimized(false)
+    resetDialogCardPosition()
+    playSound(SoundType.Open)
+    openFloatingAssistant()
+  }
+
+  const handleMascotMenuConfig = () => {
+    closeMascotMenu()
+    window.dispatchEvent(new CustomEvent('open-settings', { detail: 'ai' }))
+  }
+
+  const handleMascotMenuReset = () => {
+    closeMascotMenu()
+    const def = { right: 28, bottom: 48 }
+    setMascotOffset(def)
+    saveMascotOffset(def)
+    resetDialogCardPosition()
+    playSound(SoundType.Click)
+  }
+
+  const handleMascotMenuDisableAi = () => {
+    closeMascotMenu()
+    useAIStore.getState().setEnableAiGlobal(false)
+    playSound(SoundType.Click)
+    toast.info(t('ai_mascot_menu_disable_ai_tip') || '已关闭 AI 总开关，可在 设置 → AI 中重新开启')
+  }
+
+  // 隐藏态探头：点击或按住拖动都会让小人恢复到鼠标位置
+  const restoreFromPeek = (clientX: number, clientY: number) => {
+    if (!useAIStore.getState().isMascotMinimized) return
+    const next = clampMascotOffset({
+      right: Math.max(16, window.innerWidth - clientX - MASCOT_SIZE / 2),
+      bottom: Math.max(40, window.innerHeight - clientY - MASCOT_SIZE / 2),
+    })
+    setMascotOffset(next)
+    saveMascotOffset(next)
+    setMascotMinimized(false)
+    playSound(SoundType.Open)
   }
 
   // 计算弹窗当前尺寸 (上下严格限制在主内容区到页脚之间，宽度由用户自由拉伸，不再受 1/3 比例限制)
@@ -2133,12 +2212,42 @@ export function FloatingAIAssistant() {
     { text: 'Linux 生产环境安全基线加固', prompt: '请为这台 Linux 服务器提供一份基础安全加固方案（禁止 root 直连、SSH 密钥登录、开启防火墙）。' },
   ]
 
+  // 隐藏态：小人只露一个头、斜着趴在窗口右边框上，点一下即可恢复
+  if (isMascotMinimized && !isFloatingAssistantOpen && enableAiGlobal && showFloatingMascot) {
+    return (
+      <button
+        type="button"
+        data-testid="ai-mascot-peek"
+        title={t('ai_mascot_peek_tip') || '点我恢复小助手'}
+        onPointerDown={(e) => {
+          if (e.button === 0) restoreFromPeek(e.clientX, e.clientY)
+        }}
+        onClick={(e) => restoreFromPeek(e.clientX, e.clientY)}
+        className="group fixed right-0 z-40 flex -translate-y-1/2 translate-x-[60%] rotate-[-18deg] items-center justify-center transition-transform duration-200 hover:translate-x-[34%] cursor-pointer"
+        style={{ width: 54, height: 54, top: mascotPeekY }}
+      >
+        <AIMascotAvatar
+          size={46}
+          mood={assistantMascotMood}
+          isLight={isMascotLight}
+          terminalAccentColor={terminalMascotAccent}
+          showGlowRing={false}
+          interactive={false}
+          className="-translate-x-[14%] -translate-y-[10%]"
+        />
+      </button>
+    )
+  }
+
   // 必须在所有 React Hooks 执行完毕后才进行条件渲染判断，严格遵守 Rules of Hooks，避免开关切换时出现 "Rendered more hooks than during the previous render"
   if (!enableAiGlobal || (!showFloatingMascot && !isFloatingAssistantOpen)) {
     return null
   }
 
   const dialogLayout = getEffectiveDialogPosition()
+  const mascotMenuPosition = mascotMenu
+    ? clampMascotMenuPosition(mascotMenu.x, mascotMenu.y, MASCOT_MENU_WIDTH, MASCOT_MENU_RESERVE_HEIGHT)
+    : null
 
   return (
     <>
@@ -2155,6 +2264,7 @@ export function FloatingAIAssistant() {
           }}
           onPointerDown={handleMascotPointerDown}
           onDoubleClick={handleMascotDoubleClick}
+          onContextMenu={handleMascotContextMenu}
           className={cn(
             'select-none touch-none',
             isMascotDragging ? 'cursor-grabbing transition-none' : 'cursor-grab transition-transform duration-200',
@@ -2190,6 +2300,61 @@ export function FloatingAIAssistant() {
               )}
             />
           </div>
+        </div>
+      )}
+
+      {/* 小人右键菜单：打开 / 配置 / 重置位置 / 关闭 AI 总开关 */}
+      {mascotMenu && mascotMenuPosition && (
+        <div
+          data-testid="ai-mascot-menu"
+          onPointerDown={(e) => e.stopPropagation()}
+          style={{
+            position: 'fixed',
+            left: mascotMenuPosition.left,
+            top: mascotMenuPosition.top,
+            bottom: mascotMenuPosition.bottom,
+            zIndex: 70,
+          }}
+          className="w-[196px] rounded-lg border border-border/60 bg-background/98 p-1 text-xs text-foreground shadow-xl backdrop-blur-xl select-none"
+        >
+          <button
+            type="button"
+            data-testid="ai-mascot-menu-open"
+            onClick={handleMascotMenuOpen}
+            className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left hover:bg-muted cursor-pointer"
+          >
+            <Sparkles className="h-3.5 w-3.5 text-primary shrink-0" />
+            <span>{t('ai_mascot_menu_open') || '打开小助手'}</span>
+          </button>
+          <button
+            type="button"
+            data-testid="ai-mascot-menu-config"
+            onClick={handleMascotMenuConfig}
+            className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left hover:bg-muted cursor-pointer"
+          >
+            <Settings2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            <span>{t('ai_mascot_menu_config') || '配置'}</span>
+          </button>
+          <button
+            type="button"
+            data-testid="ai-mascot-menu-reset"
+            onClick={handleMascotMenuReset}
+            className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left hover:bg-muted cursor-pointer"
+          >
+            <RotateCcw className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            <span>{t('ai_mascot_menu_reset') || '重置位置'}</span>
+          </button>
+          <div className="my-1 h-px bg-border/50" />
+          <button
+            type="button"
+            data-testid="ai-mascot-menu-disable-ai"
+            title={t('ai_mascot_menu_disable_ai_tip') || '关闭后悬浮小人与所有 AI 入口将隐藏，可在 设置 → AI 中重新开启'}
+            onClick={handleMascotMenuDisableAi}
+            className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-destructive hover:bg-destructive/10 cursor-pointer"
+          >
+            <PowerOff className="h-3.5 w-3.5 shrink-0" />
+            <span>{t('ai_mascot_menu_disable_ai') || '关闭 AI 总开关'}</span>
+          </button>
         </div>
       )}
 
@@ -2248,7 +2413,7 @@ export function FloatingAIAssistant() {
             }
           }}
           className={cn(
-            'flex flex-col overflow-hidden rounded-2xl select-text animate-in fade-in zoom-in-95',
+            "relative flex flex-col overflow-hidden rounded-2xl select-text animate-in fade-in zoom-in-95 before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:z-10 before:h-px before:bg-gradient-to-r before:from-transparent before:via-primary/70 before:to-transparent before:content-['']",
             themeStyles.dialogContainer,
             isDialogDragging || isDialogResizing ? 'transition-none select-none shadow-cyan-500/10' : 'transition-all duration-150',
           )}
@@ -2257,20 +2422,21 @@ export function FloatingAIAssistant() {
           <div
             onPointerDown={handleDialogHeaderPointerDown}
             className={cn(
-              'flex items-center justify-between px-4 py-3 select-none shrink-0 cursor-move transition-colors',
+              'flex items-center justify-between px-4 py-2.5 select-none shrink-0 cursor-move transition-colors',
               themeStyles.header,
             )}
           >
-            {/* 左侧：小人微标 + 标题 + 拖拽手柄指示器 */}
+            {/* 左侧：小人微标 + 标题 + 状态徽章 */}
             <div className="flex items-center gap-2">
-              <AIMascotAvatar size={24} mood={assistantMascotMood} isLight={isMascotLight} terminalAccentColor={terminalMascotAccent} showGlowRing={false} interactive={false} />
-              <span className="text-xs font-bold text-inherit">
+              <AIMascotAvatar size={22} mood={assistantMascotMood} isLight={isMascotLight} terminalAccentColor={terminalMascotAccent} showGlowRing={false} interactive={false} />
+              <span className="text-[13px] font-semibold tracking-tight text-inherit">
                 {t('ai_assistant_title') || '运维小助手'}
               </span>
-              <span className={cn('text-[10px] px-1.5 py-0.2 rounded font-normal', themeStyles.copilotBadge)}>
+              <span className={cn('hidden sm:inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px]', themeStyles.copilotBadge)}>
+                <span className="h-1.5 w-1.5 rounded-full bg-primary/70" />
                 AIOps Copilot
               </span>
-              <div className="hidden sm:flex items-center opacity-40 ml-1">
+              <div className="hidden sm:flex items-center opacity-25 ml-0.5">
                 <GripHorizontal className="h-3.5 w-3.5" />
               </div>
             </div>
@@ -2545,87 +2711,85 @@ export function FloatingAIAssistant() {
           <div
             ref={messagesContainerRef}
             onScroll={handleChatScroll}
-            className="flex-1 overflow-y-auto p-4 space-y-4 select-text relative"
+            data-testid="ai-chat-scroll-container"
+            className="flex-1 overflow-y-auto px-4 py-3.5 space-y-5 select-text relative"
           >
             {assistantMessages.length === 0 ? (
-              /* 空状态：2列横向功能卡片 + 热门推荐问答 Pills */
-              <div className="flex flex-col space-y-4 pt-1 pb-2">
-                {/* 顶部欢迎区：机器人插图 + 醒目标题 */}
-                <div className={cn('relative overflow-hidden flex items-center gap-3.5 p-3.5 rounded-xl border', themeStyles.welcomeBanner)}>
-                  <div className="pointer-events-none absolute -left-6 -top-6 h-28 w-28 rounded-full bg-primary/15 blur-2xl dark:bg-sky-500/15" />
-                  <AIMascotAvatar size={60} mood={assistantMascotMood} isLight={isMascotLight} terminalAccentColor={terminalMascotAccent} showGlowRing={false} />
-                  <div>
-                    <h2 className={cn('text-sm font-bold tracking-tight', themeStyles.welcomeTitle)}>
+              /* 空状态：轻量欢迎区 + 紧凑能力入口 + 推荐提问 */
+              <div className="flex flex-col gap-5 py-2">
+                <div className="flex flex-col items-center gap-2 pt-2 pb-1 text-center">
+                  <AIMascotAvatar size={40} mood={assistantMascotMood} isLight={isMascotLight} terminalAccentColor={terminalMascotAccent} showGlowRing={false} />
+                  <div className="space-y-1">
+                    <p className={cn('text-[11px]', themeStyles.welcomeSub)}>
                       您好，欢迎使用
-                    </h2>
-                    <h1
-                      className={cn(
-                        'text-lg font-extrabold bg-clip-text text-transparent',
-                        themeStyles.isTerminalMode && !isLightTerminal
-                          ? 'bg-gradient-to-r from-sky-400 via-cyan-300 to-blue-400'
-                          : 'bg-gradient-to-r from-blue-600 via-indigo-600 to-cyan-500',
-                      )}
-                    >
+                    </p>
+                    <h1 className={cn('text-[17px] font-semibold tracking-tight', themeStyles.welcomeTitle)}>
                       {t('ai_assistant_title') || '运维小助手'}
                     </h1>
+                    <p className={cn('text-[11px] leading-relaxed', themeStyles.welcomeSub)}>
+                      直接提问即可，我会用已保存的凭据连接主机实地排查
+                    </p>
                   </div>
                 </div>
 
-                <div className={cn('text-xs font-semibold px-0.5', themeStyles.welcomeSub)}>
-                  我可以帮您
-                </div>
-
-                {/* 6 大功能场景卡片 (2 列网格排布，宽度宽裕舒适) */}
-                <div className="grid grid-cols-2 gap-3">
-                  {CAPABILITY_CARDS.map((card) => {
-                    const IconComponent = card.icon
-                    return (
-                      <div
-                        key={card.id}
-                        onClick={() => {
-                          playSound(SoundType.Click)
-                          void sendAssistantMessage(card.prompt)
-                        }}
-                        className={cn(
-                          'p-3 rounded-xl border transition-all duration-200 cursor-pointer flex flex-col justify-between group shadow-2xs hover:shadow-sm hover:-translate-y-0.5',
-                          card.bgColor,
-                        )}
-                      >
-                        <div className="flex items-center gap-2 mb-1">
-                          <div className={cn('p-1 rounded-md shadow-2xs', themeStyles.iconBox, card.color)}>
+                <div>
+                  <div className="mb-2 flex items-center justify-between px-0.5">
+                    <span className={cn('text-[11px] font-semibold', themeStyles.welcomeSub)}>
+                      我可以帮您
+                    </span>
+                    <span className="text-[10px] text-muted-foreground/55">点击卡片直接发起</span>
+                  </div>
+                  <div className="grid grid-cols-[repeat(auto-fit,minmax(150px,1fr))] gap-2">
+                    {CAPABILITY_CARDS.map((card) => {
+                      const IconComponent = card.icon
+                      return (
+                        <button
+                          key={card.id}
+                          type="button"
+                          onClick={() => {
+                            playSound(SoundType.Click)
+                            void sendAssistantMessage(card.prompt)
+                          }}
+                          className="group flex flex-col items-start gap-1.5 rounded-xl border border-border/40 bg-muted/20 p-2.5 text-left cursor-pointer transition-colors hover:border-primary/30 hover:bg-primary/[0.06]"
+                        >
+                          <span className={cn('inline-flex h-6 w-6 items-center justify-center rounded-lg', themeStyles.iconBox)}>
                             <IconComponent className="h-3.5 w-3.5" />
-                          </div>
-                          <span className={cn('text-xs font-bold transition-colors', themeStyles.cardTitle)}>
+                          </span>
+                          <span className={cn('text-[11.5px] font-semibold leading-tight', themeStyles.cardTitle)}>
                             {card.title}
                           </span>
-                        </div>
-                        <p className={cn('text-[11px] leading-snug transition-colors', themeStyles.cardDesc)}>
-                          {card.desc}
-                        </p>
-                      </div>
-                    )
-                  })}
+                          <span className={cn('line-clamp-2 text-[10px] leading-snug', themeStyles.cardDesc)}>
+                            {card.desc}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
                 </div>
 
-                {/* 推荐热门问题 Pills (带 # 前缀) */}
-                <div className="flex flex-wrap gap-2 pt-1">
-                  {RECOMMEND_PILLS.map((pill, idx) => (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => {
-                        playSound(SoundType.Click)
-                        void sendAssistantMessage(pill.prompt)
-                      }}
-                      className={cn(
-                        'inline-flex items-center text-[11px] px-2.5 py-1 rounded-lg transition-all cursor-pointer text-left',
-                        themeStyles.recommendPill,
-                      )}
-                    >
-                      <span className={cn('font-semibold mr-1', themeStyles.isTerminalMode ? 'text-sky-400' : 'text-primary')}>#</span>
-                      <span className={themeStyles.pillText}>{pill.text}</span>
-                    </button>
-                  ))}
+                <div>
+                  <div className={cn('mb-2 px-0.5 text-[11px] font-semibold', themeStyles.welcomeSub)}>
+                    试试这样问
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {RECOMMEND_PILLS.map((pill, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => {
+                          playSound(SoundType.Click)
+                          void sendAssistantMessage(pill.prompt)
+                        }}
+                        className={cn(
+                          'inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10.5px] cursor-pointer transition-colors',
+                          themeStyles.recommendPill,
+                        )}
+                      >
+                        <Sparkles className="h-2.5 w-2.5 shrink-0 opacity-70" />
+                        <span className={themeStyles.pillText}>{pill.text}</span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
             ) : (
@@ -2661,7 +2825,7 @@ export function FloatingAIAssistant() {
                           />
                         </div>
                       ) : (
-                        <div className={cn('w-7 h-7 rounded-full text-white flex items-center justify-center text-xs font-bold shrink-0 mt-0.5 shadow-2xs', themeStyles.userAvatar)}>
+                        <div className={cn('h-7 w-7 rounded-full flex items-center justify-center text-[11px] shrink-0 mt-0.5', themeStyles.userAvatar)}>
                           我
                         </div>
                       )}
@@ -2672,33 +2836,33 @@ export function FloatingAIAssistant() {
                         <div
                           data-message-content="true"
                           className={cn(
-                            'rounded-2xl text-xs leading-relaxed px-3.5 py-2.5 shadow-2xs',
+                            'rounded-2xl text-xs leading-relaxed',
                             isUser
-                              ? themeStyles.userBubble
-                              : cn('rounded-tl-xs space-y-2 w-full', themeStyles.aiBubble),
+                              ? cn('px-3.5 py-2.5 rounded-tr-sm', themeStyles.userBubble)
+                              : cn('w-full rounded-tl-sm px-0.5 py-1 space-y-2', themeStyles.aiBubble),
                           )}
                         >
-                          {/* Agent/Chat 模式与执行能力解耦标签 */}
+                          {/* 模式标签：弱化为一行说明，不抢占正文视觉 */}
                           {!isUser && msg.mode && (
                             <div
                               data-testid="ai-bubble-badge"
-                              className={cn('flex items-center gap-1.5 pb-1 text-[10px] font-medium', themeStyles.aiBubbleHeader)}
+                              className={cn('flex items-center gap-1.5 mb-1.5 text-[10px] font-medium opacity-70', themeStyles.aiBubbleHeader)}
                             >
                               {msg.mode === 'agent' ? (
                                 hasAgentAction ? (
                                   <>
-                                    <Sparkles className="h-3 w-3 text-cyan-400" />
+                                    <Sparkles className="h-3 w-3 text-primary" />
                                     <span>{t('ai_badge_agent_execution') || 'Agent 运维执行'}</span>
                                   </>
                                 ) : (
                                   <>
-                                    <Bot className="h-3 w-3 text-emerald-400" />
+                                    <Bot className="h-3 w-3 text-primary" />
                                     <span>{t('ai_badge_agent_qa') || 'AIOps 智能解答'}</span>
                                   </>
                                 )
                               ) : (
                                 <>
-                                  <MessageSquare className="h-3 w-3 text-blue-400" />
+                                  <MessageSquare className="h-3 w-3 text-primary" />
                                   <span>{t('ai_badge_chat_qa') || 'Chat 咨询解答'}</span>
                                 </>
                               )}
@@ -2783,10 +2947,10 @@ export function FloatingAIAssistant() {
                           )}
                         </div>
 
-                        {/* 底部操作栏：一键复制 (提问与回答风格、位置完全一致，放置在气泡正下方) */}
+                        {/* 底部操作栏：一键复制 (常驻低对比，hover 高亮) */}
                         <div
                           className={cn(
-                            'flex items-center pt-1 text-muted-foreground opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity',
+                            'flex items-center pt-1.5 text-muted-foreground opacity-50 hover:opacity-100 focus-within:opacity-100 transition-opacity',
                             isUser ? 'justify-end pr-1' : 'justify-start pl-1',
                           )}
                         >
@@ -2824,12 +2988,12 @@ export function FloatingAIAssistant() {
                       <div className="shrink-0 mt-0.5">
                         <AIMascotAvatar size={28} mood="thinking" isLight={isMascotLight} terminalAccentColor={terminalMascotAccent} showGlowRing={false} interactive={false} />
                       </div>
-                      <div className={cn('p-2 px-3 rounded-2xl rounded-tl-xs text-xs flex items-center justify-between gap-2.5', themeStyles.aiBubble)}>
-                        <div className="flex items-center gap-2">
+                      <div className="rounded-xl border border-border/40 bg-muted/25 px-3 py-2 text-xs flex items-center justify-between gap-2.5">
+                        <div className="flex items-center gap-2 text-muted-foreground">
                           <div className="flex space-x-1">
-                            <div className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-bounce" />
-                            <div className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-bounce delay-100" />
-                            <div className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-bounce delay-200" />
+                            <div className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce" />
+                            <div className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce delay-100" />
+                            <div className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-bounce delay-200" />
                           </div>
                           <span>AI 助手正在深度推导中...</span>
                         </div>
@@ -2859,32 +3023,48 @@ export function FloatingAIAssistant() {
 
           {/* 向上滑动脱离底部追踪时，显示直观的“追踪最新输出”浮动胶囊 */}
           {showScrollBottomBtn && (
-            <div className="absolute bottom-[86px] right-6 z-20 pointer-events-auto animate-in fade-in zoom-in-95 duration-150">
+            <div className="absolute bottom-[84px] right-6 z-20 pointer-events-auto animate-in fade-in zoom-in-95 duration-150">
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
                 data-testid="ai-scroll-to-bottom-btn"
                 onClick={scrollToBottom}
-                className="h-7 px-2.5 text-[11px] font-medium bg-background/95 dark:bg-zinc-900/95 text-foreground border border-border shadow-lg hover:bg-accent backdrop-blur-xs gap-1.5 rounded-full cursor-pointer transition-all"
+                className="h-7 px-2.5 text-[11px] font-medium bg-background/95 text-foreground border border-border/60 shadow-sm hover:bg-muted backdrop-blur-xs gap-1.5 rounded-full cursor-pointer transition-all"
               >
-                <ArrowDown className="w-3 h-3 text-sky-500 animate-bounce" />
+                <ArrowDown className="w-3 h-3 text-primary animate-bounce" />
                 <span>{isAssistantResponding ? '追踪最新输出' : '回到底部'}</span>
               </Button>
             </div>
           )}
 
-          {/* Bottom 输入区域 (Antigravity 紧凑卡片风格，减少垂直占用) */}
-          <div className={cn('p-2.5 pb-2 shrink-0 space-y-1.5 transition-colors', themeStyles.inputBar)}>
-            {/* 输入框主卡片 (Antigravity 风格：圆角卡片、模式与操作内嵌于底栏) */}
-            <div className={cn('relative rounded-2xl transition-all p-2 flex flex-col justify-between min-h-[58px]', themeStyles.inputCard)}>
+          {/* 危险模式：显著视觉警示 + 一键退出（不展示倒计时） */}
+          {dangerModeActive && (
+            <div className="shrink-0 flex items-center justify-between gap-2 px-3 py-1.5 border-t border-destructive/30 bg-destructive/10 text-[11px] text-destructive">
+              <span className="flex items-center gap-1.5 min-w-0 truncate">
+                <ShieldAlert className="h-3.5 w-3.5 shrink-0" />
+                {t('ai_danger_mode_banner') || '危险模式已开启 · 写命令将自动执行'}
+              </span>
+              <button
+                type="button"
+                onClick={deactivateDangerMode}
+                className="shrink-0 font-medium underline underline-offset-2 cursor-pointer"
+              >
+                {t('ai_danger_mode_disable') || '立即关闭'}
+              </button>
+            </div>
+          )}
+
+          {/* Bottom 输入区域：单一输入卡 + 内嵌工具栏 */}
+          <div className={cn('px-3 pt-2 pb-1.5 shrink-0 space-y-1 transition-colors', themeStyles.inputBar)}>
+            <div className={cn('relative rounded-xl transition-all p-2.5 flex flex-col justify-between min-h-[68px] gap-1', themeStyles.inputCard)}>
               {/* 智能指令拆解意图提示胶囊 */}
               {detectedInputIntent?.intent === 'explain_shell' && (
                 <div
                   data-testid="detected-explain-pill"
-                  className="flex items-center gap-1.5 px-2 py-1 mb-1.5 rounded-lg bg-sky-500/10 border border-sky-500/25 text-[10.5px] text-sky-600 dark:text-sky-400 select-none animate-in fade-in slide-in-from-bottom-1"
+                  className="flex items-center gap-1.5 px-2 py-1 mb-0.5 rounded-lg bg-primary/10 border border-primary/20 text-[10.5px] text-primary select-none animate-in fade-in slide-in-from-bottom-1"
                 >
-                  <Layers className="h-3 w-3 shrink-0 text-sky-500 animate-pulse" />
+                  <Layers className="h-3 w-3 shrink-0 animate-pulse" />
                   <span className="truncate font-medium">
                     🧩 检测到复合指令/管道，回车将自动触发乐高积木式拆解
                   </span>
@@ -2898,13 +3078,12 @@ export function FloatingAIAssistant() {
                 onKeyDown={handleKeyDownInInput}
                 placeholder="你可以输入任何运维排障、命令生成或脚本问题..."
                 rows={1}
-                className="w-full bg-transparent resize-none outline-none text-xs text-inherit placeholder:opacity-70 leading-relaxed min-h-[30px] max-h-[100px] px-1 pt-0.5"
+                className="w-full bg-transparent resize-none outline-none text-[12.5px] text-inherit placeholder:opacity-60 leading-relaxed min-h-[32px] max-h-[100px] px-1 pt-0.5"
               />
 
-              {/* 输入框底部动作条：左侧 Agent/Chat 切换，右侧紧凑微型停止/发送按钮 */}
-              <div className="flex items-center justify-between pt-1">
-                {/* 模式切换胶囊 (更小巧精致的药丸设计) */}
-                <div className={cn('flex items-center p-[2px] rounded-md border text-[10px] transition-colors', themeStyles.modePillContainer)}>
+              {/* 输入框底部动作条：左侧 Agent/Chat 切换，右侧停止/发送按钮 */}
+              <div className="flex items-center justify-between pt-0.5">
+                <div className={cn('flex items-center p-0.5 rounded-lg border text-[11px] transition-colors', themeStyles.modePillContainer)}>
                   <button
                     type="button"
                     onClick={() => {
@@ -2912,13 +3091,13 @@ export function FloatingAIAssistant() {
                       playSound(SoundType.Click)
                     }}
                     className={cn(
-                      'flex items-center gap-1 px-1.5 py-0.5 rounded text-[9.5px] font-medium leading-none transition-all cursor-pointer',
+                      'flex items-center gap-1 px-2 py-1 rounded-md text-[10.5px] font-medium leading-none transition-all cursor-pointer',
                       assistantMode === 'agent'
                         ? themeStyles.modeBtnActive
                         : themeStyles.modeBtnInactive,
                     )}
                   >
-                    <Sparkles className="h-2.5 w-2.5 text-cyan-500" />
+                    <Sparkles className="h-3 w-3 text-primary" />
                     <span>Agent</span>
                   </button>
 
@@ -2929,18 +3108,18 @@ export function FloatingAIAssistant() {
                       playSound(SoundType.Click)
                     }}
                     className={cn(
-                      'flex items-center gap-1 px-1.5 py-0.5 rounded text-[9.5px] font-medium leading-none transition-all cursor-pointer',
+                      'flex items-center gap-1 px-2 py-1 rounded-md text-[10.5px] font-medium leading-none transition-all cursor-pointer',
                       assistantMode === 'chat'
                         ? themeStyles.modeBtnActive
                         : themeStyles.modeBtnInactive,
                     )}
                   >
-                    <MessageSquare className="h-2.5 w-2.5 text-blue-500" />
+                    <MessageSquare className="h-3 w-3 opacity-70" />
                     <span>Chat</span>
                   </button>
                 </div>
 
-                {/* 发送 / 停止生成按钮 (微型尺寸 h-5 w-5，更小巧轻盈) */}
+                {/* 发送 / 停止生成按钮 */}
                 {isAssistantResponding ? (
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -2951,10 +3130,10 @@ export function FloatingAIAssistant() {
                           stopAssistantResponding()
                           playSound(SoundType.Click)
                         }}
-                        className="h-5 w-5 rounded-[5px] border border-border/80 hover:border-destructive/60 bg-background hover:bg-destructive/10 text-muted-foreground hover:text-destructive flex items-center justify-center cursor-pointer transition-all shadow-2xs"
+                        className="h-7 w-7 rounded-lg border border-border/60 hover:border-destructive/60 bg-background hover:bg-destructive/10 text-muted-foreground hover:text-destructive flex items-center justify-center cursor-pointer transition-all"
                         title={t('ai_stop_generating') || '停止生成'}
                       >
-                        <CircleStop className="h-3 w-3 transition-colors" />
+                        <CircleStop className="h-3.5 w-3.5 transition-colors" />
                       </button>
                     </TooltipTrigger>
                     <TooltipContent side="top" className="text-xs">
@@ -2968,26 +3147,22 @@ export function FloatingAIAssistant() {
                     disabled={!assistantInput.trim()}
                     onClick={handleSend}
                     className={cn(
-                      'h-5 w-5 rounded-[5px] flex items-center justify-center transition-all duration-150 cursor-pointer',
+                      'h-7 w-7 rounded-lg flex items-center justify-center transition-all duration-150 cursor-pointer',
                       assistantInput.trim()
                         ? themeStyles.sendBtnActive
                         : themeStyles.sendBtnDisabled,
                     )}
                     title={t('ai_send_message') || '发送 (Enter)'}
                   >
-                    <ArrowUp className="h-3 w-3" />
+                    <ArrowUp className="h-3.5 w-3.5" />
                   </button>
                 )}
               </div>
             </div>
 
-            {/* 底部免责声明小字 */}
-            <div className={cn('text-[9.5px] text-center select-none truncate px-1 flex items-center justify-center gap-1.5', themeStyles.disclaimerText)}>
-              <span>内容由 AI 生成，仅供参考</span>
-              <span className="opacity-40">•</span>
-              <span className="inline-flex items-center gap-1">
-                换行 <Kbd size="xs">Shift</Kbd><Kbd size="xs">↵</Kbd>
-              </span>
+            {/* 底部免责声明：单行极简，不再占用独立条带高度 */}
+            <div className={cn('text-[9px] leading-none text-center select-none truncate px-1', themeStyles.disclaimerText)}>
+              内容由 AI 生成，仅供参考 · Enter 发送 · Shift+Enter 换行
             </div>
           </div>
 

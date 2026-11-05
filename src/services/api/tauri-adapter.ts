@@ -65,6 +65,12 @@ import type {
   TagRow,
   SyncBackgroundItem,
   LogBookmark,
+  McpPluginView,
+  McpPluginConfigInput,
+  McpPresetTemplate,
+  McpTestConnectionResult,
+  ActiveMcpTool,
+  McpToolCallResult,
 } from "./types";
 import { ConnectionState } from "@/services/ssh-connection-state";
 import type {
@@ -2296,6 +2302,65 @@ export const tauriAdapter: BackendAdapter = {
     },
     async stopAll(serverId: string): Promise<OperationResult> {
       return safeInvoke<OperationResult>("port_forward_stop_all", { serverId });
+    },
+  },
+  // ==================== 外部 MCP 插件中心（智能运维中枢） ====================
+  mcpClient: {
+    async listPlugins(): Promise<McpPluginView[]> {
+      return safeInvoke<McpPluginView[]>("mcp_client_list_plugins");
+    },
+    async listPresets(): Promise<McpPresetTemplate[]> {
+      return safeInvoke<McpPresetTemplate[]>("mcp_client_list_presets");
+    },
+    async upsertPlugin(config: McpPluginConfigInput): Promise<McpPluginView> {
+      return safeInvoke<McpPluginView>("mcp_client_upsert_plugin", { config });
+    },
+    async removePlugin(pluginId: string): Promise<void> {
+      return safeInvoke<void>("mcp_client_remove_plugin", { pluginId });
+    },
+    async restorePresets(): Promise<McpPluginView[]> {
+      return safeInvoke<McpPluginView[]>("mcp_client_restore_presets");
+    },
+    async setEnabled(pluginId: string, enabled: boolean): Promise<McpPluginView> {
+      return safeInvoke<McpPluginView>("mcp_client_set_enabled", {
+        pluginId,
+        enabled,
+      });
+    },
+    async setToolDisabled(
+      pluginId: string,
+      toolName: string,
+      disabled: boolean,
+    ): Promise<McpPluginView> {
+      return safeInvoke<McpPluginView>("mcp_client_set_tool_disabled", {
+        pluginId,
+        toolName,
+        disabled,
+      });
+    },
+    async refreshPlugin(pluginId: string): Promise<McpPluginView> {
+      return safeInvoke<McpPluginView>("mcp_client_refresh_plugin", { pluginId });
+    },
+    async testConnection(
+      config: McpPluginConfigInput,
+    ): Promise<McpTestConnectionResult> {
+      return safeInvoke<McpTestConnectionResult>("mcp_client_test_connection", {
+        config,
+      });
+    },
+    async listActiveTools(): Promise<ActiveMcpTool[]> {
+      return safeInvoke<ActiveMcpTool[]>("mcp_client_list_active_tools");
+    },
+    async callTool(
+      pluginId: string,
+      toolName: string,
+      argumentsObj: Record<string, unknown>,
+    ): Promise<McpToolCallResult> {
+      return safeInvoke<McpToolCallResult>("mcp_client_call_tool", {
+        pluginId,
+        toolName,
+        arguments: argumentsObj,
+      });
     },
   },
 };

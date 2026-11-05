@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   AGENT_TOOLS,
   executeAgentTool,
@@ -6,9 +6,13 @@ import {
   stripDsmlTags,
   stripAllToolCallMarkup,
   extractTextToolCalls,
+  loadActiveMcpTools,
+  isMcpToolName,
   type AgentToolExecutionContext,
 } from '../agent-tools'
 import type { Server, ServerGroup } from '@/types'
+import { backend } from '@/services/api'
+import { useAppStore } from '@/store'
 
 vi.mock('@/services/api', () => ({
   backend: {
@@ -58,6 +62,61 @@ vi.mock('@/services/api', () => ({
     },
     metrics: {
       collect: vi.fn(),
+    },
+    mcpClient: {
+      listActiveTools: vi.fn().mockResolvedValue([
+        {
+          // 真实内置插件：必须带 ssh_native 传输标记才允许走 SSH 直连诊断
+          pluginId: 'builtin-java',
+          pluginName: 'Java / JVM 应用诊断',
+          pluginIcon: 'java',
+          qualifiedName: 'mcp__builtin_java__list_java_processes',
+          toolName: 'list_java_processes',
+          description: '[Java / JVM 应用诊断 插件] 扫描 Java 进程',
+          inputSchema: { type: 'object', properties: {} },
+          isReadOnly: true,
+          transport: 'ssh_native',
+        },
+        {
+          // 真实外部插件：走 Rust MCP Client，不应被内置 SSH 分支劫持
+          pluginId: 'ext-k8s',
+          pluginName: '外部 K8s 插件',
+          pluginIcon: 'kubernetes',
+          qualifiedName: 'mcp__ext_k8s__get_pods',
+          toolName: 'get_pods',
+          description: '[外部 K8s 插件] 查询指定命名空间的 Pod 状态',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              namespace: { type: 'string' },
+            },
+          },
+          isReadOnly: true,
+          transport: 'stdio',
+        },
+      ]),
+      callTool: vi.fn().mockImplementation(
+        (_pluginId: string, toolName: string, args: Record<string, unknown>) => {
+          if (toolName === 'get_pods') {
+            return Promise.resolve({
+              pluginId: 'builtin-kubernetes',
+              pluginName: 'Kubernetes (K8s)',
+              toolName: 'get_pods',
+              isError: false,
+              text: `NAMESPACE=${args.namespace || 'default'} POD=payment-7d8f9 STATUS=CrashLoopBackOff password="SecretDbPassword999"`,
+              durationMs: 25,
+            })
+          }
+          return Promise.resolve({
+            pluginId: _pluginId,
+            pluginName: 'Unknown',
+            toolName,
+            isError: true,
+            text: 'Tool failed',
+            durationMs: 10,
+          })
+        },
+      ),
     },
   },
 }))
@@ -134,20 +193,22 @@ describe('executeAgentTool', () => {
       activeServerId: null,
     })
     expect(res.success).toBe(false)
-    expect(res.output).toContain('当前未连接任何活动服务器终端')
+    expect(res.output).toContain('尚无可用服务器资产')
+    expect(res.output).toContain('无需手动打开终端')
   })
 
-  it('politely intercepts and lists managed servers when on dashboard with no active terminal tab', async () => {
+  it('politely intercepts and lists managed servers when several hosts exist without an active terminal', async () => {
     const res = await executeAgentTool('probe_server', { metric: 'all' }, {
       servers: mockServers,
       serverGroups: mockGroups,
       activeServerId: null,
     })
     expect(res.success).toBe(false)
-    expect(res.output).toContain('未找到对应的服务器或未连接终端')
+    expect(res.output).toContain('请指定目标服务器')
     expect(res.output).toContain('测试环境-01')
     expect(res.output).toContain('生产环境-Web')
     expect(res.output).toContain('操作建议')
+    expect(res.output).toContain('无需打开终端')
   })
 
   it('politely intercepts when explicitly requested target server is not found in assets', async () => {
@@ -157,7 +218,8 @@ describe('executeAgentTool', () => {
       activeServerId: 'srv-1',
     })
     expect(res.success).toBe(false)
-    expect(res.output).toContain('未找到匹配名称或 IP 为「non-existent-host」的服务器资产')
+    expect(res.output).toContain('未找到匹配的服务器')
+    expect(res.output).toContain('non-existent-host')
   })
 
   it('resolves target server by name or IP accurately', async () => {
@@ -179,6 +241,131 @@ describe('executeAgentTool', () => {
     expect(res.success).toBe(true)
     expect(res.commandRan).toContain('systemctl status nginx')
     expect(res.explanation).toBe('检查 Nginx 服务运行状态')
+  })
+
+  it('no longer hard-blocks a deeper find and returns its execution output', async () => {
+    const res = await executeAgentTool(
+      'execute_readonly_command',
+      { command: 'find / -maxdepth 5 -name "poetry**" -type f 2>/dev/null | head -n 20' },
+      baseContext,
+    )
+    expect(res.success).toBe(true)
+    expect(res.commandRan).toContain('-maxdepth 5')
+    expect(res.output).not.toContain('[安全网关拦截]')
+  })
+
+  it('honors executionMode in the Agent tool chain instead of always auto-running', async () => {
+    const disabledRes = await executeAgentTool(
+      'execute_readonly_command',
+      { command: 'df -h' },
+      { ...baseContext, executionMode: 'disabled' },
+    )
+    expect(disabledRes.success).toBe(false)
+    expect(disabledRes.output).toContain('只读问答')
+    expect(disabledRes.commandRan).toBeUndefined()
+
+    const askRes = await executeAgentTool(
+      'execute_readonly_command',
+      { command: 'df -h' },
+      { ...baseContext, executionMode: 'ask' },
+    )
+    expect(askRes.success).toBe(false)
+    expect(askRes.output).toContain('询问确认')
+    expect(askRes.commandRan).toBeUndefined()
+
+    const autoRes = await executeAgentTool(
+      'execute_readonly_command',
+      { command: 'df -h' },
+      { ...baseContext, executionMode: 'auto_readonly' },
+    )
+    expect(autoRes.success).toBe(true)
+    expect(autoRes.commandRan).toContain('df -h')
+  })
+
+  it('runs write commands in danger mode with a preview, but still blocks red lines', async () => {
+    const writeRes = await executeAgentTool(
+      'execute_readonly_command',
+      { command: 'systemctl restart nginx' },
+      { ...baseContext, executionMode: 'danger' },
+    )
+    expect(writeRes.success).toBe(true)
+    expect(writeRes.output).toContain('危险模式执行预览')
+
+    const redLineRes = await executeAgentTool(
+      'execute_readonly_command',
+      { command: 'rm -rf /tmp/data' },
+      { ...baseContext, executionMode: 'danger' },
+    )
+    expect(redLineRes.success).toBe(false)
+    expect(redLineRes.output).toContain('安全网关拦截')
+  })
+
+  describe('auto-connect with saved credentials (no terminal session required)', () => {
+    const batchExecuteMock = backend.ssh.batchExecute as unknown as ReturnType<typeof vi.fn>
+    const executeMock = backend.ssh.execute as unknown as ReturnType<typeof vi.fn>
+    const noTerminalContext: AgentToolExecutionContext = {
+      servers: [mockServers[0]],
+      serverGroups: mockGroups,
+      activeServerId: null,
+    }
+
+    beforeEach(() => {
+      useAppStore.setState({ tabs: [], connectedServers: {}, activeTabId: null })
+      batchExecuteMock.mockClear()
+    })
+
+    it('runs a read-only command on the only managed server without an open terminal', async () => {
+      const res = await executeAgentTool(
+        'execute_readonly_command',
+        { command: 'systemctl status nginx' },
+        noTerminalContext,
+      )
+      expect(batchExecuteMock).toHaveBeenCalledWith(
+        ['srv-1'],
+        expect.stringContaining('systemctl status nginx'),
+        10,
+      )
+      expect(res.success).toBe(true)
+      expect(res.output).toContain('Filesystem 50G')
+    })
+
+    it('reconnects with saved credentials when an existing SSH session fails', async () => {
+      executeMock.mockRejectedValueOnce(new Error('session closed'))
+      const res = await executeAgentTool(
+        'execute_readonly_command',
+        { command: 'df -h' },
+        baseContext,
+      )
+      expect(batchExecuteMock).toHaveBeenCalledTimes(1)
+      expect(res.success).toBe(true)
+      expect(res.output).toContain('Filesystem 50G')
+    })
+
+    it('runs ssh_native MCP plugin diagnostics without an open terminal', async () => {
+      const res = await executeAgentTool(
+        'mcp__builtin_java__list_java_processes',
+        {},
+        noTerminalContext,
+      )
+      expect(batchExecuteMock).toHaveBeenCalledWith(['srv-1'], expect.any(String), 12)
+      expect(res.success).toBe(true)
+      expect(res.explanation).toContain('测试环境-01')
+    })
+
+    it('falls back to head over an auto-connected SSH session when SFTP is unavailable', async () => {
+      const res = await executeAgentTool(
+        'sftp_read_file',
+        { remotePath: '/etc/nginx/fail-sftp.conf' },
+        noTerminalContext,
+      )
+      expect(batchExecuteMock).toHaveBeenCalledWith(
+        ['srv-1'],
+        expect.stringContaining('head -n'),
+        10,
+      )
+      expect(res.success).toBe(true)
+      expect(res.output).toContain('Filesystem 50G')
+    })
   })
 
   it('strictly blocks write / destructive commands with security warning', async () => {
@@ -295,14 +482,127 @@ describe('executeAgentTool', () => {
       expect(res.explanation).toContain('降级')
     })
   })
+
+  describe('External MCP Client & Zero-Config SSH-Native plugin tools execution', () => {
+    const activeToolsMock = (backend as any).mcpClient.listActiveTools
+    const callToolMock = (backend as any).mcpClient.callTool
+
+    it('loads active MCP tools and formats them for OpenAI Function Calling', async () => {
+      const bundle = await loadActiveMcpTools()
+      expect(bundle.openAiTools).toHaveLength(2)
+      expect(bundle.activeToolsMap.has('mcp__ext_k8s__get_pods')).toBe(true)
+      expect(isMcpToolName('mcp__ext_k8s__get_pods')).toBe(true)
+      expect(isMcpToolName('probe_server')).toBe(false)
+    })
+
+    it('executes zero-config SSH-native plugin tool (e.g. Java / Docker diagnosis) directly over existing SSH server credentials', async () => {
+      const res = await executeAgentTool(
+        'mcp__builtin_java__list_java_processes',
+        {},
+        baseContext,
+      )
+      expect(res.success).toBe(true)
+      expect(res.commandRan).toContain('[Java / JVM 应用诊断] list_java_processes')
+      expect(res.explanation).toContain('测试环境-01')
+    })
+
+    it('executes external MCP tool without requiring an active SSH server and enforces S1 outbound DLP sanitization', async () => {
+      const bundle = await loadActiveMcpTools()
+      const res = await executeAgentTool(
+        'mcp__ext_k8s__get_pods',
+        { namespace: 'production' },
+        {
+          servers: [],
+          serverGroups: [],
+          activeServerId: null,
+          activeMcpToolsMap: bundle.activeToolsMap,
+        },
+      )
+      expect(res.success).toBe(true)
+      expect(res.output).toContain('NAMESPACE=production')
+      expect(res.output).toContain('CrashLoopBackOff')
+      expect(res.output).toContain('[REDACTED_SECRET]')
+      expect(res.output).not.toContain('SecretDbPassword999')
+      expect(res.commandRan).toContain('[MCP:外部 K8s 插件] get_pods')
+      // 审计标签不得包含参数值，只能包含参数名
+      expect(res.commandRan).toContain('namespace')
+      expect(res.commandRan).not.toContain('production')
+    })
+
+    it('rejects unregistered or disabled MCP tool names before any SSH execution', async () => {
+      activeToolsMock.mockResolvedValueOnce([])
+      const res = await executeAgentTool(
+        'mcp__builtin_docker__inspect_abnormal_containers',
+        {},
+        baseContext,
+      )
+      expect(res.success).toBe(false)
+      expect(res.output).toContain('安全策略拒绝')
+      expect(res.commandRan).toBeUndefined()
+    })
+
+    it('does not hijack an external tool sharing a builtin diagnostic tool name', async () => {
+      activeToolsMock.mockResolvedValueOnce([
+        {
+          pluginId: 'ext-docker',
+          pluginName: '外部 Docker 插件',
+          pluginIcon: 'docker',
+          qualifiedName: 'mcp__ext_docker__inspect_abnormal_containers',
+          toolName: 'inspect_abnormal_containers',
+          description: 'external docker inspection',
+          inputSchema: { type: 'object', properties: {} },
+          isReadOnly: true,
+          transport: 'stdio',
+        },
+      ])
+      const res = await executeAgentTool(
+        'mcp__ext_docker__inspect_abnormal_containers',
+        {},
+        baseContext,
+      )
+      expect(callToolMock).toHaveBeenCalledWith('ext-docker', 'inspect_abnormal_containers', {})
+      expect(res.commandRan).toContain('[MCP:外部 Docker 插件]')
+      expect(res.commandRan).not.toContain('[Docker 容器深度排障]')
+    })
+
+    it('blocks write-capable MCP tools unless the user explicitly authorizes them', async () => {
+      const writeTool = {
+        pluginId: 'ext-writer',
+        pluginName: '外部写插件',
+        pluginIcon: 'custom',
+        qualifiedName: 'mcp__ext_writer__delete_pod',
+        toolName: 'delete_pod',
+        description: 'delete a pod',
+        inputSchema: { type: 'object', properties: {} },
+        isReadOnly: false,
+        transport: 'stdio',
+      }
+
+      activeToolsMock.mockResolvedValueOnce([writeTool])
+      const blocked = await executeAgentTool('mcp__ext_writer__delete_pod', {}, baseContext)
+      expect(blocked.success).toBe(false)
+      expect(blocked.output).toContain('安全策略拒绝')
+      expect(callToolMock).not.toHaveBeenCalledWith('ext-writer', 'delete_pod', {})
+
+      activeToolsMock.mockResolvedValueOnce([writeTool])
+      const allowed = await executeAgentTool(
+        'mcp__ext_writer__delete_pod',
+        {},
+        { ...baseContext, allowWriteMcpTools: true },
+      )
+      expect(callToolMock).toHaveBeenCalledWith('ext-writer', 'delete_pod', {})
+      expect(allowed.output).not.toContain('安全策略拒绝')
+    })
+  })
 })
 
 describe('normalizeToolName & stripDsmlTags / stripAllToolCallMarkup & extractTextToolCalls', () => {
-  it('correctly normalizes duplicated or messy tool names', () => {
+  it('correctly normalizes duplicated or messy tool names including mcp__ tools', () => {
     expect(normalizeToolName('probe_server')).toBe('probe_server')
     expect(normalizeToolName('probe_serverprobe_server')).toBe('probe_server')
     expect(normalizeToolName('execute_readonly_commandexecute_readonly_command')).toBe('execute_readonly_command')
     expect(normalizeToolName('sftp_read_filesftp_read_file')).toBe('sftp_read_file')
+    expect(normalizeToolName('mcp__builtin_kubernetes__get_pods')).toBe('mcp__builtin_kubernetes__get_pods')
     expect(normalizeToolName('custom_tool')).toBe('custom_tool')
   })
 

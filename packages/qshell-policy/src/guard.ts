@@ -12,7 +12,7 @@
  *    - 严厉阻断 `$()`、反引号 `` `...` ``、进程替换 `<()` / `>()` 等隐藏执行语法；
  * 4. 【防深度遍历与 I/O 阻塞 (Anti-Hang & DoS Prevention)】：
  *    - `du` 强制限定深度 (`--max-depth=1` 或 `-d 1`)，严禁裸跑 `du -sh /*` 导致磁盘 I/O 队列打满；
- *    - `find` 强制限定深度 (`-maxdepth 1~2`)，严禁全盘根目录遍历；
+ *    - `find` 必须带深度限制；`-maxdepth 1~2` 直接放行，深度偏大时放行但附带短超时自动降级为 `-maxdepth 1` 的重试计划；
  *    - `find` 严厉阻断 `-exec`、`-execdir`、`-delete`、`-ok` 等执行与删除扩展；
  *    - `grep -r` 严禁直接针对根目录或全盘大目录递归；
  *    - 日志与长文本查询自动追加行数截断保护 (`head -n 150`)，避免前端撑爆；
@@ -233,6 +233,49 @@ const ABSOLUTE_SYSTEM_CREDENTIAL_PATTERNS: Array<{ regex: RegExp; reason: string
 ]
 
 /**
+ * 危险模式（会话级临时提权）下仍绝对禁止的高风险指令。
+ * 危险模式放开写命令白名单，但以下操作在远程主机上不可逆或会导致整机不可用，任何模式都不放行。
+ */
+const DANGER_MODE_RED_LINES: Array<{ regex: RegExp; reason: string }> = [
+  {
+    regex: /\brm\b[^|;&\n]*\s-[a-zA-Z]*[rf][a-zA-Z]*[rf][a-zA-Z]*\b|\brm\b[^|;&\n]*\s-r[^|;&\n]*\s-f\b|\brm\b[^|;&\n]*\s-f[^|;&\n]*\s-r\b/i,
+    reason: '危险模式仍禁止 rm -rf / rm -fr 等强制递归删除（远程主机不可回滚）',
+  },
+  {
+    regex: /\b(?:mkfs(?:\.[a-z0-9]+)?|wipefs|fdisk)\b|\bparted\b[^|;&\n]*\bmklabel\b/i,
+    reason: '危险模式仍禁止格式化磁盘、擦除文件系统签名或改写分区表',
+  },
+  {
+    regex: /\b(?:shutdown|reboot|halt|poweroff)\b|\binit\s+[06]\b/i,
+    reason: '危险模式仍禁止关机 / 重启远程主机',
+  },
+  {
+    regex: /(?:curl|wget)\b[^|;\n]*\|\s*(?:ba)?sh\b/i,
+    reason: '危险模式仍禁止下载并直接管道执行远程脚本',
+  },
+  {
+    regex: />\s*\/etc\/(?:passwd|shadow|sudoers|group)\b/i,
+    reason: '危险模式仍禁止覆盖系统账户与特权配置文件',
+  },
+  {
+    regex: /\biptables\s+-F\b|\bufw\s+disable\b|\bnft\s+flush\s+ruleset\b/i,
+    reason: '危险模式仍禁止清空防火墙规则导致主机裸露',
+  },
+  {
+    regex: /\bchown\s+-[a-zA-Z]*R[a-zA-Z]*\s+\S+\s+\/\s*$/i,
+    reason: '危险模式仍禁止全盘递归变更文件属主',
+  },
+  {
+    regex: /\bdd\b[^|;&\n]*\bof=\/dev\//i,
+    reason: '危险模式仍禁止裸写磁盘块设备',
+  },
+  {
+    regex: /\bmv\s+\/(?:\s|$)/i,
+    reason: '危险模式仍禁止移动系统根目录',
+  },
+]
+
+/**
  * 敏感应用凭证路径：允许元数据探查（ls, stat, test 等确认文件在不在/权限对不对），
  * 但严禁使用 cat/head/tail/grep 读取完整凭据明文
  */
@@ -394,6 +437,8 @@ function evaluateSingleCommandSegment(segment: string): {
   isInteractive?: boolean
   blockedReason?: string
   suggestedSafeCommand?: string
+  /** find 检索深度偏大时标记实际深度，由上层生成自动降级计划 */
+  adaptiveDepth?: number
 } {
   const trimmed = segment.trim()
   if (!trimmed) return { allowed: false, blockedReason: '命令片段为空' }
@@ -458,21 +503,22 @@ function evaluateSingleCommandSegment(segment: string): {
       }
     }
 
-    // 3.2 深度限制校验
-    const hasDepthLimit = /-maxdepth\s+[12]\b/.test(trimmed)
-    if (!hasDepthLimit) {
+    // 3.2 深度限制校验：完全没有深度限制仍属无界遍历，保持硬拦截
+    const depthMatch = trimmed.match(/-maxdepth(?:=|\s+)(\d+)/i)
+    if (!depthMatch) {
       return {
         allowed: false,
         blockedReason: '【防卡死拦截】find 指令必须包含深度限制 (-maxdepth 1 或 2)，防止无界全盘遍历卡死主机！',
         suggestedSafeCommand: 'find . -maxdepth 1',
       }
     }
-    // 检查是否根目录无界搜索
-    if (/find\s+\/\s/.test(trimmed) && !/-maxdepth\s+1\b/.test(trimmed)) {
-      return {
-        allowed: false,
-        blockedReason: '【防卡死拦截】从根目录「/」检索深度过大，已自动拦截。',
-      }
+
+    // 3.3 已带深度但偏大：不再用红色拦截卡中断问答，改为放行原命令，
+    //     由执行层在短超时后自动改用 -maxdepth 1 重试（见 AdaptiveRetryPlan）
+    const depth = Number(depthMatch[1])
+    const startsAtRoot = /\bfind\s+\/(?:\s|$)/.test(trimmed)
+    if (depth > 2 || (startsAtRoot && depth > 1)) {
+      return { allowed: true, adaptiveDepth: depth }
     }
   }
 
@@ -609,6 +655,72 @@ function evaluateSingleCommandSegment(segment: string): {
 }
 
 /**
+ * 危险模式（会话级临时提权）专用裁决：改用「红线黑名单」而非只读白名单。
+ * 放开写命令，但保留用户自定义黑名单、系统级绝对红线、危险模式红线与注入/后台脱钩防护；
+ * 其余命令一律放行，并强制标记前置预览与全量审计。
+ */
+function evaluateDangerModeCommand(
+  trimmed: string,
+  options: CommandGuardOptions,
+): CommandGuardDecision {
+  const reject = (reason: string): CommandGuardDecision => ({
+    allowed: false,
+    isReadOnly: false,
+    riskLevel: 'blocked',
+    reason,
+    safeToAutoExecute: false,
+    blockedReason: reason,
+  })
+
+  // 1. 用户自定义黑名单始终最高优先级
+  if (options.customBlacklist && options.customBlacklist.length > 0) {
+    for (const item of options.customBlacklist) {
+      const cleanItem = item.trim().toLowerCase()
+      if (cleanItem && trimmed.toLowerCase().includes(cleanItem)) {
+        return reject(`命中用户自定义安全黑名单关键词「${cleanItem}」，危险模式下同样阻断！`)
+      }
+    }
+  }
+
+  // 2. 不可逾越的红线：毁灭性操作、凭据文件、危险模式专属禁令
+  const redLines = [
+    ...ABSOLUTE_BLOCKED_PATTERNS,
+    ...ABSOLUTE_SYSTEM_CREDENTIAL_PATTERNS,
+    ...DANGER_MODE_RED_LINES,
+  ]
+  for (const item of redLines) {
+    if (item.regex.test(trimmed)) return reject(item.reason)
+  }
+
+  // 3. 注入与后台脱钩防护：防止绕过审计或隐藏执行
+  if (/\$\(/.test(trimmed) || /`[^`]+`/.test(trimmed) || /<\(|>\(/.test(trimmed)) {
+    return reject('危险模式仍禁止子 Shell / 命令替换 / 进程替换等隐藏执行语法')
+  }
+  const withoutSafeAmp = trimmed.replace(/(?:2|1)?&[0-9]/g, ' ').replace(/&&/g, ' ')
+  if (/(?<!\w)&(?!\w)/.test(withoutSafeAmp)) {
+    return reject('危险模式仍禁止后台脱钩运行 (&)')
+  }
+
+  // 4. 放行：写命令可执行，但标记危险、生成前置预览、强制审计
+  return {
+    allowed: true,
+    isReadOnly: false,
+    riskLevel: 'dangerous',
+    reason: '危险模式（会话级临时提权）：已通过红线与注入检查，允许执行并全量审计。',
+    safeToAutoExecute: true,
+    isDangerous: true,
+    preview: `⚠️ 危险模式执行预览：${trimmed}`,
+    verdict: {
+      allowed: true,
+      class: 'privileged',
+      normalized: trimmed,
+      needsApproval: false,
+      timeoutMs: 10000,
+    },
+  }
+}
+
+/**
  * 完整指令多重安全评估与网关决策（内部评估实现）
  */
 function evaluateCommandForExecutionRaw(
@@ -637,6 +749,11 @@ function evaluateCommandForExecutionRaw(
       safeToAutoExecute: false,
       blockedReason: '当前系统已配置为「完全禁止执行」，AI 指令仅供参考。',
     }
+  }
+
+  // 0.1 危险模式：独立于只读白名单链路的黑名单式裁决
+  if (options.executionMode === 'danger') {
+    return evaluateDangerModeCommand(trimmed, options)
   }
 
   // 1. 自定义黑名单校验
@@ -792,6 +909,7 @@ function evaluateCommandForExecutionRaw(
     }
   }
 
+  let adaptiveDepth = 0
   for (const seg of segments) {
     const segDecision = evaluateSingleCommandSegment(seg)
     if (!segDecision.allowed) {
@@ -806,17 +924,32 @@ function evaluateCommandForExecutionRaw(
         suggestedSafeCommand: segDecision.suggestedSafeCommand,
       }
     }
+    if (segDecision.adaptiveDepth) {
+      adaptiveDepth = Math.max(adaptiveDepth, segDecision.adaptiveDepth)
+    }
   }
 
   // 9. 全项安全校验通过
   const isAuto = options.executionMode === 'auto_readonly'
+  // 深度偏大的只读检索：保留原命令（含管道/head 限流），附加快超时自动降级计划；
+  // 同时关闭自动执行，避免在无人确认的情况下直接跑重命令。
+  const adaptiveRetry = adaptiveDepth > 0
+    ? {
+        command: trimmed.replace(/-maxdepth(?:=|\s+)\d+/i, '-maxdepth 1'),
+        timeoutMs: 4000,
+        reason: `检索深度 ${adaptiveDepth} 较大，4 秒无返回时自动改用 -maxdepth 1 重试`,
+      }
+    : undefined
 
   return {
     allowed: true,
     isReadOnly: true,
-    riskLevel: 'safe',
-    reason: '经过严格只读白名单、防子Shell注入、防拼接绕过及深度卡死校验，无写操作风险。',
-    safeToAutoExecute: isAuto,
+    riskLevel: adaptiveRetry ? ('notice' as const) : ('safe' as const),
+    reason: adaptiveRetry
+      ? '只读命令已通过安全校验；检索深度较大，执行时会在短超时后自动改用浅深度重试。'
+      : '经过严格只读白名单、防子Shell注入、防拼接绕过及深度卡死校验，无写操作风险。',
+    safeToAutoExecute: isAuto && !adaptiveRetry,
+    ...(adaptiveRetry ? { adaptiveRetry } : {}),
   }
 }
 
@@ -831,7 +964,7 @@ function attachVerdict(decision: CommandGuardDecision, command: string): Command
       allowed: true,
       class: 'read-only',
       normalized: norm,
-      needsApproval: false,
+      needsApproval: Boolean(decision.adaptiveRetry),
       timeoutMs: 10000,
     }
   } else {

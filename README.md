@@ -60,6 +60,9 @@ Qshell is engineered to deliver a **lightweight, agile, secure, and all-in-one**
 - 🛡️ **Unlimited Multi-Pane Tiling & Frictionless Interaction**  
   Recursive binary tree split panes with zero layout limits, independent workspaces, tab locking/coloring, dynamic video wallpapers, and instant selection copy dismiss.
 
+- 🤖 **AI Ops Assistant with an Extensible MCP Plugin Hub**  
+  Five zero-config SSH-native diagnostic plugins (Docker, JVM, Kubernetes, Nginx, Linux kernel) ship out of the box, reusing your saved server connections. Add any standard MCP Server over local Stdio or remote HTTP / SSE from **AI Settings → MCP Plugin Hub**. Tool registration, read-only/write authorization, credential encryption, DLP sanitization and audit are enforced end-to-end. See the [MCP Plugin Hub Guide](./docs/MCP_PLUGIN_HUB.md).
+
 ---
 
 ## 📖 Introduction
@@ -211,6 +214,16 @@ Qshell provides official binaries and portable packages across major operating s
 | <kbd>Ctrl</kbd> + <kbd>L</kbd> | <kbd>Cmd</kbd> + <kbd>L</kbd> | Clear terminal buffer and reset viewport |
 | **Drag Tab to Pane Edge** | **Drag Tab to Pane Edge** | **Unlimited Multi-Pane Split**: Drag to top/bottom/left/right highlights |
 | **Tab Context Menu** | **Tab Context Menu** | Session clone, rename, lock protection, and color classification |
+
+---
+
+## 📚 Further Documentation
+
+| Guide | Description |
+| :--- | :--- |
+| [MCP Plugin Hub Guide](./docs/MCP_PLUGIN_HUB.md) | AI Ops plugin architecture, IPC commands, security model, custom MCP Server setup and troubleshooting |
+| [Project Guide](./docs/PROJECT_GUIDE.md) | Repository layout and module map |
+| [OTA Release Guide](./docs/OTA_RELEASE_GUIDE.md) | Update channel and release manifest |
 
 ---
 

@@ -18,6 +18,9 @@ import {
   PROBE_SERVER_SCHEMA,
   EXECUTE_READONLY_COMMAND_SCHEMA,
   SFTP_READ_FILE_SCHEMA,
+  MCP_TOOLS,
+  toMcpToolDefinition,
+  buildMcpTools,
   validateSftpReadPath,
   isBinaryContent,
   clipFileLines,
@@ -81,6 +84,72 @@ describe('Qshell Policy Package - S1 Contract Tests', () => {
       expect(SFTP_READ_FILE_SCHEMA.annotations?.readOnlyHint).toBe(true)
       expect(SFTP_READ_FILE_SCHEMA.inputSchema.required).toContain('remotePath')
     })
+
+    it('normalizes a dynamic plugin tool into a valid MCP tool definition', () => {
+      const def = toMcpToolDefinition({
+        qualifiedName: 'mcp__ext_k8s__get_pods',
+        toolName: 'get_pods',
+        description: 'list pods',
+        inputSchema: {
+          type: 'object',
+          properties: { namespace: { type: 'string' } },
+          required: ['namespace', 42],
+        },
+        isReadOnly: true,
+        transport: 'stdio',
+      })
+      expect(def.name).toBe('mcp__ext_k8s__get_pods')
+      expect(def.inputSchema.type).toBe('object')
+      expect(def.inputSchema.required).toEqual(['namespace'])
+      expect(def.annotations).toEqual({
+        readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      })
+    })
+
+    it('marks write-capable tools as non-idempotent and handles malformed schemas', () => {
+      const def = toMcpToolDefinition({
+        qualifiedName: 'mcp__ext_writer__delete_pod',
+        toolName: 'delete_pod',
+        description: 'delete pod',
+        inputSchema: { properties: null } as unknown as Record<string, unknown>,
+        isReadOnly: false,
+      })
+      expect(def.inputSchema.properties).toEqual({})
+      expect(def.inputSchema.required).toEqual([])
+      expect(def.annotations?.readOnlyHint).toBe(false)
+      expect(def.annotations?.idempotentHint).toBe(false)
+      expect(def.annotations?.openWorldHint).toBe(false)
+    })
+
+    it('merges dynamic tools into the full tool list and blocks protected name spoofing', () => {
+      expect(MCP_TOOLS).toHaveLength(3)
+      expect(buildMcpTools([])).toHaveLength(3)
+
+      const full = buildMcpTools([
+        {
+          qualifiedName: 'mcp__ext_k8s__get_pods',
+          toolName: 'get_pods',
+          description: 'list pods',
+          inputSchema: { type: 'object', properties: {} },
+          isReadOnly: true,
+          transport: 'http',
+        },
+        // 插件不得伪造静态内置工具名
+        {
+          qualifiedName: 'probe_server',
+          toolName: 'probe_server',
+          description: 'spoofed',
+          inputSchema: { type: 'object', properties: {} },
+          isReadOnly: false,
+          transport: 'stdio',
+        },
+      ])
+      expect(full).toHaveLength(4)
+      expect(full.map((tool) => tool.name)).toContain('mcp__ext_k8s__get_pods')
+      expect(full.find((tool) => tool.name === 'probe_server')).toBe(PROBE_SERVER_SCHEMA)
+    })
   })
 
   describe('S1-3: DLP Outbound Sanitizer & respond() Pipeline', () => {
@@ -111,6 +180,20 @@ describe('Qshell Policy Package - S1 Contract Tests', () => {
 
       const logRes = sanitizeLogContent('2026-11-04 12:00:00 [ERROR] token=secret123')
       expect(logRes).toContain('[REDACTED_SECRET]')
+    })
+
+    it('marks dangerous executions in the full audit record', () => {
+      const res = respond('restart done', {
+        tool: 'execute_readonly_command',
+        dangerous: true,
+      })
+      expect(res.audit?.dangerous).toBe(true)
+      expect(res.audit?.policyLevel).toBe('danger')
+      expect(res.audit?.approvalState).toBe('ACCEPT')
+
+      const plain = respond('ok', { tool: 'probe_server' })
+      expect(plain.audit?.dangerous).toBe(false)
+      expect(plain.audit?.policyLevel).toBe('read-only')
     })
   })
 

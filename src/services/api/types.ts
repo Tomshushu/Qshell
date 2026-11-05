@@ -1748,6 +1748,150 @@ export interface BackendAdapter {
     /** 监听串口 IAP 固件升级实时进度事件 */
     onIapProgress: (callback: (data: SerialIapProgress) => void) => () => void;
   };
+  // ==================== 外部 MCP 插件中心（智能运维中枢） ====================
+  mcpClient: {
+    /** 列出所有已配置/预置的 MCP 插件及其连接与工具发现状态 */
+    listPlugins: () => Promise<McpPluginView[]>;
+    /** 列出内置精选运维插件预设模板（5 个免配置排障模板） */
+    listPresets: () => Promise<McpPresetTemplate[]>;
+    /** 新增或更新 MCP 插件配置（凭据经 AES-256-GCM 加密落盘） */
+    upsertPlugin: (config: McpPluginConfigInput) => Promise<McpPluginView>;
+    /** 删除指定 MCP 插件 */
+    removePlugin: (pluginId: string) => Promise<void>;
+    /** 一键恢复缺失的预置常见运维插件 */
+    restorePresets: () => Promise<McpPluginView[]>;
+    /** 启用或停用指定 MCP 插件 */
+    setEnabled: (pluginId: string, enabled: boolean) => Promise<McpPluginView>;
+    /** 启用或禁用单个 MCP 工具（工具级白名单/黑名单控制） */
+    setToolDisabled: (
+      pluginId: string,
+      toolName: string,
+      disabled: boolean,
+    ) => Promise<McpPluginView>;
+    /** 重新握手并刷新指定插件的工具列表 */
+    refreshPlugin: (pluginId: string) => Promise<McpPluginView>;
+    /** 测试插件连接并返回发现的工具清单与延迟 */
+    testConnection: (
+      config: McpPluginConfigInput,
+    ) => Promise<McpTestConnectionResult>;
+    /** 获取当前所有已启用插件的可用工具汇总（供 AI ReAct 循环动态注入） */
+    listActiveTools: () => Promise<ActiveMcpTool[]>;
+    /** 调用指定插件的指定工具 */
+    callTool: (
+      pluginId: string,
+      toolName: string,
+      argumentsObj: Record<string, unknown>,
+    ) => Promise<McpToolCallResult>;
+  };
+}
+
+// ==================== MCP Client 类型定义 ====================
+
+/** MCP 插件传输方式；ssh_native 仅由内置免配置排障插件使用，禁止用户自定义 */
+export type McpTransport = "stdio" | "http" | "sse" | "ssh_native";
+
+export interface McpToolInfo {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  isReadOnly: boolean;
+}
+
+export interface McpPluginConfigInput {
+  id: string;
+  name: string;
+  description: string;
+  icon?: string;
+  category?: string;
+  enabled: boolean;
+  /** 自定义插件仅支持 stdio / http / sse；ssh_native 仅用于回存现有内置插件，后端禁止新建 */
+  transport: McpTransport;
+  command?: string | null;
+  args?: string[];
+  url?: string | null;
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+  disabledTools?: string[];
+  discoveredTools?: McpToolInfo[];
+  isPreset?: boolean;
+  presetId?: string | null;
+  lastConnectedAt?: number | null;
+  lastError?: string | null;
+}
+
+export interface McpPluginView {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  category: string;
+  enabled: boolean;
+  connected: boolean;
+  transport: McpTransport;
+  command?: string | null;
+  args: string[];
+  url?: string | null;
+  env: Record<string, string>;
+  headers: Record<string, string>;
+  disabledTools: string[];
+  discoveredTools: McpToolInfo[];
+  isPreset: boolean;
+  presetId?: string | null;
+  lastConnectedAt?: number | null;
+  lastError?: string | null;
+}
+
+export interface ActiveMcpTool {
+  pluginId: string;
+  pluginName: string;
+  pluginIcon: string;
+  qualifiedName: string;
+  toolName: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  isReadOnly: boolean;
+  /** 后端权威下发的插件传输方式，前端据此判定能否走 SSH-Native 诊断分支 */
+  transport: McpTransport;
+}
+
+export interface McpToolCallResult {
+  pluginId: string;
+  pluginName: string;
+  toolName: string;
+  isError: boolean;
+  text: string;
+  durationMs: number;
+}
+
+export interface McpTestConnectionResult {
+  success: boolean;
+  serverName?: string | null;
+  serverVersion?: string | null;
+  tools: McpToolInfo[];
+  latencyMs: number;
+  error?: string | null;
+}
+
+export interface McpPresetEnvField {
+  key: string;
+  label: string;
+  placeholder: string;
+  description: string;
+  required: boolean;
+  secret: boolean;
+}
+
+export interface McpPresetTemplate {
+  presetId: string;
+  name: string;
+  description: string;
+  icon: string;
+  category: string;
+  transport: McpTransport;
+  command?: string | null;
+  args: string[];
+  url?: string | null;
+  envFields: McpPresetEnvField[];
 }
 
 /** 审计日志记录 */

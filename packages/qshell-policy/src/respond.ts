@@ -41,8 +41,9 @@ export function respond(
     transport: ctx.transport || 'internal',
     hostId: ctx.hostId || 'default',
     tool: ctx.tool || 'unknown_tool',
-    command: ctx.command,
-    remotePath: ctx.remotePath,
+    // 审计上下文（工具参数、命令标签、路径）同样必须过 DLP，避免凭据经 localStorage 泄漏
+    command: ctx.command ? sanitize(ctx.command).text : undefined,
+    remotePath: ctx.remotePath ? sanitize(ctx.remotePath).text : undefined,
     verdict: ctx.verdict
       ? {
           class: ctx.verdict.class,
@@ -50,7 +51,9 @@ export function respond(
           segment: ctx.verdict.segment,
         }
       : undefined,
-    policyLevel: 'read-only',
+    policyLevel: ctx.dangerous ? 'danger' : 'read-only',
+    dangerous: Boolean(ctx.dangerous),
+    approvalState: ctx.dangerous ? 'ACCEPT' : 'NONE',
     durationMs: ctx.durationMs || 0,
     outputBytes: truncRes.outputBytes,
     truncated: truncRes.truncated,
@@ -106,8 +109,8 @@ export function respondError(
     transport: ctx.transport || 'internal',
     hostId: ctx.hostId || 'default',
     tool: ctx.tool || 'unknown_tool',
-    command: ctx.command,
-    remotePath: ctx.remotePath,
+    command: ctx.command ? sanitize(ctx.command).text : undefined,
+    remotePath: ctx.remotePath ? sanitize(ctx.remotePath).text : undefined,
     verdict: {
       class: 'destructive',
       reason: verdictName,
@@ -122,13 +125,15 @@ export function respondError(
 
   recordAudit(auditRecord)
 
+  // 错误文本可能回显插件/服务端返回的敏感内容，出向给模型前同样脱敏
+  const safeErrorText = sanitize(errorText).text
   const payload = {
     isError: true,
     verdict: verdictName,
     segment,
     hint,
     requestId: reqId,
-    message: errorText,
+    message: safeErrorText,
   }
 
   return {

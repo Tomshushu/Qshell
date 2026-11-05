@@ -55,7 +55,14 @@ export interface ConfiguredProvider {
   createdAt?: number
 }
 
-export type AIExecutionMode = 'ask' | 'auto_readonly' | 'disabled'
+export type AIExecutionMode = 'ask' | 'auto_readonly' | 'disabled' | 'danger'
+
+/** 与 @qshell/policy 的 AdaptiveRetryPlan 保持一致：短超时后自动改用浅层命令重试 */
+export interface AdaptiveRetryPlan {
+  command: string
+  timeoutMs: number
+  reason?: string
+}
 
 export interface CommandGuardDecision {
   allowed: boolean
@@ -66,6 +73,9 @@ export interface CommandGuardDecision {
   isInteractive?: boolean
   blockedReason?: string
   suggestedSafeCommand?: string
+  adaptiveRetry?: AdaptiveRetryPlan
+  isDangerous?: boolean
+  preview?: string
 }
 
 export interface AISettings {
@@ -80,6 +90,8 @@ export interface AISettings {
   maskPrivateIps: boolean
   executionMode?: AIExecutionMode
   customBlacklist?: string[]
+  /** 是否允许 Agent 调用「包含状态变更操作」的 MCP 插件工具（默认 false，只读工具始终可用） */
+  allowWriteMcpTools?: boolean
   /** 最大保留历史会话数（默认 30，超限自动滚动淘汰最旧会话） */
   maxAssistantSessions?: number
   /** 单个会话最多保留历史消息记录数（默认 50，超限滑动窗口滚动淘汰最旧记录） */
@@ -148,6 +160,9 @@ export interface AIAssistantExecutionCard {
   output?: string
   summary?: string
   error?: string
+  /** 危险模式执行前置预览与全量审计标记 */
+  dangerPreview?: string
+  dangerAudited?: boolean
   executedAt?: number
 }
 

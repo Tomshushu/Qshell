@@ -265,6 +265,12 @@ npm run build
 
 ---
 
+## 📚 ドキュメント
+
+- [MCP プラグインハブガイド](./MCP_PLUGIN_HUB.md)：AI 運用アシスタントのプラグイン構成、IPC コマンド、セキュリティモデル、カスタム MCP Server の設定。
+
+---
+
 ## 📄 ライセンス (License)
 
 本プロジェクトは [Apache License 2.0](../LICENSE) のもとでオープンソースとして公開されています。著作権は Qshell コミュニティに帰属します。

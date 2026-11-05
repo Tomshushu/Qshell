@@ -60,6 +60,9 @@ Qshell 致力于打造一款**轻巧、敏捷、安全且全能**的新一代服
 - 🛡️ **自由分屏与无缝交互**  
   支持**无上限任意多路拖拽分屏**、独立多工作区切换、标签锁定与彩色标记、动态视频背景跨端解析；终端选区复制即刻消失无干扰，兼具生产力效率与赏心悦目的操作体验。
 
+- 🤖 **AI 运维小助手 · 可扩展 MCP 插件中心**  
+  内置 Docker、JVM、Kubernetes、Nginx、Linux 内核 5 大免配置排障插件，直接复用已保存的 SSH 连接；也可在 **AI 设置 → MCP 插件中心** 接入任意标准 MCP Server（本地 Stdio 子进程或远程 HTTP / SSE）。工具注册校验、只读与写操作授权、凭据加密、出向 DLP 与审计全链路生效。详见 [MCP 插件中心指南](./MCP_PLUGIN_HUB.md)。
+
 ---
 
 ## 📖 项目简介 (Introduction)
@@ -270,6 +273,14 @@ npm run build
 - **提交 Issue**：报告 Bug 或提出新需求，请直接使用我们的 [Issue 模板](https://github.com/Tomshushu/Qshell/issues/new/choose)。
 - **提交 PR**：在发起代码合并请求前，请详细阅读 [**开源贡献指南 (CONTRIBUTING.md)**](../CONTRIBUTING.md)。
 - **发版标准**：核心维护者发版请严格遵守 [**固化发版流程规范 (AGENTS.md / GEMINI.md)**](../AGENTS.md)。
+
+---
+
+## 📚 扩展文档
+
+- [MCP 插件中心指南](./MCP_PLUGIN_HUB.md)：插件架构、IPC 命令清单、安全模型、自定义 MCP Server 接入与排障
+- [项目结构指南](./PROJECT_GUIDE.md)：仓库结构与模块分布
+- [OTA 更新指南](./OTA_RELEASE_GUIDE.md)：更新通道与发布清单
 
 ---
 

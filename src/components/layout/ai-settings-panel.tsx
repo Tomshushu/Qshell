@@ -9,7 +9,7 @@
  * 5. 端侧零信任安全防御与数据脱敏 (DLP)
  */
 
-import React, { useState } from 'react'
+import React, { useState, useMemo } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -23,6 +23,7 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { HintTooltip } from '@/components/ui/hint-tooltip'
 import { useTranslation } from '@/i18n'
 import {
   useAIStore,
@@ -64,6 +65,7 @@ import {
   Cpu,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { AiMcpClientCard } from './ai-mcp-client-card'
 
 // ==========================================
 // 1. 服务商 Brand 图标组件
@@ -887,6 +889,9 @@ export function AISettingsPanel() {
     settings,
     updateSettings,
     configuredProviders,
+    customModelsMap,
+    updateConfiguredProviderModel,
+    fetchModelsForConfig,
     testingProviderId,
     saveConfiguredProvider,
     removeConfiguredProvider,
@@ -898,12 +903,61 @@ export function AISettingsPanel() {
     setShowFloatingMascot,
     assistantSessions,
     clearAllAssistantSessions,
+    dangerModeActive,
+    activateDangerMode,
+    deactivateDangerMode,
   } = useAIStore()
+
+  // 同一个厂商只展示一条配置（优先已启用的那条），兼容历史重复数据
+  const visibleProviders = useMemo(() => {
+    const byProvider = new Map<string, ConfiguredProvider>()
+    for (const p of configuredProviders) {
+      const existing = byProvider.get(p.provider)
+      if (!existing || (p.isEnabled && !existing.isEnabled)) {
+        byProvider.set(p.provider, p)
+      }
+    }
+    return Array.from(byProvider.values())
+  }, [configuredProviders])
+
+  // 行内拉取最新模型：刷新该厂商缓存，下拉选项随即原地更新
+  const [fetchingModelsFor, setFetchingModelsFor] = useState<string | null>(null)
+  const [fetchModelsError, setFetchModelsError] = useState<string | null>(null)
+
+  const handleRefreshModels = async (item: ConfiguredProvider) => {
+    if (item.provider !== 'ollama' && !item.apiKey?.trim()) {
+      setFetchModelsError(t('ai_fetch_models_need_key'))
+      return
+    }
+    setFetchingModelsFor(item.provider)
+    setFetchModelsError(null)
+    try {
+      const models = await fetchModelsForConfig({
+        provider: item.provider,
+        protocol: item.protocol,
+        baseUrl: item.baseUrl,
+        apiKey: item.apiKey,
+      })
+      if (models.length === 0) {
+        setFetchModelsError(t('ai_fetch_models_failed') || '拉取模型列表失败')
+      }
+    } catch (err: unknown) {
+      setFetchModelsError(
+        (err as Error)?.message || t('ai_fetch_models_failed') || '拉取模型列表失败',
+      )
+    } finally {
+      setFetchingModelsFor(null)
+    }
+  }
 
   // 弹窗状态
   const [modalOpen, setModalOpen] = useState(false)
   const [editingProvider, setEditingProvider] = useState<ConfiguredProvider | null>(null)
   const [selectedPresetKey, setSelectedPresetKey] = useState<AIProvider | null>(null)
+
+  // 危险模式：手动开关，仅用户切换模式或关闭时退出
+  const [dangerConfirm, setDangerConfirm] = useState(false)
+  const dangerActive = dangerModeActive
 
   // 清空所有历史会话确认弹窗状态
   const [isClearHistoryConfirmOpen, setIsClearHistoryConfirmOpen] = useState(false)
@@ -1008,9 +1062,14 @@ export function AISettingsPanel() {
             <span className="text-xs font-semibold text-foreground">
               {t('ai_configured_section_title')}
             </span>
+            {fetchModelsError && (
+              <div className="text-[11px] text-destructive px-1">
+                {fetchModelsError}
+              </div>
+            )}
 
             <Card className="border border-border/60 bg-muted/15 dark:bg-card/40 rounded-xl overflow-hidden shadow-2xs">
-          {configuredProviders.length === 0 ? (
+          {visibleProviders.length === 0 ? (
             <CardContent className="p-8 text-center flex flex-col items-center justify-center space-y-2">
               <div className="p-3 rounded-full bg-muted/60 text-muted-foreground">
                 <Bot className="h-5 w-5" />
@@ -1021,7 +1080,7 @@ export function AISettingsPanel() {
             </CardContent>
           ) : (
             <div className="divide-y divide-border/40">
-              {configuredProviders.map((item) => {
+              {visibleProviders.map((item) => {
                 const isTestingThis = testingProviderId === item.id
                 const preset = AI_PROVIDER_PRESETS[item.provider]
 
@@ -1051,14 +1110,50 @@ export function AISettingsPanel() {
                             type={preset?.tagType || 'custom'}
                           />
                         </div>
-                        <div className="text-[11px] text-muted-foreground font-mono truncate max-w-[260px]">
-                          {item.model || 'default'}
-                        </div>
+                        {/* 行内模型切换：从该厂商缓存/推荐模型里直接选，无需打开配置弹窗 */}
+                        <SelectPopover
+                          value={item.model || ''}
+                          onChange={(val) => {
+                            if (val) updateConfiguredProviderModel(item.id, val)
+                          }}
+                          options={Array.from(
+                            new Set(
+                              [
+                                item.model,
+                                ...(customModelsMap[item.provider] || []),
+                                ...(preset?.recommendedModels || []),
+                                preset?.defaultModel || '',
+                              ].filter(Boolean) as string[],
+                            ),
+                          ).map((m) => ({ value: m, label: m }))}
+                          searchable
+                          searchPlaceholder={t('ai_select_model_placeholder')}
+                          placeholder={t('ai_switch_model') || '切换模型'}
+                          ariaLabel={t('ai_switch_model') || '切换模型'}
+                          className="h-6 min-w-[180px] max-w-[240px] text-[11px] font-mono"
+                          panelClassName="w-[320px] max-h-72"
+                        />
                       </div>
                     </div>
 
-                    {/* 右侧：健康检测 + 单选启用 + 编辑 + 删除 */}
+                    {/* 右侧：拉取最新模型 + 健康检测 + 单选启用 + 编辑 + 删除 */}
                     <div className="flex items-center gap-2 shrink-0">
+                      {/* 刷新该厂商云端模型列表，替换左侧模型下拉里的本地缓存 */}
+                      <button
+                        type="button"
+                        data-testid={`ai-refresh-models-${item.provider}`}
+                        disabled={fetchingModelsFor === item.provider}
+                        onClick={() => void handleRefreshModels(item)}
+                        title={t('ai_fetch_models_btn') || '拉取可用模型'}
+                        className="h-7 w-7 shrink-0 rounded border border-border/60 bg-background hover:bg-muted/50 text-muted-foreground hover:text-primary hover:border-primary/40 flex items-center justify-center transition-colors disabled:opacity-60 cursor-pointer"
+                      >
+                        <RefreshCw
+                          className={cn(
+                            'h-3.5 w-3.5',
+                            fetchingModelsFor === item.provider && 'animate-spin text-primary',
+                          )}
+                        />
+                      </button>
                       {/* 健康检测按钮与延迟显示（固定宽度 w-[84px]，防止悬停与状态切换抖动） */}
                       {isTestingThis ? (
                         <div className="h-7 w-[84px] shrink-0 rounded border border-border/60 bg-background text-[11px] text-primary flex items-center justify-center gap-1 font-mono">
@@ -1185,18 +1280,30 @@ export function AISettingsPanel() {
                   </div>
                 </div>
 
-                {/* 右侧：+ 连接 按钮 */}
+                {/* 右侧：已配置的厂商显示「已配置」，未配置才显示「+ 连接」 */}
                 <div className="shrink-0">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => handleOpenCreate(key)}
-                    className="h-7 px-3 text-xs font-medium border-border/80 hover:bg-background hover:text-primary hover:border-primary/40 shadow-2xs gap-1 transition-all"
-                  >
-                    <Plus className="h-3 w-3" />
-                    <span>{t('ai_connect_btn')}</span>
-                  </Button>
+                  {visibleProviders.find((p) => p.provider === key) ? (
+                    <span
+                      data-testid={`ai-popular-configured-${key}`}
+                      className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md border border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-medium"
+                      title={t('ai_already_configured_tip') ||
+                        '该厂商已配置，可在上方「已配置」列表中切换模型或编辑'}
+                    >
+                      <Check className="h-3 w-3 shrink-0" />
+                      <span>{t('ai_already_configured') || '已配置'}</span>
+                    </span>
+                  ) : (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleOpenCreate(key)}
+                      className="h-7 px-3 text-xs font-medium border-border/80 hover:bg-background hover:text-primary hover:border-primary/40 shadow-2xs gap-1 transition-all"
+                    >
+                      <Plus className="h-3 w-3" />
+                      <span>{t('ai_connect_btn')}</span>
+                    </Button>
+                  )}
                 </div>
               </div>
             )
@@ -1249,141 +1356,185 @@ export function AISettingsPanel() {
       {/* 4. 终端安全决策网关与执行策略 (Option C Command Guard & Execution Policy) */}
       <Card className="border border-border/60 bg-muted/15 dark:bg-card/40 rounded-xl overflow-hidden shadow-2xs">
         <CardContent className="p-5 space-y-4">
-          <div className="space-y-1">
-            <div className="font-semibold text-xs text-foreground flex items-center justify-between">
-              <div className="flex items-center gap-1.5">
-                <ShieldCheck className="h-4 w-4 text-emerald-500" />
-                <span>{t('ai_cmd_guard_title') || 'AI 终端安全执行与只读白名单网关'}</span>
-              </div>
-              <span className="text-[10px] text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full font-medium">
-                Option C 智能受控
-              </span>
+          <div className="font-semibold text-xs text-foreground flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <ShieldCheck className="h-4 w-4 text-emerald-500 shrink-0" />
+              <span className="truncate">{t('ai_cmd_guard_title') || 'AI 终端安全执行与只读白名单网关'}</span>
+              <HintTooltip
+                label="AI command guard details"
+                content={t('ai_cmd_guard_desc') ||
+                  '控制 AI 助手在远程服务器上执行指令的权限。内置严格只读白名单与防深度遍历 I/O 阻塞防护，确保生产服务器 100% 安全。'}
+              />
             </div>
-            <p className="text-[11px] text-muted-foreground leading-relaxed">
-              {t('ai_cmd_guard_desc') ||
-                '控制 AI 助手在远程服务器上执行指令的权限。内置严格只读白名单与防深度遍历 I/O 阻塞防护，确保生产服务器 100% 安全。'}
-            </p>
+            <span className="text-[10px] text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full font-medium shrink-0">
+              Option C 智能受控
+            </span>
           </div>
 
-          {/* 3 种执行模式选择卡片 */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
-            {/* 1. 询问确认模式 (推荐) */}
+          {/* 4 种执行模式选择卡片（危险模式为同级第四档，手动授权） */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-2.5">
+            {/* 1. 询问确认模式 */}
             <div
               data-testid="exec-mode-ask"
-              onClick={() => updateSettings({ executionMode: 'ask' })}
+              onClick={() => {
+                deactivateDangerMode()
+                updateSettings({ executionMode: 'ask' })
+              }}
               className={cn(
-                'p-3 rounded-xl border transition-all cursor-pointer flex flex-col justify-between space-y-2',
-                (settings.executionMode || 'ask') === 'ask'
+                'px-3 py-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2',
+                !dangerActive && (settings.executionMode || 'auto_readonly') === 'ask'
                   ? 'border-primary bg-primary/10 shadow-2xs ring-1 ring-primary/30'
                   : 'border-border/60 bg-background/60 hover:bg-muted/40 hover:border-border',
               )}
             >
-              <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-foreground">
-                    {t('ai_exec_mode_ask') || '询问确认模式 (推荐)'}
-                  </span>
-                  <span className="text-[9.5px] px-1.5 py-0.2 rounded bg-primary/20 text-primary font-medium">
-                    推荐
-                  </span>
-                </div>
-                <p className="text-[11px] text-muted-foreground leading-snug">
-                  {t('ai_exec_mode_ask_desc') ||
-                    'AI 提议只读诊断指令时，在会话中以卡片展示，由您确认后才在终端安全执行并输出诊断分析。'}
-                </p>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <CheckCircle2 className="h-3.5 w-3.5 text-primary shrink-0" />
+                <span className="text-xs font-bold text-foreground truncate">
+                  {t('ai_exec_mode_ask') || '询问确认模式 (推荐)'}
+                </span>
               </div>
-              <div className="flex items-center gap-1.5 text-[10px] text-primary font-medium pt-1">
-                <CheckCircle2 className="h-3 w-3" />
-                <span>交互授权安全可控</span>
+              <div className="flex items-center gap-1 shrink-0">
+                <HintTooltip
+                  label="Ask mode details"
+                  content={t('ai_exec_mode_ask_desc') ||
+                    'AI 提议只读诊断指令时，在会话中以卡片展示，由您确认后才在终端安全执行并输出诊断分析。'}
+                />
+                <span className="text-[9.5px] px-1.5 py-0.2 rounded bg-primary/20 text-primary font-medium">
+                  逐次确认
+                </span>
               </div>
             </div>
 
             {/* 2. 安全只读自动执行模式 */}
             <div
               data-testid="exec-mode-auto-readonly"
-              onClick={() => updateSettings({ executionMode: 'auto_readonly' })}
+              onClick={() => {
+                deactivateDangerMode()
+                updateSettings({ executionMode: 'auto_readonly' })
+              }}
               className={cn(
-                'p-3 rounded-xl border transition-all cursor-pointer flex flex-col justify-between space-y-2',
-                settings.executionMode === 'auto_readonly'
+                'px-3 py-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2',
+                !dangerActive && settings.executionMode === 'auto_readonly'
                   ? 'border-emerald-500 bg-emerald-500/10 shadow-2xs ring-1 ring-emerald-500/30'
                   : 'border-border/60 bg-background/60 hover:bg-muted/40 hover:border-border',
               )}
             >
-              <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-foreground">
-                    {t('ai_exec_mode_auto_readonly') || '安全只读自动执行'}
-                  </span>
-                  <span className="text-[9.5px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-medium">
-                    极速
-                  </span>
-                </div>
-                <p className="text-[11px] text-muted-foreground leading-snug">
-                  {t('ai_exec_mode_auto_readonly_desc') ||
-                    '通过内核只读白名单与深度限制校验的无风险查询，AI 自动在当前会话执行并直接给出诊断结论。'}
-                </p>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <Zap className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                <span className="text-xs font-bold text-foreground truncate">
+                  {t('ai_exec_mode_auto_readonly') || '安全只读自动执行'}
+                </span>
               </div>
-              <div className="flex items-center gap-1.5 text-[10px] text-emerald-600 dark:text-emerald-400 font-medium pt-1">
-                <Zap className="h-3 w-3" />
-                <span>仅限受限只读白名单</span>
+              <div className="flex items-center gap-1 shrink-0">
+                <HintTooltip
+                  label="Auto read-only mode details"
+                  content={t('ai_exec_mode_auto_readonly_desc') ||
+                    '通过内核只读白名单与深度限制校验的无风险查询，AI 自动在当前会话执行并直接给出诊断结论。'}
+                />
+                <span className="text-[9.5px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-medium">
+                  推荐
+                </span>
               </div>
             </div>
 
             {/* 3. 禁止 AI 执行终端指令 */}
             <div
               data-testid="exec-mode-disabled"
-              onClick={() => updateSettings({ executionMode: 'disabled' })}
+              onClick={() => {
+                deactivateDangerMode()
+                updateSettings({ executionMode: 'disabled' })
+              }}
               className={cn(
-                'p-3 rounded-xl border transition-all cursor-pointer flex flex-col justify-between space-y-2',
-                settings.executionMode === 'disabled'
+                'px-3 py-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2',
+                !dangerActive && settings.executionMode === 'disabled'
                   ? 'border-zinc-500 bg-zinc-500/10 shadow-2xs ring-1 ring-zinc-500/30'
                   : 'border-border/60 bg-background/60 hover:bg-muted/40 hover:border-border',
               )}
             >
-              <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-foreground">
-                    {t('ai_exec_mode_disabled') || '禁止 AI 执行指令'}
-                  </span>
-                  <span className="text-[9.5px] px-1.5 py-0.2 rounded bg-muted text-muted-foreground font-medium">
-                    只读问答
-                  </span>
-                </div>
-                <p className="text-[11px] text-muted-foreground leading-snug">
-                  {t('ai_exec_mode_disabled_desc') ||
-                    'AI 仅生成排查建议文本，不提供任何在终端执行命令的能力。'}
-                </p>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <ShieldCheck className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                <span className="text-xs font-bold text-foreground truncate">
+                  {t('ai_exec_mode_disabled') || '禁止 AI 执行指令'}
+                </span>
               </div>
-              <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground font-medium pt-1">
-                <ShieldCheck className="h-3 w-3" />
-                <span>纯文本模式</span>
+              <div className="flex items-center gap-1 shrink-0">
+                <HintTooltip
+                  label="Disabled mode details"
+                  content={t('ai_exec_mode_disabled_desc') ||
+                    'AI 仅生成排查建议文本，不提供任何在终端执行命令的能力。'}
+                />
+                <span className="text-[9.5px] px-1.5 py-0.2 rounded bg-muted text-muted-foreground font-medium">
+                  只读问答
+                </span>
+              </div>
+            </div>
+
+            {/* 4. 危险模式：手动授权，与前三档同级互斥 */}
+            <div
+              data-testid="exec-mode-danger"
+              onClick={() => {
+                if (dangerActive) {
+                  deactivateDangerMode()
+                } else {
+                  setDangerConfirm(true)
+                }
+              }}
+              className={cn(
+                'px-3 py-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2',
+                dangerActive
+                  ? 'border-destructive bg-destructive/10 shadow-2xs ring-1 ring-destructive/30'
+                  : 'border-destructive/30 bg-background/60 hover:bg-destructive/5 hover:border-destructive/50',
+              )}
+            >
+              <div className="flex items-center gap-1.5 min-w-0">
+                <AlertCircle className="h-3.5 w-3.5 text-destructive shrink-0" />
+                <span className="text-xs font-bold text-foreground truncate">
+                  {t('ai_exec_mode_danger') || '危险模式'}
+                </span>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                <HintTooltip
+                  label="Danger mode details"
+                  content={t('ai_danger_mode_desc') ||
+                    '手动开启后放开写命令白名单，仅在你手动切换模式或关闭时失效；红线命令仍禁止，执行前置预览并全量审计。'}
+                />
+                <span className="text-[9.5px] px-1.5 py-0.2 rounded bg-destructive/15 text-destructive font-medium whitespace-nowrap">
+                  {dangerActive
+                    ? (t('ai_danger_mode_badge_active') || '已开启 · 点击退出')
+                    : (t('ai_exec_mode_danger_badge') || '临时提权')}
+                </span>
               </div>
             </div>
           </div>
 
-          {/* 内置只读安全防御规范清单 */}
-          <div className="p-3 rounded-lg border border-border/50 bg-background/40 space-y-1.5">
-            <span className="text-xs font-medium text-foreground block">
-              🛡️ {t('ai_cmd_guard_highlights_title') || '端侧只读安全防御机制'}
-            </span>
-            <ul className="text-[11px] text-muted-foreground space-y-1 list-disc list-inside">
-              <li>{t('ai_cmd_guard_hl_whitelist')}</li>
-              <li>{t('ai_cmd_guard_hl_no_mutation')}</li>
-              <li>{t('ai_cmd_guard_hl_anti_hang')}</li>
-              <li>{t('ai_cmd_guard_hl_sensitive')}</li>
-            </ul>
+          {/* 内置只读安全防御规范：4 条明细收进问号浮层，不再平铺 */}
+          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <ShieldCheck className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+            <span>{t('ai_cmd_guard_highlights_title') || '端侧只读安全防御机制'}</span>
+            <HintTooltip
+              label="Command guard rules"
+              content={
+                <ul className="space-y-1 list-disc list-inside">
+                  <li>{t('ai_cmd_guard_hl_whitelist')}</li>
+                  <li>{t('ai_cmd_guard_hl_no_mutation')}</li>
+                  <li>{t('ai_cmd_guard_hl_anti_hang')}</li>
+                  <li>{t('ai_cmd_guard_hl_sensitive')}</li>
+                </ul>
+              }
+            />
           </div>
 
           {/* 自定义安全黑名单 */}
           <div className="p-3 rounded-lg border border-border/50 bg-background/50 space-y-2.5">
-            <div className="space-y-0.5">
+            <div className="flex items-center gap-1.5">
               <span className="text-xs font-medium text-foreground">
                 {t('ai_custom_blacklist_title') || '自定义安全黑名单'}
               </span>
-              <p className="text-[11px] text-muted-foreground leading-relaxed">
-                {t('ai_custom_blacklist_desc') ||
+              <HintTooltip
+                label="Blacklist usage"
+                content={t('ai_custom_blacklist_desc') ||
                   '输入您希望额外严格禁止 AI 执行的关键词、指令或路径，用回车或逗号分隔：'}
-              </p>
+              />
             </div>
 
             <div className="flex items-center gap-2">
@@ -1444,6 +1595,9 @@ export function AISettingsPanel() {
           </div>
         </CardContent>
       </Card>
+
+      {/* 4.5 外部 MCP 运维插件中心 (MCP Client Ecosystem) */}
+      <AiMcpClientCard />
 
       {/* 5. 全局悬浮 AI 助手 (Global Floating AI Assistant) */}
       <Card className="border border-border/60 bg-muted/15 dark:bg-card/40 rounded-xl overflow-hidden shadow-2xs">
@@ -1636,6 +1790,21 @@ export function AISettingsPanel() {
           setIsClearHistoryConfirmOpen(false)
         }}
         onCancel={() => setIsClearHistoryConfirmOpen(false)}
+      />
+
+      {/* 危险模式二次确认（手动开启，切换模式或关闭时退出） */}
+      <ConfirmDialog
+        open={dangerConfirm}
+        title={t('ai_danger_mode_title') || '危险模式（手动授权）'}
+        description={t('ai_danger_mode_desc') ||
+          '手动开启后放开写命令白名单，仅在你手动切换模式或关闭时失效；红线命令仍禁止，执行前置预览并全量审计。'}
+        confirmLabel={t('ai_danger_mode_confirm_btn') || '确认开启'}
+        cancelLabel={t('ai_danger_mode_cancel') || '取消'}
+        onConfirm={() => {
+          activateDangerMode()
+          setDangerConfirm(false)
+        }}
+        onCancel={() => setDangerConfirm(false)}
       />
     </div>
   )

@@ -23,6 +23,7 @@ mod telnet;
 pub mod serial;
 pub mod network;
 mod oauth;
+pub mod mcp_client;
 
 use tauri::Manager;
 
@@ -173,6 +174,9 @@ pub fn run() {
             let master_key = state::get_or_create_master_key()
                 .expect("Failed to initialize master key from OS keychain");
             db::set_master_key(master_key);
+
+            // 初始化外部 MCP 插件客户端管理器（含首次预置常见运维插件与后台自动连接）
+            mcp_client::init_mcp_client(app_data_dir.clone());
 
             // 启动即清理超过保留期的回收站项（默认 30 天后自动永久删除）
             tauri::async_runtime::spawn(async {
@@ -476,6 +480,18 @@ pub fn run() {
             // 自动更新通道测速与优选
             commands::updater::probe_updater_mirrors,
             commands::updater::check_update_with_mirror,
+            // 外部 MCP 插件中心（智能运维中枢）
+            commands::mcp_client::mcp_client_list_plugins,
+            commands::mcp_client::mcp_client_list_presets,
+            commands::mcp_client::mcp_client_upsert_plugin,
+            commands::mcp_client::mcp_client_remove_plugin,
+            commands::mcp_client::mcp_client_restore_presets,
+            commands::mcp_client::mcp_client_set_enabled,
+            commands::mcp_client::mcp_client_set_tool_disabled,
+            commands::mcp_client::mcp_client_refresh_plugin,
+            commands::mcp_client::mcp_client_test_connection,
+            commands::mcp_client::mcp_client_list_active_tools,
+            commands::mcp_client::mcp_client_call_tool,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -487,6 +503,9 @@ pub fn run() {
                 rt.block_on(async {
                     ssh::manager::SshManager::global().disconnect_all().await;
                     crate::telnet::close_all_sessions().await;
+                    if let Ok(mgr) = crate::mcp_client::global_manager() {
+                        mgr.shutdown_all().await;
+                    }
                 });
                 crate::serial::close_all_sessions();
             }
