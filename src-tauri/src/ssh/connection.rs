@@ -357,6 +357,15 @@ pub fn set_terminal_window_size_kb(kb: u32) {
 /// SFTP 走独立 SSH 连接，因此不会把大窗口的「中断慢」代价带给终端。
 pub const TRANSFER_WINDOW_SIZE: u32 = 64 * 1024 * 1024;
 
+/// russh 0.64 公开配置：每个 SSH channel 可缓存的未处理消息数（上游默认 100）。
+///
+/// SFTP 流水线并发深度为 64（`max_concurrent_writes` / 下载在途读请求），取 256 留出
+/// 4 倍余量，避免接收侧稍慢就把背压过早传导到 TCP 流、打断流水线。
+/// 注意：它作用于各 channel 的数据队列，与 0.45 时代 patch 里扩容的
+/// `handle_sender` / `inbound_channel_sender`（上游仍硬编码 `channel(10)`）不是同一处，
+/// 因此只是部分补回当时的效果。
+pub const CHANNEL_BUFFER_SIZE: usize = 256;
+
 /// 底层 SSH 传输层：持有 russh handle，提供 channel 申请。
 ///
 /// `handle` 包在 `tokio::sync::Mutex` 中：russh 的 `tcpip_forward` 要求 `&mut self`，
@@ -949,12 +958,14 @@ impl SshTransport {
         // 2. window_size 由调用方按用途指定（见 TERMINAL_WINDOW_SIZE / TRANSFER_WINDOW_SIZE）：
         //    终端用小窗口（中断时在途数据少、能快速丢弃）；文件传输用大窗口
         //    （rekey 期间 pending 上限 = 2×window，避免高带宽 × 高 RTT 下传大文件断连）。
+        // 3. channel_buffer_size 放大每个 channel 的接收队列，避免 64 并发流水线被过早背压。
         let config = russh::client::Config {
             inactivity_timeout: None,
             keepalive_interval: Some(Duration::from_secs(15)),
             keepalive_max: 4,
             window_size,
             maximum_packet_size: 65535,
+            channel_buffer_size: CHANNEL_BUFFER_SIZE,
             limits: russh::Limits {
                 rekey_write_limit: usize::MAX,
                 rekey_read_limit: usize::MAX,

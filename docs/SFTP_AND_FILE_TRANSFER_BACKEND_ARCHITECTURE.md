@@ -1,14 +1,15 @@
 # Qshell SFTP 与文件传输后台技术架构全景白皮书
 
-> **文档版本**：v1.2.0  
-> **最后更新**：2026-10-20  
-> **对应模块**：`src-tauri/src/commands/files.rs`、`src-tauri/src/ssh/manager.rs`、`src-tauri/src/ssh/connection.rs`、`src-tauri/patches/russh/`、`src-tauri/patches/russh-sftp/`
+> - **文档版本**：v1.3.1
+> - **最后更新**：2026-11-06
+> - **对应模块**：`src-tauri/src/commands/files.rs`、`src-tauri/src/ssh/manager.rs`、`src-tauri/src/ssh/connection.rs`、`src-tauri/patches/russh-sftp/`
+> - **补丁说明**：`src-tauri/patches/README.md`。`src-tauri/patches/russh/`（russh 0.45 时代的本地补丁）已在 `cf6ed23` 升级 russh 0.64 时整体删除，本文 2.2 / 2.3 节仅作历史记录。
 
 ---
 
 ## 1. 全局架构全景图 (Architecture & Data Flow)
 
-Qshell 的文件传输系统采用了「前端轻量渲染驱动 + 后端高并发异步管道 + 底层网络协议栈深度补丁」的分层设计，彻底解耦了 UI 渲染、业务流程控制、协议编解码以及内核网络 I/O。
+Qshell 的文件传输系统采用了「前端轻量渲染驱动 + 后端高并发异步管道 + 本地协议补丁（russh-sftp）与上游公开配置调优（russh 0.64）」的分层设计，彻底解耦了 UI 渲染、业务流程控制、协议编解码以及内核网络 I/O。
 
 ```mermaid
 flowchart TD
@@ -37,11 +38,12 @@ flowchart TD
         BufWriter["512KB BufWriter 磁盘写入聚合"]
     end
 
-    subgraph Patches ["5. 核心协议补丁层 (Russh & Russh-SFTP Patches)"]
+    subgraph Patches ["5. 协议补丁与连接调优层 (Russh-SFTP Patch + Russh 0.64 Config)"]
         Inflight["InflightRead + read_at_nowait (零 Task 异步投递)"]
-        Queue1024["Channel MPSC 扩容 (10 -> 1024)"]
-        BufReader["256KB BufReader TCP 报文聚合 (降低 WSARecv IOCP 切换)"]
-        Win16M["SSH Channel Window 扩容至 16MB"]
+        SftpCfg["SFTP 会话: 256KB packet / 64 并发写 / 60s 超时"]
+        Window["动态 window_size: 终端 256KB~16MB / SFTP 64MB"]
+        ChanBuf["channel_buffer_size = 256 (每 channel 接收队列)"]
+        Rekey["禁用客户端主动 rekey (limits = usize::MAX / 365d)"]
     end
 
     subgraph Kernel ["6. 操作系统内核与网络栈 (Windows Winsock / Linux Socket)"]
@@ -92,34 +94,58 @@ async fn connect_tcp_with_buffer_tuning(addr: SocketAddr) -> io::Result<tokio::n
 }
 ```
 
-### 2.2 `russh` 内部 Channel 管道扩容至 1024
-* **代码位置**：[`src-tauri/patches/russh/src/client/mod.rs`](file:///d:/SSHTOOL/Qshell/src-tauri/patches/russh/src/client/mod.rs#L688-L755)
-* **技术背景**：
-  上游 `russh` 的 `handle_sender` 与 `inbound_channel_sender` 默认 MPSC 容量仅为 **10**。在进行高并发批量请求（64~96 并发）时，投递到第 11 个请求即发生 `channel.send().await` 挂起，直接破坏流水线深度。
-* **落地代码**：
+### 2.2 【历史】`russh` 内部 Channel 管道扩容至 1024（已移除，当前不生效）
+
+> **状态**：这是 **russh 0.45 时代**的本地补丁做法。升级前的 `Cargo.toml` 含 `[patch.crates-io] russh = { path = "patches/russh" }`；提交 `cf6ed23`（升级 russh 0.64）删除了整个 `patches/russh/`（45 文件 / 13251 行）。当前 `Cargo.lock` 中 `russh 0.64.1` 来自 crates.io，**没有任何 russh 本地补丁**。当时的代码位置 `src-tauri/patches/russh/src/client/mod.rs` 已不存在。
+
+* **当时的技术背景**：上游 `handle_sender` / `inbound_channel_sender` 的 MPSC 容量仅为 **10**，高并发批量请求（64~96 并发）投递到第 11 个即 `send().await` 挂起，破坏流水线深度。
+* **当时的落地代码**：
+
 ```rust
-// 容量从官方默认的 10 扩容为 1024，容纳多并发在途请求一次性压入队列
 let (handle_sender, session_receiver) = channel(1024);
 let (inbound_channel_sender, inbound_channel_receiver) = channel(1024);
 ```
 
-### 2.3 256KB `BufReader` 聚合系统调用 (WSARecv 内核切换降低 90%)
-* **代码位置**：[`src-tauri/patches/russh/src/client/mod.rs`](file:///d:/SSHTOOL/Qshell/src-tauri/patches/russh/src/client/mod.rs#L770-L780)
-* **技术背景**：
-  SSH 解密驱动层在读取加密报文时，每次解密分为两步：先 `read_exact` 读 4 字节数据头，再读 32KB 负载。在 Windows IOCP 下，每个报文触发 2 次系统调用。高吞吐下触发海量 CPU 上下文切换。
-* **落地代码**：
+* **现状核对（2026-11-06）**：russh 0.64.1 `src/client/mod.rs:1187`、`:1275` 仍是 `channel(10)`，上游**未吸收**该改动，这两条全局队列**当前仍为 10**。0.64 提供了公开配置 `channel_buffer_size`（默认 100，作用于各 channel 的数据队列，`client/mod.rs:803/821/852/874`）；本项目已在 `src-tauri/src/ssh/connection.rs` 设为 `CHANNEL_BUFFER_SIZE = 256`，按 64 并发流水线留 4 倍余量。这是**部分补回**：作用对象不同，效果需实测，不等同于原来的 1024 全局队列扩容。
+
+### 2.3 【历史】256KB `BufReader` 聚合系统调用（已移除，当前不生效）
+
+> **状态**：同上，属于 `patches/russh/` 中的改动，已随 `cf6ed23` 删除，当时的代码位置 `src-tauri/patches/russh/src/client/mod.rs` 已不存在。
+
+* **当时的技术背景**：SSH 解密层读取报文分两步（先 `read_exact` 4 字节头、再读负载），Windows IOCP 下每报文 2 次系统调用，高吞吐时上下文切换开销显著。
+* **当时的落地代码**：
+
 ```rust
 let stream_read = tokio::io::BufReader::with_capacity(256 * 1024, stream_read);
 ```
 
-### 2.4 SSH 通道流控窗口扩容至 16 MB
-* **代码位置**：[`src-tauri/src/ssh/connection.rs`](file:///d:/SSHTOOL/Qshell/src-tauri/src/ssh/connection.rs#L521)
-* **落地代码**：
+* **现状核对（2026-11-06）**：russh 0.64.1 `src/cipher/mod.rs:303/331/336` 仍是 `stream.read_exact(&mut len)` + `read_exact(&mut buffer.buffer[l..])` 两步读，上游**未引入** `BufReader` 包装；本项目也未在 stream 层包装。因此该优化**当前不生效**，且无法仅靠公开 `Config` 补回。
+
+### 2.4 SSH 通道流控窗口与 rekey 策略（russh 0.64 公开配置）
+* **代码位置**：`src-tauri/src/ssh/connection.rs` 的 `connect_routed`（构造 `russh::client::Config`），以及 `TERMINAL_WINDOW_SIZE_KB` / `TRANSFER_WINDOW_SIZE`。
+* **现状**：`window_size` 按用途动态指定——终端用 256KB~16MB 可调（默认 1MB）、SFTP 用 `TRANSFER_WINDOW_SIZE = 64MB`（rekey 期间 pending 上限 = 2×window，避免高带宽长链路传大文件断连）；`channel_buffer_size = 256` 放大每个 channel 的接收队列以支撑 64 并发流水线；同时把客户端主动 rekey 阈值设为极大值，由服务端在 1GiB 阈值自行发起。
+
 ```rust
 russh::client::Config {
-    window_size: 16 * 1024 * 1024, // 16MB SSH Channel Window，防止服务端发满流控挂起
-    maximum_packet_size: 256 * 1024,
+    window_size,                  // 终端小窗口 / SFTP 64MB，由调用方传入
+    maximum_packet_size: 65535,
+    channel_buffer_size: CHANNEL_BUFFER_SIZE,  // 256，上游默认 100
+    limits: russh::Limits {
+        rekey_write_limit: usize::MAX,
+        rekey_read_limit: usize::MAX,
+        rekey_time_limit: Duration::from_secs(86400 * 365),
+    },
     ..Default::default()
+}
+```
+
+* **SFTP 会话另有独立配置**（`connection.rs` 中 `russh_sftp::client::Config`），不要与上面的 SSH 层 `maximum_packet_size` 混淆：
+
+```rust
+russh_sftp::client::Config {
+    max_packet_len: 256 * 1024,
+    max_concurrent_writes: 64,
+    request_timeout_secs: 60,
 }
 ```
 
@@ -314,9 +340,9 @@ impl<F: Fn(u64, u64)> ProgressReporter<F> {
 
 | 模块 | 核心源码路径 | 主要技术职责 |
 | :--- | :--- | :--- |
-| **连接注入** | [`src-tauri/src/ssh/connection.rs`](file:///d:/SSHTOOL/Qshell/src-tauri/src/ssh/connection.rs) | 4MB TCP 套接字注入、16MB Channel Window 配置、SFTP 会话池化 |
+| **连接注入** | [`src-tauri/src/ssh/connection.rs`](file:///d:/SSHTOOL/Qshell/src-tauri/src/ssh/connection.rs) | 4MB TCP 套接字注入、动态 `window_size` / rekey 策略、SFTP 会话池化 |
 | **下载引擎** | [`src-tauri/src/ssh/manager.rs`](file:///d:/SSHTOOL/Qshell/src-tauri/src/ssh/manager.rs) | `sftp_download_file_with_session` 流水线、保序落盘、TOCTOU 续传校验 |
 | **上传引擎** | [`src-tauri/src/ssh/manager.rs`](file:///d:/SSHTOOL/Qshell/src-tauri/src/ssh/manager.rs) | `sftp_upload_file`、并发写分发、写异常元数据重对齐 |
 | **业务调度** | [`src-tauri/src/commands/files.rs`](file:///d:/SSHTOOL/Qshell/src-tauri/src/commands/files.rs) | 递归传输、磁盘空间预检、任务注册与取消守卫 |
-| **协议补丁** | [`src-tauri/patches/russh-sftp/`](file:///d:/SSHTOOL/Qshell/src-tauri/patches/russh-sftp/) | `read_at_nowait`、`InflightRead` 零任务直接投递 |
-| **底层补丁** | [`src-tauri/patches/russh/`](file:///d:/SSHTOOL/Qshell/src-tauri/patches/russh/) | 1024 管道扩容、256KB `BufReader` IOCP 聚合 |
+| **协议补丁（当前唯一）** | [`src-tauri/patches/russh-sftp/`](file:///d:/SSHTOOL/Qshell/src-tauri/patches/russh-sftp/) | `read_at_nowait`、`InflightRead` 零任务直接投递；详见 `src-tauri/patches/README.md` |
+| **连接层调优（非补丁）** | [`src-tauri/src/ssh/connection.rs`](file:///d:/SSHTOOL/Qshell/src-tauri/src/ssh/connection.rs) | russh 0.64 公开 `Config`（64MB window、禁用主动 rekey）；0.45 时代的 `patches/russh/` 已于 `cf6ed23` 移除 |
