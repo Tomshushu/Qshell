@@ -36,7 +36,7 @@ export function DevopsCurlTool({ initialCmd = "" }: DevopsCurlToolProps) {
   };
 
   return (
-    <div className="space-y-4 p-4 text-xs">
+    <div className="space-y-4 p-4 text-[13px]">
       {/* 顶部输入区 */}
       <div className="rounded-xl border border-black/5 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-3 space-y-2">
         <div className="flex items-center justify-between">

@@ -134,7 +134,7 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
   };
 
   return (
-    <div className="p-3 text-xs h-full flex flex-col gap-2">
+    <div className="p-4 text-[13px] h-full flex flex-col gap-3">
       {/* 顶部单行集成工具栏 (极简紧凑、按压触感微缩) */}
       <div className="flex items-center justify-between gap-2 border-b border-black/5 dark:border-white/10 pb-2 shrink-0">
         {/* 左侧：格式化与常用转换 */}

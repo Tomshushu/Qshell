@@ -3,6 +3,36 @@
 
 @variant dark (&:where(.dark, .dark *));
 
+/* 开发运维工具箱：统一各工具页历史遗留的淡边框、低对比文字与极小字号。
+   作用域仅限浮窗工具内容区，不影响全局与其它面板。 */
+.devtools-scope [data-devtools-content] :is(textarea, input:not([type="checkbox"]):not([type="radio"]), select) {
+  border-color: var(--color-border);
+  background-color: color-mix(in oklch, var(--color-muted) 38%, transparent);
+  color: var(--color-foreground);
+  border-radius: var(--radius-md);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.devtools-scope [data-devtools-content] :is(textarea, input:not([type="checkbox"]):not([type="radio"]), select):focus {
+  border-color: var(--color-ring);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-ring) 15%, transparent);
+  outline: none;
+}
+
+.devtools-scope [data-devtools-content] :is(textarea, input)::placeholder {
+  color: var(--color-muted-foreground);
+  opacity: 0.85;
+}
+
+.devtools-scope [data-devtools-content] [class*="text-muted-foreground/"] {
+  color: var(--color-muted-foreground);
+}
+
+.devtools-scope [data-devtools-content] [class*="text-[9"],
+.devtools-scope [data-devtools-content] [class*="text-[10"] {
+  font-size: 11.5px;
+}
+
 /* 优先加载本地打包的等宽字体，确保完全离线可用与闪电加载 */
 
 /* Source Code Pro */

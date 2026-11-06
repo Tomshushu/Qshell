@@ -405,21 +405,24 @@ describe('AI Store - Storage Limit & Rolling Retention (滚动存储与数量限
       expect(preset.id).toBe('modelscope')
       expect(preset.protocol).toBe('openai')
       expect(preset.defaultBaseUrl).toBe('https://api-inference.modelscope.cn/v1')
-      expect(preset.defaultModel).toBe('deepseek-ai/DeepSeek-V3')
-      expect(preset.recommendedModels).toContain('deepseek-ai/DeepSeek-V3')
-      expect(preset.recommendedModels).toContain('deepseek-ai/DeepSeek-R1')
-      expect(preset.recommendedModels).toContain('Qwen/Qwen2.5-Coder-32B-Instruct')
+      expect('defaultModel' in preset).toBe(false)
+      expect('recommendedModels' in preset).toBe(false)
       expect(preset.isDomestic).toBe(true)
       expect(preset.websiteUrl).toContain('modelscope.cn')
     })
 
-    it('allows selecting modelscope provider and updates settings with defaults', () => {
+    it('uses fetched models instead of preset defaults when selecting a provider', () => {
+      useAIStore.setState({ customModelsMap: { modelscope: ['fetched-a', 'fetched-b'] } })
       useAIStore.getState().selectProvider('modelscope')
       const settings = useAIStore.getState().settings
       expect(settings.provider).toBe('modelscope')
       expect(settings.protocol).toBe('openai')
       expect(settings.baseUrl).toBe('https://api-inference.modelscope.cn/v1')
-      expect(settings.model).toBe('deepseek-ai/DeepSeek-V3')
+      expect(settings.model).toBe('fetched-a')
+
+      useAIStore.setState({ customModelsMap: {} })
+      useAIStore.getState().selectProvider('modelscope')
+      expect(useAIStore.getState().settings.model).toBe('')
     })
   })
 })

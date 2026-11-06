@@ -380,7 +380,7 @@ function ConfigureProviderModal({
       setName(preset.name)
       setBaseUrl(preset.defaultBaseUrl)
       setApiKey('')
-      setModel(preset.defaultModel)
+      setModel((customModelsMap[providerKey] || [])[0] || '')
       setProtocol(preset.protocol)
       setMaxTokens(8192)
     }
@@ -453,7 +453,7 @@ function ConfigureProviderModal({
         protocol,
         baseUrl: baseUrl.trim(),
         apiKey: apiKey.trim(),
-        model: model.trim() || preset?.defaultModel || 'default',
+        model: model.trim() || fetchedModels[0] || '',
         maxTokens,
       },
       activate,
@@ -717,7 +717,7 @@ function ConfigureProviderModal({
                 <Input
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
-                  placeholder={preset?.defaultModel || 'deepseek-chat'}
+                  placeholder={t('ai_model_input_placeholder') || '输入模型 ID'}
                   className="h-8 text-xs font-mono flex-1"
                 />
                 {fetchedModels.length > 0 && (
@@ -744,27 +744,6 @@ function ConfigureProviderModal({
               </div>
             )}
 
-            {/* 推荐模型标签 */}
-            {preset?.recommendedModels && preset.recommendedModels.length > 0 && (
-              <div className="flex items-center gap-1.5 flex-wrap pt-1">
-                <span className="text-[10px] text-muted-foreground">{t('ai_recommended_models')}:</span>
-                {preset.recommendedModels.map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    onClick={() => setModel(m)}
-                    className={cn(
-                      'text-[10px] font-mono px-1.5 py-0.5 rounded border transition-colors',
-                      model === m
-                        ? 'border-primary bg-primary/10 text-primary'
-                        : 'border-border/60 text-muted-foreground hover:bg-muted/40',
-                    )}
-                  >
-                    {m}
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
 
           {/* 单次最大回复 Token 限制 (Max Tokens) */}
@@ -940,6 +919,8 @@ export function AISettingsPanel() {
       })
       if (models.length === 0) {
         setFetchModelsError(t('ai_fetch_models_failed') || '拉取模型列表失败')
+      } else if (!item.model || item.model === 'default') {
+        updateConfiguredProviderModel(item.id, models[0])
       }
     } catch (err: unknown) {
       setFetchModelsError(
@@ -1110,7 +1091,7 @@ export function AISettingsPanel() {
                             type={preset?.tagType || 'custom'}
                           />
                         </div>
-                        {/* 行内模型切换：从该厂商缓存/推荐模型里直接选，无需打开配置弹窗 */}
+                        {/* 行内模型切换：只列当前模型与该厂商实际拉取到的模型，无需打开配置弹窗 */}
                         <SelectPopover
                           value={item.model || ''}
                           onChange={(val) => {
@@ -1118,12 +1099,7 @@ export function AISettingsPanel() {
                           }}
                           options={Array.from(
                             new Set(
-                              [
-                                item.model,
-                                ...(customModelsMap[item.provider] || []),
-                                ...(preset?.recommendedModels || []),
-                                preset?.defaultModel || '',
-                              ].filter(Boolean) as string[],
+                              [item.model, ...(customModelsMap[item.provider] || [])].filter(Boolean) as string[],
                             ),
                           ).map((m) => ({ value: m, label: m }))}
                           searchable

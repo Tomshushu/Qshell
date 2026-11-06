@@ -378,7 +378,7 @@ const DEFAULT_SETTINGS: AISettings = {
   protocol: 'openai',
   baseUrl: AI_PROVIDER_PRESETS.deepseek.defaultBaseUrl,
   apiKey: '',
-  model: AI_PROVIDER_PRESETS.deepseek.defaultModel,
+  model: '',
   temperature: 0.3,
   maxTokens: 8192,
   enableDlp: true,
@@ -458,7 +458,7 @@ function loadSavedConfiguredProviders(fallbackSettings: AISettings): ConfiguredP
       protocol: fallbackSettings.protocol || preset?.protocol || 'openai',
       baseUrl: fallbackSettings.baseUrl || preset?.defaultBaseUrl || '',
       apiKey: fallbackSettings.apiKey || '',
-      model: fallbackSettings.model || preset?.defaultModel || '',
+      model: fallbackSettings.model || '',
       temperature: fallbackSettings.temperature ?? 0.3,
       maxTokens: fallbackSettings.maxTokens ?? 2048,
       isEnabled: true,
@@ -863,12 +863,8 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
 
     const current = get().settings
     const cachedModels = get().customModelsMap[provider]
-    let initialModel = preset.defaultModel
-    if (cachedModels && cachedModels.length > 0) {
-      initialModel = cachedModels.includes(preset.defaultModel)
-        ? preset.defaultModel
-        : cachedModels[0]
-    }
+    // 模型只来自实际拉取到的列表；未拉取过则留空，由用户拉取或手动填写
+    const initialModel = cachedModels && cachedModels.length > 0 ? cachedModels[0] : ''
 
     const updated: AISettings = {
       ...current,
@@ -941,7 +937,7 @@ export const useAIStore = create<AIStoreState>((set, get) => ({
       protocol: providerData.protocol || preset?.protocol || 'openai',
       baseUrl: providerData.baseUrl ?? (preset?.defaultBaseUrl || ''),
       apiKey: providerData.apiKey ?? '',
-      model: providerData.model || (preset?.defaultModel || ''),
+      model: providerData.model || '',
       temperature: providerData.temperature ?? 0.3,
       maxTokens: providerData.maxTokens ?? 2048,
       isEnabled: activate || (existingIdx >= 0 ? providers[existingIdx].isEnabled : providers.length === 0),

@@ -141,6 +141,31 @@ describe('AISettingsPanel Option C Command Guard & MCP Client Ecosystem', () => 
     expect(useAIStore.getState().settings.model).toBe('model-b')
   })
 
+  it('only lists the current model and fetched models in the inline switcher', () => {
+    useAIStore.setState({
+      configuredProviders: [makeProvider({ id: 'p1', model: 'model-a', isEnabled: true })],
+      customModelsMap: { siliconflow: ['model-a', 'model-b'] },
+    })
+    renderWithProviders(<AISettingsPanel />)
+
+    fireEvent.click(screen.getByRole('button', { name: /切换模型/ }))
+    expect(screen.getByText('model-b')).toBeTruthy()
+    expect(screen.queryByText('deepseek-ai/DeepSeek-V3')).toBeNull()
+    expect(screen.queryByText('Pro/deepseek-ai/DeepSeek-V3')).toBeNull()
+  })
+
+  it('does not render hardcoded recommended models when configuring a provider', () => {
+    useAIStore.setState({ configuredProviders: [], customModelsMap: {} })
+    renderWithProviders(<AISettingsPanel />)
+
+    const connectButtons = screen.getAllByRole('button', { name: /连接/ })
+    expect(connectButtons.length).toBeGreaterThan(0)
+    fireEvent.click(connectButtons[0])
+
+    expect(screen.queryByText(/推荐模型/)).toBeNull()
+    expect(screen.queryByText('deepseek-chat')).toBeNull()
+  })
+
   it('fetches fresh models from the refresh button before the latency test', async () => {
     const originalFetch = useAIStore.getState().fetchModelsForConfig
     const fetchSpy = vi.fn().mockResolvedValue(['model-a', 'model-new'])

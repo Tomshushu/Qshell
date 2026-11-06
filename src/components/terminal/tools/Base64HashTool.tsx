@@ -79,7 +79,7 @@ export function Base64HashTool({ initialText = "Qshell DevOps Toolset" }: Base64
   const formatHash = (h: string) => (isUppercase ? h.toUpperCase() : h.toLowerCase());
 
   return (
-    <div className="space-y-3 p-3 text-xs">
+    <div className="space-y-4 p-4 text-[13px]">
       {/* Base64 区域 */}
       <div className="rounded-xl border border-black/5 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-3 space-y-2.5">
         <div className="flex items-center justify-between border-b border-black/5 dark:border-white/10 pb-2">

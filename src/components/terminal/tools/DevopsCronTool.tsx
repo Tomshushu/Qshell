@@ -30,7 +30,7 @@ export function DevopsCronTool({ initialExpr = "*/15 0-6 * * 1-5" }: DevopsCronT
   };
 
   return (
-    <div className="space-y-3 p-3 text-xs">
+    <div className="space-y-4 p-4 text-[13px]">
       {/* 预设快捷选择 */}
       <div className="flex flex-wrap items-center gap-1.5 border-b border-black/5 dark:border-white/10 pb-2">
         <span className="text-[11px] font-medium text-muted-foreground/80 mr-1 font-mono">

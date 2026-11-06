@@ -38,6 +38,8 @@ export function FloatingTextFormatter() {
   const [dragging, setDragging] = useState(false);
   const [resizing, setResizing] = useState(false);
 
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
   const dragRef = useRef<{
     startX: number;
     startY: number;
@@ -59,6 +61,12 @@ export function FloatingTextFormatter() {
   useEffect(() => {
     if (!open) return;
     const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+        return;
+      }
       if (e.key === "Escape") {
         e.preventDefault();
         playSound(SoundType.Close);
@@ -286,13 +294,10 @@ export function FloatingTextFormatter() {
   return (
     <div
       className={cn(
-        "fixed z-[60] flex flex-col overflow-hidden rounded-2xl",
-        "border border-black/10 dark:border-white/10",
-        "bg-white/90 dark:bg-zinc-950/90 backdrop-blur-2xl backdrop-saturate-150",
-        "shadow-[0_24px_70px_-12px_rgba(0,0,0,0.35),inset_0_1px_0_0_rgba(255,255,255,0.4)] dark:shadow-[0_24px_70px_-12px_rgba(0,0,0,0.7),inset_0_1px_0_0_rgba(255,255,255,0.08)]",
-        "select-text transition-all duration-150 ease-out",
-        (dragging || resizing) && "transition-none select-none",
-        isMaximized && "rounded-none border-none inset-3"
+        "devtools-scope fixed z-[60] flex flex-col overflow-hidden rounded-xl",
+        "border border-border bg-card/95 backdrop-blur-xl shadow-xl",
+        "select-text transition-[box-shadow,border-color] duration-150 ease-out",
+        (dragging || resizing) && "transition-none select-none"
       )}
       style={
         isMaximized
@@ -312,133 +317,152 @@ export function FloatingTextFormatter() {
             }
       }
     >
-      {/* 顶部标题与控制栏 (苹果液态玻璃与极简视窗控件) */}
+      {/* 顶部标题栏 */}
       <div
         onPointerDown={handleDragStart}
         onDoubleClick={() => setIsMaximized((m) => !m)}
-        className="flex items-center justify-between px-3.5 py-2 border-b border-black/5 dark:border-white/10 select-none cursor-move shrink-0 bg-black/[0.02] dark:bg-white/[0.02]"
+        className="flex h-11 shrink-0 cursor-move select-none items-center justify-between border-b border-border bg-muted/40 px-4"
       >
-        <div className="flex items-center gap-2 text-xs font-medium text-foreground tracking-tight">
-          <Terminal className="h-3.5 w-3.5 text-primary/80" />
-          <span>开发运维工具箱</span>
-          <span className="text-[10px] font-mono text-muted-foreground/50 border-l border-black/10 dark:border-white/10 pl-2">DevTools</span>
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <Terminal className="h-3.5 w-3.5" />
+          </div>
+          <span className="text-[13px] font-semibold text-foreground">开发运维工具箱</span>
+          <span className="rounded-md border border-border bg-background/70 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+            DevTools
+          </span>
         </div>
 
         <div className="flex items-center gap-1" onPointerDown={(e) => e.stopPropagation()}>
           <button
             type="button"
             onClick={() => setIsMaximized((m) => !m)}
-            className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-black/5 dark:hover:bg-white/10 hover:text-foreground active:scale-90 transition-all cursor-pointer"
-            title={isMaximized ? "还原窗口" : "最大化"}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground cursor-pointer"
+            title={isMaximized ? "还原窗口" : "最大化 (双击标题栏)"}
           >
             {isMaximized ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
           </button>
           <button
             type="button"
             onClick={handleClose}
-            className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive active:scale-90 transition-all cursor-pointer"
-            title="关闭 (Escape)"
+            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive cursor-pointer"
+            title="关闭 (Esc)"
           >
-            <X className="h-3.5 w-3.5" />
+            <X className="h-4 w-4" />
           </button>
         </div>
       </div>
 
       {/* 工作台双栏主体 */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
-        {/* 左侧：搜索与工具分类导航栏 (紧凑高密设计，消除AI塑料感) */}
-        <div className="w-48 shrink-0 border-r border-black/5 dark:border-white/10 bg-black/[0.015] dark:bg-white/[0.015] flex flex-col min-h-0">
-          {/* 单行紧凑搜索栏 + 剪贴板识别按钮 */}
-          <div className="p-2 border-b border-black/5 dark:border-white/10">
-            <div className="relative flex items-center">
-              <Search className="absolute left-2.5 h-3.5 w-3.5 text-muted-foreground/50 pointer-events-none" />
+        {/* 左侧：搜索与工具分类导航 */}
+        <div className="flex min-h-0 w-52 shrink-0 flex-col border-r border-border bg-muted/25">
+          <div className="border-b border-border p-3">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
               <input
+                ref={searchInputRef}
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="搜索工具..."
-                className="w-full rounded-md border border-black/10 dark:border-white/10 bg-black/[0.03] dark:bg-white/[0.04] pl-8 pr-7 py-1 text-xs text-foreground placeholder:text-muted-foreground/45 outline-none focus:border-primary/50 transition-colors"
+                className="h-8 w-full rounded-md border border-input bg-background pl-8 pr-9 text-xs text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
               />
               <button
                 type="button"
                 onClick={handlePasteAndJump}
-                className="absolute right-1.5 flex h-5 w-5 items-center justify-center rounded text-muted-foreground/60 hover:text-foreground hover:bg-black/5 dark:hover:bg-white/10 active:scale-90 transition-all cursor-pointer"
-                title="读取剪贴板自动跳转对应工具"
+                className="absolute right-1.5 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground cursor-pointer"
+                title="读取剪贴板，自动跳转到对应工具"
               >
-                <ClipboardPaste className="h-3 w-3" />
+                <ClipboardPaste className="h-3.5 w-3.5" />
               </button>
             </div>
           </div>
 
-          {/* 分组工具菜单列表 */}
-          <div className="flex-1 overflow-y-auto p-1.5 space-y-2.5">
+          {/* 分组工具列表 */}
+          <div className="flex-1 space-y-3 overflow-y-auto p-2">
             {groupedTools.map((group) => (
               <div key={group.categoryLabel} className="space-y-0.5">
-                <div className="px-2 py-0.5 text-[9.5px] font-mono font-medium text-muted-foreground/50 uppercase tracking-wider">
+                <div className="px-2 py-1 text-[11px] font-semibold text-muted-foreground">
                   {group.categoryLabel}
                 </div>
-                <div className="space-y-0.5">
-                  {group.items.map((tool) => {
-                    const Icon = tool.icon;
-                    const isActive = tool.id === activeToolId;
-                    return (
-                      <button
-                        key={tool.id}
-                        type="button"
-                        onClick={() => {
-                          setActiveToolId(tool.id);
-                          playSound(SoundType.Click);
-                        }}
+                {group.items.map((tool) => {
+                  const Icon = tool.icon;
+                  const isActive = tool.id === activeToolId;
+                  return (
+                    <button
+                      key={tool.id}
+                      type="button"
+                      onClick={() => {
+                        setActiveToolId(tool.id);
+                        playSound(SoundType.Click);
+                      }}
+                      className={cn(
+                        "group relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors cursor-pointer select-none",
+                        isActive
+                          ? "bg-primary/10 font-medium text-primary"
+                          : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                      )}
+                    >
+                      {isActive && (
+                        <span className="absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-r-full bg-primary" />
+                      )}
+                      <Icon
                         className={cn(
-                          "w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-all cursor-pointer select-none active:scale-[0.98]",
-                          isActive
-                            ? "bg-black/5 dark:bg-white/10 text-foreground font-medium shadow-2xs"
-                            : "text-muted-foreground hover:text-foreground hover:bg-black/[0.03] dark:hover:bg-white/[0.05]"
+                          "h-4 w-4 shrink-0",
+                          isActive ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
                         )}
-                      >
-                        <Icon className={cn("h-3.5 w-3.5 shrink-0", isActive ? "text-primary" : "text-muted-foreground/70")} />
-                        <span className="truncate">{tool.name}</span>
-                      </button>
-                    );
-                  })}
-                </div>
+                      />
+                      <span className="truncate">{tool.name}</span>
+                    </button>
+                  );
+                })}
               </div>
             ))}
 
             {filteredTools.length === 0 && (
-              <div className="py-6 text-center text-xs text-muted-foreground/50">
-                无匹配工具
+              <div className="flex flex-col items-center gap-1.5 py-10 text-center">
+                <Search className="h-5 w-5 text-muted-foreground/60" />
+                <span className="text-xs text-muted-foreground">没有匹配的工具</span>
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  className="text-xs text-primary hover:underline cursor-pointer"
+                >
+                  清除搜索
+                </button>
               </div>
             )}
           </div>
 
-          {/* 底部极简小贴士 */}
-          <div className="p-2 border-t border-black/5 dark:border-white/10 text-[10px] text-muted-foreground/50 flex items-center justify-between select-none">
-            <span className="font-mono">Esc 关闭</span>
-            <span className="font-mono text-[9px] tabular-nums">{filteredTools.length} 项</span>
+          <div className="flex shrink-0 select-none items-center justify-between border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
+            <span>Ctrl+F 搜索 · Esc 关闭</span>
+            <span className="tabular-nums">{filteredTools.length} 个工具</span>
           </div>
         </div>
 
         {/* 右侧：主工具交互区域 */}
-        <div className="flex-1 min-w-0 flex flex-col min-h-0 bg-transparent">
-          {/* 工具顶栏单行轻量标题 */}
-          <div className="flex items-center justify-between px-3.5 py-1.5 border-b border-black/5 dark:border-white/10 shrink-0 bg-black/[0.01] dark:bg-white/[0.01]">
-            <div className="flex items-center gap-2 truncate">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background/40">
+          <div className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-border px-4">
+            <div className="flex min-w-0 items-center gap-2">
               {(() => {
                 const ActiveIcon = activeTool.icon;
-                return <ActiveIcon className="h-3.5 w-3.5 text-primary/80 shrink-0" />;
+                return <ActiveIcon className="h-4 w-4 shrink-0 text-primary" />;
               })()}
-              <span className="font-medium text-xs text-foreground truncate">
+              <span className="truncate text-[13px] font-semibold text-foreground">
                 {activeTool.name}
               </span>
-              <span className="text-[11px] text-muted-foreground/50 hidden sm:inline truncate">
-                · {activeTool.description}
+              <span className="hidden truncate text-xs text-muted-foreground md:inline">
+                — {activeTool.description}
               </span>
             </div>
+            <span className="hidden shrink-0 rounded-md border border-border px-2 py-0.5 text-[10px] text-muted-foreground lg:inline">
+              {activeTool.categoryLabel}
+            </span>
           </div>
 
           {/* 工具组件容器 */}
-          <div className="flex-1 overflow-y-auto">
+          <div className="flex-1 overflow-y-auto" data-devtools-content>
             <ActiveComponent initialSeed={seed} />
           </div>
         </div>

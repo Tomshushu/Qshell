@@ -171,7 +171,7 @@ export function TimestampTool({ initialText = "" }: TimestampToolProps) {
   };
 
   return (
-    <div className="space-y-3 p-3 text-xs">
+    <div className="space-y-4 p-4 text-[13px]">
       {/* 1. 顶部当前时间戳极简卡片 (微质感 + 防抖 tabular-nums) */}
       <div className="rounded-xl border border-black/5 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] p-3">
         <div className="flex flex-wrap items-center justify-between gap-3">

@@ -49,7 +49,7 @@ export function MacAddressTool({ initialMac = "00:1A:2B:3C:4D:5E" }: MacAddressT
   const currentEndianData = selectedEndian === "big" ? result.bigEndian : result.littleEndian;
 
   return (
-    <div className="space-y-4 p-4 text-xs">
+    <div className="space-y-4 p-4 text-[13px]">
       {/* 预设示例与控制 */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/40 pb-2.5">
         <div className="flex flex-wrap items-center gap-1.5">

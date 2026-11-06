@@ -118,7 +118,7 @@ export function JwtTool({ initialToken = "" }: JwtToolProps) {
   const signaturePart = tokenParts[2] || "";
 
   return (
-    <div className="space-y-4 p-4 text-xs">
+    <div className="space-y-4 p-4 text-[13px]">
       {/* 顶部操作条 */}
       <div className="flex items-center justify-between border-b border-border/40 pb-2">
         <div className="flex items-center gap-2">
