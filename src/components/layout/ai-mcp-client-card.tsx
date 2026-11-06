@@ -12,36 +12,27 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { HintTooltip } from '@/components/ui/hint-tooltip'
-import { useAIStore } from '@/store/ai-store'
 import { useTranslation, translate } from '@/i18n'
 import {
   backend,
   type McpPluginView,
-  type McpPresetTemplate,
   type McpToolInfo,
 } from '@/services/api'
 import {
   Blocks,
-  CheckCircle2,
   AlertCircle,
   Loader2,
   ChevronDown,
   ChevronUp,
-  ShieldCheck,
-  ShieldAlert,
   Globe,
   Cpu,
   Container,
   Coffee,
   Wrench,
-  RotateCcw,
-  Sparkles,
   Plus,
   Pencil,
   RefreshCw,
   Trash2,
-  Layers,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
@@ -83,24 +74,17 @@ const CATEGORY_LABEL_KEYS: Record<string, string> = {
 // ============================================================================
 export function AiMcpClientCard() {
   const [plugins, setPlugins] = useState<McpPluginView[]>([])
-  const [presets, setPresets] = useState<McpPresetTemplate[]>([])
   const [loading, setLoading] = useState<boolean>(true)
   const [selectedCategory, setSelectedCategory] = useState<string>('all')
   const [expandedToolsPluginId, setExpandedToolsPluginId] = useState<string | null>(null)
   const [busyPluginIds, setBusyPluginIds] = useState<Record<string, boolean>>({})
   const [globalError, setGlobalError] = useState<string | null>(null)
-  const [showPresets, setShowPresets] = useState(false)
   const [editorOpen, setEditorOpen] = useState(false)
   const [editorTarget, setEditorTarget] = useState<McpEditorTarget>({ mode: 'create' })
   const [pendingRemove, setPendingRemove] = useState<McpPluginView | null>(null)
   const [removing, setRemoving] = useState(false)
 
   const { t } = useTranslation()
-  const allowWriteMcpTools = useAIStore((s) => s.settings.allowWriteMcpTools === true)
-  const effectiveMode = useAIStore((s) => s.getEffectiveExecutionMode())
-  const dangerModeActive = effectiveMode === 'danger'
-  const pluginToolsBlocked = effectiveMode === 'ask' || effectiveMode === 'disabled'
-  const updateSettings = useAIStore((s) => s.updateSettings)
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -110,16 +94,11 @@ export function AiMcpClientCard() {
       if (!mcp?.listPlugins) {
         throw new Error(translate('mcp_engine_unavailable'))
       }
-      const [pluginList, presetList] = await Promise.all([
-        mcp.listPlugins(),
-        mcp.listPresets?.() ?? Promise.resolve([] as McpPresetTemplate[]),
-      ])
+      const pluginList = await mcp.listPlugins()
       setPlugins(Array.isArray(pluginList) ? pluginList : [])
-      setPresets(Array.isArray(presetList) ? presetList : [])
     } catch (err: unknown) {
       setGlobalError((err as Error)?.message || translate('mcp_unknown_error'))
       setPlugins([])
-      setPresets([])
     } finally {
       setLoading(false)
     }
@@ -158,11 +137,6 @@ export function AiMcpClientCard() {
     if (selectedCategory === 'all') return plugins
     return plugins.filter((p) => p.category === selectedCategory)
   }, [plugins, selectedCategory])
-
-  const missingPresets = useMemo(
-    () => presets.filter((preset) => !plugins.some((p) => p.presetId === preset.presetId)),
-    [presets, plugins],
-  )
 
   const withBusy = useCallback(
     async (pluginId: string, action: () => Promise<void>) => {
@@ -212,8 +186,6 @@ export function AiMcpClientCard() {
       if (!mcp?.restorePresets) throw new Error(translate('mcp_engine_unavailable'))
       const updatedList = await mcp.restorePresets()
       setPlugins(updatedList)
-      const presetList = await (mcp.listPresets?.() ?? Promise.resolve([] as McpPresetTemplate[]))
-      setPresets(Array.isArray(presetList) ? presetList : [])
     } catch (err: unknown) {
       setGlobalError((err as Error)?.message || translate('mcp_unknown_error'))
     } finally {
@@ -247,18 +219,17 @@ export function AiMcpClientCard() {
     <>
       <Card
         data-testid="ai-mcp-client-card"
-        className="border border-border/60 bg-muted/15 dark:bg-card/40 rounded-xl overflow-hidden shadow-2xs"
+        className="overflow-hidden rounded-xl border border-border/60 bg-background shadow-none"
       >
-        <CardContent className="p-4 space-y-3">
-          {/* 顶部标题栏与汇总统计 */}
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2 flex-wrap">
-              <Blocks className="h-4 w-4 text-primary" />
-              <span className="font-semibold text-xs text-foreground">
+        <CardContent className="p-4 space-y-4">
+          {/* 标题与操作：全部收在顶栏一行 */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <Blocks className="h-4 w-4 text-primary shrink-0" />
+              <span className="text-xs font-semibold text-foreground" title={t('mcp_hub_intro')}>
                 {t('mcp_hub_title')}
               </span>
-              <HintTooltip label="MCP plugin hub" content={t('mcp_hub_intro')} />
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 font-medium">
+              <span className="text-[11px] text-muted-foreground truncate">
                 {t('mcp_stats', {
                   enabled: stats.enabledCount,
                   total: plugins.length,
@@ -268,68 +239,30 @@ export function AiMcpClientCard() {
               </span>
             </div>
 
-            <div className="flex items-center gap-1.5 flex-wrap">
+            <div className="flex flex-wrap items-center gap-1.5">
               <Button
                 type="button"
                 size="sm"
-                variant="outline"
                 data-testid="mcp-add-plugin-btn"
                 onClick={() => openEditor({ mode: 'create' })}
-                className="h-7 px-2.5 text-[11px] gap-1 cursor-pointer"
+                className="h-7 px-2.5 text-xs gap-1 cursor-pointer"
               >
-                <Plus className="h-3 w-3" />
+                <Plus className="h-3.5 w-3.5" />
                 <span>{t('mcp_add_plugin')}</span>
               </Button>
               <Button
                 type="button"
                 size="sm"
-                variant="outline"
-                data-testid="mcp-list-presets-btn"
-                onClick={() => setShowPresets((prev) => !prev)}
-                className="h-7 px-2.5 text-[11px] gap-1 cursor-pointer"
-              >
-                <Layers className="h-3 w-3" />
-                <span>{t('mcp_builtin_templates', { count: presets.length })}</span>
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
+                variant="ghost"
                 data-testid="mcp-restore-presets-btn"
                 onClick={() => void handleRestorePresets()}
-                className="h-7 px-2.5 text-[11px] gap-1 cursor-pointer"
+                className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
                 title={t('mcp_restore_defaults_hint')}
               >
-                <RotateCcw className="h-3 w-3" />
                 <span>{t('mcp_restore_defaults')}</span>
               </Button>
             </div>
           </div>
-
-          {/* 写操作授权：跟随执行模式，危险模式下由临时提权接管 */}
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-1.5 min-w-0">
-              <ShieldAlert className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
-              <span className="text-[11px] font-medium text-foreground">{t('mcp_allow_write_title')}</span>
-              <HintTooltip label="Write authorization details" content={t('mcp_allow_write_desc')} />
-            </div>
-            <Switch
-              data-testid="mcp-allow-write-switch"
-              checked={allowWriteMcpTools || dangerModeActive}
-              disabled={dangerModeActive}
-              onCheckedChange={(checked) => updateSettings({ allowWriteMcpTools: checked })}
-            />
-          </div>
-          {dangerModeActive && (
-            <div className="text-[10px] text-destructive">
-              {t('mcp_allow_write_danger_override') || '危险模式已接管插件写权限，退出后恢复原设置'}
-            </div>
-          )}
-          {pluginToolsBlocked && (
-            <div className="text-[10px] text-muted-foreground">
-              {t('mcp_exec_mode_blocked') || '当前执行模式不允许 AI 调用插件工具，请切换到只读自动执行或危险模式'}
-            </div>
-          )}
 
           {/* 错误横幅提示 */}
           {globalError && (
@@ -339,57 +272,8 @@ export function AiMcpClientCard() {
             </div>
           )}
 
-          {/* 内置模板清单 */}
-          {showPresets && (
-            <div className="p-3 rounded-lg border border-border/50 bg-background/50 space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-[11px] font-medium text-foreground">
-                  {t('mcp_templates_status', {
-                    installed: presets.length - missingPresets.length,
-                    total: presets.length,
-                  })}
-                </span>
-                {missingPresets.length > 0 && (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => void handleRestorePresets()}
-                    className="h-6 px-2 text-[10px] cursor-pointer"
-                  >
-                    {t('mcp_restore_missing')}
-                  </Button>
-                )}
-              </div>
-              {presets.length === 0 ? (
-                <p className="text-[10px] text-muted-foreground">{t('mcp_no_templates')}</p>
-              ) : (
-                <div className="flex flex-wrap gap-1.5">
-                  {presets.map((preset) => {
-                    const installed = !missingPresets.some((p) => p.presetId === preset.presetId)
-                    return (
-                      <span
-                        key={preset.presetId}
-                        className={cn(
-                          'inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[10px]',
-                          installed
-                            ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400'
-                            : 'bg-muted/40 border-border/50 text-muted-foreground',
-                        )}
-                      >
-                        {installed ? <CheckCircle2 className="h-3 w-3" /> : <AlertCircle className="h-3 w-3" />}
-                        {preset.name}
-                        {!installed && ` ${t('mcp_template_missing')}`}
-                      </span>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* 分类筛选胶囊 */}
-          <div className="flex items-center gap-1.5 flex-wrap">
+          {/* 分类筛选：轻量文字标签页 */}
+          <div className="flex flex-wrap items-center gap-4 border-b border-border/50">
             {categories.map((cat) => {
               const active = selectedCategory === cat
               return (
@@ -399,10 +283,10 @@ export function AiMcpClientCard() {
                   data-testid={`mcp-cat-${cat}`}
                   onClick={() => setSelectedCategory(cat)}
                   className={cn(
-                    'px-2 py-0.5 rounded-md text-[11px] font-medium transition-all cursor-pointer border',
+                    '-mb-px border-b-2 pb-2 pt-1 text-xs transition-colors cursor-pointer',
                     active
-                      ? 'bg-primary text-primary-foreground border-primary shadow-2xs'
-                      : 'bg-background/60 hover:bg-muted text-muted-foreground border-border/50 hover:text-foreground',
+                      ? 'border-primary font-medium text-primary'
+                      : 'border-transparent text-muted-foreground hover:text-foreground',
                   )}
                 >
                   {cat === 'all'
@@ -415,7 +299,7 @@ export function AiMcpClientCard() {
             })}
           </div>
 
-          {/* 插件卡片网格 */}
+          {/* 插件列表 */}
           {loading ? (
             <div className="flex items-center justify-center py-8 text-xs text-muted-foreground gap-2">
               <Loader2 className="h-4 w-4 animate-spin text-primary" />
@@ -449,7 +333,7 @@ export function AiMcpClientCard() {
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="divide-y divide-border/50">
               {filteredPlugins.map((plugin) => {
                 const isBusy = Boolean(busyPluginIds[plugin.id])
                 const toolsCount = plugin.discoveredTools?.length || 0
@@ -459,67 +343,114 @@ export function AiMcpClientCard() {
                 ).length
                 const isExpanded = expandedToolsPluginId === plugin.id
                 const hasWriteTools = (plugin.discoveredTools || []).some((t) => !t.isReadOnly)
+                // builtin-* 才是内置预置插件；isPreset 也会用于「用户基于模板创建」的插件，不能据此判断
+                const isBuiltin = plugin.id.startsWith('builtin-')
+                const state = isBusy
+                  ? { label: t('mcp_state_busy'), dot: 'bg-primary', detail: t('mcp_status_busy') }
+                  : plugin.lastError
+                    ? { label: t('mcp_state_error'), dot: 'bg-destructive', detail: t('mcp_status_error', { error: plugin.lastError }) }
+                    : !plugin.enabled
+                      ? { label: t('mcp_state_disabled'), dot: 'bg-muted-foreground/50', detail: t('mcp_status_disabled') }
+                      : plugin.connected
+                        ? {
+                            label: t('mcp_state_connected'),
+                            dot: 'bg-emerald-500',
+                            detail: t('mcp_status_connected', {
+                              mode: plugin.transport === 'ssh_native' ? t('mcp_mode_ssh') : t('mcp_mode_mcp'),
+                              active: activeToolsCount,
+                              total: toolsCount,
+                            }),
+                          }
+                        : { label: t('mcp_state_offline'), dot: 'bg-amber-500', detail: t('mcp_status_no_session') }
 
                 return (
                   <div
                     key={plugin.id}
                     data-testid={`mcp-plugin-card-${plugin.id}`}
-                    className={cn(
-                      'p-3 rounded-xl border transition-all flex flex-col justify-between gap-2',
-                      plugin.enabled
-                        ? 'border-primary/40 bg-primary/5 dark:bg-primary/10 shadow-2xs'
-                        : 'border-border/50 bg-background/50 hover:border-border',
-                    )}
+                    className={cn('group', !plugin.enabled && 'opacity-60')}
                   >
-                    <div className="space-y-1.5">
-                      {/* 第一行：图标、名称、徽章与启停开关 */}
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <div className="w-8 h-8 rounded-lg bg-muted/70 border border-border/60 flex items-center justify-center shrink-0">
-                            <McpPluginIcon icon={plugin.icon} className="w-4 h-4" />
-                          </div>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className="text-xs font-semibold text-foreground truncate">
-                                {plugin.name}
-                              </span>
-                              <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 font-medium leading-none">
-                                <Sparkles className="h-2.5 w-2.5" />
-                                {plugin.transport === 'ssh_native' ? t('mcp_badge_zero_config') : plugin.transport}
-                              </span>
-                            </div>
+                    <div className="flex items-center gap-3 py-2.5">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted/60">
+                        <McpPluginIcon icon={plugin.icon} className="h-4 w-4" />
+                      </div>
 
-                            {/* 状态指示行：真实连接状态与后端错误 */}
-                            <div className="flex items-center gap-1.5 mt-1 text-[10.5px]">
-                              {isBusy ? (
-                                <span className="inline-flex items-center gap-1 text-primary font-medium">
-                                  <Loader2 className="h-3 w-3 animate-spin" />
-                                  {t('mcp_status_busy')}
-                                </span>
-                              ) : plugin.lastError ? (
-                                <span className="inline-flex items-center gap-1 text-destructive font-medium break-all">
-                                  <AlertCircle className="h-3 w-3 shrink-0" />
-                                  {t('mcp_status_error', { error: plugin.lastError })}
-                                </span>
-                              ) : !plugin.enabled ? (
-                                <span className="text-muted-foreground">{t('mcp_status_disabled')}</span>
-                              ) : plugin.connected ? (
-                                <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium">
-                                  <CheckCircle2 className="h-3 w-3" />
-                                  {t('mcp_status_connected', {
-                                    mode: plugin.transport === 'ssh_native' ? t('mcp_mode_ssh') : t('mcp_mode_mcp'),
-                                    active: activeToolsCount,
-                                    total: toolsCount,
-                                  })}
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400 font-medium">
-                                  <AlertCircle className="h-3 w-3" />
-                                  {t('mcp_status_no_session')}
-                                </span>
-                              )}
-                            </div>
-                          </div>
+                      {/* 名称 + 状态点 + 一行简介 */}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="truncate text-[13px] font-medium text-foreground">
+                            {plugin.name}
+                          </span>
+                          <span
+                            className={cn('h-1.5 w-1.5 shrink-0 rounded-full', state.dot)}
+                            title={state.detail}
+                          />
+                          <span className="shrink-0 text-[11px] text-muted-foreground">
+                            {state.label}
+                          </span>
+                        </div>
+                        <p className="truncate text-xs text-muted-foreground" title={plugin.description}>
+                          {plugin.description}
+                        </p>
+                      </div>
+
+                      <div className="flex shrink-0 items-center gap-1">
+                        {toolsCount > 0 && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            data-testid={`mcp-tools-toggle-${plugin.id}`}
+                            title={`${t('mcp_view_tools', { active: activeToolsCount, total: toolsCount })} · ${hasWriteTools ? t('mcp_has_write_tools') : t('mcp_all_readonly')}`}
+                            onClick={() => setExpandedToolsPluginId(isExpanded ? null : plugin.id)}
+                            className="h-7 px-2 text-[11px] gap-1 cursor-pointer text-muted-foreground hover:text-foreground"
+                          >
+                            <span className="font-mono">{activeToolsCount}/{toolsCount}</span>
+                            {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                          </Button>
+                        )}
+
+                        {/* 编辑 / 刷新 / 删除：平时隐藏，悬停或键盘聚焦时出现；内置预置插件不允许编辑与删除 */}
+                        <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                          {!isBuiltin && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              data-testid={`mcp-edit-${plugin.id}`}
+                              disabled={isBusy}
+                              title={t('mcp_action_edit')}
+                              onClick={() => openEditor({ mode: 'edit', plugin })}
+                              className="h-7 px-1.5 cursor-pointer text-muted-foreground hover:text-foreground"
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </Button>
+                          )}
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            data-testid={`mcp-refresh-${plugin.id}`}
+                            disabled={isBusy}
+                            title={t('mcp_action_refresh')}
+                            onClick={() => void handleRefresh(plugin)}
+                            className="h-7 px-1.5 cursor-pointer text-muted-foreground hover:text-foreground"
+                          >
+                            <RefreshCw className="h-3 w-3" />
+                          </Button>
+                          {!isBuiltin && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              data-testid={`mcp-remove-${plugin.id}`}
+                              disabled={isBusy}
+                              title={t('mcp_action_remove')}
+                              onClick={() => setPendingRemove(plugin)}
+                              className="h-7 px-1.5 cursor-pointer text-muted-foreground hover:text-destructive"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          )}
                         </div>
 
                         <Switch
@@ -529,119 +460,33 @@ export function AiMcpClientCard() {
                           onCheckedChange={(checked) => void handleTogglePlugin(plugin, checked)}
                         />
                       </div>
-
-                      {/* 插件功能简介：单行省略，完整说明收进问号 */}
-                      <div className="flex items-center gap-1 min-w-0">
-                        <p className="text-[11px] text-muted-foreground truncate min-w-0 flex-1">
-                          {plugin.description}
-                        </p>
-                        <HintTooltip
-                          label="Plugin description"
-                          content={plugin.description}
-                          iconClassName="h-3 w-3"
-                        />
-                      </div>
                     </div>
 
-                    {/* 底部工具抽屉与插件操作 */}
-                    <div className="flex items-center justify-between gap-1.5 pt-1 border-t border-border/40 flex-wrap">
-                      <span className="text-[10.5px] text-muted-foreground flex items-center gap-1">
-                        {hasWriteTools ? (
-                          <ShieldAlert className="h-3 w-3 text-amber-500 shrink-0" />
-                        ) : (
-                          <ShieldCheck className="h-3 w-3 text-emerald-500 shrink-0" />
-                        )}
-                        <span>{hasWriteTools ? t('mcp_writable') : t('mcp_readonly')}</span>
-                        <HintTooltip
-                          label="Tool safety"
-                          content={hasWriteTools ? t('mcp_has_write_tools') : t('mcp_all_readonly')}
-                          iconClassName="h-3 w-3"
-                        />
-                      </span>
-
-                      <div className="flex items-center gap-1">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          data-testid={`mcp-edit-${plugin.id}`}
-                          disabled={isBusy}
-                          title={t('mcp_action_edit')}
-                          onClick={() => openEditor({ mode: 'edit', plugin })}
-                          className="h-6 px-1.5 text-[11px] cursor-pointer text-muted-foreground hover:text-foreground"
-                        >
-                          <Pencil className="h-3 w-3" />
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          data-testid={`mcp-refresh-${plugin.id}`}
-                          disabled={isBusy}
-                          title={t('mcp_action_refresh')}
-                          onClick={() => void handleRefresh(plugin)}
-                          className="h-6 px-1.5 text-[11px] cursor-pointer text-muted-foreground hover:text-foreground"
-                        >
-                          <RefreshCw className="h-3 w-3" />
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          data-testid={`mcp-remove-${plugin.id}`}
-                          disabled={isBusy}
-                          title={t('mcp_action_remove')}
-                          onClick={() => setPendingRemove(plugin)}
-                          className="h-6 px-1.5 text-[11px] cursor-pointer text-muted-foreground hover:text-destructive"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                        {toolsCount > 0 && (
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            data-testid={`mcp-tools-toggle-${plugin.id}`}
-                            title={t('mcp_view_tools', { active: activeToolsCount, total: toolsCount })}
-                            onClick={() => setExpandedToolsPluginId(isExpanded ? null : plugin.id)}
-                            className="h-6 px-2 text-[11px] gap-1 cursor-pointer text-muted-foreground hover:text-foreground"
-                          >
-                            <span className="font-mono">{activeToolsCount}/{toolsCount}</span>
-                            {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* 展开的工具级开关抽屉 */}
+                    {/* 展开的工具级开关 */}
                     {isExpanded && toolsCount > 0 && (
-                      <div className="pt-2 border-t border-border/50 space-y-1.5">
+                      <div className="space-y-0.5 pb-3 pl-11">
                         {plugin.discoveredTools.map((tool: McpToolInfo) => {
                           const isToolEnabled = !disabledSet.has(tool.name)
                           return (
                             <div
                               key={tool.name}
-                              className="flex items-center justify-between gap-2 p-2 rounded-lg bg-background/80 border border-border/40 text-[11px]"
+                              className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 hover:bg-muted/40"
                             >
                               <div className="min-w-0 flex-1">
                                 <div className="flex items-center gap-1.5">
-                                  <span className="font-mono font-medium text-foreground truncate">
-                                    {tool.name}
-                                  </span>
                                   <span
                                     className={cn(
-                                      'inline-flex items-center gap-0.5 text-[9.5px] px-1.5 py-0.2 rounded border',
-                                      tool.isReadOnly
-                                        ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
-                                        : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20',
+                                      'h-1.5 w-1.5 shrink-0 rounded-full',
+                                      tool.isReadOnly ? 'bg-emerald-500' : 'bg-amber-500',
                                     )}
-                                  >
-                                    {tool.isReadOnly ? <ShieldCheck className="h-2.5 w-2.5" /> : <ShieldAlert className="h-2.5 w-2.5" />}
-                                    {tool.isReadOnly ? t('mcp_readonly') : t('mcp_writable')}
+                                    title={tool.isReadOnly ? t('mcp_all_readonly') : t('mcp_has_write_tools')}
+                                  />
+                                  <span className="truncate font-mono text-[11px] text-foreground">
+                                    {tool.name}
                                   </span>
                                 </div>
                                 {tool.description && (
-                                  <p className="text-[10px] text-muted-foreground line-clamp-2 mt-0.5">
+                                  <p className="truncate pl-3 text-[11px] text-muted-foreground">
                                     {tool.description}
                                   </p>
                                 )}

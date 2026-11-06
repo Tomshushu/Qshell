@@ -1,12 +1,7 @@
 import React, { memo, useEffect, useMemo } from 'react'
 import { QshellLoader } from '@/components/ui/qshell-loader'
 import { Button } from '@/components/ui/button'
-import {
-  RotateCcw,
-  Terminal,
-  Settings2,
-  Eye,
-} from 'lucide-react'
+import { RotateCcw, Settings2 } from 'lucide-react'
 import { useTranslation } from '@/i18n'
 import { friendlyError } from '@/lib/error-messages'
 import type { Server } from '@/types'
@@ -17,8 +12,6 @@ export interface TerminalConnectionOverlayProps {
   reconnectAttempt?: number
   server?: Server | null
   termName?: string
-  isPeekRaw?: boolean
-  onTogglePeekRaw?: () => void
   onReconnect: () => void
   onEditServer?: () => void
   onCancel?: () => void
@@ -30,8 +23,6 @@ export const TerminalConnectionOverlay = memo(function TerminalConnectionOverlay
   reconnectAttempt,
   server,
   termName,
-  isPeekRaw = false,
-  onTogglePeekRaw = () => {},
   onReconnect,
   onEditServer,
   onCancel,
@@ -39,24 +30,20 @@ export const TerminalConnectionOverlay = memo(function TerminalConnectionOverlay
   const { t } = useTranslation()
   const friendly = useMemo(() => friendlyError(error || ''), [error])
 
-  // 快捷键支持：在失败/重连状态下，用户直接按 Enter 键触发重新连接，按 Esc 切换原始终端回显
+  // 快捷键支持：仅在连接失败时允许按 Enter 手动重连；
+  // 自动重连进行中不再响应 Enter，避免重复发起连接
   useEffect(() => {
-    if (status !== 'error' && status !== 'reconnecting') return
+    if (status !== 'error') return
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (isPeekRaw) return
       if (e.key === 'Enter') {
         e.preventDefault()
         e.stopPropagation()
         onReconnect()
-      } else if (e.key === 'Escape') {
-        e.preventDefault()
-        e.stopPropagation()
-        onTogglePeekRaw()
       }
     }
     window.addEventListener('keydown', handleKeyDown, true)
     return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [status, isPeekRaw, onReconnect, onTogglePeekRaw])
+  }, [status, onReconnect])
 
   // 连接目标描述串
   const targetLabel = useMemo(() => {
@@ -78,57 +65,7 @@ export const TerminalConnectionOverlay = memo(function TerminalConnectionOverlay
     return null
   }
 
-  // ===== 1. 偷看模式（Peek Raw）：用户主动切换到底层终端控制台，显示轻量悬浮胶囊 =====
-  if (isPeekRaw) {
-    return (
-      <div className="pointer-events-auto absolute top-3 right-3 z-30 flex items-center gap-2 px-3 py-1.5 rounded-full border border-border/80 bg-background/95 shadow-xl backdrop-blur-md text-xs select-none animate-in fade-in slide-in-from-top-2 duration-200">
-        {status === 'connecting' && (
-          <>
-            <QshellLoader size="xs" />
-            <span className="text-[11px] text-muted-foreground">{t('tm_connecting') || '连接中...'}</span>
-          </>
-        )}
-        {status === 'reconnecting' && (
-          <>
-            <QshellLoader size="xs" />
-            <span className="text-[11px] text-amber-500 font-medium">
-              {t('term_reconnecting') || '重连中'} ({reconnectAttempt || 1})
-            </span>
-          </>
-        )}
-        {status === 'error' && (
-          <>
-            <span className="w-2 h-2 rounded-full bg-destructive animate-ping shrink-0" />
-            <span className="text-[11px] text-destructive font-medium truncate max-w-[140px]" title={friendly.message}>
-              {friendly.message || t('tm_connection_failed') || '连接失败'}
-            </span>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-6 px-2 text-[10.5px] font-semibold gap-1"
-              onClick={onReconnect}
-            >
-              <RotateCcw className="h-3 w-3" />
-              <span>{t('reconnect_now') || '重试'}</span>
-            </Button>
-          </>
-        )}
-        <div className="h-3.5 w-px bg-border/60 mx-0.5" />
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-6 px-2 text-[10.5px] text-primary hover:text-primary font-medium gap-1"
-          onClick={onTogglePeekRaw}
-          title="还原图形化加载界面 (Esc)"
-        >
-          <Eye className="h-3 w-3" />
-          <span>还原画面</span>
-        </Button>
-      </div>
-    )
-  }
-
-  // ===== 2. 正常连接中状态 (connecting) =====
+  // ===== 1. 正常连接中状态 (connecting) =====
   if (status === 'connecting') {
     return (
       <div className="pointer-events-auto absolute inset-0 z-20 flex flex-col items-center justify-center p-6 bg-background/90 backdrop-blur-md select-none animate-in fade-in duration-200">
@@ -147,38 +84,23 @@ export const TerminalConnectionOverlay = memo(function TerminalConnectionOverlay
             }
           />
 
-          {/* 底部辅助操作条 */}
-          <div className="mt-8 flex items-center gap-2">
+          {onCancel && (
             <Button
               type="button"
-              variant="ghost"
+              variant="outline"
               size="sm"
-              className="h-7 px-2.5 text-xs text-muted-foreground hover:text-foreground gap-1.5"
-              onClick={onTogglePeekRaw}
-              title="切换到底层终端原始回显界面"
+              className="mt-8 h-7 px-3 text-xs"
+              onClick={onCancel}
             >
-              <Terminal className="h-3.5 w-3.5" />
-              <span>查看控制台输出</span>
+              {t('common_cancel') || '取消'}
             </Button>
-
-            {onCancel && (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-7 px-3 text-xs"
-                onClick={onCancel}
-              >
-                {t('common_cancel') || '取消'}
-              </Button>
-            )}
-          </div>
+          )}
         </div>
       </div>
     )
   }
 
-  // ===== 3. 自动重连中状态 (reconnecting) =====
+  // ===== 2. 自动重连中状态 (reconnecting) =====
   if (status === 'reconnecting') {
     return (
       <div className="pointer-events-auto absolute inset-0 z-20 flex flex-col items-center justify-center p-6 bg-background/90 backdrop-blur-md select-none animate-in fade-in duration-200">
@@ -198,27 +120,9 @@ export const TerminalConnectionOverlay = memo(function TerminalConnectionOverlay
             }
           />
 
-          <div className="mt-6 flex items-center gap-2">
-            <Button
-              size="sm"
-              className="h-8 px-4 text-xs font-semibold gap-1.5"
-              onClick={onReconnect}
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-              <span>{t('reconnect_now') || '立即重试 (Enter)'}</span>
-            </Button>
-
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 px-2.5 text-xs text-muted-foreground hover:text-foreground gap-1.5"
-              onClick={onTogglePeekRaw}
-            >
-              <Terminal className="h-3.5 w-3.5" />
-              <span>控制台输出</span>
-            </Button>
-
-            {onCancel && (
+          {/* 自动重连进行中只展示进度，不再提供手动重试入口 */}
+          {onCancel && (
+            <div className="mt-6 flex items-center gap-2">
               <Button
                 variant="outline"
                 size="sm"
@@ -227,14 +131,14 @@ export const TerminalConnectionOverlay = memo(function TerminalConnectionOverlay
               >
                 {t('reconnect_cancel') || '取消'}
               </Button>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </div>
     )
   }
 
-  // ===== 4. 连接失败状态 (error)：完全沿用加载页面结构，字母定格静止（不跳动），下方显示提示与重试/编辑配置按钮 =====
+  // ===== 3. 连接失败状态 (error)：完全沿用加载页面结构，字母定格静止（不跳动），下方显示提示与重试/编辑配置按钮 =====
   return (
     <div className="pointer-events-auto absolute inset-0 z-20 flex flex-col items-center justify-center p-6 bg-background/92 backdrop-blur-md select-none animate-in fade-in duration-200">
       <div className="flex flex-col items-center max-w-md w-full text-center">
@@ -256,7 +160,14 @@ export const TerminalConnectionOverlay = memo(function TerminalConnectionOverlay
             </span>
           </div>
 
-          {/* 底部行动按钮群：重新连接 (Enter) + 编辑配置 + 原始输出 */}
+          {/* 直接告诉用户大概是什么问题，不再提供底层输出入口 */}
+          {friendly.message && (
+            <p className="max-w-[320px] text-xs leading-relaxed text-muted-foreground">
+              {friendly.message}
+            </p>
+          )}
+
+          {/* 底部行动按钮群：重新连接 (Enter) + 编辑配置 */}
           <div className="mt-4 flex items-center gap-2.5">
             <Button
               size="sm"
@@ -278,17 +189,6 @@ export const TerminalConnectionOverlay = memo(function TerminalConnectionOverlay
                 <span>编辑配置</span>
               </Button>
             )}
-
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-8 px-2.5 text-xs text-muted-foreground hover:text-foreground gap-1.5"
-              onClick={onTogglePeekRaw}
-              title="查看终端底层报错与输出 (Esc)"
-            >
-              <Eye className="h-3.5 w-3.5" />
-              <span>原始输出</span>
-            </Button>
 
             {onCancel && (
               <Button

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { XCircle, ChevronDown, ChevronUp } from 'lucide-react'
+import { useEffect } from 'react'
+import { XCircle } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -25,16 +25,8 @@ export function ErrorDialog({
   onClose,
 }: ErrorDialogProps) {
   const { t } = useTranslation()
-  const [showDetail, setShowDetail] = useState(false)
-  // 错误信息友好化：命中已知模式时展示友好文案，原始技术信息收进"技术详情"
-  const { message: friendlyMessage, detail } = friendlyError(message)
-
-  // 弹窗关闭时重置详情展开状态（渲染期调整状态，避免 effect 级联渲染）
-  const [prevOpen, setPrevOpen] = useState(open)
-  if (prevOpen !== open) {
-    setPrevOpen(open)
-    if (!open && showDetail) setShowDetail(false)
-  }
+  // 只向用户展示一句友好概括，底层技术信息不再暴露
+  const { message: friendlyMessage } = friendlyError(message)
   // 错误对话框弹出时播放 Error 音，关闭时不响（避免干扰）
   useEffect(() => {
     if (open) playSound(SoundType.Error)
@@ -59,27 +51,6 @@ export function ErrorDialog({
               {friendlyMessage}
             </p>
           </div>
-
-          {/* 技术详情：命中友好化映射时提供原始错误供排查 */}
-          {detail && (
-            <div className="mt-1.5">
-              <button
-                type="button"
-                onClick={() => setShowDetail((v) => !v)}
-                className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors mx-auto"
-              >
-                {showDetail ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-                {showDetail ? t('err_hide_detail') : t('err_show_detail')}
-              </button>
-              {showDetail && (
-                <div className="mt-1.5 rounded-md bg-muted/50 border border-border/60 px-3 py-2 max-h-[160px] overflow-y-auto">
-                  <p className="text-[11px] text-muted-foreground font-mono leading-relaxed break-all whitespace-pre-wrap">
-                    {detail}
-                  </p>
-                </div>
-              )}
-            </div>
-          )}
 
           {/* 操作按钮 */}
           <div className="mt-5 flex justify-center">

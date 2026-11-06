@@ -360,10 +360,17 @@ export function McpPluginEditorDialog({
             </div>
           </div>
 
+          {busy && (
+            <div className="flex items-start gap-2 p-2.5 rounded-lg border border-border/50 bg-muted/40 text-[11px] text-muted-foreground">
+              <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />
+              <span>{t('mcp_editor_wait_hint')}</span>
+            </div>
+          )}
+
           {error && (
             <div className="flex items-center gap-2 p-2.5 rounded-lg bg-destructive/10 border border-destructive/25 text-destructive text-xs">
               <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-              <span className="flex-1 break-all">{error}</span>
+              <span className="flex-1 whitespace-pre-wrap break-all leading-relaxed">{error}</span>
             </div>
           )}
 
@@ -381,7 +388,7 @@ export function McpPluginEditorDialog({
               ) : (
                 <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
               )}
-              <span className="flex-1 break-all">
+              <span className="flex-1 whitespace-pre-wrap break-all leading-relaxed">
                 {testResult.success
                   ? t('mcp_editor_test_success', {
                       server: testResult.serverName || 'MCP Server',

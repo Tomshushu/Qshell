@@ -89,6 +89,7 @@ export function SelectKeyDialog({
               newEntries.push({
                 id: gk.id,
                 name: gk.name,
+                isGlobal: true,
                 keyType: gk.keyType === 'certificate' ? 'certificate' : 'private',
                 privateKeyPath: gk.privateKeyPath || '',
                 passphrase: '',

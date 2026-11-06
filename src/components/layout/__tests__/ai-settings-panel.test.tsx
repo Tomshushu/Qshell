@@ -126,6 +126,17 @@ describe('AISettingsPanel Option C Command Guard & MCP Client Ecosystem', () => 
     expect(screen.getByTestId('ai-popular-configured-siliconflow')).toBeTruthy()
   })
 
+  it('does not render marketing tags next to provider names', () => {
+    useAIStore.setState({
+      configuredProviders: [makeProvider({ id: 'p1', model: 'model-a', isEnabled: true })],
+    })
+    renderWithProviders(<AISettingsPanel />)
+
+    expect(screen.queryByText('免费/国内')).toBeNull()
+    expect(screen.queryByText('100%离线')).toBeNull()
+    expect(screen.queryByText('极速推理')).toBeNull()
+  })
+
   it('switches the model directly from the configured list', () => {
     useAIStore.setState({
       configuredProviders: [makeProvider({ id: 'p1', model: 'model-a', isEnabled: true })],
@@ -194,14 +205,14 @@ describe('AISettingsPanel Option C Command Guard & MCP Client Ecosystem', () => 
     }
   })
 
-  it('renders Option C command guard title, highlights and 3 execution modes', () => {
+  it('renders command guard title and 4 execution modes', () => {
     renderWithProviders(<AISettingsPanel />)
 
     expect(screen.getByText('AI 终端安全执行与只读白名单网关')).toBeTruthy()
-    expect(screen.getByText('Option C 智能受控')).toBeTruthy()
     expect(screen.getByTestId('exec-mode-ask')).toBeTruthy()
     expect(screen.getByTestId('exec-mode-auto-readonly')).toBeTruthy()
     expect(screen.getByTestId('exec-mode-disabled')).toBeTruthy()
+    expect(screen.getByTestId('exec-mode-danger')).toBeTruthy()
   })
 
   it('allows user to switch execution modes', () => {

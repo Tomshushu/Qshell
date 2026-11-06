@@ -648,7 +648,7 @@ async function executeExternalMcpTool(
 
   if (!toolMeta.isReadOnly && !context.allowWriteMcpTools && context.executionMode !== 'danger') {
     const errRes = respondError(
-      `安全策略拒绝：插件工具「${qualifiedName}」包含状态变更操作，当前仅允许只读工具。如需放开，请在 AI 设置中显式开启「允许插件写操作」。`,
+      `安全策略拒绝：插件工具「${qualifiedName}」包含状态变更操作，当前仅允许只读工具（仅在危险模式下放开插件写操作）。`,
       {
         tool: qualifiedName,
         hostId: `mcp:${toolMeta.pluginId}`,

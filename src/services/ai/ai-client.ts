@@ -1462,7 +1462,7 @@ export async function sendAssistantChat(
         executionMode,
         signal,
         activeMcpToolsMap: mcpBundle.activeToolsMap,
-        allowWriteMcpTools: settings.allowWriteMcpTools === true || executionMode === 'danger',
+        allowWriteMcpTools: executionMode === 'danger',
       }
 
       const execResult = await executeAgentTool(normCallName, parsedArgs, toolExecContext)

@@ -1,8 +1,6 @@
-import { useState } from 'react'
 import { Badge } from '@/components/ui/badge'
-import { CheckCircle2, AlertTriangle, XCircle, Clock, Loader2, ChevronDown, ChevronRight, HelpCircle } from 'lucide-react'
+import { CheckCircle2, AlertTriangle, XCircle, Clock, Loader2, HelpCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { useTranslation } from '@/i18n'
 import type { StepResult } from '@/types/network'
 
 interface LayerPipelineProps {
@@ -11,17 +9,9 @@ interface LayerPipelineProps {
 }
 
 export function LayerPipeline({ steps }: LayerPipelineProps) {
-  const { t } = useTranslation()
-  const [expandedIndex, setExpandedIndex] = useState<number | null>(null)
-
-  const toggleExpand = (idx: number) => {
-    setExpandedIndex(prev => prev === idx ? null : idx)
-  }
-
   return (
     <div className="rounded-xl border border-border/70 bg-card/50 overflow-hidden divide-y divide-border/40 shadow-xs">
       {steps.map((step, idx) => {
-        const isExpanded = expandedIndex === idx
         return (
           <div
             key={idx}
@@ -35,10 +25,7 @@ export function LayerPipeline({ steps }: LayerPipelineProps) {
             )}
           >
             <div className="px-3.5 py-2.5">
-              <div
-                className="flex items-center justify-between gap-3 cursor-pointer select-none"
-                onClick={() => toggleExpand(idx)}
-              >
+              <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3 flex-1 min-w-0">
                   <div className="flex items-center justify-center w-6 h-6 rounded-full bg-muted/60 shrink-0">
                     <StatusIcon status={step.status} />
@@ -74,32 +61,7 @@ export function LayerPipeline({ steps }: LayerPipelineProps) {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-1.5 shrink-0">
-                  {step.detail ? (
-                    isExpanded ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                  ) : null}
-                </div>
               </div>
-
-              {isExpanded && (step.detail || step.error) && (
-                <div className="mt-2.5 pt-2 border-t border-border/40 text-[11px] font-mono">
-                  {step.error && (
-                    <div className="mb-2 p-2 rounded-md bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20">
-                      <strong>Error:</strong> {step.error}
-                    </div>
-                  )}
-                  {step.detail && (
-                    <div>
-                      <div className="text-[10px] uppercase text-muted-foreground mb-1 font-sans">
-                        {t('net_view_raw')}
-                      </div>
-                      <pre className="p-2.5 rounded-lg bg-muted/60 text-muted-foreground max-h-48 overflow-auto whitespace-pre-wrap break-all text-[11px] leading-relaxed border border-border/40">
-                        {step.detail}
-                      </pre>
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
           </div>
         )

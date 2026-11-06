@@ -101,10 +101,38 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
       fireEvent.contextMenu(screen.getByTestId('ai-mascot-trigger'), { clientX: 120, clientY: 120 })
     })
     expect(screen.getByTestId('ai-mascot-menu')).toBeTruthy()
-    expect(screen.getByTestId('ai-mascot-menu-open')).toBeTruthy()
+    expect(screen.getByTestId('ai-mascot-menu-toggle-assistant').textContent).toContain('打开小助手')
     expect(screen.getByTestId('ai-mascot-menu-config')).toBeTruthy()
     expect(screen.getByTestId('ai-mascot-menu-reset')).toBeTruthy()
     expect(screen.queryByTestId('ai-mascot-menu-hide')).toBeNull()
+  })
+
+  it('opens the assistant from the context menu when the dialog is closed', () => {
+    renderWithProviders(<FloatingAIAssistant />)
+    act(() => {
+      fireEvent.contextMenu(screen.getByTestId('ai-mascot-trigger'), { clientX: 120, clientY: 120 })
+    })
+    act(() => {
+      fireEvent.click(screen.getByTestId('ai-mascot-menu-toggle-assistant'))
+    })
+    expect(useAIStore.getState().isFloatingAssistantOpen).toBe(true)
+  })
+
+  it('offers closing the assistant from the context menu while the dialog is open', () => {
+    useAIStore.setState({ isFloatingAssistantOpen: true })
+    renderWithProviders(<FloatingAIAssistant />)
+    act(() => {
+      fireEvent.contextMenu(screen.getByTestId('ai-mascot-trigger'), { clientX: 120, clientY: 120 })
+    })
+    const toggle = screen.getByTestId('ai-mascot-menu-toggle-assistant')
+    expect(toggle.textContent).toContain('关闭小助手')
+    expect(toggle.textContent).not.toContain('打开小助手')
+
+    act(() => {
+      fireEvent.click(toggle)
+    })
+    expect(useAIStore.getState().isFloatingAssistantOpen).toBe(false)
+    expect(screen.queryByTestId('ai-mascot-menu')).toBeNull()
   })
 
   it('disables the AI master switch from the mascot context menu', () => {
@@ -1369,8 +1397,8 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
     const { unmount } = renderWithProviders(<FloatingAIAssistant />)
 
     // 默认收起为紧凑药丸栏，保障对话体验干净利落
-    expect(screen.getByText('展开详情')).toBeTruthy()
-    fireEvent.click(screen.getByText('展开详情'))
+    expect(screen.getByText('查看执行结果')).toBeTruthy()
+    fireEvent.click(screen.getByText('查看执行结果'))
 
     expect(screen.getByTestId('ai-card-summary')).toBeTruthy()
     expect(screen.getByText(/经终端采样分析，当前资源占用最高的是进程/)).toBeTruthy()

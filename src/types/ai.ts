@@ -30,8 +30,6 @@ export interface ProviderPreset {
   websiteUrl: string
   descriptionKey: string
   isDomestic: boolean
-  tagText: string
-  tagType: 'recommended' | 'domestic' | 'offline' | 'speed' | 'custom' | 'global'
   subtitleKey: string
 }
 
@@ -221,8 +219,6 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
     descriptionKey: 'ai_provider_deepseek_desc',
     subtitleKey: 'ai_provider_deepseek_sub',
     isDomestic: true,
-    tagText: '推荐',
-    tagType: 'recommended',
   },
   qwen: {
     id: 'qwen',
@@ -233,8 +229,6 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
     descriptionKey: 'ai_provider_qwen_desc',
     subtitleKey: 'ai_provider_qwen_sub',
     isDomestic: true,
-    tagText: '国内',
-    tagType: 'domestic',
   },
   modelscope: {
     id: 'modelscope',
@@ -245,8 +239,6 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
     descriptionKey: 'ai_provider_modelscope_desc',
     subtitleKey: 'ai_provider_modelscope_sub',
     isDomestic: true,
-    tagText: '免费/国内',
-    tagType: 'domestic',
   },
   siliconflow: {
     id: 'siliconflow',
@@ -257,8 +249,6 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
     descriptionKey: 'ai_provider_siliconflow_desc',
     subtitleKey: 'ai_provider_siliconflow_sub',
     isDomestic: true,
-    tagText: '推荐',
-    tagType: 'recommended',
   },
   ollama: {
     id: 'ollama',
@@ -269,8 +259,6 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
     descriptionKey: 'ai_provider_ollama_desc',
     subtitleKey: 'ai_provider_ollama_sub',
     isDomestic: true,
-    tagText: '100%离线',
-    tagType: 'offline',
   },
   moonshot: {
     id: 'moonshot',
@@ -281,8 +269,6 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
     descriptionKey: 'ai_provider_moonshot_desc',
     subtitleKey: 'ai_provider_moonshot_sub',
     isDomestic: true,
-    tagText: '长上下文',
-    tagType: 'domestic',
   },
   glm: {
     id: 'glm',
@@ -293,8 +279,6 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
     descriptionKey: 'ai_provider_glm_desc',
     subtitleKey: 'ai_provider_glm_sub',
     isDomestic: true,
-    tagText: '国内',
-    tagType: 'domestic',
   },
   openai: {
     id: 'openai',
@@ -305,8 +289,6 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
     descriptionKey: 'ai_provider_openai_desc',
     subtitleKey: 'ai_provider_openai_sub',
     isDomestic: false,
-    tagText: '国际',
-    tagType: 'global',
   },
   anthropic: {
     id: 'anthropic',
@@ -317,8 +299,6 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
     descriptionKey: 'ai_provider_anthropic_desc',
     subtitleKey: 'ai_provider_anthropic_sub',
     isDomestic: false,
-    tagText: '代码顶尖',
-    tagType: 'global',
   },
   gemini: {
     id: 'gemini',
@@ -329,8 +309,6 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
     descriptionKey: 'ai_provider_gemini_desc',
     subtitleKey: 'ai_provider_gemini_sub',
     isDomestic: false,
-    tagText: '极速推理',
-    tagType: 'speed',
   },
   groq: {
     id: 'groq',
@@ -341,8 +319,6 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
     descriptionKey: 'ai_provider_groq_desc',
     subtitleKey: 'ai_provider_groq_sub',
     isDomestic: false,
-    tagText: '极速推理',
-    tagType: 'speed',
   },
   custom: {
     id: 'custom',
@@ -353,7 +329,5 @@ export const AI_PROVIDER_PRESETS: Record<AIProvider, ProviderPreset> = {
     descriptionKey: 'ai_provider_custom_desc',
     subtitleKey: 'ai_provider_custom_sub',
     isDomestic: false,
-    tagText: '自定义',
-    tagType: 'custom',
   },
 }

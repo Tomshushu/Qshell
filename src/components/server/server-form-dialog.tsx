@@ -339,6 +339,8 @@ export function ServerFormDialog({
   const [certificatePath, setCertificatePath] = useState('')
   const [sshKeyId, setSshKeyId] = useState('')
   const [authKeys, setAuthKeys] = useState<ServerKeyEntry[]>([])
+  // 打开弹窗时的 keys_config 快照：列表读取会脱敏 passphrase，未改动时不得回写覆盖库中的加密凭据
+  const initialKeysConfigRef = useRef<string | null>(null)
   const [activeKeyId, setActiveKeyId] = useState('')
   const [tags, setTags] = useState<string[]>([])
   const [, setNewTagInput] = useState('')
@@ -371,10 +373,6 @@ export function ServerFormDialog({
   const [serialLocalEcho, setSerialLocalEcho] = useState(false)
   const [availableSerialPorts, setAvailableSerialPorts] = useState<SerialPortInfo[]>([])
   const [loadingSerialPorts, setLoadingSerialPorts] = useState(false)
-
-  // FinalShell 高级选项
-  const [autoReconnect, setAutoReconnect] = useState(true)
-  const [keepAlive, setKeepAlive] = useState(true)
 
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
@@ -418,6 +416,7 @@ export function ServerFormDialog({
   if (sessionKey !== prevSessionKey) {
     setPrevSessionKey(sessionKey)
     if (open) {
+      initialKeysConfigRef.current = isEditMode && existingServer ? (existingServer.keysConfig || null) : null
       setActiveCategory('connection')
       setValidationError(null)
       setError(null)
@@ -644,6 +643,18 @@ export function ServerFormDialog({
     }
   }, [])
 
+  // 弹窗打开时按当前目标类型预加载串口列表（初始即 serial 时同样生效）
+  useEffect(() => {
+    if (!open || targetType !== 'serial') return
+    void loadSerialPorts()
+  }, [open, sessionKey, targetType, loadSerialPorts])
+
+  // 认证方式切到 SSH Agent 时自动拉取身份，无需手动点「刷新」
+  useEffect(() => {
+    if (!open || authType !== 'sshAgent') return
+    void loadAgentIdentities()
+  }, [open, sessionKey, authType, loadAgentIdentities])
+
   // 切换目标类型
   const handleTargetTypeChange = (newType: string) => {
     if (isEditMode) return
@@ -658,12 +669,10 @@ export function ServerFormDialog({
     setUsername(spec.defaultUsername)
     if (newType === 'windows' || newType === 'bmc' || newType === 'serial') {
       setAuthType('password')
-    } else if (newType === 'linux') {
+    } else     if (newType === 'linux') {
       setAuthType(spec.defaultAuthType)
     }
-    if (newType === 'serial') {
-      loadSerialPorts()
-    }
+    // 串口列表由上面的 useEffect 统一加载，避免切换时重复扫描
   }
 
   // 协议切换时同步默认端口与认证方式，避免 Windows 在 RDP/SSH 间切换后
@@ -682,7 +691,7 @@ export function ServerFormDialog({
     if (newProtocol !== 'ssh') {
       setAuthType('password')
     }
-    if (!(targetType === 'linux' && newProtocol === 'ssh') && (activeCategory === 'proxy' || activeCategory === 'tunnels')) {
+    if (newProtocol !== 'ssh' && (activeCategory === 'proxy' || activeCategory === 'tunnels')) {
       setActiveCategory('connection')
     }
   }
@@ -857,7 +866,7 @@ export function ServerFormDialog({
         targetType,
         protocol,
         sshKeyId: sshKeyId || undefined,
-        proxyConfig: targetType === 'linux' && protocol === 'ssh' && proxyConfig
+        proxyConfig: protocol === 'ssh' && proxyConfig
           ? JSON.stringify(proxyConfig)
           : undefined,
       }
@@ -1000,7 +1009,7 @@ export function ServerFormDialog({
             connectionTimeout: parseInt(connectionTimeout) || 30,
             targetType: 'serial',
             protocol: 'serial',
-            protocols: '["serial"]',
+            protocols: ['serial'],
             serialConfig: serialConfigStr,
             groupId: groupId || HOST_GROUP_ID,
           }
@@ -1133,10 +1142,24 @@ export function ServerFormDialog({
       return
     }
 
+    if (effectiveAuthType === 'certificate') {
+      if (!privateKeyPath) {
+        setValidationError(tr('证书认证需要选择私钥', 'Please select a private key for certificate auth'))
+        setActiveCategory('connection')
+        return
+      }
+      if (!certificatePath) {
+        setValidationError(tr('请选择证书文件', 'Please select a certificate file'))
+        setActiveCategory('connection')
+        return
+      }
+    }
+
     setSaving(true)
     try {
       const keysConfigStr = authKeys.length > 0 ? JSON.stringify(authKeys) : null
-      const canConfigureSshRouting = targetType === 'linux' && protocol === 'ssh'
+      const keysConfigChanged = keysConfigStr !== initialKeysConfigRef.current
+      const canConfigureSshRouting = protocol === 'ssh'
       const proxyConfigStr =
         canConfigureSshRouting && proxyConfig && proxyConfig.type !== 'none' ? JSON.stringify(proxyConfig) : ''
       const tunnelsConfigStr = canConfigureSshRouting && tunnelsConfig.length > 0 ? JSON.stringify(tunnelsConfig) : ''
@@ -1159,8 +1182,11 @@ export function ServerFormDialog({
           bmcAllowInvalidCerts: targetType === 'bmc' ? bmcAllowInvalidCerts : false,
           proxyConfig: proxyConfigStr || null,
           tunnelsConfig: tunnelsConfigStr || null,
-          keysConfig: keysConfigStr,
           groupId: groupId || HOST_GROUP_ID,
+        }
+        // 仅当密钥列表确实被改动时才回写，避免脱敏后的空 passphrase 覆盖库中已加密的凭据
+        if (keysConfigChanged) {
+          updates.keysConfig = keysConfigStr
         }
 
         if (password) {
@@ -1273,7 +1299,7 @@ export function ServerFormDialog({
       : 'SSH连接'
 
   const isWindowsTarget = targetType === 'windows'
-  const canConfigureSshRouting = targetType === 'linux' && protocol === 'ssh'
+  const canConfigureSshRouting = protocol === 'ssh'
   const primaryPortLabel = targetType === 'bmc'
     ? tr('管理端口', 'Management port')
     : isWindowsTarget
@@ -2041,25 +2067,6 @@ export function ServerFormDialog({
               {activeCategory === 'advanced' && (
                 <fieldset className="border border-border/70 rounded-md p-3.5 pt-1 space-y-3 bg-card/20 shadow-2xs">
                   <legend className="px-1.5 text-xs font-medium text-foreground">高级连接设置</legend>
-                  <label className="flex items-center gap-2 text-xs text-foreground cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={keepAlive}
-                      onChange={(e) => setKeepAlive(e.target.checked)}
-                      className="rounded border-input text-primary focus:ring-1 focus:ring-primary h-3.5 w-3.5"
-                    />
-                    智能心跳保活 (保持连接活跃，防止闲置断开)
-                  </label>
-                  <label className="flex items-center gap-2 text-xs text-foreground cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={autoReconnect}
-                      onChange={(e) => setAutoReconnect(e.target.checked)}
-                      className="rounded border-input text-primary focus:ring-1 focus:ring-primary h-3.5 w-3.5"
-                    />
-                    启用自动重连 (网络波动断开后自动尝试恢复)
-                  </label>
-
                   {/* 连接超时 */}
                   <div className="flex items-center gap-3 pt-2 border-t border-border/40">
                     <label className="text-xs font-normal text-foreground shrink-0">
@@ -2146,6 +2153,8 @@ export function ServerFormDialog({
           setSelectedKeyIdInModal(target.id)
           setPrivateKeyPath(target.privateKeyPath || '')
           setPrivateKeyPassphrase(target.passphrase || '')
+          // 仅全局密钥库条目的 id 是 ssh_keys 表主键；本地自建条目的 id 不可作为 sshKeyId
+          setSshKeyId(target.isGlobal ? target.id : '')
           if (target.certificatePath) setCertificatePath(target.certificatePath)
         }}
       />

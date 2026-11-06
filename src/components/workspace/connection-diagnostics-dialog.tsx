@@ -220,7 +220,6 @@ export function ConnectionDiagnosticsDialog({
       `${server.name} (${server.host}:${server.port})`,
       `${t('diag_report_summary')}: ${t(report.summaryKey)}`,
       ...steps.map((step) => `${t(step.labelKey)}: ${step.status}${step.detail ? ` - ${step.detail}` : ''}`),
-      finalError ? `${t('diag_technical_detail')}: ${finalError}` : '',
     ].filter(Boolean).join('\n')
     await navigator.clipboard.writeText(text)
     toast.success(t('diag_report_copied'))
@@ -282,12 +281,6 @@ export function ConnectionDiagnosticsDialog({
             </div>
           )}
 
-          {finalError && (
-            <details className="rounded-lg border border-border/60 px-3 py-2 text-xs">
-              <summary className="cursor-pointer select-none font-medium text-muted-foreground">{t('diag_technical_detail')}</summary>
-              <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground">{finalError}</pre>
-            </details>
-          )}
         </div>
 
         <DialogFooter className="border-t border-border/60 px-6 py-4">

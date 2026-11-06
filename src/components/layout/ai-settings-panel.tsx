@@ -60,7 +60,6 @@ import {
   Layers,
   Activity,
   X,
-  Database,
   HardDrive,
   Cpu,
 } from 'lucide-react'
@@ -237,38 +236,6 @@ function ProviderBrandIcon({
     default:
       return <Sliders className={cn('text-muted-foreground', iconClass)} />
   }
-}
-
-// ==========================================
-// 2. 标签徽章组件 (TagBadge)
-// ==========================================
-function TagBadge({
-  text,
-  type = 'custom',
-}: {
-  text: string
-  type?: 'recommended' | 'domestic' | 'offline' | 'speed' | 'custom' | 'global' | 'official'
-}) {
-  const colorMap: Record<string, string> = {
-    recommended: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/25',
-    domestic: 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/25',
-    offline: 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/25',
-    speed: 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/25',
-    global: 'bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/25',
-    official: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/25',
-    custom: 'bg-muted/80 text-muted-foreground border-border/60',
-  }
-
-  return (
-    <span
-      className={cn(
-        'text-[10px] px-1.5 py-0.5 rounded font-medium border leading-none shrink-0 inline-flex items-center justify-center',
-        colorMap[type] || colorMap.custom,
-      )}
-    >
-      {text}
-    </span>
-  )
 }
 
 // ==========================================
@@ -471,14 +438,10 @@ function ConfigureProviderModal({
               <ProviderBrandIcon provider={providerKey} className="w-5 h-5" />
             </div>
             <div className="space-y-0.5">
-              <DialogTitle className="text-sm font-semibold flex items-center gap-2 text-foreground">
+              <DialogTitle className="text-sm font-semibold text-foreground">
                 {editingProvider
                   ? t('ai_config_dialog_title_edit', { provider: preset?.name || providerKey })
                   : t('ai_config_dialog_title_create', { provider: preset?.name || providerKey })}
-                <TagBadge
-                  text={preset?.tagText || (editingProvider ? t('ai_tag_custom') : t('ai_tag_official'))}
-                  type={preset?.tagType || 'custom'}
-                />
               </DialogTitle>
               <DialogDescription className="text-xs text-muted-foreground">
                 {t('ai_config_dialog_subtitle')}
@@ -511,9 +474,6 @@ function ConfigureProviderModal({
                   <Sliders className="h-3.5 w-3.5 text-muted-foreground" />
                   接口协议规范 (API Protocol)
                 </label>
-                <span className="text-[10px] text-muted-foreground">
-                  {providerKey === 'modelscope' ? '魔搭官方双协议支持' : '选择底层通信协议'}
-                </span>
               </div>
               <div className={cn('grid gap-2', providerKey === 'custom' ? 'grid-cols-3' : 'grid-cols-2')}>
                 <button
@@ -532,9 +492,6 @@ function ConfigureProviderModal({
                   )}
                 >
                   <span>OpenAI 兼容</span>
-                  <span className="text-[10px] px-1 py-0.2 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-mono">
-                    推荐
-                  </span>
                 </button>
                 <button
                   type="button"
@@ -552,9 +509,6 @@ function ConfigureProviderModal({
                   )}
                 >
                   <span>Anthropic (Claude)</span>
-                  <span className="text-[10px] px-1 py-0.2 rounded bg-purple-500/10 text-purple-600 dark:text-purple-400 font-mono">
-                    beta
-                  </span>
                 </button>
                 {providerKey === 'custom' && (
                   <button
@@ -634,9 +588,6 @@ function ConfigureProviderModal({
                 {showApiKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
               </button>
             </div>
-            <p className="text-[10px] text-muted-foreground/70">
-              {t('ai_api_key_security_notice')}
-            </p>
           </div>
 
           {/* 模型选择与拉取 */}
@@ -774,9 +725,6 @@ function ConfigureProviderModal({
                 </button>
               ))}
             </div>
-            <p className="text-[10px] text-muted-foreground/80 leading-normal">
-              推荐 8192（针对 DeepSeek-R1 / Qwen 等长思维链模型，充足的 Token 配额可杜绝集群巡检时思维链截断卡死）。
-            </p>
           </div>
 
           {/* 连通性测试按钮与反馈 */}
@@ -983,39 +931,26 @@ export function AISettingsPanel() {
   return (
     <div className="w-full max-w-4xl mx-auto space-y-6 animate-in fade-in duration-300 pb-12">
       {/* 顶部标题区 */}
-      <div className="space-y-1">
-        <h2 className="text-base font-semibold text-foreground tracking-tight flex items-center gap-2">
-          {t('ai_providers_section_title')}
-        </h2>
-      </div>
-
       {/* 0. 全局 AI 功能总开关 (Master Switch) */}
-      <Card className="border border-border/80 bg-gradient-to-r from-primary/5 via-background to-background rounded-xl overflow-hidden shadow-2xs">
-        <CardContent className="p-4 flex items-center justify-between gap-4">
-          <div className="flex items-start gap-3 min-w-0">
-            <div className="p-2 rounded-lg bg-primary/10 text-primary shrink-0 mt-0.5">
+      <Card className="border border-border/60 bg-background rounded-xl overflow-hidden shadow-2xs">
+        <CardContent className="px-4 py-3 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="p-1.5 rounded-lg bg-primary/10 text-primary shrink-0">
               <Sparkles className="h-4 w-4" />
             </div>
-            <div className="space-y-0.5">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-foreground">
-                  {t('ai_master_switch_title')}
-                </span>
-                <span
-                  className={cn(
-                    'text-[10px] px-2 py-0.2 rounded-full font-medium',
-                    enableAiGlobal
-                      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
-                      : 'bg-muted text-muted-foreground border border-border',
-                  )}
-                >
-                  {enableAiGlobal ? t('ai_status_enabled') : t('lg_pause')}
-                </span>
-              </div>
-              <p className="text-[11px] text-muted-foreground leading-relaxed">
-                {t('ai_master_switch_desc')}
-              </p>
-            </div>
+            <span className="text-xs font-semibold text-foreground">
+              {t('ai_master_switch_title')}
+            </span>
+            <span
+              className={cn(
+                'text-[10px] px-2 py-0.2 rounded-full font-medium',
+                enableAiGlobal
+                  ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
+                  : 'bg-muted text-muted-foreground border border-border',
+              )}
+            >
+              {enableAiGlobal ? t('ai_status_enabled') : t('lg_pause')}
+            </span>
           </div>
 
           <Switch
@@ -1063,7 +998,6 @@ export function AISettingsPanel() {
             <div className="divide-y divide-border/40">
               {visibleProviders.map((item) => {
                 const isTestingThis = testingProviderId === item.id
-                const preset = AI_PROVIDER_PRESETS[item.provider]
 
                 return (
                   <div
@@ -1075,22 +1009,16 @@ export function AISettingsPanel() {
                         : 'hover:bg-muted/30',
                     )}
                   >
-                    {/* 左侧：图标 + 名称 + 标签 + 模型 */}
+                    {/* 左侧：图标 + 名称 + 模型 */}
                     <div className="flex items-center gap-3 min-w-0">
                       <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-background border border-border/60 shadow-2xs shrink-0">
                         <ProviderBrandIcon provider={item.provider} className="w-4 h-4" />
                       </div>
 
                       <div className="min-w-0 space-y-0.5">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-semibold text-foreground truncate max-w-[200px]">
-                            {item.name}
-                          </span>
-                          <TagBadge
-                            text={preset?.tagText || t('ai_tag_custom')}
-                            type={preset?.tagType || 'custom'}
-                          />
-                        </div>
+                        <span className="block text-xs font-semibold text-foreground truncate max-w-[200px]">
+                          {item.name}
+                        </span>
                         {/* 行内模型切换：只列当前模型与该厂商实际拉取到的模型，无需打开配置弹窗 */}
                         <SelectPopover
                           value={item.model || ''}
@@ -1242,18 +1170,15 @@ export function AISettingsPanel() {
                 key={key}
                 className="px-4 py-2.5 flex items-center justify-between gap-3 hover:bg-muted/30 transition-colors"
               >
-                {/* 左侧：图标 + 名称 + 标签 */}
+                {/* 左侧：图标 + 名称 */}
                 <div className="flex items-center gap-3 min-w-0">
                   <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-background border border-border/60 shadow-2xs shrink-0">
                     <ProviderBrandIcon provider={key} className="w-4 h-4" />
                   </div>
 
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-xs font-medium text-foreground truncate">
-                      {preset.name}
-                    </span>
-                    <TagBadge text={preset.tagText} type={preset.tagType} />
-                  </div>
+                  <span className="min-w-0 truncate text-xs font-medium text-foreground">
+                    {preset.name}
+                  </span>
                 </div>
 
                 {/* 右侧：已配置的厂商显示「已配置」，未配置才显示「+ 连接」 */}
@@ -1288,67 +1213,74 @@ export function AISettingsPanel() {
       </div>
 
       {/* 3. 安全防护与隐私脱敏 (DLP) */}
-      <Card className="border border-border/60 bg-muted/15 dark:bg-card/40 rounded-xl overflow-hidden shadow-2xs">
-        <CardContent className="p-5 space-y-4">
-          <div className="font-semibold text-xs text-foreground flex items-center gap-1.5">
+      <Card className="border border-border/60 bg-background rounded-xl overflow-hidden shadow-2xs">
+        <CardContent className="p-4 space-y-2">
+          <div className="font-semibold text-xs text-foreground flex items-center gap-1.5 pb-1">
             <ShieldCheck className="h-4 w-4 text-emerald-500" />
             {t('ai_security_and_dlp_title')}
           </div>
 
-          {/* DLP 脱敏开关 */}
-          <div className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-background/50">
-            <div className="space-y-0.5 pr-4">
-              <div className="text-xs font-medium text-foreground">
-                {t('ai_dlp_switch_title')}
+          <div className="divide-y divide-border/40">
+            {/* DLP 脱敏开关 */}
+            <div className="flex items-center justify-between py-2.5">
+              <div className="flex items-center gap-1.5 pr-4">
+                <span className="text-xs text-foreground">
+                  {t('ai_dlp_switch_title')}
+                </span>
+                <HintTooltip label="DLP details" content={t('ai_dlp_switch_desc')} />
               </div>
-              <p className="text-[11px] text-muted-foreground leading-relaxed">
-                {t('ai_dlp_switch_desc')}
-              </p>
+              <Switch
+                checked={settings.enableDlp}
+                onCheckedChange={(checked) => updateSettings({ enableDlp: checked })}
+              />
             </div>
-            <Switch
-              checked={settings.enableDlp}
-              onCheckedChange={(checked) => updateSettings({ enableDlp: checked })}
-            />
-          </div>
 
-          {/* 内网 IP 模糊化开关 */}
-          <div className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-background/50">
-            <div className="space-y-0.5 pr-4">
-              <div className="text-xs font-medium text-foreground">
-                {t('ai_mask_private_ip_title')}
+            {/* 内网 IP 模糊化开关 */}
+            <div className="flex items-center justify-between py-2.5">
+              <div className="flex items-center gap-1.5 pr-4">
+                <span className="text-xs text-foreground">
+                  {t('ai_mask_private_ip_title')}
+                </span>
+                <HintTooltip label="Mask private IP details" content={t('ai_mask_private_ip_desc')} />
               </div>
-              <p className="text-[11px] text-muted-foreground leading-relaxed">
-                {t('ai_mask_private_ip_desc')}
-              </p>
+              <Switch
+                checked={settings.maskPrivateIps}
+                onCheckedChange={(checked) => updateSettings({ maskPrivateIps: checked })}
+              />
             </div>
-            <Switch
-              checked={settings.maskPrivateIps}
-              onCheckedChange={(checked) => updateSettings({ maskPrivateIps: checked })}
-            />
           </div>
         </CardContent>
       </Card>
 
-      {/* 4. 终端安全决策网关与执行策略 (Option C Command Guard & Execution Policy) */}
-      <Card className="border border-border/60 bg-muted/15 dark:bg-card/40 rounded-xl overflow-hidden shadow-2xs">
-        <CardContent className="p-5 space-y-4">
+      {/* 4. 终端安全决策网关与执行策略 (Command Guard & Execution Policy) */}
+      <Card className="border border-border/60 bg-background rounded-xl overflow-hidden shadow-2xs">
+        <CardContent className="p-4 space-y-3">
           <div className="font-semibold text-xs text-foreground flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5 min-w-0">
               <ShieldCheck className="h-4 w-4 text-emerald-500 shrink-0" />
               <span className="truncate">{t('ai_cmd_guard_title') || 'AI 终端安全执行与只读白名单网关'}</span>
               <HintTooltip
                 label="AI command guard details"
-                content={t('ai_cmd_guard_desc') ||
-                  '控制 AI 助手在远程服务器上执行指令的权限。内置严格只读白名单与防深度遍历 I/O 阻塞防护，确保生产服务器 100% 安全。'}
+                content={
+                  <div className="space-y-1.5">
+                    <p>
+                      {t('ai_cmd_guard_desc') ||
+                        '控制 AI 助手在远程服务器上执行指令的权限。内置严格只读白名单与防深度遍历 I/O 阻塞防护。'}
+                    </p>
+                    <ul className="space-y-1 list-disc list-inside text-muted-foreground">
+                      <li>{t('ai_cmd_guard_hl_whitelist')}</li>
+                      <li>{t('ai_cmd_guard_hl_no_mutation')}</li>
+                      <li>{t('ai_cmd_guard_hl_anti_hang')}</li>
+                      <li>{t('ai_cmd_guard_hl_sensitive')}</li>
+                    </ul>
+                  </div>
+                }
               />
             </div>
-            <span className="text-[10px] text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full font-medium shrink-0">
-              Option C 智能受控
-            </span>
           </div>
 
           {/* 4 种执行模式选择卡片（危险模式为同级第四档，手动授权） */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-2.5">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
             {/* 1. 询问确认模式 */}
             <div
               data-testid="exec-mode-ask"
@@ -1357,7 +1289,7 @@ export function AISettingsPanel() {
                 updateSettings({ executionMode: 'ask' })
               }}
               className={cn(
-                'px-3 py-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2',
+                'px-3 py-2 rounded-lg border transition-all cursor-pointer flex items-center justify-between gap-1.5',
                 !dangerActive && (settings.executionMode || 'auto_readonly') === 'ask'
                   ? 'border-primary bg-primary/10 shadow-2xs ring-1 ring-primary/30'
                   : 'border-border/60 bg-background/60 hover:bg-muted/40 hover:border-border',
@@ -1365,20 +1297,15 @@ export function AISettingsPanel() {
             >
               <div className="flex items-center gap-1.5 min-w-0">
                 <CheckCircle2 className="h-3.5 w-3.5 text-primary shrink-0" />
-                <span className="text-xs font-bold text-foreground truncate">
-                  {t('ai_exec_mode_ask') || '询问确认模式 (推荐)'}
+                <span className="text-xs font-medium text-foreground truncate">
+                  {t('ai_exec_mode_ask') || '询问确认模式'}
                 </span>
               </div>
-              <div className="flex items-center gap-1 shrink-0">
-                <HintTooltip
-                  label="Ask mode details"
-                  content={t('ai_exec_mode_ask_desc') ||
-                    'AI 提议只读诊断指令时，在会话中以卡片展示，由您确认后才在终端安全执行并输出诊断分析。'}
-                />
-                <span className="text-[9.5px] px-1.5 py-0.2 rounded bg-primary/20 text-primary font-medium">
-                  逐次确认
-                </span>
-              </div>
+              <HintTooltip
+                label="Ask mode details"
+                content={t('ai_exec_mode_ask_desc') ||
+                  'AI 提议只读诊断指令时，在会话中以卡片展示，由您确认后才在终端安全执行并输出诊断分析。'}
+              />
             </div>
 
             {/* 2. 安全只读自动执行模式 */}
@@ -1389,7 +1316,7 @@ export function AISettingsPanel() {
                 updateSettings({ executionMode: 'auto_readonly' })
               }}
               className={cn(
-                'px-3 py-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2',
+                'px-3 py-2 rounded-lg border transition-all cursor-pointer flex items-center justify-between gap-1.5',
                 !dangerActive && settings.executionMode === 'auto_readonly'
                   ? 'border-emerald-500 bg-emerald-500/10 shadow-2xs ring-1 ring-emerald-500/30'
                   : 'border-border/60 bg-background/60 hover:bg-muted/40 hover:border-border',
@@ -1397,20 +1324,15 @@ export function AISettingsPanel() {
             >
               <div className="flex items-center gap-1.5 min-w-0">
                 <Zap className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-                <span className="text-xs font-bold text-foreground truncate">
+                <span className="text-xs font-medium text-foreground truncate">
                   {t('ai_exec_mode_auto_readonly') || '安全只读自动执行'}
                 </span>
               </div>
-              <div className="flex items-center gap-1 shrink-0">
-                <HintTooltip
-                  label="Auto read-only mode details"
-                  content={t('ai_exec_mode_auto_readonly_desc') ||
-                    '通过内核只读白名单与深度限制校验的无风险查询，AI 自动在当前会话执行并直接给出诊断结论。'}
-                />
-                <span className="text-[9.5px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-medium">
-                  推荐
-                </span>
-              </div>
+              <HintTooltip
+                label="Auto read-only mode details"
+                content={t('ai_exec_mode_auto_readonly_desc') ||
+                  '通过内核只读白名单与深度限制校验的无风险查询，AI 自动在当前会话执行并直接给出诊断结论。'}
+              />
             </div>
 
             {/* 3. 禁止 AI 执行终端指令 */}
@@ -1421,7 +1343,7 @@ export function AISettingsPanel() {
                 updateSettings({ executionMode: 'disabled' })
               }}
               className={cn(
-                'px-3 py-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2',
+                'px-3 py-2 rounded-lg border transition-all cursor-pointer flex items-center justify-between gap-1.5',
                 !dangerActive && settings.executionMode === 'disabled'
                   ? 'border-zinc-500 bg-zinc-500/10 shadow-2xs ring-1 ring-zinc-500/30'
                   : 'border-border/60 bg-background/60 hover:bg-muted/40 hover:border-border',
@@ -1429,20 +1351,15 @@ export function AISettingsPanel() {
             >
               <div className="flex items-center gap-1.5 min-w-0">
                 <ShieldCheck className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                <span className="text-xs font-bold text-foreground truncate">
+                <span className="text-xs font-medium text-foreground truncate">
                   {t('ai_exec_mode_disabled') || '禁止 AI 执行指令'}
                 </span>
               </div>
-              <div className="flex items-center gap-1 shrink-0">
-                <HintTooltip
-                  label="Disabled mode details"
-                  content={t('ai_exec_mode_disabled_desc') ||
-                    'AI 仅生成排查建议文本，不提供任何在终端执行命令的能力。'}
-                />
-                <span className="text-[9.5px] px-1.5 py-0.2 rounded bg-muted text-muted-foreground font-medium">
-                  只读问答
-                </span>
-              </div>
+              <HintTooltip
+                label="Disabled mode details"
+                content={t('ai_exec_mode_disabled_desc') ||
+                  'AI 仅生成排查建议文本，不提供任何在终端执行命令的能力。'}
+              />
             </div>
 
             {/* 4. 危险模式：手动授权，与前三档同级互斥 */}
@@ -1456,7 +1373,7 @@ export function AISettingsPanel() {
                 }
               }}
               className={cn(
-                'px-3 py-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2',
+                'px-3 py-2 rounded-lg border transition-all cursor-pointer flex items-center justify-between gap-1.5',
                 dangerActive
                   ? 'border-destructive bg-destructive/10 shadow-2xs ring-1 ring-destructive/30'
                   : 'border-destructive/30 bg-background/60 hover:bg-destructive/5 hover:border-destructive/50',
@@ -1464,93 +1381,73 @@ export function AISettingsPanel() {
             >
               <div className="flex items-center gap-1.5 min-w-0">
                 <AlertCircle className="h-3.5 w-3.5 text-destructive shrink-0" />
-                <span className="text-xs font-bold text-foreground truncate">
+                <span className="text-xs font-medium text-foreground truncate">
                   {t('ai_exec_mode_danger') || '危险模式'}
                 </span>
               </div>
               <div className="flex items-center gap-1 shrink-0">
+                {dangerActive && (
+                  <span className="text-[9.5px] px-1.5 py-0.2 rounded bg-destructive/15 text-destructive font-medium whitespace-nowrap">
+                    {t('ai_danger_mode_badge_active') || '已开启'}
+                  </span>
+                )}
                 <HintTooltip
                   label="Danger mode details"
                   content={t('ai_danger_mode_desc') ||
                     '手动开启后放开写命令白名单，仅在你手动切换模式或关闭时失效；红线命令仍禁止，执行前置预览并全量审计。'}
                 />
-                <span className="text-[9.5px] px-1.5 py-0.2 rounded bg-destructive/15 text-destructive font-medium whitespace-nowrap">
-                  {dangerActive
-                    ? (t('ai_danger_mode_badge_active') || '已开启 · 点击退出')
-                    : (t('ai_exec_mode_danger_badge') || '临时提权')}
-                </span>
               </div>
             </div>
           </div>
 
-          {/* 内置只读安全防御规范：4 条明细收进问号浮层，不再平铺 */}
-          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <ShieldCheck className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-            <span>{t('ai_cmd_guard_highlights_title') || '端侧只读安全防御机制'}</span>
-            <HintTooltip
-              label="Command guard rules"
-              content={
-                <ul className="space-y-1 list-disc list-inside">
-                  <li>{t('ai_cmd_guard_hl_whitelist')}</li>
-                  <li>{t('ai_cmd_guard_hl_no_mutation')}</li>
-                  <li>{t('ai_cmd_guard_hl_anti_hang')}</li>
-                  <li>{t('ai_cmd_guard_hl_sensitive')}</li>
-                </ul>
-              }
-            />
-          </div>
-
           {/* 自定义安全黑名单 */}
-          <div className="p-3 rounded-lg border border-border/50 bg-background/50 space-y-2.5">
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs font-medium text-foreground">
-                {t('ai_custom_blacklist_title') || '自定义安全黑名单'}
-              </span>
-              <HintTooltip
-                label="Blacklist usage"
-                content={t('ai_custom_blacklist_desc') ||
-                  '输入您希望额外严格禁止 AI 执行的关键词、指令或路径，用回车或逗号分隔：'}
-              />
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Input
-                data-testid="custom-blacklist-input"
-                value={newBlacklistInput}
-                onChange={(e) => setNewBlacklistInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault()
-                    handleAddCustomBlacklist()
+          <div className="pt-2 border-t border-border/40 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-foreground">
+                  {t('ai_custom_blacklist_title') || '自定义安全黑名单'}
+                </span>
+                <HintTooltip
+                  label="Blacklist usage"
+                  content={t('ai_custom_blacklist_desc') ||
+                    '输入您希望额外严格禁止 AI 执行的关键词、指令或路径，用回车或逗号分隔：'}
+                />
+              </div>
+              <div className="flex items-center gap-1.5 flex-1 max-w-sm">
+                <Input
+                  data-testid="custom-blacklist-input"
+                  value={newBlacklistInput}
+                  onChange={(e) => setNewBlacklistInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      handleAddCustomBlacklist()
+                    }
+                  }}
+                  placeholder={
+                    t('ai_custom_blacklist_placeholder') ||
+                    'prod-db, /data/secret, drop'
                   }
-                }}
-                placeholder={
-                  t('ai_custom_blacklist_placeholder') ||
-                  '例如：prod-db, /data/secret, truncate, drop, reboot'
-                }
-                className="h-8 text-xs font-mono flex-1"
-              />
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                data-testid="custom-blacklist-add-btn"
-                onClick={handleAddCustomBlacklist}
-                className="h-8 px-3 text-xs gap-1 cursor-pointer shrink-0"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                <span>{t('ai_custom_blacklist_add_btn') || '添加'}</span>
-              </Button>
+                  className="h-7 text-xs font-mono flex-1"
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  data-testid="custom-blacklist-add-btn"
+                  onClick={handleAddCustomBlacklist}
+                  className="h-7 px-2.5 text-xs gap-1 cursor-pointer shrink-0"
+                >
+                  <Plus className="h-3 w-3" />
+                  <span>{t('ai_custom_blacklist_add_btn') || '添加'}</span>
+                </Button>
+              </div>
             </div>
 
             {/* 当前已配置的自定义黑名单标签 */}
-            <div className="flex items-center gap-1.5 flex-wrap pt-0.5 min-h-[24px]">
-              {(settings.customBlacklist || []).length === 0 ? (
-                <span className="text-[11px] text-muted-foreground/60 italic">
-                  {t('ai_custom_blacklist_empty') || '暂无自定义黑名单关键词'}
-                </span>
-              ) : (
-                (settings.customBlacklist || []).map((keyword) => (
+            {(settings.customBlacklist || []).length > 0 && (
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {(settings.customBlacklist || []).map((keyword) => (
                   <span
                     key={keyword}
                     data-testid={`blacklist-tag-${keyword}`}
@@ -1565,9 +1462,9 @@ export function AISettingsPanel() {
                       <X className="h-3 w-3" />
                     </button>
                   </span>
-                ))
-              )}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -1575,156 +1472,120 @@ export function AISettingsPanel() {
       {/* 4.5 外部 MCP 运维插件中心 (MCP Client Ecosystem) */}
       <AiMcpClientCard />
 
-      {/* 5. 全局悬浮 AI 助手 (Global Floating AI Assistant) */}
-      <Card className="border border-border/60 bg-muted/15 dark:bg-card/40 rounded-xl overflow-hidden shadow-2xs">
-        <CardContent className="p-5 space-y-4">
-          <div className="font-semibold text-xs text-foreground flex items-center justify-between">
-            <div className="flex items-center gap-1.5">
-              <Sparkles className="h-4 w-4 text-primary" />
-              <span>{t('ai_floating_mascot_title')}</span>
-            </div>
-            <span className="text-[10px] text-primary bg-primary/10 px-2 py-0.5 rounded-full font-normal">
-              Ctrl+Alt+A
-            </span>
-          </div>
-
-          <div className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-background/50">
-            <div className="space-y-0.5 pr-4">
-              <div className="text-xs font-medium text-foreground">
+      {/* 5. 悬浮小助手与问答存储管理 */}
+      <Card className="border border-border/60 bg-background rounded-xl overflow-hidden shadow-2xs">
+        <CardContent className="p-4 divide-y divide-border/40">
+          {/* 悬浮小人开关 */}
+          <div className="flex items-center justify-between pb-3">
+            <div className="flex items-center gap-2 pr-4">
+              <Sparkles className="h-4 w-4 text-primary shrink-0" />
+              <span className="text-xs font-medium text-foreground">
                 {t('ai_floating_mascot_enable')}
-              </div>
-              <p className="text-[11px] text-muted-foreground leading-relaxed">
-                {t('ai_floating_mascot_desc')}
-              </p>
+              </span>
+              <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-mono">
+                Ctrl+Alt+A
+              </span>
+              <HintTooltip label="Mascot details" content={t('ai_floating_mascot_desc')} />
             </div>
             <Switch
               checked={showFloatingMascot}
               onCheckedChange={setShowFloatingMascot}
             />
           </div>
-        </CardContent>
-      </Card>
 
-      {/* 6. AI 问答记录存储与滚动淘汰策略 (AI Chat Storage & Rolling Retention) */}
-      <Card className="border border-border/60 bg-muted/15 dark:bg-card/40 rounded-xl overflow-hidden shadow-2xs">
-        <CardContent className="p-5 space-y-4">
-          <div className="font-semibold text-xs text-foreground flex items-center justify-between">
+          {/* 最多保留历史会话数 */}
+          <div className="flex items-center justify-between py-2.5 gap-3">
             <div className="flex items-center gap-1.5">
-              <Database className="h-4 w-4 text-primary" />
-              <span>{t('ai_storage_limit_title') || '问答记录本地存储与滚动淘汰'}</span>
+              <span className="text-xs text-foreground">
+                {t('ai_storage_max_sessions') || '最多保留会话数'}
+              </span>
+              <HintTooltip
+                label="Max sessions details"
+                content={t('ai_storage_max_sessions_desc') || '超出此上限后，自动删除最久未活跃的历史会话。'}
+              />
             </div>
-            <span className="text-[10px] text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full font-medium">
-              FIFO 自动滚动淘汰
-            </span>
+            <div className="flex items-center gap-1">
+              {[10, 20, 30, 50, 100].map((num) => {
+                const currentVal = settings.maxAssistantSessions || DEFAULT_MAX_ASSISTANT_SESSIONS
+                const isSelected = currentVal === num
+                return (
+                  <button
+                    key={num}
+                    type="button"
+                    data-testid={`max-sessions-${num}`}
+                    onClick={() => updateSettings({ maxAssistantSessions: num })}
+                    className={cn(
+                      'px-2 py-0.5 rounded text-[11px] font-mono transition-all cursor-pointer font-medium border',
+                      isSelected
+                        ? 'bg-primary text-primary-foreground border-primary shadow-2xs font-semibold'
+                        : 'bg-muted/40 hover:bg-muted text-muted-foreground border-border/40 hover:text-foreground',
+                    )}
+                  >
+                    {num}
+                  </button>
+                )
+              })}
+            </div>
           </div>
 
-          <p className="text-[11px] text-muted-foreground leading-relaxed">
-            {t('ai_storage_limit_desc') ||
-              '限制本地保留的历史会话与问答条数，超出上限时自动滚动淘汰最早的旧记录，防止占用过多空间。'}
-          </p>
+          {/* 单个会话最多保留记录数 */}
+          <div className="flex items-center justify-between py-2.5 gap-3">
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-foreground">
+                {t('ai_storage_max_messages') || '单个会话最多保留记录数'}
+              </span>
+              <HintTooltip
+                label="Max messages details"
+                content={t('ai_storage_max_messages_desc') || '超出此上限后，当前会话以滑动窗口保留最新对话。'}
+              />
+            </div>
+            <div className="flex items-center gap-1">
+              {[20, 30, 50, 100].map((num) => {
+                const currentVal = settings.maxMessagesPerSession || DEFAULT_MAX_MESSAGES_PER_SESSION
+                const isSelected = currentVal === num
+                return (
+                  <button
+                    key={num}
+                    type="button"
+                    data-testid={`max-messages-${num}`}
+                    onClick={() => updateSettings({ maxMessagesPerSession: num })}
+                    className={cn(
+                      'px-2 py-0.5 rounded text-[11px] font-mono transition-all cursor-pointer font-medium border',
+                      isSelected
+                        ? 'bg-primary text-primary-foreground border-primary shadow-2xs font-semibold'
+                        : 'bg-muted/40 hover:bg-muted text-muted-foreground border-border/40 hover:text-foreground',
+                    )}
+                  >
+                    {num}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
 
           {/* 存储占用统计与一键清理 */}
-          <div className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-background/50">
-            <div className="space-y-0.5">
-              <div className="text-xs font-medium text-foreground flex items-center gap-1.5">
-                <HardDrive className="h-3.5 w-3.5 text-primary" />
-                <span>
-                  当前已存储 <span className="font-mono text-primary font-bold">{storageStats.sessionCount}</span> 个会话，
-                  共 <span className="font-mono text-primary font-bold">{storageStats.messageCount}</span> 条问答记录
-                </span>
-              </div>
-              <p className="text-[11px] text-muted-foreground font-mono">
-                本地占用空间约 <span className="text-foreground font-semibold">{storageStats.approxFormatted}</span>
-                {storageStats.sessionCount > 0 ? '（单条命令庞大回显超 8KB 会自动截断保护）' : ''}
-              </p>
+          <div className="flex items-center justify-between pt-2.5 text-xs">
+            <div className="flex items-center gap-1.5 text-muted-foreground">
+              <HardDrive className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              <span>
+                已缓存 <span className="font-mono text-foreground font-medium">{storageStats.sessionCount}</span> 个会话 /{' '}
+                <span className="font-mono text-foreground font-medium">{storageStats.messageCount}</span> 条消息（约 {storageStats.approxFormatted}）
+              </span>
             </div>
 
             {storageStats.sessionCount > 0 && (
               <Button
                 type="button"
                 size="sm"
-                variant="outline"
+                variant="ghost"
                 data-testid="ai-clear-storage-btn"
                 onClick={() => setIsClearHistoryConfirmOpen(true)}
-                className="h-7 px-2.5 text-xs text-destructive hover:bg-destructive/10 border-destructive/30 hover:border-destructive/50 gap-1 cursor-pointer"
+                className="h-7 px-2 text-xs text-destructive hover:bg-destructive/10 gap-1 cursor-pointer"
               >
                 <Trash2 className="h-3 w-3" />
-                <span>{t('ai_storage_clear_all_btn') || '一键清理所有问答缓存'}</span>
+                <span>{t('ai_storage_clear_all_btn') || '清空缓存'}</span>
               </Button>
             )}
-          </div>
-
-          {/* 两个滚动上限配置 */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-            {/* 1. 最多保留历史会话数 */}
-            <div className="p-3 rounded-lg border border-border/50 bg-background/50 space-y-2">
-              <div className="space-y-0.5">
-                <span className="text-xs font-medium text-foreground block">
-                  {t('ai_storage_max_sessions') || '最多保留会话数'}
-                </span>
-                <p className="text-[10.5px] text-muted-foreground leading-snug">
-                  {t('ai_storage_max_sessions_desc') || '超出此上限后，自动删除最久未活跃的历史会话。'}
-                </p>
-              </div>
-
-              <div className="flex items-center gap-1.5 pt-1">
-                {[10, 20, 30, 50, 100].map((num) => {
-                  const currentVal = settings.maxAssistantSessions || DEFAULT_MAX_ASSISTANT_SESSIONS
-                  const isSelected = currentVal === num
-                  return (
-                    <button
-                      key={num}
-                      type="button"
-                      data-testid={`max-sessions-${num}`}
-                      onClick={() => updateSettings({ maxAssistantSessions: num })}
-                      className={cn(
-                        'px-2.5 py-1 rounded-md text-[11px] font-mono transition-all cursor-pointer font-medium border',
-                        isSelected
-                          ? 'bg-primary text-primary-foreground border-primary shadow-2xs font-semibold'
-                          : 'bg-muted/40 hover:bg-muted text-muted-foreground border-border/40 hover:text-foreground',
-                      )}
-                    >
-                      {num}{num === 30 ? ' (默认)' : ''}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-
-            {/* 2. 单个会话最多保留记录数 */}
-            <div className="p-3 rounded-lg border border-border/50 bg-background/50 space-y-2">
-              <div className="space-y-0.5">
-                <span className="text-xs font-medium text-foreground block">
-                  {t('ai_storage_max_messages') || '单个会话最多保留记录数'}
-                </span>
-                <p className="text-[10.5px] text-muted-foreground leading-snug">
-                  {t('ai_storage_max_messages_desc') || '超出此上限后，当前会话以滑动窗口保留最新对话。'}
-                </p>
-              </div>
-
-              <div className="flex items-center gap-1.5 pt-1">
-                {[20, 30, 50, 100].map((num) => {
-                  const currentVal = settings.maxMessagesPerSession || DEFAULT_MAX_MESSAGES_PER_SESSION
-                  const isSelected = currentVal === num
-                  return (
-                    <button
-                      key={num}
-                      type="button"
-                      data-testid={`max-messages-${num}`}
-                      onClick={() => updateSettings({ maxMessagesPerSession: num })}
-                      className={cn(
-                        'px-2.5 py-1 rounded-md text-[11px] font-mono transition-all cursor-pointer font-medium border',
-                        isSelected
-                          ? 'bg-primary text-primary-foreground border-primary shadow-2xs font-semibold'
-                          : 'bg-muted/40 hover:bg-muted text-muted-foreground border-border/40 hover:text-foreground',
-                      )}
-                    >
-                      {num}{num === 50 ? ' (默认)' : ''}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
           </div>
         </CardContent>
       </Card>

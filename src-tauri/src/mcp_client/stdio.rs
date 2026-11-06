@@ -16,6 +16,9 @@ use tokio::sync::{oneshot, Mutex};
 
 use super::types::{infer_tool_read_only, McpToolInfo};
 
+/// initialize 握手：需覆盖首次 npx / uvx 下载依赖的耗时
+const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(60);
+/// tools/list 工具发现的超时，保持较短以免故障插件拖慢 AI 对话
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(25);
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -141,7 +144,7 @@ impl StdioMcpSession {
                         "version": "1.0.20"
                     }
                 }),
-                HANDSHAKE_TIMEOUT,
+                INITIALIZE_TIMEOUT,
             )
             .await
             .map_err(|e| {
@@ -337,10 +340,22 @@ impl StdioMcpSession {
             Err(_) => {
                 self.pending.lock().await.remove(&id);
                 let stderr_tail = self.format_stderr().await;
+                let hint = if method == "initialize" {
+                    "\n可能原因：\n  1. 首次运行 npx / uvx 需要下载依赖，耗时较长；\n  2. 本机 kubectl、kubeconfig 等前置条件缺失；\n  3. 启动命令未把 stdin/stdout 交给 MCP Server。\n建议：先在终端手动执行一次启动命令预热依赖，并确认它能正常启动。"
+                } else {
+                    "\n请确认插件进程仍在运行，必要时使用「刷新」重新握手。"
+                };
+                let no_log = if stderr_tail.is_empty() {
+                    "\n插件进程未输出任何日志（stderr 为空）。"
+                } else {
+                    ""
+                };
                 Err(format!(
-                    "等待插件响应 `{}` 超时 ({}s){}",
+                    "等待插件响应 `{}` 超时 ({}s){}{}{}",
                     method,
                     timeout_dur.as_secs(),
+                    no_log,
+                    hint,
                     stderr_tail
                 ))
             }

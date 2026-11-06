@@ -454,8 +454,11 @@ impl McpClientManager {
         self.get_plugin_view(&plugin_id).await
     }
 
-    /// 删除插件
+    /// 删除插件（内置预置插件不可删除，只能通过开关禁用或「恢复默认全开」重置）
     pub async fn remove_plugin(&self, plugin_id: &str) -> Result<(), String> {
+        if plugin_id.starts_with("builtin-") {
+            return Err("内置预置插件不可删除，可使用开关禁用或通过「恢复默认全开」重置".to_string());
+        }
         self.stop_plugin(plugin_id).await;
         self.last_failed_at.lock().await.remove(plugin_id);
         self.connect_locks.lock().await.remove(plugin_id);

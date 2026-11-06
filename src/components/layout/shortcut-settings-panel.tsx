@@ -6,7 +6,6 @@ import {
   Check,
   AlertTriangle,
   X,
-  Sparkles,
   CheckCircle2,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
@@ -504,21 +503,6 @@ export function ShortcutSettingsPanel() {
         )}
       </div>
 
-      {/* 提示 Banner */}
-      <div className="px-3.5 py-2 rounded-lg border bg-muted/20 text-xs text-muted-foreground/80 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Sparkles className="h-3.5 w-3.5 text-primary shrink-0" />
-          <span>
-            {isMac
-              ? t('shortcut_banner_tip_mac')
-              : t('shortcut_banner_tip_win')}
-          </span>
-        </div>
-        <div className="text-[11px] text-muted-foreground/60 hidden sm:block">
-          {t('shortcut_total_count', { n: filteredList.length })}
-        </div>
-      </div>
-
       {/* 分类分组渲染 */}
       {(['global', 'terminal', 'sftp', 'dashboard'] as const).map((scopeKey) => {
         const items = groupedDefinitions[scopeKey]
@@ -532,21 +516,18 @@ export function ShortcutSettingsPanel() {
             {/* 分类标题条 */}
             <div className="px-4 py-2 border-b bg-muted/30 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-foreground">
+                <span
+                  className={cn(
+                    'px-1.5 py-0.5 rounded border text-[10px] font-semibold',
+                    SCOPE_BADGE_CLASS[scopeKey],
+                  )}
+                >
                   {scopeLabels[scopeKey]}
                 </span>
                 <span className="text-[10px] text-muted-foreground/60">
                   {t('shortcut_group_count', { n: items.length })}
                 </span>
               </div>
-              <span
-                className={cn(
-                  'px-2 py-0.5 rounded-md border text-[9px] font-bold uppercase tracking-wider',
-                  SCOPE_BADGE_CLASS[scopeKey],
-                )}
-              >
-                {scopeLabels[scopeKey]}
-              </span>
             </div>
 
             {/* 列表项：单次点击整行即可触发录制 */}
@@ -559,28 +540,24 @@ export function ShortcutSettingsPanel() {
                   <div
                     key={item.id}
                     onClick={() => setActiveDef(item)}
-                    className="group flex items-center justify-between gap-4 px-4 py-2.5 text-xs transition-colors hover:bg-muted/50 cursor-pointer"
+                    title={t(item.descKey)}
+                    className="group flex items-center justify-between gap-4 px-4 py-2 text-xs transition-colors hover:bg-muted/50 cursor-pointer"
                   >
                     {/* 左侧说明与元数据 */}
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-medium text-foreground group-hover:text-primary transition-colors">
-                          {t(item.titleKey)}
+                    <div className="min-w-0 flex-1 flex items-center gap-2 flex-wrap">
+                      <span className="font-medium text-foreground group-hover:text-primary transition-colors">
+                        {t(item.titleKey)}
+                      </span>
+                      {isCustom && (
+                        <span className="px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[9px] font-semibold border border-amber-500/20">
+                          {t('shortcut_customized')}
                         </span>
-                        {isCustom && (
-                          <span className="px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[9px] font-semibold border border-amber-500/20">
-                            {t('shortcut_customized')}
-                          </span>
-                        )}
-                        {item.isProtected && (
-                          <span className="px-1.5 py-0.2 rounded bg-muted text-muted-foreground/80 text-[9px] font-medium border">
-                            {t('shortcut_protected_badge')}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-[11px] text-muted-foreground/70 truncate mt-0.5">
-                        {t(item.descKey)}
-                      </p>
+                      )}
+                      {item.isProtected && (
+                        <span className="px-1.5 py-0.2 rounded bg-muted text-muted-foreground/80 text-[9px] font-medium border">
+                          {t('shortcut_protected_badge')}
+                        </span>
+                      )}
                     </div>
 
                     {/* 右侧按键徽章：纯净展示，跟随整行点击 */}

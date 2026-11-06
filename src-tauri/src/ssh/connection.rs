@@ -1033,6 +1033,15 @@ impl SshTransport {
         Ok(Self { handle: tokio::sync::Mutex::new(handle), server_id, host, port, banner })
     }
 
+    /// 根据服务端 `server-sig-algs` 扩展协商 RSA 签名算法。
+    /// - 服务端支持 rsa-sha2-* 时返回 SHA-512/256（OpenSSH 8.8+ 必需）
+    /// - 无扩展或只支持 ssh-rsa 时返回 None，保持对老设备（含网络设备）的兼容
+    async fn negotiated_rsa_hash(
+        handle: &russh::client::Handle<ClientHandler>,
+    ) -> Option<russh::keys::HashAlg> {
+        handle.best_supported_rsa_hash().await.ok().flatten().flatten()
+    }
+
     /// 认证逻辑（从 connect 抽出，避免与 jump 分支耦合）
     async fn authenticate(
         handle: &mut russh::client::Handle<ClientHandler>,
@@ -1056,11 +1065,30 @@ impl SshTransport {
                 let key_path = validate_and_canonicalize_key_path(private_key_path)?;
                 let key_pair = load_key_pair(&key_path, private_key_passphrase.as_deref())
                     .map_err(|e| SshError::AuthFailed(e.user_friendly_message()))?;
-                let key_with_hash = russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key_pair), None);
-                let result = handle
-                    .authenticate_publickey(username, key_with_hash)
+                let hash_alg = if matches!(key_pair.algorithm(), russh::keys::Algorithm::Rsa { .. }) {
+                    Self::negotiated_rsa_hash(handle).await
+                } else {
+                    None
+                };
+                let key = Arc::new(key_pair);
+                let mut result = handle
+                    .authenticate_publickey(
+                        username,
+                        russh::keys::PrivateKeyWithHashAlg::new(Arc::clone(&key), hash_alg),
+                    )
                     .await
                     .map_err(|e| SshError::AuthFailed(format!("Public key auth failed: {}", e)))?;
+                // 协商到 SHA-2 却被拒绝时，回退到改动前的 ssh-rsa 再试一次，
+                // 兼容「通告了 rsa-sha2-* 却实际不接受」的服务端。
+                if !result.success() && hash_alg.is_some() {
+                    result = handle
+                        .authenticate_publickey(
+                            username,
+                            russh::keys::PrivateKeyWithHashAlg::new(Arc::clone(&key), None),
+                        )
+                        .await
+                        .map_err(|e| SshError::AuthFailed(format!("Public key auth failed: {}", e)))?;
+                }
                 if !result.success() {
                     return Err(SshError::AuthFailed("Public key authentication rejected".into()));
                 }
@@ -1091,20 +1119,42 @@ impl SshTransport {
                 let mut signer = AgentSigner::new(agent_conn);
                 let mut last_error = None;
                 let mut authenticated = false;
-                for pubkey in candidates {
-                    let auth_result = timeout(
-                        AGENT_TIMEOUT,
-                        handle.authenticate_publickey_with(username, pubkey, None, &mut signer),
-                    )
-                    .await
-                    .map_err(|_| SshError::AuthFailed("SSH Agent 签名认证超时（8 秒）".into()))?;
-                    match auth_result {
-                        Ok(result) if result.success() => {
-                            authenticated = true;
-                            break;
+                // 仅当候选里存在 RSA 身份时才协商，避免 Ed25519 场景白白等待 1 秒 EXT_INFO
+                let negotiated = if candidates.iter().any(|pk| {
+                    matches!(pk.algorithm(), russh::keys::Algorithm::Rsa { .. })
+                }) {
+                    Self::negotiated_rsa_hash(handle).await
+                } else {
+                    None
+                };
+                // 协商到 SHA-2 但整轮被拒时，回退到改动前的 ssh-rsa 再试一轮，
+                // 兼容「通告了 rsa-sha2-* 却实际拒绝」的服务端或不支持新 flags 的老 agent。
+                let attempts: Vec<Option<russh::keys::HashAlg>> = if negotiated.is_some() {
+                    vec![negotiated, None]
+                } else {
+                    vec![None]
+                };
+                'auth: for alg in attempts {
+                    for pubkey in candidates.iter().cloned() {
+                        let hash_alg = if matches!(pubkey.algorithm(), russh::keys::Algorithm::Rsa { .. }) {
+                            alg
+                        } else {
+                            None
+                        };
+                        let auth_result = timeout(
+                            AGENT_TIMEOUT,
+                            handle.authenticate_publickey_with(username, pubkey, hash_alg, &mut signer),
+                        )
+                        .await
+                        .map_err(|_| SshError::AuthFailed("SSH Agent 签名认证超时（8 秒）".into()))?;
+                        match auth_result {
+                            Ok(result) if result.success() => {
+                                authenticated = true;
+                                break 'auth;
+                            }
+                            Ok(_) => {}
+                            Err(e) => last_error = Some(e.to_string()),
                         }
-                        Ok(_) => {}
-                        Err(e) => last_error = Some(e.to_string()),
                     }
                 }
                 drop(signer);
@@ -1155,11 +1205,30 @@ impl SshTransport {
                     private_key_passphrase.as_deref(),
                 )
                 .map_err(|e| SshError::AuthFailed(e.user_friendly_message()))?;
-                let key_with_hash = russh::keys::PrivateKeyWithHashAlg::new(Arc::new(key_pair), None);
-                let result = handle
-                    .authenticate_publickey(username, key_with_hash)
+                let hash_alg = if matches!(key_pair.algorithm(), russh::keys::Algorithm::Rsa { .. }) {
+                    Self::negotiated_rsa_hash(handle).await
+                } else {
+                    None
+                };
+                let key = Arc::new(key_pair);
+                let mut result = handle
+                    .authenticate_publickey(
+                        username,
+                        russh::keys::PrivateKeyWithHashAlg::new(Arc::clone(&key), hash_alg),
+                    )
                     .await
                     .map_err(|e| SshError::AuthFailed(format!("Public key auth failed: {}", e)))?;
+                // 协商到 SHA-2 却被拒绝时，回退到改动前的 ssh-rsa 再试一次，
+                // 兼容「通告了 rsa-sha2-* 却实际不接受」的服务端。
+                if !result.success() && hash_alg.is_some() {
+                    result = handle
+                        .authenticate_publickey(
+                            username,
+                            russh::keys::PrivateKeyWithHashAlg::new(Arc::clone(&key), None),
+                        )
+                        .await
+                        .map_err(|e| SshError::AuthFailed(format!("Public key auth failed: {}", e)))?;
+                }
                 if !result.success() {
                     return Err(SshError::AuthFailed("Public key authentication rejected".into()));
                 }

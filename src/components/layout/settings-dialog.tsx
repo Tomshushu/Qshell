@@ -1315,60 +1315,56 @@ function SettingsPanel({
         className="flex-grow overflow-y-auto p-8 bg-slate-100 dark:bg-zinc-950"
       >
         {subTab === "general" ? (
-          <div className="w-full max-w-4xl mx-auto space-y-6">
+          <div className="w-full max-w-4xl mx-auto space-y-4">
             <Card className="border/50 bg-background shadow-sm rounded-lg overflow-hidden">
-              <CardContent className="p-6 flex flex-col gap-6 text-xs">
-                <span className="text-sm font-bold text-foreground">
+              <CardContent className="p-5 flex flex-col gap-4 text-xs">
+                <span className="text-xs font-bold text-foreground">
                   {t("general_sound")}
                 </span>
-                {/* 全局界面音效总开关 */}
-                <div className="flex items-center justify-between">
-                  <SettingLabelWithHint
-                    label={t("general_ui_sound")}
-                    desc={t("general_ui_sound_desc")}
-                  />
-                  <Switch
-                    checked={uiSoundEnabled ?? false}
-                    onCheckedChange={(enabled) => {
-                      setUiSoundEnabled(enabled);
-                      // 开启时试听一次，让用户即时感知（setUiSoundEnabled 内已同步全局开关）
-                      if (enabled) playSound(SoundType.Notify, true);
-                    }}
-                  />
-                </div>
+                <div className="divide-y divide-border/40">
+                  {/* 全局界面音效总开关 */}
+                  <div className="flex items-center justify-between pb-3">
+                    <SettingLabelWithHint
+                      label={t("general_ui_sound")}
+                      desc={t("general_ui_sound_desc")}
+                    />
+                    <Switch
+                      checked={uiSoundEnabled ?? false}
+                      onCheckedChange={(enabled) => {
+                        setUiSoundEnabled(enabled);
+                        if (enabled) playSound(SoundType.Notify, true);
+                      }}
+                    />
+                  </div>
 
-                {/* 主题专属个性化光标总开关 */}
-                <div className="flex items-center justify-between pt-2 border-t">
-                  <SettingLabelWithHint
-                    label={t("general_custom_cursor")}
-                    desc={t("general_custom_cursor_desc")}
-                  />
-                  <Switch
-                    checked={customCursorEnabled ?? true}
-                    onCheckedChange={(enabled) => {
-                      setCustomCursorEnabled(enabled);
-                      playSound(SoundType.Toggle);
-                    }}
-                  />
+                  {/* 主题专属个性化光标总开关 */}
+                  <div className="flex items-center justify-between pt-3">
+                    <SettingLabelWithHint
+                      label={t("general_custom_cursor")}
+                      desc={t("general_custom_cursor_desc")}
+                    />
+                    <Switch
+                      checked={customCursorEnabled ?? true}
+                      onCheckedChange={(enabled) => {
+                        setCustomCursorEnabled(enabled);
+                        playSound(SoundType.Toggle);
+                      }}
+                    />
+                  </div>
                 </div>
               </CardContent>
             </Card>
 
             {/* 软件在线更新 (OTA) */}
             <Card className="border/50 bg-background shadow-sm rounded-lg overflow-hidden">
-              <CardContent className="p-6 flex flex-col gap-5 text-xs">
+              <CardContent className="p-5 flex flex-col gap-4 text-xs">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="space-y-0.5 min-w-0">
-                    <span className="text-sm font-bold text-foreground flex items-center gap-2">
-                      {t("ota_title")}
-                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 shrink-0">
-                        v{appVersion}
-                      </span>
+                  <span className="text-xs font-bold text-foreground flex items-center gap-2">
+                    {t("ota_title")}
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 shrink-0">
+                      v{appVersion}
                     </span>
-                    <p className="text-muted-foreground text-[11px]">
-                      {t("ota_desc")}
-                    </p>
-                  </div>
+                  </span>
 
                   <div className="flex items-center gap-2.5 shrink-0">
                     {!isCheckingUpdate && updateAvailable && (
@@ -1408,7 +1404,7 @@ function SettingsPanel({
                     <Button
                       size="sm"
                       variant="outline"
-                      className="h-8 text-xs gap-1.5 font-medium hover:bg-muted/80 shadow-xs shrink-0 cursor-pointer"
+                      className="h-7 text-xs gap-1.5 font-medium hover:bg-muted/80 shadow-xs shrink-0 cursor-pointer"
                       disabled={isCheckingUpdate}
                       onClick={() => {
                         void checkForUpdates(false);
@@ -1420,7 +1416,7 @@ function SettingsPanel({
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between pt-3 border-t">
+                <div className="flex items-center justify-between pt-3 border-t border-border/40">
                   <SettingLabelWithHint
                     label={t("ota_auto_check")}
                     desc={t("ota_auto_check_desc")}
@@ -1432,13 +1428,10 @@ function SettingsPanel({
                 </div>
 
                 {skippedVersion && (
-                  <div className="flex items-center justify-between pt-3 border-t text-xs">
-                    <div className="space-y-0.5">
-                      <div className="font-medium text-foreground">{t("ota_skipped_version_title")}</div>
-                      <div className="text-muted-foreground text-[11px]">
-                        {t("ota_skipped_version_desc", { version: skippedVersion })}
-                      </div>
-                    </div>
+                  <div className="flex items-center justify-between pt-3 border-t border-border/40 text-xs">
+                    <span className="text-muted-foreground">
+                      {t("ota_skipped_version_desc", { version: skippedVersion })}
+                    </span>
                     <Button
                       size="sm"
                       variant="outline"
@@ -1453,138 +1446,125 @@ function SettingsPanel({
             </Card>
           </div>
         ) : subTab === "security" ? (
-          <div className="w-full max-w-4xl mx-auto space-y-6">
+          <div className="w-full max-w-4xl mx-auto space-y-4">
             <Card className="border/50 bg-background shadow-sm rounded-lg overflow-hidden">
-              <CardContent className="p-6 flex flex-col gap-6 text-xs">
-                <div>
-                  <h3 className="text-sm font-bold text-foreground">
-                    {t("app_lock_title") || "应用锁"}
-                  </h3>
-                  <p className="text-muted-foreground mt-1 leading-relaxed">
-                    {t("app_lock_desc") ||
-                      "离开工位时锁定整个应用，保护所有服务器资产与连接。远端任务后台持续运行。"}
-                  </p>
-                </div>
-
-                {/* 启用应用锁开关 */}
+              <CardContent className="p-5 flex flex-col gap-4 text-xs">
                 <div className="flex items-center justify-between">
                   <SettingLabelWithHint
-                    label={t("app_lock_enable_switch") || "启用应用锁"}
+                    label={t("app_lock_title") || "应用锁"}
                     desc={
-                      t("app_lock_enable_hint") ||
-                      "开启后可通过标题栏锁图标或快捷键 (Ctrl+Alt+L) 随时锁定应用"
+                      t("app_lock_desc") ||
+                      "离开工位时锁定整个应用，保护所有服务器资产与连接。远端任务后台持续运行。"
                     }
+                    className="text-xs font-bold text-foreground"
                   />
-                  <Switch
-                    checked={Boolean(appLockEnabled && appLockPasswordHash)}
-                    onCheckedChange={(checked) => {
-                      if (checked) {
-                        window.dispatchEvent(
-                          new CustomEvent("open-app-lock-setup", {
-                            detail: { mode: "setup" },
-                          }),
-                        );
-                      } else {
-                        window.dispatchEvent(
-                          new CustomEvent("open-app-lock-setup", {
-                            detail: { mode: "disable" },
-                          }),
-                        );
-                      }
-                    }}
-                  />
+                  <div className="flex items-center gap-1.5 text-muted-foreground">
+                    <Lock className="h-3.5 w-3.5 text-amber-500" />
+                    <Kbd className="h-5 px-2 text-[11px] font-semibold">Ctrl + Alt + L</Kbd>
+                  </div>
                 </div>
 
-                {Boolean(appLockEnabled && appLockPasswordHash) && (
-                  <>
-                    {/* 修改密码 / 修改图案 */}
-                    <div className="flex items-center justify-between pt-2 border-t">
-                      <div>
-                        <div className="font-medium text-foreground">
+                <div className="divide-y divide-border/40">
+                  {/* 启用应用锁开关 */}
+                  <div className="flex items-center justify-between pb-3">
+                    <SettingLabelWithHint
+                      label={t("app_lock_enable_switch") || "启用应用锁"}
+                      desc={
+                        t("app_lock_enable_hint") ||
+                        "开启后可通过标题栏锁图标或快捷键 (Ctrl+Alt+L) 随时锁定应用"
+                      }
+                    />
+                    <Switch
+                      checked={Boolean(appLockEnabled && appLockPasswordHash)}
+                      onCheckedChange={(checked) => {
+                        if (checked) {
+                          window.dispatchEvent(
+                            new CustomEvent("open-app-lock-setup", {
+                              detail: { mode: "setup" },
+                            }),
+                          );
+                        } else {
+                          window.dispatchEvent(
+                            new CustomEvent("open-app-lock-setup", {
+                              detail: { mode: "disable" },
+                            }),
+                          );
+                        }
+                      }}
+                    />
+                  </div>
+
+                  {Boolean(appLockEnabled && appLockPasswordHash) && (
+                    <>
+                      {/* 修改密码 / 修改图案 */}
+                      <div className="flex items-center justify-between py-3">
+                        <span className="font-medium text-foreground">
                           {appLockType === "pattern"
                             ? t("app_lock_type_pattern") || "九点图案锁"
                             : t("app_lock_change_pwd_label") || "解锁密码 / PIN"}
-                        </div>
-                        <div className="text-[11px] text-muted-foreground mt-0.5">
+                        </span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="text-xs h-7 gap-1.5"
+                          onClick={() => {
+                            window.dispatchEvent(
+                              new CustomEvent("open-app-lock-setup", {
+                                detail: { mode: "change" },
+                              }),
+                            );
+                          }}
+                        >
+                          {appLockType === "pattern" ? (
+                            <Grid3X3 className="h-3.5 w-3.5" />
+                          ) : (
+                            <KeyRound className="h-3.5 w-3.5" />
+                          )}
                           {appLockType === "pattern"
-                            ? t("app_lock_pattern_status_desc") || "已设置九点图案锁并受保护"
-                            : t("app_lock_change_pwd_desc") || "已设置并处于受保护状态"}
+                            ? t("app_lock_change_pattern_btn") || "修改图案"
+                            : t("app_lock_change_pwd_btn") || "修改密码"}
+                        </Button>
+                      </div>
+
+                      {/* 空闲自动锁定 */}
+                      <div className="flex items-center justify-between pt-3">
+                        <SettingLabelWithHint
+                          label={t("app_lock_idle_timeout") || "空闲自动锁定"}
+                          desc={
+                            t("app_lock_idle_desc") ||
+                            "一段时间无键盘与鼠标操作时，自动锁定整个应用界面"
+                          }
+                        />
+                        <div className="flex items-center gap-1.5">
+                          {[
+                            { val: 0, label: t("app_lock_idle_never") || "从不" },
+                            { val: 5, label: t("app_lock_idle_5m") || "5分钟" },
+                            { val: 10, label: t("app_lock_idle_10m") || "10分钟" },
+                            { val: 15, label: t("app_lock_idle_15m") || "15分钟" },
+                            { val: 30, label: t("app_lock_idle_30m") || "30分钟" },
+                          ].map((opt) => (
+                            <button
+                              key={opt.val}
+                              type="button"
+                              onClick={() => {
+                                setAppLockIdleMinutes(opt.val);
+                                playSound(SoundType.Click);
+                              }}
+                              className={cn(
+                                "px-2.5 py-1 text-xs rounded transition-colors border",
+                                appLockIdleMinutes === opt.val
+                                  ? "bg-primary text-primary-foreground border-primary font-medium"
+                                  : "bg-muted/30 hover:bg-muted/60 text-muted-foreground border-border/50",
+                              )}
+                            >
+                              {opt.label}
+                            </button>
+                          ))}
                         </div>
                       </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="text-xs h-8 gap-1.5"
-                        onClick={() => {
-                          window.dispatchEvent(
-                            new CustomEvent("open-app-lock-setup", {
-                              detail: { mode: "change" },
-                            }),
-                          );
-                        }}
-                      >
-                        {appLockType === "pattern" ? (
-                          <Grid3X3 className="h-3.5 w-3.5" />
-                        ) : (
-                          <KeyRound className="h-3.5 w-3.5" />
-                        )}
-                        {appLockType === "pattern"
-                          ? t("app_lock_change_pattern_btn") || "修改图案"
-                          : t("app_lock_change_pwd_btn") || "修改密码"}
-                      </Button>
-                    </div>
-
-                    {/* 空闲自动锁定 */}
-                    <div className="flex items-center justify-between pt-2 border-t">
-                      <SettingLabelWithHint
-                        label={t("app_lock_idle_timeout") || "空闲自动锁定"}
-                        desc={
-                          t("app_lock_idle_desc") ||
-                          "一段时间无键盘与鼠标操作时，自动锁定整个应用界面"
-                        }
-                      />
-                      <div className="flex items-center gap-1.5">
-                        {[
-                          { val: 0, label: t("app_lock_idle_never") || "从不" },
-                          { val: 5, label: t("app_lock_idle_5m") || "5分钟" },
-                          { val: 10, label: t("app_lock_idle_10m") || "10分钟" },
-                          { val: 15, label: t("app_lock_idle_15m") || "15分钟" },
-                          { val: 30, label: t("app_lock_idle_30m") || "30分钟" },
-                        ].map((opt) => (
-                          <button
-                            key={opt.val}
-                            type="button"
-                            onClick={() => {
-                              setAppLockIdleMinutes(opt.val);
-                              playSound(SoundType.Click);
-                            }}
-                            className={cn(
-                              "px-2.5 py-1 text-xs rounded transition-colors border",
-                              appLockIdleMinutes === opt.val
-                                ? "bg-primary text-primary-foreground border-primary font-medium"
-                                : "bg-muted/30 hover:bg-muted/60 text-muted-foreground border-border/50",
-                            )}
-                          >
-                            {opt.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* 快捷键提示卡片 */}
-            <Card className="border/50 bg-background shadow-sm rounded-lg overflow-hidden">
-              <CardContent className="p-4 flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2">
-                  <Lock className="h-4 w-4 text-amber-500" />
-                  <span className="text-muted-foreground">
-                    {t("app_lock_shortcut_hint") || "随时使用全局快捷键锁定："}
-                  </span>
+                    </>
+                  )}
                 </div>
-                <Kbd className="h-6 px-2.5 text-xs font-semibold">Ctrl + Alt + L</Kbd>
               </CardContent>
             </Card>
           </div>
@@ -1798,21 +1778,20 @@ function SettingsPanel({
                   />
                 </div>
 
-                <div className="border-t border-border/60 pt-5 flex flex-col gap-4">
-                  <div className="flex items-center justify-between">
+                <div className="border-t border-border/60 pt-4 flex flex-col divide-y divide-border/40">
+                  <div className="pb-2">
                     <SettingLabelWithHint
                       label={t("term_cache_record_title")}
                       desc={t("term_cache_record_desc")}
                       className="font-semibold text-foreground text-xs"
                     />
                   </div>
-                  <div className="flex flex-col gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-3 py-2.5">
                     <SettingLabelWithHint
                       label={t("term_scrollback_title")}
                       desc={t("term_scrollback_desc")}
-                      className="text-muted-foreground font-normal"
                     />
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       <input
                         type="number"
                         min={1000}
@@ -1825,16 +1804,16 @@ function SettingsPanel({
                             setTerminalScrollbackLines(val);
                           }
                         }}
-                        className="h-8 w-32 rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-primary"
+                        className="h-7 w-24 rounded-md border border-border bg-background px-2 text-xs font-mono outline-none focus:ring-1 focus:ring-primary"
                       />
-                      <div className="flex items-center gap-1.5 text-[11px]">
+                      <div className="flex items-center gap-1 text-[11px]">
                         {[5000, 10000, 50000, 100000, 128000].map((preset) => (
                           <button
                             key={preset}
                             type="button"
                             onClick={() => setTerminalScrollbackLines(preset)}
                             className={cn(
-                              "px-2 py-1 rounded-md border text-xs font-medium transition-colors",
+                              "px-2 py-0.5 rounded border text-xs font-mono font-medium transition-colors",
                               terminalScrollbackLines === preset
                                 ? "bg-primary text-primary-foreground border-primary shadow-xs"
                                 : "bg-muted/50 hover:bg-muted text-muted-foreground border-border/60"
@@ -1846,20 +1825,19 @@ function SettingsPanel({
                       </div>
                     </div>
                   </div>
-                  <div className="flex flex-col gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-3 py-2.5">
                     <SettingLabelWithHint
                       label={t("term_window_size_title")}
-                      desc={t("term_window_size_desc")}
-                      className="text-muted-foreground font-normal"
+                      desc={`${t("term_window_size_desc")} (${t("term_window_size_hint")})`}
                     />
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       {[512, 1024, 2048, 4096, 8192].map((preset) => (
                         <button
                           key={preset}
                           type="button"
                           onClick={() => setTerminalWindowSizeKb(preset)}
                           className={cn(
-                            "px-2 py-1 rounded-md border text-xs font-medium transition-colors",
+                            "px-2 py-0.5 rounded border text-xs font-mono font-medium transition-colors",
                             terminalWindowSizeKb === preset
                               ? "bg-primary text-primary-foreground border-primary shadow-xs"
                               : "bg-muted/50 hover:bg-muted text-muted-foreground border-border/60"
@@ -1869,40 +1847,38 @@ function SettingsPanel({
                         </button>
                       ))}
                     </div>
-                    <span className="text-[11px] text-muted-foreground">
-                      {t("term_window_size_hint")}
-                    </span>
                   </div>
-                  <div className="flex flex-col gap-1.5">
+                  <div className="flex items-center justify-between gap-3 py-2.5">
                     <SettingLabelWithHint
                       label={t("term_encoding_title")}
                       desc={t("term_encoding_desc")}
-                      className="text-muted-foreground font-normal"
                     />
-                    <TerminalEncodingSelect
-                      value={terminalEncoding}
-                      onChange={setTerminalEncoding}
-                    />
+                    <div className="w-56">
+                      <TerminalEncodingSelect
+                        value={terminalEncoding}
+                        onChange={setTerminalEncoding}
+                      />
+                    </div>
                   </div>
-                  <div className="flex flex-col gap-1.5">
+                  <div className="flex items-center justify-between gap-3 py-2.5">
                     <SettingLabelWithHint
                       label={t("term_record_dir_title")}
                       desc={t("term_record_dir_desc")}
-                      className="text-muted-foreground font-normal"
                     />
-                    <div className="flex gap-2">
+                    <div className="flex items-center gap-2 flex-1 max-w-sm">
                       <input
                         readOnly
                         value={
                           terminalRecordingDirectory ||
                           t("term_record_dir_unset")
                         }
-                        className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs text-muted-foreground outline-none"
+                        className="h-7 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs text-muted-foreground outline-none"
                       />
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
+                        className="h-7 text-xs shrink-0"
                         onClick={async () => {
                           const selected = await openDialog({
                             directory: true,
@@ -1917,13 +1893,12 @@ function SettingsPanel({
                       </Button>
                     </div>
                   </div>
-                  <div className="flex flex-col gap-1.5">
+                  <div className="flex items-center justify-between gap-3 pt-2.5">
                     <SettingLabelWithHint
                       label={t("term_record_max_size_title")}
                       desc={t("term_record_max_size_desc")}
-                      className="text-muted-foreground font-normal"
                     />
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5">
                       <input
                         type="number"
                         min={50}
@@ -1933,7 +1908,7 @@ function SettingsPanel({
                         onChange={(e) =>
                           setTerminalRecordingMaxSizeMb(Number(e.target.value))
                         }
-                        className="h-8 w-32 rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-primary"
+                        className="h-7 w-24 rounded-md border border-border bg-background px-2 text-xs font-mono outline-none focus:ring-1 focus:ring-primary"
                       />
                       <span className="text-xs text-muted-foreground">MB</span>
                     </div>
@@ -1942,15 +1917,15 @@ function SettingsPanel({
               </CardContent>
             </Card>
 
-            {/* Font & Size 卡片 */}
+            {/* 字体、主题与高亮合并卡片 */}
             <Card className="border/50 bg-background shadow-sm rounded-lg overflow-hidden">
-              <CardContent className="p-6 flex flex-col gap-6 text-xs">
+              <CardContent className="p-5 flex flex-col divide-y divide-border/40 text-xs">
                 {/* 字体家族 */}
-                <div className="flex flex-col gap-2">
-                  <span className="font-semibold text-foreground">
+                <div className="flex items-center justify-between gap-4 pb-3">
+                  <span className="font-medium text-foreground">
                     {t("term_font_family")}
                   </span>
-                  <div className="relative" ref={fontDropdownRef}>
+                  <div className="relative w-56" ref={fontDropdownRef}>
                     <button
                       type="button"
                       onClick={() => setFontDropdownOpen((v) => !v)}
@@ -1982,8 +1957,6 @@ function SettingsPanel({
                           <div
                             className="flex-1 overflow-y-auto"
                             onWheel={(e) => {
-                              // Radix Dialog 的 react-remove-scroll 会 preventDefault portal 元素的 wheel 默认滚动,
-                              // 这里手动驱动 scrollTop,让鼠标滚轮可用
                               e.currentTarget.scrollTop += e.deltaY;
                             }}
                           >
@@ -2025,8 +1998,8 @@ function SettingsPanel({
                 </div>
 
                 {/* 字体字号 */}
-                <div className="flex items-center justify-between mt-2 pt-2 border-t">
-                  <span className="font-semibold text-foreground">
+                <div className="flex items-center justify-between py-3">
+                  <span className="font-medium text-foreground">
                     {t("term_font_size")}
                   </span>
                   <div className="flex items-center gap-1.5 border border-border/85 rounded bg-muted/10 px-1 py-0.5">
@@ -2057,39 +2030,20 @@ function SettingsPanel({
                     </Button>
                   </div>
                 </div>
-              </CardContent>
-            </Card>
 
-            {/* Terminal theme 卡片 */}
-            <Card className="border/50 bg-background shadow-sm rounded-lg overflow-hidden">
-              <CardContent className="p-6 flex flex-col gap-6 text-xs">
-                <span className="text-sm font-bold text-foreground">
-                  {t("term_custom_theme")}
-                </span>
-
-                <div className="flex items-center justify-between gap-4">
-                  <div className="flex flex-col gap-0.5">
-                    <span className="font-semibold">
-                      {t("dash_active_theme")}
-                    </span>
-                    <span className="text-[10px] text-muted-foreground capitalize">
-                      {activeTheme.name} (
-                      {activeTheme.type === "dark"
-                        ? t("dash_theme_dark")
-                        : t("dash_theme_light")}
-                      )
-                    </span>
-                  </div>
+                {/* 终端配色主题 */}
+                <div className="flex items-center justify-between gap-4 py-3">
+                  <span className="font-medium text-foreground">
+                    {t("dash_active_theme")}
+                  </span>
 
                   <div className="flex items-center gap-2">
-                    {/* 自定义主题下拉:带缩略图预览 */}
                     <div className="relative" ref={themeDropdownRef}>
                       <button
                         type="button"
                         onClick={() => setThemeDropdownOpen((v) => !v)}
                         className="h-8 flex items-center gap-2 border border-border/80 rounded px-2.5 outline-none font-medium cursor-pointer text-foreground bg-transparent hover:bg-accent/40 transition-colors"
                       >
-                        {/* 当前主题小色块 */}
                         <span
                           className="inline-flex h-4 w-6 rounded-sm border border-border/60 overflow-hidden flex-shrink-0"
                           style={{ backgroundColor: activeTheme.ui.background }}
@@ -2130,8 +2084,6 @@ function SettingsPanel({
                             <div
                               className="flex-1 overflow-y-auto"
                               onWheel={(e) => {
-                                // Radix Dialog 的 react-remove-scroll 会 preventDefault portal 元素的 wheel 默认滚动,
-                                // 这里手动驱动 scrollTop,让鼠标滚轮可用
                                 e.currentTarget.scrollTop += e.deltaY;
                               }}
                             >
@@ -2221,21 +2173,13 @@ function SettingsPanel({
                     </Button>
                   </div>
                 </div>
-              </CardContent>
-            </Card>
 
-            {/* Highlight settings 卡片 */}
-            <Card className="border/50 bg-background shadow-sm rounded-lg overflow-hidden">
-              <CardContent className="p-6 flex flex-col gap-6 text-xs">
-                <div className="flex items-center justify-between">
-                  <div className="flex flex-col gap-0.5">
-                    <span className="text-sm font-bold text-foreground">
-                      {t("dash_highlight_title")}
-                    </span>
-                    <span className="text-[10px] text-muted-foreground">
-                      {t("dash_highlight_desc")}
-                    </span>
-                  </div>
+                {/* 高亮设置 */}
+                <div className="flex items-center justify-between pt-3">
+                  <SettingLabelWithHint
+                    label={t("dash_highlight_title")}
+                    desc={t("dash_highlight_desc")}
+                  />
                   <Switch
                     checked={terminalHighlightEnabled}
                     onCheckedChange={setTerminalHighlightEnabled}
@@ -2395,126 +2339,127 @@ function SettingsPanel({
             </Card>
 
             {/* SFTP 视图与显示设置卡片 */}
-            {/* SFTP 视图与显示设置卡片 */}
             <Card className="border/50 bg-background shadow-sm rounded-lg overflow-hidden">
-              <CardContent className="p-6 flex flex-col gap-4 text-xs">
-                <span className="text-sm font-bold text-foreground">
+              <CardContent className="p-5 flex flex-col gap-4 text-xs">
+                <span className="text-xs font-bold text-foreground">
                   {t("sftp_settings_view")}
                 </span>
 
-                {/* 本地面板 */}
-                <div className="flex flex-col gap-3 rounded-lg border border-border/50 bg-muted/10 p-3.5">
-                  <div className="flex items-center gap-2">
-                    <Laptop className="w-4 h-4 text-primary" />
-                    <span className="font-medium text-foreground text-xs">
-                      {t("sftp_local_defaults")}
-                    </span>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {/* 本地面板 */}
+                  <div className="flex flex-col gap-2.5 rounded-lg border border-border/50 bg-muted/10 p-3">
+                    <div className="flex items-center gap-1.5">
+                      <Laptop className="w-3.5 h-3.5 text-primary" />
+                      <span className="font-medium text-foreground text-xs">
+                        {t("sftp_local_defaults")}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-1.5">
+                      {[
+                        { id: "list", label: t("sftp_view_list"), icon: List },
+                        { id: "large", label: t("sftp_view_large"), icon: LayoutGrid },
+                        { id: "medium", label: t("sftp_view_medium"), icon: Grid2X2 },
+                        { id: "small", label: t("sftp_view_small"), icon: Grid3X3 },
+                      ].map((item) => {
+                        const Icon = item.icon;
+                        const isSelected = sftpLocalViewMode === item.id;
+                        return (
+                          <button
+                            key={`local-${item.id}`}
+                            type="button"
+                            onClick={() => {
+                              setSftpLocalViewMode(
+                                item.id as "list" | "large" | "medium" | "small"
+                              );
+                              playSound(SoundType.CLICK);
+                            }}
+                            className={cn(
+                              "flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-md border text-center transition-all cursor-pointer select-none",
+                              isSelected
+                                ? "border-primary bg-primary/10 text-primary font-medium shadow-2xs"
+                                : "border-border/60 bg-muted/20 hover:bg-muted/50 hover:border-border text-foreground"
+                            )}
+                          >
+                            <Icon className="w-3.5 h-3.5 shrink-0" />
+                            <span className="text-[11px] truncate">
+                              {item.label}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex items-center justify-between pt-2 border-t border-border/30">
+                      <span className="text-xs text-foreground">
+                        {t("sftp_show_hidden_files")}
+                      </span>
+                      <Switch
+                        checked={sftpLocalShowHidden}
+                        onCheckedChange={(checked) => {
+                          setSftpLocalShowHidden(checked);
+                          playSound(SoundType.SWITCH);
+                        }}
+                      />
+                    </div>
                   </div>
 
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-0.5">
-                    {[
-                      { id: "list", label: t("sftp_view_list"), icon: List },
-                      { id: "large", label: t("sftp_view_large"), icon: LayoutGrid },
-                      { id: "medium", label: t("sftp_view_medium"), icon: Grid2X2 },
-                      { id: "small", label: t("sftp_view_small"), icon: Grid3X3 },
-                    ].map((item) => {
-                      const Icon = item.icon;
-                      const isSelected = sftpLocalViewMode === item.id;
-                      return (
-                        <button
-                          key={`local-${item.id}`}
-                          type="button"
-                          onClick={() => {
-                            setSftpLocalViewMode(
-                              item.id as "list" | "large" | "medium" | "small"
-                            );
-                            playSound(SoundType.CLICK);
-                          }}
-                          className={cn(
-                            "flex items-center justify-center gap-2 py-2 px-3 rounded-lg border text-center transition-all cursor-pointer select-none relative group",
-                            isSelected
-                              ? "border-primary bg-primary/10 text-primary font-medium shadow-2xs"
-                              : "border-border/60 bg-muted/20 hover:bg-muted/50 hover:border-border text-foreground"
-                          )}
-                        >
-                          <Icon className="w-4 h-4 shrink-0" />
-                          <span className="text-xs">
-                            {item.label}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
+                  {/* 远程面板 */}
+                  <div className="flex flex-col gap-2.5 rounded-lg border border-border/50 bg-muted/10 p-3">
+                    <div className="flex items-center gap-1.5">
+                      <Server className="w-3.5 h-3.5 text-primary" />
+                      <span className="font-medium text-foreground text-xs">
+                        {t("sftp_remote_defaults")}
+                      </span>
+                    </div>
 
-                  <div className="flex items-center justify-between pt-1 border-t border-border/30">
-                    <span className="text-xs font-medium text-foreground">
-                      {t("sftp_show_hidden_files")}
-                    </span>
-                    <Switch
-                      checked={sftpLocalShowHidden}
-                      onCheckedChange={(checked) => {
-                        setSftpLocalShowHidden(checked);
-                        playSound(SoundType.SWITCH);
-                      }}
-                    />
-                  </div>
-                </div>
+                    <div className="grid grid-cols-4 gap-1.5">
+                      {[
+                        { id: "list", label: t("sftp_view_list"), icon: List },
+                        { id: "large", label: t("sftp_view_large"), icon: LayoutGrid },
+                        { id: "medium", label: t("sftp_view_medium"), icon: Grid2X2 },
+                        { id: "small", label: t("sftp_view_small"), icon: Grid3X3 },
+                      ].map((item) => {
+                        const Icon = item.icon;
+                        const isSelected = sftpRemoteViewMode === item.id;
+                        return (
+                          <button
+                            key={`remote-${item.id}`}
+                            type="button"
+                            onClick={() => {
+                              setSftpRemoteViewMode(
+                                item.id as "list" | "large" | "medium" | "small"
+                              );
+                              playSound(SoundType.CLICK);
+                            }}
+                            className={cn(
+                              "flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-md border text-center transition-all cursor-pointer select-none",
+                              isSelected
+                                ? "border-primary bg-primary/10 text-primary font-medium shadow-2xs"
+                                : "border-border/60 bg-muted/20 hover:bg-muted/50 hover:border-border text-foreground"
+                            )}
+                          >
+                            <Icon className="w-3.5 h-3.5 shrink-0" />
+                            <span className="text-[11px] truncate">
+                              {item.label}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
 
-                {/* 远程面板 */}
-                <div className="flex flex-col gap-3 rounded-lg border border-border/50 bg-muted/10 p-3.5">
-                  <div className="flex items-center gap-2">
-                    <Server className="w-4 h-4 text-primary" />
-                    <span className="font-medium text-foreground text-xs">
-                      {t("sftp_remote_defaults")}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-0.5">
-                    {[
-                      { id: "list", label: t("sftp_view_list"), icon: List },
-                      { id: "large", label: t("sftp_view_large"), icon: LayoutGrid },
-                      { id: "medium", label: t("sftp_view_medium"), icon: Grid2X2 },
-                      { id: "small", label: t("sftp_view_small"), icon: Grid3X3 },
-                    ].map((item) => {
-                      const Icon = item.icon;
-                      const isSelected = sftpRemoteViewMode === item.id;
-                      return (
-                        <button
-                          key={`remote-${item.id}`}
-                          type="button"
-                          onClick={() => {
-                            setSftpRemoteViewMode(
-                              item.id as "list" | "large" | "medium" | "small"
-                            );
-                            playSound(SoundType.CLICK);
-                          }}
-                          className={cn(
-                            "flex items-center justify-center gap-2 py-2 px-3 rounded-lg border text-center transition-all cursor-pointer select-none relative group",
-                            isSelected
-                              ? "border-primary bg-primary/10 text-primary font-medium shadow-2xs"
-                              : "border-border/60 bg-muted/20 hover:bg-muted/50 hover:border-border text-foreground"
-                          )}
-                        >
-                          <Icon className="w-4 h-4 shrink-0" />
-                          <span className="text-xs">
-                            {item.label}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  <div className="flex items-center justify-between pt-1 border-t border-border/30">
-                    <span className="text-xs font-medium text-foreground">
-                      {t("sftp_show_hidden_files")}
-                    </span>
-                    <Switch
-                      checked={sftpRemoteShowHidden}
-                      onCheckedChange={(checked) => {
-                        setSftpRemoteShowHidden(checked);
-                        playSound(SoundType.SWITCH);
-                      }}
-                    />
+                    <div className="flex items-center justify-between pt-2 border-t border-border/30">
+                      <span className="text-xs text-foreground">
+                        {t("sftp_show_hidden_files")}
+                      </span>
+                      <Switch
+                        checked={sftpRemoteShowHidden}
+                        onCheckedChange={(checked) => {
+                          setSftpRemoteShowHidden(checked);
+                          playSound(SoundType.SWITCH);
+                        }}
+                      />
+                    </div>
                   </div>
                 </div>
 

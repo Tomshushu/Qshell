@@ -685,6 +685,8 @@ export interface SplitDropTarget {
 export interface ServerKeyEntry {
   id: string
   name: string
+  /** 来自全局密钥库（ssh_keys 表）的条目，其 id 可直接作为 sshKeyId 传给后端 */
+  isGlobal?: boolean
   keyType: 'private' | 'certificate'
   privateKeyPath?: string
   privateKeyContent?: string

@@ -146,62 +146,52 @@ export function KnownHostsPanel() {
 
   return (
     <div className="w-full max-w-4xl mx-auto space-y-6">
-      {/* 头部卡片 */}
+      {/* 头部工具栏卡片 */}
       <Card className="border/50 bg-background shadow-sm rounded-lg overflow-hidden">
-        <CardContent className="p-6 flex flex-col gap-4 text-xs">
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex items-center gap-2.5">
-              <div className="p-2 rounded-lg bg-primary/10 text-primary">
-                <ShieldCheck className="h-5 w-5" />
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
-                  {t("sidebar_known_hosts")}
-                  <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-primary/10 text-primary border border-primary/20">
-                    {hosts.length}
-                  </span>
-                </h3>
-                <p className="text-[11px] text-muted-foreground mt-0.5">
-                  {t("known_hosts_desc")}
-                </p>
-              </div>
+        <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2 shrink-0">
+            <ShieldCheck className="h-4 w-4 text-primary" />
+            <h3 className="text-xs font-semibold text-foreground flex items-center gap-1.5" title={t("known_hosts_desc")}>
+              {t("sidebar_known_hosts")}
+              <span className="px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-primary/10 text-primary border border-primary/20">
+                {hosts.length}
+              </span>
+            </h3>
+          </div>
+
+          <div className="flex items-center gap-2 flex-1 sm:max-w-md justify-end">
+            <div className="relative flex-1">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder={t("known_hosts_search_placeholder")}
+                className="pl-8 h-8 text-xs"
+              />
             </div>
 
-            <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs gap-1.5 shrink-0"
+              onClick={() => void fetchHosts()}
+              disabled={loading}
+            >
+              <RotateCcw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+              {t("known_hosts_refresh")}
+            </Button>
+            {hosts.length > 0 && (
               <Button
                 variant="outline"
                 size="sm"
-                className="h-8 text-xs gap-1.5"
-                onClick={() => void fetchHosts()}
-                disabled={loading}
+                className="h-8 text-xs gap-1.5 shrink-0 text-rose-500 hover:text-rose-600 hover:bg-rose-500/10 border-rose-500/20"
+                onClick={() => setShowClearConfirm(true)}
+                disabled={loading || clearing}
               >
-                <RotateCcw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
-                {t("known_hosts_refresh")}
+                <Trash2 className="h-3.5 w-3.5" />
+                {t("known_hosts_clear_all")}
               </Button>
-              {hosts.length > 0 && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8 text-xs gap-1.5 text-rose-500 hover:text-rose-600 hover:bg-rose-500/10 border-rose-500/20"
-                  onClick={() => setShowClearConfirm(true)}
-                  disabled={loading || clearing}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  {t("known_hosts_clear_all")}
-                </Button>
-              )}
-            </div>
-          </div>
-
-          {/* 搜索过滤栏 */}
-          <div className="relative mt-1">
-            <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder={t("known_hosts_search_placeholder")}
-              className="pl-8 h-9 text-xs"
-            />
+            )}
           </div>
         </CardContent>
       </Card>

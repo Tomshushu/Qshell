@@ -821,6 +821,29 @@ fn migrate_servers_table(conn: &Connection) {
     );
 }
 
+/// 加密含凭据的 JSON 文本列（幂等：已是 v1 密文则原样返回，兼容导出后再次导入）
+fn encrypt_sensitive_text(raw: &str) -> Result<String, String> {
+    if raw.starts_with("v1:") {
+        return Ok(raw.to_string());
+    }
+    crypto::encrypt_password(raw, master_key())
+        .map_err(|e| format!("Keys config encryption failed: {}", e))
+}
+
+/// 读取含凭据的 JSON 文本列；兼容升级前直接以明文入库的老数据。
+fn decrypt_sensitive_text(raw: Option<String>) -> Option<String> {
+    raw.and_then(|value| {
+        if value.is_empty() {
+            return None;
+        }
+        if value.starts_with("v1:") {
+            crypto::decrypt_password(&value, master_key()).ok().filter(|s| !s.is_empty())
+        } else {
+            Some(value)
+        }
+    })
+}
+
 fn row_to_server(row: &rusqlite::Row<'_>) -> SqliteResult<Server> {
     Ok(Server {
         id: row.get("id")?,
@@ -875,8 +898,9 @@ fn row_to_server(row: &rusqlite::Row<'_>) -> SqliteResult<Server> {
         }),
         tunnels_config: row.get::<_, Option<String>>("tunnels_config")?
             .filter(|s| !s.is_empty()),
-        keys_config: row.get::<_, Option<String>>("keys_config").ok().flatten()
-            .filter(|s| !s.is_empty()),
+        keys_config: decrypt_sensitive_text(
+            row.get::<_, Option<String>>("keys_config").ok().flatten(),
+        ),
         serial_config: row.get::<_, Option<String>>("serial_config").ok().flatten()
             .filter(|s| !s.is_empty()),
         group_id: row.get::<_, Option<String>>("group_id").ok().flatten()
@@ -894,6 +918,27 @@ fn mask_server_passwords(mut server: Server) -> Server {
     }
     if server.private_key_passphrase.is_some() {
         server.private_key_passphrase = Some(PASSWORD_PLACEHOLDER.to_string());
+    }
+    // keys_config 里的私钥密码不回显给前端（表单本来就不预填密码）。
+    // 私钥/证书内容保留，避免破坏内联密钥的导入与编辑链路。
+    if let Some(ref raw) = server.keys_config {
+        if let Ok(mut entries) = serde_json::from_str::<Vec<serde_json::Value>>(raw) {
+            let mut changed = false;
+            for entry in entries.iter_mut() {
+                if let Some(obj) = entry.as_object_mut() {
+                    if obj.contains_key("passphrase") {
+                        obj.insert(
+                            "passphrase".to_string(),
+                            serde_json::Value::String(String::new()),
+                        );
+                        changed = true;
+                    }
+                }
+            }
+            if changed {
+                server.keys_config = serde_json::to_string(&entries).ok();
+            }
+        }
     }
     server
 }
@@ -1111,7 +1156,8 @@ pub fn servers_add(server: String) -> Result<String, String> {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "[]".to_string());
     // 内联代理配置：加密存储（其中可能含 password/privateKeyPassphrase 明文）
-    let allow_ssh_routing = target_type.eq_ignore_ascii_case("linux") && protocol == "ssh";
+    // 任何走 SSH 协议的资产（含 Windows OpenSSH、网络设备 SSH）都允许代理/跳板/隧道
+    let allow_ssh_routing = protocol == "ssh";
     let proxy_config_enc = match &input.proxy_config {
         _ if !allow_ssh_routing => None,
         Some(s) if !s.trim().is_empty() => Some(
@@ -1125,7 +1171,11 @@ pub fn servers_add(server: String) -> Result<String, String> {
     } else {
         None
     };
-    let keys_config = input.keys_config.filter(|s| !s.trim().is_empty());
+    // 内联密钥配置可能含 passphrase / 私钥内容，与 proxy_config 同样加密入库
+    let keys_config_enc = match input.keys_config.filter(|s| !s.trim().is_empty()) {
+        Some(s) => Some(encrypt_sensitive_text(s.trim())?),
+        None => None,
+    };
     let serial_config = input.serial_config.filter(|s| !s.trim().is_empty());
     let group_id = input
         .group_id
@@ -1172,7 +1222,7 @@ pub fn servers_add(server: String) -> Result<String, String> {
             tunnel_ids,
             proxy_config_enc,
             tunnels_config,
-            keys_config,
+            keys_config_enc,
             serial_config,
             group_id,
             now,
@@ -1262,9 +1312,9 @@ pub fn servers_update(id: String, updates: String) -> Result<(), String> {
         update.bmc_port = Some(bmc_port);
     }
 
-    // 跳板、代理和 SSH 隧道只属于 Linux SSH。切换目标类型或协议时主动清除，
-    // 避免隐藏配置在后端继续生效。
-    if !(effective_target.eq_ignore_ascii_case("linux") && effective_protocol == "ssh") {
+    // 非 SSH 协议（RDP / Telnet / Redfish / Serial）不应残留代理与隧道配置。
+    // SSH 资产不限目标类型：Windows OpenSSH 与网络设备 SSH 同样允许。
+    if effective_protocol != "ssh" {
         update.proxy_config = Some(String::new());
         update.tunnels_config = Some(String::new());
     }
@@ -1453,12 +1503,12 @@ pub fn servers_update(id: String, updates: String) -> Result<(), String> {
         set_clauses.push("tunnels_config = ?".to_string());
         param_values.push(Box::new(value));
     }
-    // 内联密钥配置（JSON 数组字符串；空字符串表示清除）
+    // 内联密钥配置（加密存储；空字符串表示清除）
     if let Some(ref keys_config) = update.keys_config {
         let value: Option<String> = if keys_config.trim().is_empty() {
             None
         } else {
-            Some(keys_config.trim().to_string())
+            Some(encrypt_sensitive_text(keys_config.trim())?)
         };
         set_clauses.push("keys_config = ?".to_string());
         param_values.push(Box::new(value));

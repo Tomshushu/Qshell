@@ -78,6 +78,7 @@ impl AgentConnection {
     pub async fn sign_request(
         &mut self,
         public: &PublicKey,
+        hash_alg: Option<russh::keys::HashAlg>,
         data: Vec<u8>,
     ) -> Result<Vec<u8>, SshError> {
         match self {
@@ -88,11 +89,11 @@ impl AgentConnection {
                     SshError::AuthFailed("Agent connection already consumed".into())
                 })?;
                 let identity = russh::keys::agent::AgentIdentity::from(public.clone());
-                client.sign_request(&identity, None, data).await
+                client.sign_request(&identity, hash_alg, data).await
                     .map_err(|e| SshError::AuthFailed(format!("Agent sign_request 失败: {}", e)))
             }
             #[cfg(windows)]
-            AgentConnection::Windows(c) => c.sign_request(public, data).await,
+            AgentConnection::Windows(c) => c.sign_request(public, hash_alg, data).await,
         }
     }
 }
@@ -270,6 +271,7 @@ impl WindowsPageantClient {
     async fn sign_request(
         &mut self,
         public: &PublicKey,
+        hash_alg: Option<russh::keys::HashAlg>,
         data: Vec<u8>,
     ) -> Result<Vec<u8>, SshError> {
         use russh::keys::PublicKeyBase64;
@@ -291,12 +293,16 @@ impl WindowsPageantClient {
         payload.extend_from_slice(&data_len.to_be_bytes());
         payload.extend_from_slice(&data);
 
-        // uint32(flags): SSH_AGENT_RSA_SHA2_512 = 0x04 (现代 RSA 推荐)
-        // 对于 Ed25519/ECDSA，flags 会被忽略
-        let flags: u32 = if matches!(public.algorithm(), russh::keys::Algorithm::Rsa { .. }) {
-            0x04 // SSH_AGENT_RSA_SHA2_512
-        } else {
-            0
+        // uint32(flags)：必须与 russh 外层 publickey 请求声明的 RSA 算法一致，
+        // 否则会出现「外层 ssh-rsa、内层 rsa-sha2-512」的签名错配。
+        // Ed25519/ECDSA 的 flags 会被 agent 忽略。
+        let flags: u32 = match public.algorithm() {
+            russh::keys::Algorithm::Rsa { .. } => match hash_alg {
+                Some(russh::keys::HashAlg::Sha512) => 0x04, // SSH_AGENT_RSA_SHA2_512
+                Some(_) => 0x02, // SSH_AGENT_RSA_SHA2_256（兼容 non_exhaustive 枚举）
+                None => 0, // 服务端未通告 rsa-sha2-*，保持 ssh-rsa (SHA-1)
+            },
+            _ => 0,
         };
         payload.extend_from_slice(&flags.to_be_bytes());
 
@@ -361,18 +367,18 @@ impl russh::Signer for AgentSigner {
 
     // russh 0.64 的 Signer 改为 `auth_sign(&mut self, &AgentIdentity, Option<HashAlg>, Vec<u8>)`，
     // 使用 RPITIT（无 `Future` 关联类型），且为 &mut self（无需 take/put）。
-    // hash_alg 目前忽略：AgentConnection::sign_request 由 agent 自行选择签名 hash，
-    // Ed25519/ECDSA 不依赖 hash_alg，RSA 场景后续如需可透传。
+    // hash_alg 由 connection.rs 按服务端 server-sig-algs 协商得到，必须透传给 agent，
+    // 保证外层 publickey 请求声明的算法与内层签名算法一致。
     fn auth_sign(
         &mut self,
         key: &russh::keys::agent::AgentIdentity,
-        _hash_alg: Option<russh::keys::HashAlg>,
+        hash_alg: Option<russh::keys::HashAlg>,
         to_sign: Vec<u8>,
     ) -> impl std::future::Future<Output = Result<Vec<u8>, Self::Error>> + Send {
         let public = key.public_key().into_owned();
         async move {
             match self.connection.as_mut() {
-                Some(c) => c.sign_request(&public, to_sign).await,
+                Some(c) => c.sign_request(&public, hash_alg, to_sign).await,
                 None => Err(SshError::AuthFailed("Agent connection already consumed".into())),
             }
         }

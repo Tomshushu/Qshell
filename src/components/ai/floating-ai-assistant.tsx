@@ -695,7 +695,7 @@ function CommandExecutionCard({
             {t('ai_card_safe_readonly_badge') || '只读白名单'}
           </span>
           <span className="flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400 font-medium group-hover:underline">
-            <span>{t('ai_card_expand_details') || '展开详情'}</span>
+            <span>{t('ai_card_expand_details') || '查看执行结果'}</span>
             <ChevronRight className="h-3 w-3" />
           </span>
         </div>
@@ -776,7 +776,7 @@ function CommandExecutionCard({
               onClick={() => setIsExpanded(false)}
               className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-foreground ml-1.5 cursor-pointer transition-colors"
             >
-              <span>{t('ai_card_collapse_details') || '收起详情'}</span>
+              <span>{t('ai_card_collapse_details') || '收起'}</span>
               <ChevronDown className="h-3 w-3" />
             </button>
           )}
@@ -1650,8 +1650,13 @@ export function FloatingAIAssistant() {
 
   const closeMascotMenu = () => setMascotMenu(null)
 
-  const handleMascotMenuOpen = () => {
+  const handleMascotMenuToggleAssistant = () => {
     closeMascotMenu()
+    if (isFloatingAssistantOpen) {
+      playSound(SoundType.Close)
+      closeFloatingAssistant()
+      return
+    }
     setMascotMinimized(false)
     resetDialogCardPosition()
     playSound(SoundType.Open)
@@ -2303,7 +2308,7 @@ export function FloatingAIAssistant() {
         </div>
       )}
 
-      {/* 小人右键菜单：打开 / 配置 / 重置位置 / 关闭 AI 总开关 */}
+      {/* 小人右键菜单：打开/关闭小助手 / 配置 / 重置位置 / 关闭 AI 总开关 */}
       {mascotMenu && mascotMenuPosition && (
         <div
           data-testid="ai-mascot-menu"
@@ -2319,12 +2324,20 @@ export function FloatingAIAssistant() {
         >
           <button
             type="button"
-            data-testid="ai-mascot-menu-open"
-            onClick={handleMascotMenuOpen}
+            data-testid="ai-mascot-menu-toggle-assistant"
+            onClick={handleMascotMenuToggleAssistant}
             className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left hover:bg-muted cursor-pointer"
           >
-            <Sparkles className="h-3.5 w-3.5 text-primary shrink-0" />
-            <span>{t('ai_mascot_menu_open') || '打开小助手'}</span>
+            {isFloatingAssistantOpen ? (
+              <X className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            ) : (
+              <Sparkles className="h-3.5 w-3.5 text-primary shrink-0" />
+            )}
+            <span>
+              {isFloatingAssistantOpen
+                ? t('ai_mascot_menu_close') || '关闭小助手'
+                : t('ai_mascot_menu_open') || '打开小助手'}
+            </span>
           </button>
           <button
             type="button"

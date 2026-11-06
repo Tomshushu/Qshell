@@ -18,6 +18,7 @@ import { Switch } from '@/components/ui/switch'
 import { useSyncStore } from '@/store/sync-store'
 import { useToast } from '@/components/ui/toast'
 import { UserAvatar } from '@/components/ui/user-avatar'
+import { HintTooltip } from '@/components/ui/hint-tooltip'
 import { useTranslation } from '@/i18n'
 import {
   isTelemetryEnabled,
@@ -215,36 +216,31 @@ export function SyncSettingsPanel() {
   return (
     <div className="space-y-4">
       {/* 1. 顶部紧凑标题栏 + 平台切换器 */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-border/50">
-        <div>
-          <div className="flex items-center gap-2">
-            <div
-              className={cn(
-                'flex h-7 w-7 items-center justify-center rounded-lg border transition-colors',
-                isGitee
-                  ? 'bg-red-500/10 border-red-500/20 text-red-500'
-                  : 'bg-primary/10 border-primary/20 text-primary',
-              )}
-            >
-              <Cloud className="h-4 w-4" />
-            </div>
-            <h3 className="text-sm font-semibold text-foreground">
-              {isGitee ? t('sync_gitee_title') : t('sync_github_title')}
-            </h3>
-            {isConfigured ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-500 border border-emerald-500/20">
-                <CheckCircle2 className="h-3 w-3" />
-                {t('sync_status_connected')}
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground border border-border">
-                {t('sync_status_unbound')}
-              </span>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-border/50">
+        <div className="flex items-center gap-2">
+          <div
+            className={cn(
+              'flex h-7 w-7 items-center justify-center rounded-lg border transition-colors',
+              isGitee
+                ? 'bg-red-500/10 border-red-500/20 text-red-500'
+                : 'bg-primary/10 border-primary/20 text-primary',
             )}
+          >
+            <Cloud className="h-4 w-4" />
           </div>
-          <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
-            {t('sync_scenario_desc_3')}
-          </p>
+          <h3 className="text-sm font-semibold text-foreground">
+            {isGitee ? t('sync_gitee_title') : t('sync_github_title')}
+          </h3>
+          {isConfigured ? (
+            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-500 border border-emerald-500/20">
+              <CheckCircle2 className="h-3 w-3" />
+              {t('sync_status_connected')}
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground border border-border">
+              {t('sync_status_unbound')}
+            </span>
+          )}
         </div>
 
         {/* 平台分段切换器 */}
@@ -379,6 +375,10 @@ export function SyncSettingsPanel() {
                   <label className="text-xs font-semibold flex items-center gap-1.5 text-foreground">
                     <KeyRound className={cn('h-3.5 w-3.5', isGitee ? 'text-red-500' : 'text-primary')} />
                     <span>{isGitee ? t('sync_token_input_gitee') : t('sync_token_input_github')}</span>
+                    <HintTooltip
+                      label="Token help"
+                      content={isGitee ? t('sync_gitee_token_tip') : t('sync_github_token_tip')}
+                    />
                   </label>
                   <a
                     href={tokenHelpUrl}
@@ -390,10 +390,6 @@ export function SyncSettingsPanel() {
                     <ExternalLink className="h-3 w-3" />
                   </a>
                 </div>
-
-                <p className="text-[11px] text-muted-foreground leading-relaxed">
-                  {isGitee ? t('sync_gitee_token_tip') : t('sync_github_token_tip')}
-                </p>
 
                 <div className="relative">
                   <Input
@@ -509,14 +505,6 @@ export function SyncSettingsPanel() {
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between text-[11px] text-muted-foreground px-0.5">
-                  <span className="flex items-center gap-1">
-                    <CheckCircle2 className="h-3 w-3 text-emerald-500 shrink-0" />
-                    <span>{t('sync_master_pwd_local_safe')}</span>
-                  </span>
-                  <span className="text-[10px] text-muted-foreground shrink-0">{t('sync_master_pwd_never_cloud')}</span>
-                </div>
-
                 <div className="flex items-center gap-2 pt-1 mt-auto">
                   <Button
                     size="sm"
@@ -550,15 +538,15 @@ export function SyncSettingsPanel() {
                   <label className="text-xs font-semibold flex items-center gap-1.5 text-foreground">
                     <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
                     <span>{t('sync_master_pwd_setup_title')}</span>
+                    <HintTooltip
+                      label="Master password details"
+                      content={t('sync_master_pwd_setup_desc')}
+                    />
                   </label>
                   <span className="text-[10px] text-emerald-500 font-medium bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
                     AES-256-GCM
                   </span>
                 </div>
-
-                <p className="text-[11px] text-muted-foreground leading-relaxed">
-                  {t('sync_master_pwd_setup_desc')}
-                </p>
 
                 <div className="relative">
                   <Input
@@ -790,51 +778,38 @@ export function SyncSettingsPanel() {
         </CardContent>
       </Card>
 
-      {/* 4. 自动同步偏好设置 */}
-      <div className="flex items-center justify-between p-3 rounded-xl border border-border/50 bg-muted/20 text-xs">
-        <div className="space-y-0.5 pr-4 min-w-0 flex-1">
-          <div className="font-medium text-foreground flex items-center gap-1.5">
-            <RefreshCw className={cn("h-3.5 w-3.5 text-primary shrink-0", isSyncing && "animate-spin")} />
-            <span>{t('sync_auto_sync_title')}</span>
-            {isConfigured && masterPassword && (
-              <span className={cn(
-                "text-[9px] px-1.5 py-0.2 rounded font-normal",
-                autoSync ? "bg-emerald-500/10 text-emerald-500" : "bg-muted text-muted-foreground"
-              )}>
-                {autoSync ? t('sync_auto_sync_badge_enabled') : t('sync_auto_sync_badge_disabled')}
-              </span>
-            )}
+      {/* 4. 自动同步与匿名统计偏好设置 */}
+      <Card className="border-border/60 bg-card/60">
+        <CardContent className="px-4 py-1 divide-y divide-border/40 text-xs">
+          <div className="flex items-center justify-between py-2.5">
+            <div className="flex items-center gap-1.5 pr-4 min-w-0">
+              <RefreshCw className={cn("h-3.5 w-3.5 text-primary shrink-0", isSyncing && "animate-spin")} />
+              <span className="font-medium text-foreground">{t('sync_auto_sync_title')}</span>
+              <HintTooltip label="Auto sync details" content={t('sync_auto_sync_desc')} />
+            </div>
+            <Switch
+              checked={autoSync}
+              onCheckedChange={(checked) => setAutoSync(checked)}
+              disabled={!isConfigured || !masterPassword}
+            />
           </div>
-          <p className="text-[11px] text-muted-foreground leading-relaxed">
-            {t('sync_auto_sync_desc')}
-          </p>
-        </div>
-        <div className="shrink-0 flex items-center">
-          <Switch
-            checked={autoSync}
-            onCheckedChange={(checked) => setAutoSync(checked)}
-            disabled={!isConfigured || !masterPassword}
-          />
-        </div>
-      </div>
 
-      {/* 5. 匿名统计偏好设置 (轻量紧凑行) */}
-      <div className="flex items-center justify-between p-3 rounded-xl border border-border/50 bg-muted/20 text-xs">
-        <div className="space-y-0.5 pr-2">
-          <div className="font-medium text-foreground">{t('sync_telemetry_title')}</div>
-          <p className="text-[11px] text-muted-foreground leading-relaxed">
-            {t('sync_telemetry_desc')}
-          </p>
-        </div>
-        <Button
-          variant={telemetryActive ? 'default' : 'outline'}
-          size="sm"
-          onClick={handleToggleTelemetry}
-          className="h-7 text-xs shrink-0"
-        >
-          {telemetryActive ? t('sync_telemetry_enabled') : t('sync_telemetry_disabled')}
-        </Button>
-      </div>
+          <div className="flex items-center justify-between py-2.5">
+            <div className="flex items-center gap-1.5 pr-4 min-w-0">
+              <span className="font-medium text-foreground">{t('sync_telemetry_title')}</span>
+              <HintTooltip label="Telemetry details" content={t('sync_telemetry_desc')} />
+            </div>
+            <Button
+              variant={telemetryActive ? 'default' : 'outline'}
+              size="sm"
+              onClick={handleToggleTelemetry}
+              className="h-7 text-xs shrink-0"
+            >
+              {telemetryActive ? t('sync_telemetry_enabled') : t('sync_telemetry_disabled')}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }
