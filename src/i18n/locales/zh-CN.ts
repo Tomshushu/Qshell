@@ -556,6 +556,8 @@ export default {
   ws_not_connected: "未连接到服务器",
   ws_not_connected_desc: "请先连接服务器以查看数据",
   ws_btn_connect: "连接服务器",
+  ws_back_to_dashboard: "返回服务器列表",
+  ws_conn_failed_hint: "请确认主机地址、端口与网络可达，或检查凭据后重试；也可以关闭该会话返回服务器列表。",
 
   // ========== RDP 远程桌面 ==========
   rdp_subtitle: "通过系统 RDP 客户端连接 Windows 远程桌面",
@@ -715,8 +717,11 @@ export default {
 
   // ========== 小文件 i18n ==========
   eb_title: "应用出现错误",
-  eb_desc: "应用发生了意外错误，请尝试重新加载页面。",
+  eb_desc: "应用发生了意外错误，可以返回主界面继续使用，或重新加载页面。",
   eb_reload: "重新加载",
+  eb_back: "返回主界面",
+  eb_back_hint: "返回将关闭当前所有会话标签，避免再次进入出错页面；未保存的终端内容可能丢失。",
+  eb_details: "查看技术详情",
   cd_default_title: "确认操作",
   cd_default_confirm: "确认",
   cd_default_cancel: "取消",
@@ -1368,6 +1373,8 @@ export default {
   // ========== Overview 模块 ==========
   ov_refresh: "刷新",
   ov_connecting: "正在连接服务器获取数据...",
+  ov_metrics_unavailable: "当前主机暂不支持或无法采集系统指标",
+  ov_metrics_unavailable_desc: "这通常出现在交换机、串口、带外管理或远端命令受限的主机上。为避免误导，此处不展示占位数据，请确认主机类型与命令权限后重试。",
   ov_health_healthy: "健康",
   ov_health_warning: "警告",
   ov_health_critical: "异常",

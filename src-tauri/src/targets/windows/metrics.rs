@@ -4,11 +4,13 @@
 //! 通过 PowerShell + WMI 获取 CPU/内存/磁盘/网络/进程数等指标，
 //! 构造与 Linux 相同的 SystemMetrics JSON 结构。
 //!
-//! Windows 无 loadavg 概念，cpuLoad 返回空数组（前端做降级显示）。
-//! Windows 无 POSIX 权限模型，memBreakdown 各分类返回近似值。
+//! Windows 无 loadavg 概念，cpuLoad 返回空数组（前端隐藏该区块）。
+//! 采集脚本没有任何有效 KEY=VALUE 输出时返回 `metricsAvailable: false`，
+//! 前端据此隐藏监控卡片，绝不把"全 0 的解析失败结果"当成真实指标展示。
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::time::Instant;
 
 /// Windows 网络流量差分缓存：(rx_bytes, tx_bytes) per interface
 static WIN_NET_PREV: std::sync::OnceLock<Mutex<HashMap<String, HashMap<String, (u64, u64)>>>> =
@@ -16,6 +18,14 @@ static WIN_NET_PREV: std::sync::OnceLock<Mutex<HashMap<String, HashMap<String, (
 
 fn win_net_prev() -> &'static Mutex<HashMap<String, HashMap<String, (u64, u64)>>> {
     WIN_NET_PREV.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 每次采集的时间戳：网络速率按真实采样间隔计算，不再固定假设 2 秒
+static WIN_NET_LAST: std::sync::OnceLock<Mutex<HashMap<String, Instant>>> =
+    std::sync::OnceLock::new();
+
+fn win_net_last() -> &'static Mutex<HashMap<String, Instant>> {
+    WIN_NET_LAST.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// 在 SSH 上执行命令并返回 stdout 字符串（失败返回空字符串）
@@ -43,7 +53,7 @@ pub async fn collect_metrics(server_id: String) -> Result<String, String> {
     let server_id = server_id.as_str();
     // 优化：将原本并发 4 次启动 powershell.exe 的查询合并为单条 PowerShell 脚本
     // 避免每次轮询触发 4 个 powershell.exe 进程并发启动导致远程主机 CPU 飙升 100%
-    let combined_script = "$os = Get-CimInstance Win32_OperatingSystem; $cpu = Get-CimInstance Win32_Processor; $total = [math]::Round($os.TotalVisibleMemorySize/1,0); $free = [math]::Round($os.FreePhysicalMemory/1,0); $load = ($cpu | Measure-Object -Property LoadPercentage -Average).Average; $uptime = ((Get-Date) - $os.LastBootUpTime).TotalSeconds; $procs = (Get-Process).Count; Write-Output ('CPU_LOAD=' + $load); Write-Output ('MEM_TOTAL=' + $total); Write-Output ('MEM_FREE=' + $free); Write-Output ('UPTIME=' + [math]::Round($uptime)); Write-Output ('OS_NAME=' + $os.Caption); Write-Output ('OS_VER=' + $os.Version); Write-Output ('PROC_COUNT=' + $procs); Write-Output '---DISKS---'; Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | ForEach-Object { Write-Output ($_.DeviceId + '|' + $_.Size + '|' + $_.FreeSpace) }; Write-Output '---NET---'; Get-CimInstance Win32_PerfRawData_Tcpip_NetworkInterface | ForEach-Object { Write-Output ($_.Name + '|' + $_.BytesReceivedPerSec + '|' + $_.BytesSentPerSec) }";
+    let combined_script = "$os = Get-CimInstance Win32_OperatingSystem; $cpu = Get-CimInstance Win32_Processor; $total = [math]::Round($os.TotalVisibleMemorySize/1,0); $free = [math]::Round($os.FreePhysicalMemory/1,0); $vtotal = [math]::Round($os.TotalVirtualMemorySize/1,0); $vfree = [math]::Round($os.FreeVirtualMemory/1,0); $load = ($cpu | Measure-Object -Property LoadPercentage -Average).Average; $uptime = ((Get-Date) - $os.LastBootUpTime).TotalSeconds; $procs = (Get-Process).Count; Write-Output ('CPU_LOAD=' + $load); Write-Output ('MEM_TOTAL=' + $total); Write-Output ('MEM_FREE=' + $free); Write-Output ('VIRT_TOTAL=' + $vtotal); Write-Output ('VIRT_FREE=' + $vfree); Write-Output ('UPTIME=' + [math]::Round($uptime)); Write-Output ('OS_NAME=' + $os.Caption); Write-Output ('OS_VER=' + $os.Version); Write-Output ('PROC_COUNT=' + $procs); Write-Output '---DISKS---'; Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | ForEach-Object { Write-Output ($_.DeviceId + '|' + $_.Size + '|' + $_.FreeSpace) }; Write-Output '---NET---'; Get-CimInstance Win32_PerfRawData_Tcpip_NetworkInterface | ForEach-Object { Write-Output ($_.Name + '|' + $_.BytesReceivedPerSec + '|' + $_.BytesSentPerSec) }";
 
     let raw_output = ssh_exec_ok(server_id, combined_script).await;
 
@@ -51,6 +61,8 @@ pub async fn collect_metrics(server_id: String) -> Result<String, String> {
     let mut cpu_load: f64 = 0.0;
     let mut mem_total_kb: u64 = 0;
     let mut mem_free_kb: u64 = 0;
+    let mut virt_total_kb: u64 = 0;
+    let mut virt_free_kb: u64 = 0;
     let mut uptime: u64 = 0;
     let mut os_name = String::new();
     let mut os_ver = String::new();
@@ -78,6 +90,10 @@ pub async fn collect_metrics(server_id: String) -> Result<String, String> {
                     mem_total_kb = v.trim().parse().unwrap_or(0);
                 } else if let Some(v) = line_trim.strip_prefix("MEM_FREE=") {
                     mem_free_kb = v.trim().parse().unwrap_or(0);
+                } else if let Some(v) = line_trim.strip_prefix("VIRT_TOTAL=") {
+                    virt_total_kb = v.trim().parse().unwrap_or(0);
+                } else if let Some(v) = line_trim.strip_prefix("VIRT_FREE=") {
+                    virt_free_kb = v.trim().parse().unwrap_or(0);
                 } else if let Some(v) = line_trim.strip_prefix("UPTIME=") {
                     uptime = v.trim().parse().unwrap_or(0);
                 } else if let Some(v) = line_trim.strip_prefix("OS_NAME=") {
@@ -129,40 +145,64 @@ pub async fn collect_metrics(server_id: String) -> Result<String, String> {
     let mem_total_bytes = mem_total_kb as f64 * 1024.0;
     let mem_available_bytes = mem_free_kb as f64 * 1024.0;
 
-    // 计算差分速率（与 Linux 一致：字节/秒，转换为 Kbps）
+    // 页面文件（swap）：虚拟内存总量 - 物理内存 = 页面文件总量；
+    // 已提交虚拟内存 - 物理已用 ≈ 页面文件已用。全部来自 WMI 真实值，不再固定返回 0。
+    let swap_total_kb = virt_total_kb.saturating_sub(mem_total_kb);
+    let committed_kb = virt_total_kb.saturating_sub(virt_free_kb);
+    let swap_used_kb = committed_kb.saturating_sub(mem_used_kb).min(swap_total_kb);
+
+    // 采集脚本没有任何有效 KEY 输出时视为不可用，避免前端把全 0 当成真实指标
+    let metrics_available = mem_total_kb > 0 && !os_name.is_empty();
+
+    // 计算差分速率（按真实采样间隔换算 Kbps，不再固定假设 2 秒）
     let mut net_out: Vec<serde_json::Value> = Vec::new();
     {
+        // 第一次采集没有基准，只记录累计值，不输出速率（避免把累计字节当成"实时速率"）
+        let interval = {
+            let mut last_map = win_net_last().lock().unwrap_or_else(|e| e.into_inner());
+            let now = Instant::now();
+            let dt = last_map
+                .get(server_id)
+                .map(|last| last.elapsed().as_secs_f64())
+                .unwrap_or(0.0);
+            last_map.insert(server_id.to_string(), now);
+            if (0.2..=60.0).contains(&dt) { dt } else { 0.0 }
+        };
         let mut prev_map = win_net_prev().lock().unwrap_or_else(|e| e.into_inner());
         let prev = prev_map.get(server_id).cloned().unwrap_or_default();
-        for (name, (rx, tx)) in &current_net {
-            let (prev_rx, prev_tx) = prev.get(name).copied().unwrap_or((0, 0));
-            let drx = rx.saturating_sub(prev_rx);
-            let dtx = tx.saturating_sub(prev_tx);
-            // 假设采集间隔约 2 秒（前端轮询周期），转换为 Kbps
-            let rx_kbps = (drx as f64 * 8.0 / 1000.0) / 2.0;
-            let tx_kbps = (dtx as f64 * 8.0 / 1000.0) / 2.0;
-            net_out.push(serde_json::json!({
-                "interface": name,
-                "rxKbps": rx_kbps,
-                "txKbps": tx_kbps,
-                "rxPackets": 0,
-                "txPackets": 0,
-                "rxErrors": 0,
-                "txErrors": 0,
-                "rxDrop": 0,
-                "txDrop": 0,
-                "dropRate": 0.0,
-            }));
+        if interval > 0.0 {
+            for (name, (rx, tx)) in &current_net {
+                let (prev_rx, prev_tx) = prev.get(name).copied().unwrap_or((0, 0));
+                let drx = rx.saturating_sub(prev_rx);
+                let dtx = tx.saturating_sub(prev_tx);
+                let rx_kbps = drx as f64 * 8.0 / 1000.0 / interval;
+                let tx_kbps = dtx as f64 * 8.0 / 1000.0 / interval;
+                net_out.push(serde_json::json!({
+                    "interface": name,
+                    "rxKbps": rx_kbps,
+                    "txKbps": tx_kbps,
+                    "rxPackets": 0,
+                    "txPackets": 0,
+                    "rxErrors": 0,
+                    "txErrors": 0,
+                    "rxDrop": 0,
+                    "txDrop": 0,
+                    "dropRate": 0.0,
+                }));
+            }
         }
         prev_map.insert(server_id.to_string(), current_net);
     }
 
-    // 构造 SystemMetrics JSON
+    // 构造 SystemMetrics JSON。WMI 不提供 usr/sys/iowait 分项，
+    // 不再按 0.6/0.3/0.05 比例编造，统一置 0 并交由前端按平台隐藏分项视图。
     let metrics = serde_json::json!({
+        "metricsAvailable": metrics_available,
+        "platform": "windows",
         "cpuUsage": cpu_load,
-        "cpuUsr": cpu_load * 0.6,
-        "cpuSys": cpu_load * 0.3,
-        "cpuIowait": cpu_load * 0.05,
+        "cpuUsr": 0.0,
+        "cpuSys": 0.0,
+        "cpuIowait": 0.0,
         "cpuSteal": 0.0,
         "cpuIdle": 100.0 - cpu_load,
         "cpuLoad": [],  // Windows 无 loadavg 概念
@@ -186,8 +226,8 @@ pub async fn collect_metrics(server_id: String) -> Result<String, String> {
             "sreclaimable": 0,
             "shared": 0,
         },
-        "swapUsed": 0.0,
-        "swapTotal": 0.0,
+        "swapUsed": swap_used_kb as f64 / 1_048_576.0,   // GB，来自 WMI 虚拟内存真实值
+        "swapTotal": swap_total_kb as f64 / 1_048_576.0,
         "disks": disks_out,
         "diskIo": [],
         "network": net_out,
@@ -205,8 +245,10 @@ pub async fn collect_metrics(server_id: String) -> Result<String, String> {
     Ok(metrics.to_string())
 }
 
-/// 清空 Windows 网络流量差分缓存
+/// 清空 Windows 网络流量差分缓存（含采样时间，避免重连后按错误间隔算速率）
 pub fn clear_server_cache(server_id: &str) {
     let mut prev = win_net_prev().lock().unwrap_or_else(|e| e.into_inner());
     prev.remove(server_id);
+    let mut last = win_net_last().lock().unwrap_or_else(|e| e.into_inner());
+    last.remove(server_id);
 }

@@ -124,6 +124,8 @@ interface ModuleTabsProps {
   filesPanelOpen?: boolean;
   /** 实时监控悬浮窗是否显示 */
   floatingMonitorVisible?: boolean;
+  /** 当前主机是否真的有可展示的指标：为 false 时隐藏开关，避免按钮点了没反应 */
+  floatingMonitorAvailable?: boolean;
   /** 切换实时监控悬浮窗显示/隐藏 */
   onToggleFloatingMonitor?: () => void;
 }
@@ -147,6 +149,7 @@ export function ModuleTabs({
   serialToolbar,
   filesPanelOpen,
   floatingMonitorVisible,
+  floatingMonitorAvailable,
   onToggleFloatingMonitor,
 }: ModuleTabsProps) {
   const { t } = useTranslation();
@@ -538,7 +541,7 @@ export function ModuleTabs({
             <Palette className="h-3 w-3" />
           </Button>
         )}
-        {activeModule === "terminal" && onToggleFloatingMonitor && (
+        {activeModule === "terminal" && onToggleFloatingMonitor && floatingMonitorAvailable !== false && (
           <Button
             variant="ghost"
             size="icon"

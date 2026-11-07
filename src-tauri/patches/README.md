@@ -56,7 +56,7 @@
 现状：
 
 - **已部分补回**：`src-tauri/src/ssh/connection.rs` 定义 `CHANNEL_BUFFER_SIZE = 256`，在 `russh::client::Config` 中设置 `channel_buffer_size`（上游默认 100），按 64 并发流水线留 4 倍余量。它作用于各 channel 的数据队列，与原来的全局队列不是同一处，效果需实测。
-- **仍未恢复**：256KB `BufReader` 没有公开配置可用，要么重新 patch russh、要么在 stream 层包装、要么接受现状。
+- **已通过 stream 层补回**：主项目使用 russh 0.64 的公开 `connect_stream`，在 `connection.rs` 的 `connect_routed` 中给 stream 包一层 256KB `tokio::io::BufReader`（Tokio 的 `BufReader` 透传 `AsyncWrite`），仅对 `window_size == TRANSFER_WINDOW_SIZE` 的文件传输连接启用，终端连接不包装。环境变量 `QSHELL_SSH_READ_BUFFER=0` 可运行时关闭，便于 A/B 测试。**不需要重新引入 russh patch**。
 
 ## 同步上游的步骤
 

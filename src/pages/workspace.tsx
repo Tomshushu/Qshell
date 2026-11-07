@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useAppStore } from "@/store";
+import { useMetricsStore } from "@/store/metrics-store";
 import { ModuleTabs, type SerialToolbarState } from "@/components/workspace/module-tabs";
 import { OverviewModule } from "@/components/workspace/modules/overview";
 import { FloatingMetricsHud } from "@/components/workspace/floating-metrics-hud";
@@ -83,6 +84,7 @@ export function WorkspacePage({
   const switchModule = useAppStore((s) => s.switchModule);
   const setServerConnected = useAppStore((s) => s.setServerConnected);
   const updateServer = useAppStore((s) => s.updateServer);
+  const closeTab = useAppStore((s) => s.closeTab);
   const setServerState = useAppStore((s) => s.setServerState);
   const clearServerState = useAppStore((s) => s.clearServerState);
   const setManualDisconnect = useAppStore((s) => s.setManualDisconnect);
@@ -189,9 +191,21 @@ export function WorkspacePage({
   const isBmcServer = server?.targetType === "bmc";
   const isSerialServer = server?.targetType === "serial" || server?.protocol === "serial";
   const isRdpServer = server?.protocol === "rdp";
+  // 网络设备（交换机/路由器）后端仍会走 Linux /proc 采集，但没有 /proc，
+  // 因此与 serial/rdp/bmc 一样不展示系统指标监控，避免出现全 0 假值
+  const isNetworkServer = server?.targetType === "network";
   const connId = tabId && serverId && !isSerialServer && !isRdpServer && !isBmcServer
     ? `ws:${serverId}:${tabId}`
     : serverId;
+  // 顶部「实时监控悬浮窗」开关只在确实有指标可展示时保留：
+  // 网络设备/BMC/串口/RDP 没有对应采集链路，后端明确标记采集失败时 HUD 与底栏胶囊也已隐藏，
+  // 此时再留开关会出现"点了没反应"的死按钮。
+  const metricsAvailable = useMetricsStore(
+    (s) => s.serverStates[connId]?.metrics?.metricsAvailable,
+  );
+  const floatingMonitorAvailable =
+    !isSerialServer && !isRdpServer && !isBmcServer && !isNetworkServer &&
+    metricsAvailable !== false;
 
   // 监听底栏胶囊点击切换监控卡片事件
   useEffect(() => {
@@ -1018,6 +1032,7 @@ export function WorkspacePage({
       serialToolbar={isSerialServer && currentTab.module === "terminal" ? null : serialToolbar}
       filesPanelOpen={filesPanelOpen}
       floatingMonitorVisible={floatingMonitorVisible}
+      floatingMonitorAvailable={floatingMonitorAvailable}
       onToggleFloatingMonitor={handleToggleFloatingMonitor}
     />
   ) : null;
@@ -1026,6 +1041,16 @@ export function WorkspacePage({
     <div
       className={`absolute inset-0 z-40 flex flex-col items-center justify-center ${wasConnected ? "bg-background/80 backdrop-blur-sm" : "bg-background"}`}
     >
+      {/* 连接中/失败都给用户退路，避免卡在遮罩里只能退出应用 */}
+      <Button
+        variant="ghost"
+        size="sm"
+        className="absolute right-3 top-3 z-10 gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+        onClick={() => closeTab(tabId)}
+      >
+        <LayoutDashboard className="h-3.5 w-3.5" />
+        {t("ws_back_to_dashboard")}
+      </Button>
       {connecting || reconnectState.status === 'reconnecting' || (isConnected && !terminalReady) ? (
         <ConnectingAnimation
           serverName={currentTab.serverName}
@@ -1129,8 +1154,13 @@ export function WorkspacePage({
           </p>
           <p className="text-sm mb-4">{t("ws_not_connected_desc")}</p>
           {connectError && (
-            <p className="text-xs text-destructive mb-3 max-w-md text-center">
+            <p className="text-xs text-destructive mb-2 max-w-md text-center">
               {friendlyError(connectError).message}
+            </p>
+          )}
+          {connectError && (
+            <p className="text-xs text-muted-foreground mb-4 max-w-md text-center">
+              {t("ws_conn_failed_hint")}
             </p>
           )}
           <div className="flex items-center gap-2">
@@ -1197,7 +1227,7 @@ export function WorkspacePage({
           />
 
           {/* 实时性能悬浮监控卡片 (原生拖拽、FinalShell 经典监控、全交互波形与进程) */}
-          {!isSerialServer && !isRdpServer && !isBmcServer && (
+          {!isSerialServer && !isRdpServer && !isBmcServer && !isNetworkServer && (
             <FloatingMetricsHud
               serverId={connId}
               isConnected={isConnected && isFullyReady}

@@ -96,8 +96,63 @@ class LinuxMockServer:
         uptime_sec = int(time.time() - self._start_time) + 360000
 
         output = ""
-        # 1. /proc/stat
-        if "cat /proc/stat" in cmd or "/proc/stat" in cmd:
+        # 0. 后端 targets/linux/metrics.rs 的 core 是「单条组合命令」，
+        #    一次请求 /proc/stat、loadavg、meminfo、df、uname、os-release、uptime。
+        #    必须一次性返回全部段落，否则 parser 拿不到 MemTotal，
+        #    整次采集会被 metricsAvailable=false 判为不可用。
+        if "cat /proc/stat" in cmd and "/proc/meminfo" in cmd and "df -Pk" in cmd:
+            output = (
+                f"cpu  {cpu_busy * 1000} 0 {cpu_busy * 200} {cpu_idle * 1000} 500 0 100 0 0 0\n"
+                "0.15 0.22 0.18 1/100 500\n"
+                f"MemTotal:       {mem_total} kB\n"
+                f"MemFree:         {mem_free} kB\n"
+                f"MemAvailable:    {mem_avail} kB\n"
+                "Buffers:          256000 kB\n"
+                "Cached:          4096000 kB\n"
+                "SwapTotal:       2097152 kB\n"
+                "SwapFree:        1572864 kB\n"
+                "Filesystem     1024-blocks     Used Available Capacity Mounted on\n"
+                "/dev/sda1       104857600 31457280  73400320      30% /\n"
+                "/dev/sda2         1024000   204800    819200      20% /boot\n"
+                "/dev/sdb1       524288000 157286400 367001600      30% /data\n"
+                "Linux ubuntu-mock-node 5.15.0-107-generic #117-Ubuntu SMP x86_64 GNU/Linux\n"
+                'PRETTY_NAME="Ubuntu 22.04.4 LTS"\n'
+                'NAME="Ubuntu"\n'
+                " 12:00:00 up 10 days, 4:20, 2 users, load average: 0.15, 0.22, 0.18\n"
+                "::TCP_STATES::\n"
+                "01\n0A\n"
+            )
+
+        # 0.1 /proc/diskstats（磁盘 IO 差分数据源）
+        elif "/proc/diskstats" in cmd:
+            output = (
+                "   8       0 sda 12000 0 960000 3400 8000 0 640000 2100 0 5500 5500\n"
+                "   8      16 sdb  4000 0 320000  900 2000 0 160000  600 0 1500 1500\n"
+            )
+
+        # 0.2 /proc/net/dev（累计字节随时间增长，差分后才有真实速率）
+        elif "/proc/net/dev" in cmd:
+            rx_bytes = int(time.time() * 2_000_000)
+            tx_bytes = int(time.time() * 800_000)
+            output = (
+                "Inter-|   Receive                                                |  Transmit\n"
+                " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n"
+                f"  eth0: {rx_bytes} 120000 0 0 0 0 0 0 {tx_bytes} 90000 0 0 0 0 0 0\n"
+                "    lo: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n"
+            )
+
+        # 0.3 ps -eo state + /proc/mounts（进程状态计数与磁盘分类）
+        elif "ps -eo state" in cmd:
+            output = (
+                "    120 S\n      2 R\n      1 Z\n      8 D\n"
+                "::MOUNTS::\n"
+                "/dev/sda1 / ext4 rw,relatime 0 0\n"
+                "/dev/sda2 /boot ext4 rw,relatime 0 0\n"
+                "/dev/sdb1 /data ext4 rw,relatime 0 0\n"
+            )
+
+        # 1. /proc/stat（逐条命令的兼容分支）
+        elif "cat /proc/stat" in cmd or "/proc/stat" in cmd:
             output = f"cpu  {cpu_busy * 1000} 0 {cpu_busy * 200} {cpu_idle * 1000} 500 0 100 0 0 0\n"
             output += f"cpu0 {cpu_busy * 500} 0 {cpu_busy * 100} {cpu_idle * 500} 250 0 50 0 0 0\n"
             output += f"cpu1 {cpu_busy * 500} 0 {cpu_busy * 100} {cpu_idle * 500} 250 0 50 0 0 0\n"

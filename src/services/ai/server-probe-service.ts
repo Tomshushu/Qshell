@@ -158,6 +158,15 @@ export function formatSystemMetricsSummary(
   metrics: Partial<SystemMetrics>,
   metric: ProbeMetricType = 'all',
 ): string {
+  // 采集失败/不支持的主机返回的全 0 结构不能作为诊断依据注入模型上下文
+  if (metrics.metricsAvailable === false) {
+    return [
+      '【系统指标采集状态】',
+      '- 该主机本次指标采集失败或不支持（远端只读命令无有效输出）',
+      '- 请勿把 0 值当作真实负载，请依据实时指令输出或主机侧工具判断',
+    ].join('\n')
+  }
+
   const lines: string[] = []
 
   // 1. CPU / 负载

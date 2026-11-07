@@ -15,6 +15,8 @@ export interface TerminalConnectionOverlayProps {
   onReconnect: () => void
   onEditServer?: () => void
   onCancel?: () => void
+  /** 关闭当前会话并返回服务器列表（连接中/失败时都要给用户退路） */
+  onBack?: () => void
 }
 
 export const TerminalConnectionOverlay = memo(function TerminalConnectionOverlay({
@@ -26,9 +28,14 @@ export const TerminalConnectionOverlay = memo(function TerminalConnectionOverlay
   onReconnect,
   onEditServer,
   onCancel,
+  onBack,
 }: TerminalConnectionOverlayProps) {
   const { t } = useTranslation()
   const friendly = useMemo(() => friendlyError(error || ''), [error])
+  const backHandler = onCancel || onBack
+  const backLabel = onBack
+    ? (t('ws_back_to_dashboard') || '返回服务器列表')
+    : (t('common_cancel') || '取消')
 
   // 快捷键支持：仅在连接失败时允许按 Enter 手动重连；
   // 自动重连进行中不再响应 Enter，避免重复发起连接
@@ -84,15 +91,15 @@ export const TerminalConnectionOverlay = memo(function TerminalConnectionOverlay
             }
           />
 
-          {onCancel && (
+          {backHandler && (
             <Button
               type="button"
               variant="outline"
               size="sm"
               className="mt-8 h-7 px-3 text-xs"
-              onClick={onCancel}
+              onClick={backHandler}
             >
-              {t('common_cancel') || '取消'}
+              {backLabel}
             </Button>
           )}
         </div>
@@ -120,16 +127,16 @@ export const TerminalConnectionOverlay = memo(function TerminalConnectionOverlay
             }
           />
 
-          {/* 自动重连进行中只展示进度，不再提供手动重试入口 */}
-          {onCancel && (
+          {/* 自动重连进行中只展示进度，不再提供手动重试入口；但仍允许退出会话 */}
+          {backHandler && (
             <div className="mt-6 flex items-center gap-2">
               <Button
                 variant="outline"
                 size="sm"
                 className="h-8 px-3 text-xs"
-                onClick={onCancel}
+                onClick={backHandler}
               >
-                {t('reconnect_cancel') || '取消'}
+                {backLabel}
               </Button>
             </div>
           )}
@@ -198,6 +205,17 @@ export const TerminalConnectionOverlay = memo(function TerminalConnectionOverlay
                 onClick={onCancel}
               >
                 {t('common_cancel') || '取消'}
+              </Button>
+            )}
+
+            {onBack && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 px-2.5 text-xs text-muted-foreground hover:text-foreground"
+                onClick={onBack}
+              >
+                {t('ws_back_to_dashboard') || '返回服务器列表'}
               </Button>
             )}
           </div>

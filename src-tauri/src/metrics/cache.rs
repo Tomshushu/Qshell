@@ -1,4 +1,4 @@
-use crate::metrics::parser::{parse_tcp_snmp, parse_tcp_states, parse_snapshot_only, parse_metrics_diff, RawSnapshot, SystemMetrics};
+use crate::metrics::parser::{parse_tcp_snmp, parse_tcp_states, parse_snapshot_only, parse_metrics_diff, parse_cpu_stat, parse_meminfo, RawSnapshot, SystemMetrics};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -143,8 +143,23 @@ pub fn collect_metrics(server_id: &str, raw_outputs: &str) -> Result<String, Str
         None => parse_snapshot_only(&cur_raw),
     };
 
+    // 采集可用性：/proc/stat 与 /proc/meminfo 都解析成功才算拿到真实数据。
+    // 网络设备、受限 shell、SSH 断连等场景会得到空输出，此时必须显式标记不可用，
+    // 否则前端会把 parser 的全 0 默认结构当成真实指标展示（与 Windows 的兜底一致）。
+    let metrics_available =
+        parse_cpu_stat(&raw.core).is_some() && parse_meminfo(&raw.core).total_kb > 0;
+
     // Serialize to JSON with camelCase (matching JS output)
-    let json = serde_json::to_string(&metrics)
+    let mut json_value = serde_json::to_value(&metrics)
+        .map_err(|e| format!("Failed to serialize metrics: {}", e))?;
+    if let Some(obj) = json_value.as_object_mut() {
+        obj.insert(
+            "metricsAvailable".to_string(),
+            serde_json::json!(metrics_available),
+        );
+        obj.insert("platform".to_string(), serde_json::json!("linux"));
+    }
+    let json = serde_json::to_string(&json_value)
         .map_err(|e| format!("Failed to serialize metrics: {}", e))?;
 
     Ok(json)
@@ -153,4 +168,34 @@ pub fn collect_metrics(server_id: &str, raw_outputs: &str) -> Result<String, Str
 /// Refresh cache for a server
 pub fn refresh_cache(server_id: &str) {
     METRICS_CACHE.refresh(server_id);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn marks_metrics_unavailable_when_raw_outputs_are_empty() {
+        let raw = r#"{"core":"","diskIo":"","net":"","proc":""}"#;
+        let out = collect_metrics("test-empty-metrics", raw).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(value["metricsAvailable"], false);
+        assert_eq!(value["platform"], "linux");
+    }
+
+    #[test]
+    fn marks_metrics_available_when_proc_stat_and_meminfo_are_valid() {
+        let core = "cpu  100 0 50 850 10 0 5 0\n0.10 0.20 0.15 1/100 500\nMemTotal: 8192000 kB\nMemFree: 4096000 kB\nMemAvailable: 5120000 kB\n";
+        let raw = serde_json::json!({
+            "core": core,
+            "diskIo": "",
+            "net": "",
+            "proc": "",
+            "mounts": "",
+        })
+        .to_string();
+        let out = collect_metrics("test-valid-metrics", &raw).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(value["metricsAvailable"], true);
+    }
 }

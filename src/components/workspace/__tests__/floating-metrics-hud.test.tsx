@@ -519,6 +519,154 @@ describe('FloatingMetricsHud', () => {
     expect(screen.queryByTitle(/卡片透明度/)).not.toBeInTheDocument()
     expect(screen.queryByText('卡片透明度')).not.toBeInTheDocument()
   })
+
+  it('Windows 主机：无 loadavg/进程 CPU 真实值时不显示占位假值', async () => {
+    useMetricsStore.setState((state) => ({
+      serverStates: {
+        ...state.serverStates,
+        'srv-win': {
+          ...(state.serverStates['srv-win'] || {
+            metrics: null,
+            topProcesses: [],
+            netHistoryByIface: {},
+            diskIoHistory: [],
+            lastUpdatedAt: null,
+            loading: false,
+            error: null,
+          }),
+          metrics: {
+            ...mockMetrics,
+            cpuLoad: [],
+            network: [],
+            platform: 'windows',
+            metricsAvailable: true,
+          },
+          topProcesses: [{ ...mockProcesses[0], cpu: undefined }] as unknown as ProcessInfo[],
+        },
+      },
+    }))
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const { container } = render(
+      <FloatingMetricsHud
+        serverId="srv-win"
+        isConnected={true}
+        visible={true}
+        onClose={vi.fn()}
+        onOpenFullOverview={vi.fn()}
+      />,
+    )
+
+    expect(container.querySelector('.rounded-xl.border')).toBeInTheDocument()
+    expect(screen.queryByText(/负载/)).not.toBeInTheDocument()
+    expect(container.textContent).not.toContain('0.00, 0.00, 0.00')
+    expect(warnSpy).not.toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
+
+  it('采集标记为不可用时隐藏整张监控卡片，不展示全 0 假指标', () => {
+    useMetricsStore.setState((state) => ({
+      serverStates: {
+        ...state.serverStates,
+        'srv-fail': {
+          ...(state.serverStates['srv-fail'] || {
+            metrics: null,
+            topProcesses: [],
+            netHistoryByIface: {},
+            diskIoHistory: [],
+            lastUpdatedAt: null,
+            loading: false,
+            error: null,
+          }),
+          metrics: {
+            ...mockMetrics,
+            cpuUsage: 0,
+            memoryTotal: 0,
+            memoryUsed: 0,
+            cpuLoad: [],
+            network: [],
+            disks: [],
+            platform: 'windows',
+            metricsAvailable: false,
+          },
+          topProcesses: [],
+        },
+      },
+    }))
+
+    const { container } = render(
+      <FloatingMetricsHud
+        serverId="srv-fail"
+        isConnected={true}
+        visible={true}
+        onClose={vi.fn()}
+        onOpenFullOverview={vi.fn()}
+      />,
+    )
+
+    expect(container.firstChild).toBeNull()
+  })
+
+  it('首次订阅尚无指标快照时不渲染 0 值卡片', () => {
+    useMetricsStore.getState().clearServerMetrics('srv-empty')
+
+    const { container } = render(
+      <FloatingMetricsHud
+        serverId="srv-empty"
+        isConnected={true}
+        visible={true}
+        onClose={vi.fn()}
+        onOpenFullOverview={vi.fn()}
+      />,
+    )
+
+    expect(container.firstChild).toBeNull()
+  })
+
+  it('Linux /proc 采集失败标记后隐藏卡片，不再把全 0 当真实指标', () => {
+    useMetricsStore.setState((state) => ({
+      serverStates: {
+        ...state.serverStates,
+        'srv-linux-fail': {
+          ...(state.serverStates['srv-linux-fail'] || {
+            metrics: null,
+            topProcesses: [],
+            netHistoryByIface: {},
+            diskIoHistory: [],
+            lastUpdatedAt: null,
+            loading: false,
+            error: null,
+          }),
+          metrics: {
+            ...mockMetrics,
+            cpuUsage: 0,
+            memoryTotal: 0,
+            memoryUsed: 0,
+            cpuLoad: [],
+            network: [],
+            disks: [],
+            metricsAvailable: false,
+            platform: 'linux',
+          },
+          topProcesses: [],
+        },
+      },
+    }))
+
+    const { container } = render(
+      <FloatingMetricsHud
+        serverId="srv-linux-fail"
+        isConnected={true}
+        visible={true}
+        onClose={vi.fn()}
+        onOpenFullOverview={vi.fn()}
+      />,
+    )
+
+    expect(container.firstChild).toBeNull()
+  })
 })
 
 describe('StatusBarMetricsPill', () => {

@@ -1,6 +1,6 @@
 # Qshell SFTP 与文件传输后台技术架构全景白皮书
 
-> - **文档版本**：v1.3.1
+> - **文档版本**：v1.3.2
 > - **最后更新**：2026-11-06
 > - **对应模块**：`src-tauri/src/commands/files.rs`、`src-tauri/src/ssh/manager.rs`、`src-tauri/src/ssh/connection.rs`、`src-tauri/patches/russh-sftp/`
 > - **补丁说明**：`src-tauri/patches/README.md`。`src-tauri/patches/russh/`（russh 0.45 时代的本地补丁）已在 `cf6ed23` 升级 russh 0.64 时整体删除，本文 2.2 / 2.3 节仅作历史记录。
@@ -43,6 +43,7 @@ flowchart TD
         SftpCfg["SFTP 会话: 256KB packet / 64 并发写 / 60s 超时"]
         Window["动态 window_size: 终端 256KB~16MB / SFTP 64MB"]
         ChanBuf["channel_buffer_size = 256 (每 channel 接收队列)"]
+        ReadBuf["256KB 读侧预读 (仅 SFTP 连接, 可运行时关闭)"]
         Rekey["禁用客户端主动 rekey (limits = usize::MAX / 365d)"]
     end
 
@@ -108,7 +109,7 @@ let (inbound_channel_sender, inbound_channel_receiver) = channel(1024);
 
 * **现状核对（2026-11-06）**：russh 0.64.1 `src/client/mod.rs:1187`、`:1275` 仍是 `channel(10)`，上游**未吸收**该改动，这两条全局队列**当前仍为 10**。0.64 提供了公开配置 `channel_buffer_size`（默认 100，作用于各 channel 的数据队列，`client/mod.rs:803/821/852/874`）；本项目已在 `src-tauri/src/ssh/connection.rs` 设为 `CHANNEL_BUFFER_SIZE = 256`，按 64 并发流水线留 4 倍余量。这是**部分补回**：作用对象不同，效果需实测，不等同于原来的 1024 全局队列扩容。
 
-### 2.3 【历史】256KB `BufReader` 聚合系统调用（已移除，当前不生效）
+### 2.3 【历史】256KB `BufReader` 聚合系统调用（0.45 时代补丁，现已在 stream 层补回）
 
 > **状态**：同上，属于 `patches/russh/` 中的改动，已随 `cf6ed23` 删除，当时的代码位置 `src-tauri/patches/russh/src/client/mod.rs` 已不存在。
 
@@ -119,7 +120,8 @@ let (inbound_channel_sender, inbound_channel_receiver) = channel(1024);
 let stream_read = tokio::io::BufReader::with_capacity(256 * 1024, stream_read);
 ```
 
-* **现状核对（2026-11-06）**：russh 0.64.1 `src/cipher/mod.rs:303/331/336` 仍是 `stream.read_exact(&mut len)` + `read_exact(&mut buffer.buffer[l..])` 两步读，上游**未引入** `BufReader` 包装；本项目也未在 stream 层包装。因此该优化**当前不生效**，且无法仅靠公开 `Config` 补回。
+* **现状核对（2026-11-06）**：russh 0.64.1 `src/cipher/mod.rs:303/331/336` 仍是 `stream.read_exact(&mut len)` + `read_exact(&mut buffer.buffer[l..])` 两步读，上游**未引入** `BufReader` 包装，也无法仅靠公开 `Config` 补回。
+* **当前实现**：russh 0.64 提供 `connect_stream`（`client/mod.rs:1166`），主项目三条建连路径（直连 / 链式跳板 / 代理）在 `connect_routed` 中汇聚到同一个 stream，因此**无需重新 patch russh**——直接在 `src-tauri/src/ssh/connection.rs` 给 stream 包一层 `tokio::io::BufReader::with_capacity(SSH_READ_BUFFER_SIZE = 256KB, stream)`（Tokio 的 `BufReader` 透传 `AsyncWrite`）。仅对 `window_size == TRANSFER_WINDOW_SIZE` 的文件传输连接启用，终端连接不包装。环境变量 `QSHELL_SSH_READ_BUFFER=0` 可运行时关闭，便于 A/B 对比与回滚验证；效果需实测。
 
 ### 2.4 SSH 通道流控窗口与 rekey 策略（russh 0.64 公开配置）
 * **代码位置**：`src-tauri/src/ssh/connection.rs` 的 `connect_routed`（构造 `russh::client::Config`），以及 `TERMINAL_WINDOW_SIZE_KB` / `TRANSFER_WINDOW_SIZE`。

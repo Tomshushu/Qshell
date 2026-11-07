@@ -366,6 +366,27 @@ pub const TRANSFER_WINDOW_SIZE: u32 = 64 * 1024 * 1024;
 /// 因此只是部分补回当时的效果。
 pub const CHANNEL_BUFFER_SIZE: usize = 256;
 
+/// SSH 读侧预读缓冲（字节），仅用于文件传输连接。
+///
+/// russh 解密层读每个加密报文要两次 `read_exact`（包长头 + 负载），Windows IOCP 下
+/// 相当于每报文两次 WSARecv / 完成通知；包一层 BufReader 后一次大块预读可服务
+/// 多个报文的逻辑读，把系统调用次数压下来。
+/// 设为 0 即编译期关闭；也可用环境变量 `QSHELL_SSH_READ_BUFFER=0` 在不重新编译时关闭，
+/// 便于 A/B 对比与回滚验证。
+pub const SSH_READ_BUFFER_SIZE: usize = 256 * 1024;
+
+/// 是否对当前连接启用读侧预读聚合。
+///
+/// 只作用于 SFTP / 大文件传输（`TRANSFER_WINDOW_SIZE` 大窗口）连接；终端连接保持原样，
+/// 避免改变交互式流量的 TCP 读取节奏。
+fn ssh_read_buffer_enabled(window_size: u32) -> bool {
+    SSH_READ_BUFFER_SIZE > 0
+        && window_size == TRANSFER_WINDOW_SIZE
+        && std::env::var("QSHELL_SSH_READ_BUFFER")
+            .map(|v| v != "0")
+            .unwrap_or(true)
+}
+
 /// 底层 SSH 传输层：持有 russh handle，提供 channel 申请。
 ///
 /// `handle` 包在 `tokio::sync::Mutex` 中：russh 的 `tcpip_forward` 要求 `&mut self`，
@@ -1000,6 +1021,20 @@ impl SshTransport {
             (Box::pin(socket) as Pin<Box<dyn AsyncReadWrite + Send>>, elapsed)
         };
         let _ = tcp_elapsed;
+
+        // 三条路径（直连 / 链式跳板 / 代理）已汇聚到同一个 stream，这里统一包装：
+        // 仅文件传输连接启用读侧预读，终端连接完全不碰。
+        let stream: Pin<Box<dyn AsyncReadWrite + Send>> = if ssh_read_buffer_enabled(window_size) {
+            tracing::info!(
+                "[SSH Perf] {} read-side buffering enabled ({} KB)",
+                server_id,
+                SSH_READ_BUFFER_SIZE / 1024
+            );
+            Box::pin(tokio::io::BufReader::with_capacity(SSH_READ_BUFFER_SIZE, stream))
+                as Pin<Box<dyn AsyncReadWrite + Send>>
+        } else {
+            stream
+        };
 
         // russh 内部完成 SSH 协议协商及握手
         let handshake_timeout = deadline.saturating_duration_since(std::time::Instant::now());
@@ -2571,3 +2606,5 @@ mod key_path_tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
+
+

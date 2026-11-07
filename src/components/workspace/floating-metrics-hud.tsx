@@ -32,6 +32,12 @@ export interface FloatingMetricsHudProps {
   onOpenFullOverview?: () => void
 }
 
+/** 安全数值格式化：非有限数（含 undefined / null）返回 '0'，避免后端字段缺失时 toFixed 崩溃 */
+const safeFixed = (v: number | undefined | null, n: number) =>
+  Number.isFinite(v as number) ? (v as number).toFixed(n) : '0'
+/** 安全数值转换：非有限数返回 0，用于求和与排序 */
+const safeNum = (v?: number | null) => (Number.isFinite(v as number) ? (v as number) : 0)
+
 /** 格式化运行时间 (如 "347 天" 或 "12 天 4 小时") */
 function formatUptime(seconds?: number): string {
   if (!seconds || seconds <= 0) return '-'
@@ -98,7 +104,41 @@ function getTextColor(pct: number) {
 }
 
 // ==================== 1. 主工作区悬浮监控卡片 (原生拖拽、完整功能、去除了右上角下拉折叠按钮) ====================
-export function FloatingMetricsHud({
+/** 局部错误边界：指标数据异常时只隐藏监控卡片，不让 React 错误冒泡到全局导致整屏白屏 */
+class HudErrorBoundary extends React.Component<
+  { serverId: string; children: React.ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false }
+
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+
+  componentDidCatch(error: Error) {
+    console.warn('[MetricsHud] 指标渲染异常，已隐藏悬浮监控卡片:', error)
+  }
+
+  componentDidUpdate(prevProps: { serverId: string }) {
+    if (this.state.failed && prevProps.serverId !== this.props.serverId) {
+      this.setState({ failed: false })
+    }
+  }
+
+  render() {
+    return this.state.failed ? null : this.props.children
+  }
+}
+
+export function FloatingMetricsHud(props: FloatingMetricsHudProps) {
+  return (
+    <HudErrorBoundary serverId={props.serverId}>
+      <FloatingMetricsHudInner {...props} />
+    </HudErrorBoundary>
+  )
+}
+
+function FloatingMetricsHudInner({
   serverId,
   isConnected,
   visible = true,
@@ -370,6 +410,14 @@ export function FloatingMetricsHud({
         txKbps: 0,
         disks: [] as DiskInfo[],
         level: 'normal' as 'normal' | 'warning' | 'critical',
+        available: true,
+        isWindows: false,
+        hasUptime: false,
+        hasLoad: false,
+        hasSwap: false,
+        hasDisks: false,
+        hasNetwork: false,
+        processCpuAvailable: true,
       }
     }
 
@@ -382,21 +430,25 @@ export function FloatingMetricsHud({
     const swapUsed = metrics.swapUsed || 0
     const swapPercent = swapTotal > 0 ? Math.min(100, Math.round((swapUsed / swapTotal) * 100)) : 0
 
-    const loadArr = metrics.cpuLoad || [0, 0, 0]
-    const loadStr = `${loadArr[0].toFixed(2)}, ${loadArr[1].toFixed(2)}, ${loadArr[2].toFixed(2)}`
+    // Windows / 部分网络设备后端不提供 load average（返回空数组），空数组是 truthy，
+    // 不能用 `|| [0,0,0]` 兜底；长度不足或元素非数值时降级显示 '-'。
+    const loadArr = Array.isArray(metrics.cpuLoad) ? metrics.cpuLoad : []
+    const loadStr = loadArr.length >= 3
+      ? [0, 1, 2].map((i) => safeFixed(loadArr[i], 2)).join(', ')
+      : '-'
 
     let rxKbps = 0
     let txKbps = 0
     if (selectedIface === 'all' || !selectedIface) {
       metrics.network?.forEach((n) => {
-        rxKbps += n.rxKbps
-        txKbps += n.txKbps
+        rxKbps += safeNum(n.rxKbps)
+        txKbps += safeNum(n.txKbps)
       })
     } else {
       const match = sortedNetwork.find((n) => n.interface === selectedIface)
       if (match) {
-        rxKbps = match.rxKbps
-        txKbps = match.txKbps
+        rxKbps = safeNum(match.rxKbps)
+        txKbps = safeNum(match.txKbps)
       }
     }
 
@@ -423,6 +475,14 @@ export function FloatingMetricsHud({
       txKbps,
       disks: allDisks,
       level,
+      available: metrics.metricsAvailable !== false,
+      isWindows: metrics.platform === 'windows',
+      hasUptime: safeNum(metrics.uptime) > 0,
+      hasLoad: loadArr.length >= 3,
+      hasSwap: swapTotal > 0,
+      hasDisks: allDisks.length > 0,
+      hasNetwork: (metrics.network || []).length > 0,
+      processCpuAvailable: metrics.platform !== 'windows',
     }
   }, [metrics, selectedIface, sortedNetwork])
 
@@ -432,7 +492,7 @@ export function FloatingMetricsHud({
       .slice()
       .sort((a, b) => {
         if (procSort === 'cpu') {
-          return b.cpu - a.cpu
+          return safeNum(b.cpu) - safeNum(a.cpu)
         }
         const aMem = a.rss || a.memory || 0
         const bMem = b.rss || b.memory || 0
@@ -468,7 +528,8 @@ export function FloatingMetricsHud({
     return { rxD, txD, rxAreaD, width, height, points, maxVal }
   }, [netHistory])
 
-  if (!visible || !isConnected) return null
+  // 尚未拿到快照 / 采集失败 / 主机不支持指标时都不渲染，绝不展示全 0 的假指标
+  if (!visible || !isConnected || !metrics || metrics.metricsAvailable === false) return null
 
   // 状态指示点颜色
   const statusDotClass =
@@ -528,15 +589,21 @@ export function FloatingMetricsHud({
             </div>
           </div>
 
-          {/* 运行时间与系统负载 (单行紧凑排布) */}
-          <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground tabular-nums gap-2">
-            <span className="truncate" title={`运行时间: ${summary.uptimeStr}`}>
-              运行 {summary.uptimeStr}
-            </span>
-            <span className="shrink-0" title={`系统负载: ${summary.loadStr}`}>
-              负载 {summary.loadStr}
-            </span>
-          </div>
+          {/* 运行时间与系统负载：Windows 无 loadavg，缺真实数据的项直接不显示 */}
+          {(summary.hasUptime || summary.hasLoad) && (
+            <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground tabular-nums gap-2">
+              {summary.hasUptime && (
+                <span className="truncate" title={`运行时间: ${summary.uptimeStr}`}>
+                  运行 {summary.uptimeStr}
+                </span>
+              )}
+              {summary.hasLoad && (
+                <span className="shrink-0" title={`系统负载: ${summary.loadStr}`}>
+                  负载 {summary.loadStr}
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         {/* 2. 核心指标进度条 (CPU / 内存 / 交换 - FinalShell 经典条状) */}
@@ -572,8 +639,8 @@ export function FloatingMetricsHud({
             </div>
           </div>
 
-          {/* 交换 进度条 */}
-          <div className="flex items-center gap-2">
+          {/* 交换 进度条：Windows 页面文件无真实值时不展示，不显示 0/0 */}
+          <div className="flex items-center gap-2" style={{ display: summary.hasSwap ? undefined : 'none' }}>
             <span className="w-8 shrink-0 text-muted-foreground font-sans text-xs">交换</span>
             <div className="relative flex-1 h-5 bg-black/[0.04] dark:bg-white/[0.06] rounded-md border border-black/5 dark:border-white/[0.08] overflow-hidden flex items-center justify-between px-1.5 backdrop-blur-xs">
               <div
@@ -590,8 +657,11 @@ export function FloatingMetricsHud({
           </div>
         </div>
 
-        {/* 3. 实时进程排行 (一眼定位高负载根因) */}
-        <div className="border border-black/5 dark:border-white/10 rounded-xl overflow-hidden bg-black/[0.02] dark:bg-white/[0.03] backdrop-blur-md">
+        {/* 3. 实时进程排行：无进程数据时整块隐藏，不再永久显示"加载进程列表中..." */}
+        <div
+          className="border border-black/5 dark:border-white/10 rounded-xl overflow-hidden bg-black/[0.02] dark:bg-white/[0.03] backdrop-blur-md"
+          style={{ display: displayProcesses.length > 0 ? undefined : 'none' }}
+        >
           {/* 表头与排序切换 */}
           <div className="grid grid-cols-[66px_50px_1fr] bg-black/[0.03] dark:bg-white/[0.05] text-[10px] font-medium text-center border-b border-black/5 dark:border-white/10">
             <button
@@ -630,13 +700,13 @@ export function FloatingMetricsHud({
                 <div
                   key={p.pid}
                   className="grid grid-cols-[66px_50px_1fr] items-center hover:bg-muted/30 py-0.5 px-0.5 text-center"
-                  title={`PID ${p.pid} | CPU: ${p.cpu}% | MEM: ${formatProcMem(p)}\n命令: ${p.command}`}
+                  title={`PID ${p.pid} | CPU: ${safeFixed(p.cpu, 1)}% | MEM: ${formatProcMem(p)}\n命令: ${p.command}`}
                 >
                   <span className={cn('tabular-nums truncate', procSort === 'memory' && 'text-primary font-medium')}>
                     {formatProcMem(p)}
                   </span>
                   <span className={cn('tabular-nums truncate border-l border-border/20', procSort === 'cpu' && 'text-primary font-medium')}>
-                    {p.cpu.toFixed(1)}%
+                    {summary.processCpuAvailable ? `${safeFixed(p.cpu, 1)}%` : '-'}
                   </span>
                   <span className="text-left pl-2 truncate font-sans text-foreground/90 border-l border-border/20">
                     {getShortCommand(p.command)}
@@ -647,11 +717,11 @@ export function FloatingMetricsHud({
           </div>
         </div>
 
-        {/* 4. 网络速率与实时波形直方图 (紧凑精简表头 + 交互标度指示) */}
+        {/* 4. 网络速率与实时波形：无网卡采样数据时整块隐藏，不显示 0 B/s */}
         <div className={cn(
           "border border-black/5 dark:border-white/10 rounded-xl p-1.5 bg-black/[0.02] dark:bg-white/[0.03] flex flex-col gap-1",
           ifaceMenuOpen ? "relative z-30" : "relative z-10",
-        )}>
+        )} style={{ display: summary.hasNetwork ? undefined : 'none' }}>
           <div className="flex items-center justify-between text-[10px] font-mono leading-none">
             <div className="flex items-center gap-1.5">
               <span className="flex items-center gap-0.5 text-orange-500 font-medium">
@@ -829,13 +899,16 @@ export function FloatingMetricsHud({
             </div>
           ) : (
             <div className="h-9 rounded bg-muted/20 border border-border/30 flex items-center justify-center text-[10px] text-muted-foreground/60">
-              采集网络波形中...
+              等待下一轮网络采样
             </div>
           )}
         </div>
 
-        {/* 5. 完整磁盘分区列表 (FinalShell 样式: 路径 | 可用/大小) */}
-        <div className="border border-black/5 dark:border-white/10 rounded-xl overflow-hidden bg-black/[0.02] dark:bg-white/[0.03] relative z-0">
+        {/* 5. 完整磁盘分区列表：无真实分区数据时整块隐藏 */}
+        <div
+          className="border border-black/5 dark:border-white/10 rounded-xl overflow-hidden bg-black/[0.02] dark:bg-white/[0.03] relative z-0"
+          style={{ display: summary.hasDisks ? undefined : 'none' }}
+        >
           <div className="grid grid-cols-[1fr_96px] bg-black/[0.03] dark:bg-white/[0.05] text-[10px] font-medium text-center border-b border-black/5 dark:border-white/10 py-1 px-2 text-muted-foreground font-sans">
             <span className="text-left">路径</span>
             <span className="text-right">可用/大小</span>
@@ -934,6 +1007,10 @@ export function StatusBarMetricsPill({
     return { cpu, ram, rxKbps, txKbps, level }
   }, [metrics])
 
+  // 采集失败/主机不支持时不显示底栏假 0 值，也不提供打开空卡片的入口
+  if (!metrics || metrics.metricsAvailable === false) return null
+  const hasNetwork = (metrics.network?.length ?? 0) > 0
+
   const statusDotClass =
     summary.level === 'critical'
       ? 'bg-destructive animate-ping'
@@ -965,11 +1042,15 @@ export function StatusBarMetricsPill({
       <span className={getTextColor(summary.ram)}>
         RAM {summary.ram}%
       </span>
-      <span className="text-muted-foreground/40">|</span>
-      <span className="hidden sm:inline-flex items-center gap-1 text-[9.5px]">
-        <span className="text-emerald-500">↓{formatNetRate(summary.rxKbps)}</span>
-        <span className="text-orange-500">↑{formatNetRate(summary.txKbps)}</span>
-      </span>
+      {hasNetwork && (
+        <>
+          <span className="text-muted-foreground/40">|</span>
+          <span className="hidden sm:inline-flex items-center gap-1 text-[9.5px]">
+            <span className="text-emerald-500">↓{formatNetRate(summary.rxKbps)}</span>
+            <span className="text-orange-500">↑{formatNetRate(summary.txKbps)}</span>
+          </span>
+        </>
+      )}
     </button>
   )
 }

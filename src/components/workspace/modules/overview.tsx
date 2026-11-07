@@ -319,14 +319,17 @@ export function OverviewModule({
     [metrics?.network, selectedIface],
   );
 
-  // 平均负载标签（固定 3 个，避免长度不等于 3 时出现 "undefined分钟"）
+  // 平均负载标签：Windows 无 loadavg 概念；数据缺失时显示 '-'，不再伪造 0.00
   const loadAvgLabels = useMemo(() => {
     const loads = metrics?.cpuLoad ?? [];
+    const unsupported = metrics?.platform === "windows" || loads.length < 3;
     return ["1", "5", "15"].map((label, i) => ({
       label,
-      value: safeFixed(loads[i], 2),
+      value: unsupported || !Number.isFinite(loads[i] as number)
+        ? "-"
+        : safeFixed(loads[i], 2),
     }));
-  }, [metrics?.cpuLoad]);
+  }, [metrics?.cpuLoad, metrics?.platform]);
 
   const memoryBreakdownData = useMemo(() => {
     const breakdown = Object.entries(metrics?.memBreakdown ?? {})
@@ -614,6 +617,26 @@ export function OverviewModule({
     }
     return items;
   }, [metrics]);
+
+  // 采集失败/主机不支持时不渲染全 0 大盘，避免把占位数据当成诊断依据
+  if (metrics?.metricsAvailable === false) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
+        <Activity className="h-12 w-12 mb-3" />
+        <p className="text-sm">{t("ov_metrics_unavailable")}</p>
+        <p className="mt-1 max-w-md text-center text-xs">{t("ov_metrics_unavailable_desc")}</p>
+        <button
+          onClick={() => {
+            refreshMetrics();
+            fetchCpuInfo();
+          }}
+          className="mt-3 rounded border border-border/40 bg-muted/40 px-3 py-1 text-xs transition-colors hover:bg-muted/60"
+        >
+          {t("common_retry")}
+        </button>
+      </div>
+    );
+  }
 
   if (loading && !metrics) {
     return (

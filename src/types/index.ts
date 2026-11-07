@@ -375,6 +375,10 @@ export interface SystemMetrics {
   kernelVersion: string
   totalProcesses: number
   zombieProcesses: number
+  /** 采集是否成功：false 表示脚本解析失败/主机不支持，UI 应隐藏监控而非展示全 0 */
+  metricsAvailable?: boolean
+  /** 指标来源平台：windows 下 loadavg、进程 CPU% 等 POSIX 概念不适用 */
+  platform?: string
 }
 
 export interface DiskInfo {

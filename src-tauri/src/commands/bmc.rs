@@ -429,6 +429,42 @@ async fn close_test_session(ctx: &RedfishCtx) {
     }
 }
 
+/// 归类底层错误，给出可执行的中文提示（纯函数，便于单测）
+fn redfish_error_hint(detail: &str, is_connect: bool, is_timeout: bool) -> &'static str {
+    let lower = detail.to_ascii_lowercase();
+    if lower.contains("certificate")
+        || lower.contains("self signed")
+        || lower.contains("self-signed")
+        || lower.contains("unknown issuer")
+        || lower.contains("tls")
+        || lower.contains("ssl")
+    {
+        "TLS 证书校验失败（自签名或不受信任的证书）。如确认设备可信，请在服务器设置中勾选「允许 BMC 使用自签名或无效 TLS 证书」后重试。"
+    } else if is_connect {
+        "无法建立连接：请检查主机地址、BMC 端口与网络可达性。"
+    } else if is_timeout {
+        "连接或响应超时：请检查网络状况，或适当增大连接超时。"
+    } else {
+        "请求发送失败："
+    }
+}
+
+/// reqwest 的顶层 Display 只有 "error sending request for url"，不含 source。
+/// 展开错误链才能把「证书不受信任」这类原因告诉用户，而不是甩一句笼统的英文。
+fn format_redfish_error(url: &str, error: &reqwest::Error) -> String {
+    let root: &(dyn std::error::Error + 'static) = error;
+    let mut chain: Vec<String> = Vec::new();
+    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(root);
+    while let Some(err) = current {
+        chain.push(err.to_string());
+        current = std::error::Error::source(err);
+    }
+    let detail = chain.join(" -> ");
+    let hint = redfish_error_hint(&detail, error.is_connect(), error.is_timeout());
+    let brief: String = detail.chars().take(240).collect();
+    format!("无法连接 BMC ({})：{} [底层原因: {}]", url, hint, brief)
+}
+
 /// 统一的带认证请求：优先 X-Auth-Token，无会话回退 Basic；
 /// token 收到 401 时丢弃缓存、重建一次并重试（登录失败自动落回 Basic）
 async fn send_authorized(
@@ -455,7 +491,7 @@ async fn send_authorized(
     let resp = build(session.as_ref())
         .send()
         .await
-        .map_err(|e| format!("无法连接 BMC ({}): {}", url, e))?;
+        .map_err(|e| format_redfish_error(url, &e))?;
     // 非 401 或本来就用 Basic：直接返回
     if resp.status().as_u16() != 401 || session.is_none() {
         return Ok(resp);
@@ -466,7 +502,7 @@ async fn send_authorized(
     let resp2 = build(session2.as_ref())
         .send()
         .await
-        .map_err(|e| format!("无法连接 BMC ({}): {}", url, e))?;
+        .map_err(|e| format_redfish_error(url, &e))?;
     Ok(resp2)
 }
 
@@ -1438,5 +1474,27 @@ mod tests {
             .send()
             .await;
         assert!(result.is_err(), "strict TLS client unexpectedly accepted self-signed certificate");
+    }
+
+    #[test]
+    fn redfish_error_hint_recognizes_certificate_failure() {
+        let hint = redfish_error_hint(
+            "error sending request for url (https://127.0.0.1:8444/redfish/v1/Systems) -> invalid peer certificate: UnknownIssuer",
+            true,
+            false,
+        );
+        assert!(hint.contains("TLS 证书校验失败"));
+        assert!(hint.contains("允许 BMC 使用自签名或无效 TLS 证书"));
+    }
+
+    #[test]
+    fn redfish_error_hint_recognizes_connect_and_timeout() {
+        assert!(redfish_error_hint("tcp connect error", true, false).contains("无法建立连接"));
+        assert!(redfish_error_hint("operation timed out", false, true).contains("超时"));
+    }
+
+    #[test]
+    fn redfish_error_hint_defaults_to_generic() {
+        assert!(redfish_error_hint("some other failure", false, false).contains("请求发送失败"));
     }
 }

@@ -325,6 +325,9 @@ struct ExportServer {
     /// BMC Redfish HTTPS 端口，默认 443
     #[serde(default = "default_export_bmc_port")]
     bmc_port: i32,
+    /// 是否允许自签名/无效 BMC TLS 证书；旧导出文件缺省 false，不会被自动放宽校验
+    #[serde(default)]
+    bmc_allow_invalid_certs: bool,
     /// 关联的密钥库记录 ID
     #[serde(skip_serializing_if = "Option::is_none")]
     ssh_key_id: Option<String>,
@@ -449,6 +452,7 @@ fn to_export_server(
         protocols: server.protocols.clone(),
         rdp_port: server.rdp_port,
         bmc_port: server.bmc_port,
+        bmc_allow_invalid_certs: server.bmc_allow_invalid_certs,
         ssh_key_id: server.ssh_key_id.clone(),
         private_key_content: None,
         certificate_content: None,
@@ -694,6 +698,7 @@ pub async fn servers_import(
                 "protocols": server.protocols,
                 "rdpPort": server.rdp_port,
                 "bmcPort": server.bmc_port,
+                "bmcAllowInvalidCerts": server.bmc_allow_invalid_certs,
                 "sshKeyId": server.ssh_key_id,
                 "proxyConfig": server.proxy_config,
                 "tunnelsConfig": server.tunnels_config,
@@ -748,5 +753,55 @@ fn ensure_extension(path: &str, ext: &str) -> String {
     match p.extension().and_then(|e| e.to_str()) {
         Some(existing) if existing.eq_ignore_ascii_case(ext) => path.to_string(),
         _ => p.with_extension(ext).to_string_lossy().into_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 导出/导入必须保真 BMC 自签名证书开关，否则模拟 BMC 导入后仍然连不上
+    #[test]
+    fn export_server_roundtrip_keeps_bmc_tls_switch() {
+        let json = r#"{
+            "name": "bmc-mock",
+            "host": "127.0.0.1",
+            "port": 8444,
+            "username": "Administrator",
+            "authType": "password",
+            "tags": [],
+            "connectionTimeout": 30,
+            "favorite": false,
+            "targetType": "bmc",
+            "protocol": "redfish",
+            "protocols": "[\"redfish\"]",
+            "bmcPort": 8444,
+            "bmcAllowInvalidCerts": true
+        }"#;
+        let parsed: ExportServer = serde_json::from_str(json).expect("parse export server");
+        assert!(parsed.bmc_allow_invalid_certs);
+        let encoded = serde_json::to_string(&parsed).expect("serialize export server");
+        assert!(encoded.contains("\"bmcAllowInvalidCerts\":true"));
+    }
+
+    /// 旧导出文件不带该字段时默认严格校验，不会被自动放宽 TLS
+    #[test]
+    fn legacy_export_defaults_to_strict_tls() {
+        let json = r#"{
+            "name": "legacy-bmc",
+            "host": "127.0.0.1",
+            "port": 443,
+            "username": "root",
+            "authType": "password",
+            "tags": [],
+            "connectionTimeout": 30,
+            "favorite": false,
+            "targetType": "bmc",
+            "protocol": "redfish",
+            "protocols": "[\"redfish\"]",
+            "bmcPort": 443
+        }"#;
+        let parsed: ExportServer = serde_json::from_str(json).expect("parse legacy export server");
+        assert!(!parsed.bmc_allow_invalid_certs);
     }
 }

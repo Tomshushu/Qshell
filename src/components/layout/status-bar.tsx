@@ -62,6 +62,7 @@ export function StatusBar() {
   const isBmcServer = server?.targetType === 'bmc'
   const isRdpServer = server?.targetType === 'rdp' || server?.protocol === 'rdp'
   const isSerialServer = server?.targetType === 'serial' || server?.protocol === 'serial'
+  const isNetworkServer = server?.targetType === 'network'
 
   const connId =
     activeTab?.id && serverId && !isSerialServer && !isRdpServer && !isBmcServer
@@ -234,7 +235,7 @@ export function StatusBar() {
       )}
 
       {/* 实时监控底栏触发胶囊 */}
-      {isConnected && !isSftpTab && !isSerialServer && !isRdpServer && !isBmcServer && connId && (
+      {isConnected && !isSftpTab && !isSerialServer && !isRdpServer && !isBmcServer && !isNetworkServer && connId && (
         <StatusBarMetricsPill
           serverId={connId}
           isConnected={isConnected}

@@ -9093,6 +9093,7 @@ export function TerminalModule({
               termName={inst.name}
               onReconnect={() => reconnectTerminal(termId)}
               onEditServer={baseServerId ? () => setEditServerOpen(true) : undefined}
+              onBack={tabId ? () => useAppStore.getState().closeTab(tabId) : undefined}
             />
           </div>
         ))}

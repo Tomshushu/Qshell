@@ -332,6 +332,23 @@ describe('Server Probe Service - Security & Probing Rules', () => {
       expect(summary).not.toContain('【CPU 与系统负载】')
       expect(summary).not.toContain('【磁盘存储指标】')
     })
+
+    it('should not inject all-zero placeholders when metrics collection failed', () => {
+      const summary = formatSystemMetricsSummary(
+        {
+          metricsAvailable: false,
+          cpuUsage: 0,
+          memoryTotal: 0,
+          memoryUsed: 0,
+          disks: [],
+        },
+        'all',
+      )
+
+      expect(summary).toContain('指标采集失败或不支持')
+      expect(summary).not.toContain('CPU 总使用率: 0.0%')
+      expect(summary).not.toContain('【内存指标】')
+    })
   })
 
   describe('Probe Execution & AI Report Formatting', () => {

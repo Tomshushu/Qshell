@@ -24,6 +24,7 @@ import type { WorkspaceTab, WorkspaceDef } from "@/types";
 import { useTranslation } from "@/i18n";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
+import { friendlyError } from "@/lib/error-messages";
 import { backend, isTauri } from "@/services/api";
 import {
   computeDropZone,
@@ -837,10 +838,25 @@ export function TabStrip({ tabs, className }: TabStripProps) {
         if (hasSsh) {
           openTab(server.id, server.name, "terminal");
         } else if (hasRdp) {
-          void backend?.rdp.launch({
-            serverId: server.id,
-            rdpPort: server.rdpPort,
-          });
+          void (async () => {
+            try {
+              const result = await backend?.rdp.launch({
+                serverId: server.id,
+                rdpPort: server.rdpPort,
+              });
+              if (!result?.success) {
+                toast.error(
+                  friendlyError(result?.error || "").message ||
+                    t("err_generic_conn_failed"),
+                );
+              }
+            } catch (e) {
+              const raw = e instanceof Error ? e.message : String(e);
+              toast.error(
+                friendlyError(raw).message || t("err_generic_conn_failed"),
+              );
+            }
+          })();
         } else {
           toast.warning(t("server_no_port") || "未配置连接端口");
         }

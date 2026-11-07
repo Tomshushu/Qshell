@@ -574,6 +574,8 @@ export default {
   ws_not_connected: "Not Connected to Server",
   ws_not_connected_desc: "Please connect to server to view workspace modules",
   ws_btn_connect: "Connect to Server",
+  ws_back_to_dashboard: "Back to server list",
+  ws_conn_failed_hint: "Check the host address, port, network reachability and credentials, then retry. You can also close this session and return to the server list.",
 
   // ========== RDP Remote Desktop ==========
   rdp_subtitle: "Connect to Windows Remote Desktop via system RDP client",
@@ -735,8 +737,11 @@ export default {
 
   // ========== Small files i18n ==========
   eb_title: "Application Error",
-  eb_desc: "An unexpected error occurred. Please try reloading the page.",
+  eb_desc: "An unexpected error occurred. You can return to the main screen or reload the page.",
   eb_reload: "Reload",
+  eb_back: "Back to main screen",
+  eb_back_hint: "This closes all session tabs to avoid reopening the failing view; unsaved terminal output may be lost.",
+  eb_details: "Technical details",
   cd_default_title: "Confirm",
   cd_default_confirm: "OK",
   cd_default_cancel: "Cancel",
@@ -1390,6 +1395,8 @@ export default {
   // ========== Overview module ==========
   ov_refresh: "Refresh",
   ov_connecting: "Connecting to server to fetch data...",
+  ov_metrics_unavailable: "System metrics are unavailable on this host",
+  ov_metrics_unavailable_desc: "This usually happens on network devices, serial or out-of-band hosts, or when remote commands are restricted. Placeholder data is hidden to avoid misleading results. Check the host type and command permissions, then retry.",
   ov_health_healthy: "Healthy",
   ov_health_warning: "Warning",
   ov_health_critical: "Critical",

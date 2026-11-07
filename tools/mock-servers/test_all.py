@@ -36,6 +36,20 @@ def run_tests():
         stdin, stdout, stderr = ssh.exec_command("cat /proc/meminfo")
         out = stdout.read().decode("utf-8")
         assert "MemTotal" in out, "meminfo output failed"
+
+        # Qshell metrics_collect 的 core 是单条组合命令，mock 必须一次返回全部段落，
+        # 否则后端因缺少 MemTotal 把整次采集标记为 metricsAvailable=false。
+        combined_cmd = (
+            "cat /proc/stat 2>/dev/null | head -1; cat /proc/loadavg 2>/dev/null; "
+            "cat /proc/meminfo 2>/dev/null; "
+            "(LC_ALL=C df -Pk 2>/dev/null || df -Pk 2>/dev/null || true); "
+            "uname -a 2>/dev/null; cat /etc/os-release 2>/dev/null; uptime 2>/dev/null"
+        )
+        stdin, stdout, stderr = ssh.exec_command(combined_cmd)
+        combined_out = stdout.read().decode("utf-8")
+        assert "cpu  " in combined_out, "combined core: /proc/stat missing"
+        assert "MemTotal" in combined_out, "combined core: /proc/meminfo missing"
+        assert "1024-blocks" in combined_out, "combined core: df -Pk missing"
         ssh.close()
 
         # SFTP 独立会话验证
@@ -134,6 +148,21 @@ def run_tests():
         stdin, stdout, stderr = ssh.exec_command("Get-CimInstance Win32_OperatingSystem")
         out = stdout.read().decode("utf-8")
         assert "Windows Server 2022" in out, "Get-CimInstance output failed"
+
+        # targets/windows/metrics.rs 的组合指标脚本：必须返回可解析的 KEY=VALUE 段落，
+        # 否则 Windows 指标会被 metricsAvailable=false 判为不可用。
+        combined_ps = (
+            "$os = Get-CimInstance Win32_OperatingSystem; "
+            "Write-Output ('CPU_LOAD=' + 30); "
+            "Write-Output '---DISKS---'; "
+            "Get-CimInstance Win32_LogicalDisk | ForEach-Object { Write-Output ($_.DeviceId + '|' + $_.Size) }; "
+            "Write-Output '---NET---'"
+        )
+        stdin, stdout, stderr = ssh.exec_command(combined_ps)
+        ps_out = stdout.read().decode("utf-8")
+        assert "CPU_LOAD=" in ps_out, "combined metrics script: CPU_LOAD missing"
+        assert "MEM_TOTAL=" in ps_out, "combined metrics script: MEM_TOTAL missing"
+        assert "---DISKS---" in ps_out, "combined metrics script: disks section missing"
         ssh.close()
         print("  \033[32m[PASS]\033[0m Windows OpenSSH & PowerShell 监控解析测试通过！", flush=True)
         results.append(("Windows SSH (Port 2223)", True))

@@ -79,8 +79,29 @@ class WindowsMockServer:
         cpu_load = int(20 + math.sin(t / 15.0) * 10)
 
         output = ""
+        # 0. 组合指标采集脚本：按 Rust 端 targets/windows/metrics.rs 的 KEY=VALUE 协议输出，
+        #    这样前端能拿到可解析的真实（模拟）指标，而不是全 0 的解析失败结果。
+        if "cpu_load=" in c and "---disks---" in c:
+            rx_bytes = int(t * 2_000_000)
+            tx_bytes = int(t * 800_000)
+            output = (
+                f"CPU_LOAD={cpu_load}\n"
+                "MEM_TOTAL=16777216\n"
+                "MEM_FREE=10485760\n"
+                "VIRT_TOTAL=19922944\n"
+                "VIRT_FREE=13631488\n"
+                "UPTIME=93784\n"
+                "OS_NAME=Microsoft Windows Server 2022 Datacenter\n"
+                "OS_VER=10.0.20348\n"
+                "PROC_COUNT=87\n"
+                "---DISKS---\n"
+                "C:|107374182400|64424509440\n"
+                "D:|536870912000|375809638400\n"
+                "---NET---\n"
+                f"Ethernet|{rx_bytes}|{tx_bytes}\n"
+            )
         # 1. OS & Memory Info
-        if "win32_operatingsystem" in c or "totalvisiblememorysize" in c:
+        elif "win32_operatingsystem" in c or "totalvisiblememorysize" in c:
             output = (
                 "Caption                   : Microsoft Windows Server 2022 Datacenter\n"
                 "Version                   : 10.0.20348\n"
