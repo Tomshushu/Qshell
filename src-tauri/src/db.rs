@@ -133,7 +133,9 @@ pub struct Server {
     /// BMC Redfish HTTPS 端口，默认 443
     #[serde(default = "default_bmc_port")]
     pub bmc_port: i32,
-    /// 是否允许 BMC 使用自签名/无效 TLS 证书，默认关闭。
+    /// 是否允许 HTTPS 设备使用自签名/无效 TLS 证书，默认关闭。
+    /// 列名是 BMC 时代的遗留命名，语义已泛化到所有 HTTPS 设备（决策 4）；
+    /// 保留物理列名可避免迁移已有数据，对外统一通过 `allow_invalid_tls_certs()` 读取。
     #[serde(default = "default_bmc_allow_invalid_certs")]
     pub bmc_allow_invalid_certs: bool,
     /// 遗留的代理 ID 列表字段。为兼容旧数据库保留，但连接流程不再读取。
@@ -159,6 +161,10 @@ pub struct Server {
     pub keys_config: Option<String>,
     #[serde(default)]
     pub serial_config: Option<String>,
+    /// 设备专属凭据配置（JSON 字符串，加密存储）：token / kubeconfig / VNC 密码等。
+    /// Phase 0 预留给未来的 HTTPS / 容器 / 外部启动器设备；现有设备不使用。
+    #[serde(default)]
+    pub credentials_config: Option<String>,
     /// 所属服务器分组 ID（指向 server_groups 表 id），NULL 表示未分组
     #[serde(default)]
     pub group_id: Option<String>,
@@ -167,6 +173,13 @@ pub struct Server {
     /// 回收站删除时间（毫秒时间戳）；NULL 表示正常，非 NULL 表示待删除
     #[serde(default)]
     pub deleted_at: Option<i64>,
+}
+
+impl Server {
+    /// 泛化入口：所有 HTTPS 设备统一通过此方法读取证书校验开关。
+    pub fn allow_invalid_tls_certs(&self) -> bool {
+        self.bmc_allow_invalid_certs
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -208,6 +221,9 @@ pub struct ServerInput {
     pub bmc_port: Option<i32>,
     #[serde(default)]
     pub bmc_allow_invalid_certs: Option<bool>,
+    /// 泛化后的 TLS 开关（新前端/新导出文件写入）；为 None 时回退读取旧字段。
+    #[serde(default)]
+    pub tls_allow_invalid_certs: Option<bool>,
     /// 关联的代理 ID 列表（JSON 数组字符串）
     #[serde(default)]
     pub proxy_ids: Option<String>,
@@ -227,6 +243,10 @@ pub struct ServerInput {
     pub keys_config: Option<String>,
     #[serde(default)]
     pub serial_config: Option<String>,
+    /// 设备专属凭据配置（JSON 字符串，加密存储）：token / kubeconfig / VNC 密码等。
+    /// Phase 0 预留给未来的 HTTPS / 容器 / 外部启动器设备；现有设备不使用。
+    #[serde(default)]
+    pub credentials_config: Option<String>,
     /// 所属分组 ID（None 表示未分组）
     #[serde(default)]
     pub group_id: Option<String>,
@@ -268,6 +288,9 @@ pub struct ServerUpdate {
     pub bmc_port: Option<i32>,
     #[serde(default)]
     pub bmc_allow_invalid_certs: Option<bool>,
+    /// 泛化后的 TLS 开关（新前端/新导出文件写入）；为 None 时回退读取旧字段。
+    #[serde(default)]
+    pub tls_allow_invalid_certs: Option<bool>,
     /// 关联的代理 ID 列表（JSON 数组字符串；None 表示不修改）
     #[serde(default)]
     pub proxy_ids: Option<String>,
@@ -289,6 +312,10 @@ pub struct ServerUpdate {
     /// 串口配置（JSON 字符串；None 表示不修改）
     #[serde(default)]
     pub serial_config: Option<String>,
+    /// 设备专属凭据配置（JSON 字符串，加密存储）：token / kubeconfig / VNC 密码等。
+    /// Phase 0 预留给未来的 HTTPS / 容器 / 外部启动器设备；现有设备不使用。
+    #[serde(default)]
+    pub credentials_config: Option<String>,
     /// 所属分组 ID（None 表示不修改，空字符串表示移出到根目录）
     #[serde(default)]
     pub group_id: Option<String>,
@@ -420,6 +447,7 @@ fn create_tables(conn: &Connection) -> SqliteResult<()> {
             tunnels_config TEXT,
             keys_config TEXT,
             serial_config TEXT,
+            credentials_config TEXT,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             deleted_at INTEGER
@@ -745,6 +773,8 @@ fn migrate_servers_table(conn: &Connection) {
     let _ = conn.execute("ALTER TABLE servers ADD COLUMN tunnels_config TEXT", []);
     let _ = conn.execute("ALTER TABLE servers ADD COLUMN keys_config TEXT", []);
     let _ = conn.execute("ALTER TABLE servers ADD COLUMN serial_config TEXT", []);
+    // Phase 0：设备专属凭据配置（JSON，加密存储），供未来 HTTPS / 容器 / 外部启动器设备使用
+    let _ = conn.execute("ALTER TABLE servers ADD COLUMN credentials_config TEXT", []);
     // 回收站：软删除时间戳（NULL=正常，非 NULL=待删除）
     let _ = conn.execute("ALTER TABLE servers ADD COLUMN deleted_at INTEGER", []);
 
@@ -780,45 +810,78 @@ fn migrate_servers_table(conn: &Connection) {
         [],
     );
 
-    // 早期版本曾把尚未实现的 WinRM/VNC 写入服务器记录。它们不能继续伪装成
-    // 可连接协议；按目标类型迁移到当前可工作的安全默认值，并把 protocols
-    // 收敛为单一主协议，确保模块列表与双击行为一致。
+    // Phase 0：协议白名单与主协议统一来自 connection::TARGET_SPECS。
+    // 早期版本曾把尚未实现的 WinRM/VNC 写入服务器记录，启动时迁移到该目标的主协议；
+    // 改为遍历能力表后，新增设备/协议不会再被这里的 SQL 洗回旧默认值。
+    for spec in crate::connection::TARGET_SPECS {
+        let allowed = spec
+            .protocols
+            .iter()
+            .map(|p| format!("'{}'", p.as_str()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let primary = spec.primary_protocol.as_str();
+        let protocols_json = serde_json::to_string(&vec![primary]).unwrap_or_default();
+        let auth_clause = if primary == "ssh" { "" } else { ", auth_type = 'password'" };
+        let sql = format!(
+            "UPDATE servers
+             SET protocol = ?1, protocols = ?2{}
+             WHERE lower(COALESCE(target_type, 'linux')) = ?3
+               AND lower(COALESCE(protocol, '')) NOT IN ({})",
+            auth_clause, allowed
+        );
+        let _ = conn.execute(&sql, params![primary, protocols_json, spec.target.as_str()]);
+    }
+
+    // Windows/RDP 端口回填（与协议清洗解耦，仅修数据）
     let _ = conn.execute(
         "UPDATE servers
-         SET protocol = 'rdp', protocols = '[\"rdp\"]', auth_type = 'password',
-             rdp_port = CASE WHEN rdp_port IS NULL OR rdp_port <= 0 THEN 3389 ELSE rdp_port END,
+         SET rdp_port = CASE WHEN rdp_port IS NULL OR rdp_port <= 0 THEN 3389 ELSE rdp_port END,
              port = CASE WHEN rdp_port IS NULL OR rdp_port <= 0 THEN 3389 ELSE rdp_port END
          WHERE lower(COALESCE(target_type, '')) = 'windows'
-           AND lower(COALESCE(protocol, '')) NOT IN ('ssh', 'rdp')",
+           AND (rdp_port IS NULL OR rdp_port <= 0 OR port IS NULL OR port <= 0)",
         [],
     );
-    let _ = conn.execute(
-        "UPDATE servers
-         SET protocol = 'ssh', protocols = '[\"ssh\"]'
-         WHERE lower(COALESCE(target_type, 'linux')) IN ('linux', 'unix', 'xinchuang')
-           AND lower(COALESCE(protocol, '')) <> 'ssh'",
-        [],
-    );
-    let _ = conn.execute(
-        "UPDATE servers
-         SET protocol = 'ssh', protocols = '[\"ssh\"]'
-         WHERE lower(COALESCE(target_type, '')) = 'network'
-           AND lower(COALESCE(protocol, '')) NOT IN ('ssh', 'telnet')",
-        [],
-    );
-    let _ = conn.execute(
-        "UPDATE servers
-         SET protocol = 'serial', protocols = '[\"serial\"]', auth_type = 'password'
-         WHERE lower(COALESCE(target_type, '')) = 'serial'
-           AND lower(COALESCE(protocol, '')) <> 'serial'",
-        [],
-    );
-    let _ = conn.execute(
-        "UPDATE servers SET protocols = '[\"' || lower(protocol) || '\"]'
-         WHERE lower(COALESCE(protocol, '')) IN ('ssh', 'rdp', 'telnet', 'serial', 'redfish')
-           AND COALESCE(protocols, '') <> '[\"' || lower(protocol) || '\"]'",
-        [],
-    );
+    // Phase 0：protocols 允许多个合法协议，启动时只清洗非法值并保证包含主协议。
+    // 现有数据的 protocols 均为单元素，规范化后保持原值不变。
+    // 先把待更新行收集到 Vec，避免 stmt 借用 conn 期间执行 UPDATE。
+    let pending: Vec<(String, String)> = {
+        let mut pending = Vec::new();
+        let query = "SELECT id, COALESCE(target_type, 'linux'), COALESCE(protocol, 'ssh'), COALESCE(protocols, '') FROM servers";
+        if let Ok(mut stmt) = conn.prepare(query) {
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            });
+            if let Ok(rows) = rows {
+                for row in rows.flatten() {
+                    let (id, target, protocol, protocols) = row;
+                    let target_type = crate::connection::TargetType::from_str_lossy(&target);
+                    let primary = crate::connection::ConnectionProtocol::parse(&protocol)
+                        .unwrap_or_else(|_| crate::connection::primary_protocol(target_type));
+                    let normalized = crate::connection::normalize_protocols(
+                        Some(&protocols),
+                        target_type,
+                        primary,
+                    );
+                    if normalized != protocols {
+                        pending.push((id, normalized));
+                    }
+                }
+            }
+        }
+        pending
+    };
+    for (id, normalized) in pending {
+        let _ = conn.execute(
+            "UPDATE servers SET protocols = ?1 WHERE id = ?2",
+            params![normalized, id],
+        );
+    }
 }
 
 /// 加密含凭据的 JSON 文本列（幂等：已是 v1 密文则原样返回，兼容导出后再次导入）
@@ -858,6 +921,10 @@ fn row_to_server(row: &rusqlite::Row<'_>) -> SqliteResult<Server> {
         agent_identity: row.get("agent_identity")?,
         certificate_path: row.get("certificate_path")?,
         ssh_key_id: row.get("ssh_key_id")?,
+        // 列缺失时（旧版本数据库 / 回滚场景）安全降级为 None
+        credentials_config: decrypt_sensitive_text(
+            row.get::<_, Option<String>>("credentials_config").ok().flatten(),
+        ),
         tags: row.get("tags")?,
         notes: row.get("notes")?,
         connection_timeout: row.get("connection_timeout")?,
@@ -940,6 +1007,11 @@ fn mask_server_passwords(mut server: Server) -> Server {
             }
         }
     }
+    // credentials_config 是加密列，row_to_server 已解密成明文。
+    // 该字段目前没有任何表单写入路径，直接不回显，避免 token / kubeconfig
+    // 等凭据随 servers_list / servers_get / 回收站一起明文送到前端。
+    // 导出走 servers_list_raw（不经过此处），因此备份内容不受影响。
+    server.credentials_config = None;
     server
 }
 
@@ -1131,20 +1203,34 @@ pub fn servers_add(server: String) -> Result<String, String> {
         protocol = "redfish".to_string();
     }
     crate::connection::validate_target_protocol(&target_type, &protocol)?;
-    if protocol != "ssh" && auth_type != "password" {
-        return Err(format!("协议 {} 仅支持密码认证", protocol));
+    let parsed_target = crate::connection::TargetType::from_str_lossy(&target_type);
+    let parsed_protocol = crate::connection::ConnectionProtocol::from_str_lossy(&protocol);
+    if !crate::connection::is_auth_allowed(parsed_protocol, &auth_type) {
+        return Err(format!(
+            "协议 {} 不支持认证方式 {}，可选：{}",
+            protocol,
+            auth_type,
+            crate::connection::allowed_auth_types(parsed_protocol).join(", ")
+        ));
     }
-    // 当前产品每台资产只选择一个主协议；不信任调用方传入的历史 protocols 数组，
-    // 否则工作台可能按数组显示了另一个协议的模块。
-    let protocols = serde_json::to_string(&vec![protocol.clone()])
-        .map_err(|e| format!("Failed to serialize protocol: {}", e))?;
+    // Phase 0：数据层允许多协议；规范化会过滤非法值并保证包含当前主协议。
+    // 现有前端仍只传单元素数组，因此行为与重构前一致。
+    let protocols = crate::connection::normalize_protocols(
+        input.protocols.as_deref(),
+        parsed_target,
+        parsed_protocol,
+    );
     let rdp_port = input.rdp_port.unwrap_or(3389);
     let bmc_port = if target_type.eq_ignore_ascii_case("bmc") {
         input.bmc_port.unwrap_or(if port == 22 { 443 } else { port })
     } else {
         input.bmc_port.unwrap_or(443)
     };
-    let bmc_allow_invalid_certs = input.bmc_allow_invalid_certs.unwrap_or(false);
+    // 泛化字段优先、历史字段兜底：旧前端与旧导入文件的 BMC 开关仍能生效
+    let bmc_allow_invalid_certs = input
+        .tls_allow_invalid_certs
+        .or(input.bmc_allow_invalid_certs)
+        .unwrap_or(false);
     if target_type.eq_ignore_ascii_case("bmc") {
         port = bmc_port;
     }
@@ -1177,6 +1263,11 @@ pub fn servers_add(server: String) -> Result<String, String> {
         None => None,
     };
     let serial_config = input.serial_config.filter(|s| !s.trim().is_empty());
+    // 设备专属凭据（token / kubeconfig / VNC 密码等）与密钥配置一样加密入库
+    let credentials_config_enc = match input.credentials_config.filter(|s| !s.trim().is_empty()) {
+        Some(s) => Some(encrypt_sensitive_text(s.trim())?),
+        None => None,
+    };
     let group_id = input
         .group_id
         .as_deref()
@@ -1186,8 +1277,8 @@ pub fn servers_add(server: String) -> Result<String, String> {
         .unwrap_or_else(|| HOST_GROUP_ID.to_string());
 
     conn.execute(
-        "INSERT INTO servers (id, name, host, port, username, auth_type, password, private_key_path, private_key_passphrase, agent_identity, certificate_path, ssh_key_id, tags, notes, connection_timeout, favorite, status, last_accessed_at, os_type, os_info, last_disconnected_at, last_error, target_type, protocol, protocols, rdp_port, bmc_port, bmc_allow_invalid_certs, proxy_ids, default_proxy_id, tunnel_ids, proxy_config, tunnels_config, keys_config, serial_config, group_id, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38)",
+        "INSERT INTO servers (id, name, host, port, username, auth_type, password, private_key_path, private_key_passphrase, agent_identity, certificate_path, ssh_key_id, tags, notes, connection_timeout, favorite, status, last_accessed_at, os_type, os_info, last_disconnected_at, last_error, target_type, protocol, protocols, rdp_port, bmc_port, bmc_allow_invalid_certs, proxy_ids, default_proxy_id, tunnel_ids, proxy_config, tunnels_config, keys_config, serial_config, group_id, created_at, updated_at, credentials_config)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39)",
         params![
             id,
             input.name,
@@ -1227,6 +1318,7 @@ pub fn servers_add(server: String) -> Result<String, String> {
             group_id,
             now,
             now,
+            credentials_config_enc,
         ],
     )
     .map_err(|e| format!("Failed to insert server: {}", e))?;
@@ -1292,15 +1384,19 @@ pub fn servers_update(id: String, updates: String) -> Result<(), String> {
     let effective_protocol = effective_protocol_value.as_str();
     let effective_auth = update.auth_type.as_deref().unwrap_or(&current_auth);
     crate::connection::validate_target_protocol(effective_target, effective_protocol)?;
-
-    if effective_protocol != "ssh" && effective_auth != "password" {
-        return Err(format!("协议 {} 仅支持密码认证", effective_protocol));
+    let parsed_target = crate::connection::TargetType::from_str_lossy(effective_target);
+    let parsed_protocol = crate::connection::ConnectionProtocol::from_str_lossy(effective_protocol);
+    if !crate::connection::is_auth_allowed(parsed_protocol, effective_auth) {
+        return Err(format!(
+            "协议 {} 不支持认证方式 {}，可选：{}",
+            effective_protocol,
+            effective_auth,
+            crate::connection::allowed_auth_types(parsed_protocol).join(", ")
+        ));
     }
 
-    update.protocols = Some(
-        serde_json::to_string(&vec![effective_protocol_value.clone()])
-            .map_err(|e| format!("Failed to serialize protocol: {}", e))?,
-    );
+    // protocols 只在请求显式携带时写入（见下方 set_clauses）。
+    // db_update_async 的后台运行时更新不带该字段，不能顺手把多协议数组收敛成单元素。
 
     if effective_target.eq_ignore_ascii_case("bmc") {
         update.auth_type = Some("password".to_string());
@@ -1437,9 +1533,16 @@ pub fn servers_update(id: String, updates: String) -> Result<(), String> {
         set_clauses.push("protocol = ?".to_string());
         param_values.push(Box::new(protocol.clone()));
     }
-    if let Some(ref protocols) = update.protocols {
+    if let Some(ref raw_protocols) = update.protocols {
+        // 仅显式提交 protocols 时才规范化并写入；后台运行时更新不碰这一列，
+        // 避免把 Phase 1 的多协议数组收敛成单元素。
+        let normalized = crate::connection::normalize_protocols(
+            Some(raw_protocols),
+            parsed_target,
+            parsed_protocol,
+        );
         set_clauses.push("protocols = ?".to_string());
-        param_values.push(Box::new(protocols.clone()));
+        param_values.push(Box::new(normalized));
     }
     if let Some(rdp_port) = update.rdp_port {
         set_clauses.push("rdp_port = ?".to_string());
@@ -1449,7 +1552,7 @@ pub fn servers_update(id: String, updates: String) -> Result<(), String> {
         set_clauses.push("bmc_port = ?".to_string());
         param_values.push(Box::new(bmc_port));
     }
-    if let Some(allow_invalid_certs) = update.bmc_allow_invalid_certs {
+    if let Some(allow_invalid_certs) = update.tls_allow_invalid_certs.or(update.bmc_allow_invalid_certs) {
         set_clauses.push("bmc_allow_invalid_certs = ?".to_string());
         param_values.push(Box::new(if allow_invalid_certs { 1 } else { 0 }));
     }
@@ -1521,6 +1624,16 @@ pub fn servers_update(id: String, updates: String) -> Result<(), String> {
             Some(serial_config.trim().to_string())
         };
         set_clauses.push("serial_config = ?".to_string());
+        param_values.push(Box::new(value));
+    }
+    // 设备专属凭据配置（JSON，加密存储；空字符串表示清除）
+    if let Some(ref credentials_config) = update.credentials_config {
+        let value: Option<String> = if credentials_config.trim().is_empty() {
+            None
+        } else {
+            Some(encrypt_sensitive_text(credentials_config.trim())?)
+        };
+        set_clauses.push("credentials_config = ?".to_string());
         param_values.push(Box::new(value));
     }
     // 所属分组 ID（空字符串表示挂到「主机」根分组）
@@ -3514,6 +3627,63 @@ mod known_host_tests {
         // 同 host 不同端口：属于独立记录，仍是 TOFU 首次信任
         let r = check_known_host(host, 2200, "ssh-ed25519", "ZZZZ").unwrap();
         assert_eq!(r, KnownHostVerifyResult::NotFound);
+    }
+
+    fn protocols_of(id: &str) -> String {
+        let guard = DB_CONN.lock().unwrap();
+        let conn = &guard.as_ref().expect("db initialized").1;
+        conn.query_row(
+            "SELECT protocols FROM servers WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, String>(0),
+        )
+        .expect("query protocols")
+    }
+
+    /// Phase 1 验收：多协议数组不能被后台运行时字段更新收敛成单元素。
+    #[test]
+    fn multi_protocol_survives_background_updates() {
+        setup();
+        let id = servers_add(
+            serde_json::json!({
+                "id": "phase1-multi-proto",
+                "name": "multi-proto",
+                "host": "127.0.0.1",
+                "port": 22,
+                "username": "root",
+                "authType": "password",
+                "targetType": "windows",
+                "protocol": "ssh",
+                "protocols": ["rdp", "ssh"],
+                "rdpPort": 3389,
+            })
+            .to_string(),
+        )
+        .expect("add multi-protocol server");
+        assert_eq!(protocols_of(&id), r#"["rdp","ssh"]"#, "新建时保留多协议");
+
+        // 模拟 db_update_async：只带运行时字段，不带 protocols
+        servers_update(
+            id.clone(),
+            serde_json::json!({ "lastAccessedAt": 1_700_000_000_000i64 }).to_string(),
+        )
+        .expect("background update");
+        assert_eq!(protocols_of(&id), r#"["rdp","ssh"]"#, "后台更新不得改写");
+
+        servers_update(
+            id.clone(),
+            serde_json::json!({ "osType": "windows", "osInfo": "Windows Server" }).to_string(),
+        )
+        .expect("os probe update");
+        assert_eq!(protocols_of(&id), r#"["rdp","ssh"]"#, "OS 探测不得改写");
+
+        // 只有显式提交 protocols 时才按能力表规范化 / 去重 / 过滤未实现协议
+        servers_update(
+            id.clone(),
+            serde_json::json!({ "protocols": ["ssh", "ssh", "vnc"] }).to_string(),
+        )
+        .expect("explicit protocols update");
+        assert_eq!(protocols_of(&id), r#"["ssh"]"#, "显式提交才规范化");
     }
 }
 

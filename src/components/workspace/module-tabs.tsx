@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useAppStore } from "@/store";
 import type { WorkspaceModule } from "@/types";
 import { useTranslation } from "@/i18n";
-import { isModuleAvailable } from "@/services/connection-targets";
+import { deviceModuleLabelKey, getServerConnectionFlags, isModuleVisibleForServer } from "@/services/connection-targets";
 import {
   Terminal,
   Wrench,
@@ -187,25 +187,11 @@ export function ModuleTabs({
           targets: broadcastTargets.join(", "),
         })
       : t("broadcast_no_targets");
-  const targetType = server?.targetType;
-  const protocols = server?.protocols || ["ssh"];
-  const visibleModules = modules.filter(({ key }) => {
-    // 先按 targetType 过滤
-    if (!isModuleAvailable(targetType, key)) return false;
-    // RDP 是独立系统客户端会话。仅当当前主协议为 RDP 时显示 RDP 模块，
-    // 避免把监控/文件/终端等 SSH 模块错误挂载到纯 RDP 工作台。
-    if (server?.protocol === "rdp") return key === "rdp";
-    // 再按 protocols 过滤：
-    //   rdp 模块仅当 protocols 包含 'rdp' 时可见
-    //   terminal/files/forward 仅当 protocols 包含 'ssh' 时可见
-    //   其余模块（overview/services/processes/...）不受 protocols 限制
-    if (key === "rdp") return protocols.includes("rdp");
-    if (key === "terminal")
-      return protocols.includes("ssh") || protocols.includes("telnet") || protocols.includes("serial") || targetType === "serial" || targetType === "network";
-    if (key === "files" || key === "forward")
-      return protocols.includes("ssh");
-    return true;
-  });
+  const flags = getServerConnectionFlags(server?.targetType, server?.protocol);
+  // Phase 1-C：可见性规则统一由能力表解析；多协议设备可在模块栏切换 SSH / RDP
+  const visibleModules = modules.filter(({ key }) =>
+    isModuleVisibleForServer(key, server ?? {}),
+  );
 
   const vertical = toolbarPosition === "left" || toolbarPosition === "right";
 
@@ -243,7 +229,9 @@ export function ModuleTabs({
             onClick={() => onModuleChange(key)}
           >
             <Icon className="h-3.5 w-3.5 flex-shrink-0 opacity-85" />
-            <span className="truncate max-w-[120px]">{t(`module_${key}`)}</span>
+            <span className="truncate max-w-[120px]">
+              {key === "bmc" ? t(deviceModuleLabelKey(server?.targetType)) : t(`module_${key}`)}
+            </span>
           </button>
         ))}
 
@@ -283,7 +271,7 @@ export function ModuleTabs({
         </button>
 
         {/* 串口专属控制组（直插顶栏单行，零遮挡终端画布） */}
-        {(targetType === "serial" || server?.protocol === "serial") && serialToolbar && !vertical && (
+        {flags.isSerialServer && serialToolbar && !vertical && (
           <div className="flex items-center gap-1.5 pl-2.5 ml-1.5 border-l border-border/50 shrink-0 select-none py-0.5">
             {/* === 1. 前半部分：连接状态与硬件引脚信号 === */}
             {/* 连接 / 断开按钮 */}
@@ -472,7 +460,7 @@ export function ModuleTabs({
             </DropdownMenu>
           </div>
         )}
-        {activeModule !== "bmc" && targetType !== "serial" && server?.protocol !== "serial" && server?.protocol !== "rdp" && (
+        {activeModule !== "bmc" && !flags.isSerialServer && server?.protocol !== "rdp" && (
           <>
             {!isConnected ? (
               <Button

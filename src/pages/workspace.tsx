@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useAppStore } from "@/store";
 import { useMetricsStore } from "@/store/metrics-store";
+import { getServerConnectionFlags } from "@/services/connection-targets";
 import { ModuleTabs, type SerialToolbarState } from "@/components/workspace/module-tabs";
 import { OverviewModule } from "@/components/workspace/modules/overview";
 import { FloatingMetricsHud } from "@/components/workspace/floating-metrics-hud";
@@ -13,6 +14,8 @@ import { FilesModule } from "@/components/workspace/modules/files";
 import { DockerModule } from "@/components/workspace/modules/docker";
 import { RdpViewerModule } from "@/components/workspace/modules/rdp-viewer";
 import { BmcModule } from "@/components/workspace/modules/bmc";
+import { EsxiModule } from "@/components/workspace/modules/esxi";
+import { K8sModule } from "@/components/workspace/modules/k8s";
 import { ConnectingAnimation } from "@/components/workspace/connecting-animation";
 import { ConnectionDiagnosticsDialog } from "@/components/workspace/connection-diagnostics-dialog";
 import { SshCredentialDialog } from "@/components/workspace/ssh-credential-dialog";
@@ -188,12 +191,17 @@ export function WorkspacePage({
   const currentTab = tabs.find((t) => t.id === tabId);
   const serverId = currentTab?.serverId ?? "";
   const server = useAppStore((s) => s.servers.find((sv) => sv.id === serverId));
-  const isBmcServer = server?.targetType === "bmc";
-  const isSerialServer = server?.targetType === "serial" || server?.protocol === "serial";
-  const isRdpServer = server?.protocol === "rdp";
-  // 网络设备（交换机/路由器）后端仍会走 Linux /proc 采集，但没有 /proc，
-  // 因此与 serial/rdp/bmc 一样不展示系统指标监控，避免出现全 0 假值
-  const isNetworkServer = server?.targetType === "network";
+  // Phase 0：形态判断统一查能力表；刻意不传 osType，保持与重构前的
+  // targetType / protocol 字面量判断完全等价（只有标签条需要 osType 旧资产兜底）。
+  const serverFlags = getServerConnectionFlags(server?.targetType, server?.protocol);
+  // Phase 2-C：设备管理目标统一由 isDeviceManagedServer 判定（BMC / ESXi / K8s），
+  // 这些设备由各自模块建立连接，不能落入通用 SSH 链路（工作台容器 key 仍为 bmc）。
+  const isBmcServer = serverFlags.isDeviceManagedServer;
+  const deviceTargetType = server?.targetType;
+  const isSerialServer = serverFlags.isSerialServer;
+  const isRdpServer = serverFlags.isRdpServer;
+  // 没有系统指标采集链路的设备（网络设备 / Telnet / 外部启动器）不展示监控，避免全 0 假值
+  const supportsMetrics = serverFlags.supportsMetrics;
   const connId = tabId && serverId && !isSerialServer && !isRdpServer && !isBmcServer
     ? `ws:${serverId}:${tabId}`
     : serverId;
@@ -204,7 +212,7 @@ export function WorkspacePage({
     (s) => s.serverStates[connId]?.metrics?.metricsAvailable,
   );
   const floatingMonitorAvailable =
-    !isSerialServer && !isRdpServer && !isBmcServer && !isNetworkServer &&
+    !isSerialServer && !isRdpServer && !isBmcServer && supportsMetrics &&
     metricsAvailable !== false;
 
   // 监听底栏胶囊点击切换监控卡片事件
@@ -567,7 +575,7 @@ export function WorkspacePage({
     if (targetModule === "files") {
       // telnet / 不支持文件管理的目标类型：不响应，避免按钮高亮但面板不出现
       const filesAvailable =
-        isModuleAvailable(server?.targetType, "files") && server?.protocol !== "telnet";
+        isModuleAvailable(server?.targetType, "files") && !serverFlags.isTelnetServer;
       if (!filesAvailable) return;
       // 面板高度动画期间冻结终端画布（复用分屏拖拽的 split-resize-start/end 机制）：
       // 否则 ResizeObserver 逐帧 fit 导致 rows 反复变化，日志文字上下跳动。
@@ -981,7 +989,7 @@ export function WorkspacePage({
   const filesPanelAvailable =
     !isSplitPane &&
     isModuleAvailable(server?.targetType, "files") &&
-    server?.protocol !== "telnet";
+    !serverFlags.isTelnetServer;
   // 文件面板是否可见：可用且用户已展开
   const showFilesPanel = filesPanelOpen && filesPanelAvailable;
   // 文件面板是否处于激活态（供 FilesModule 处理拖拽/直达等全局事件）
@@ -1227,7 +1235,7 @@ export function WorkspacePage({
           />
 
           {/* 实时性能悬浮监控卡片 (原生拖拽、FinalShell 经典监控、全交互波形与进程) */}
-          {!isSerialServer && !isRdpServer && !isBmcServer && !isNetworkServer && (
+          {!isSerialServer && !isRdpServer && !isBmcServer && supportsMetrics && (
             <FloatingMetricsHud
               serverId={connId}
               isConnected={isConnected && isFullyReady}
@@ -1415,8 +1423,12 @@ export function WorkspacePage({
         {/* RDP 模块：独立于 SSH 连接，无需先建立 SSH 即可启动远程桌面 */}
         {isRdpModule && <RdpViewerModule serverId={serverId} />}
 
-        {/* BMC 模块：通过 Redfish API (HTTPS) 工作，独立于 SSH 连接 */}
-        {isBmcModule && <BmcModule serverId={serverId} isActive={isActive} />}
+        {/* 设备管理模块：按目标类型分派 BMC / ESXi / K8s，独立于 SSH 连接 */}
+        {isBmcModule && (deviceTargetType === "kubernetes"
+          ? <K8sModule serverId={serverId} isActive={isActive} />
+          : deviceTargetType === "esxi"
+            ? <EsxiModule serverId={serverId} isActive={isActive} />
+            : <BmcModule serverId={serverId} isActive={isActive} />)}
       </div>
 
       {/* Snapshot modal */}

@@ -1,7 +1,7 @@
 # Qshell 项目总览与开发指南
 
 > 目标读者：第一次接触本仓库的开发者。读完本文应能完成环境搭建、理解整体架构、知道改代码要遵守哪些约定、去哪里找对应模块。
-> 配套文档：[`OTA_RELEASE_GUIDE.md`](./OTA_RELEASE_GUIDE.md)（发版流程）、[`TERMINAL_COMPARISON_XSHELL.md`](./TERMINAL_COMPARISON_XSHELL.md)（终端规划）、[`SFTP_COMPARISON_XFTP.md`](./SFTP_COMPARISON_XFTP.md)（SFTP 规划）。
+> 配套文档：[`OTA_RELEASE_GUIDE.md`](./OTA_RELEASE_GUIDE.md)（发版流程）、[`VNC_AND_FTP_ROADMAP.md`](./VNC_AND_FTP_ROADMAP.md)（VNC 与 FTP/FTPS 协议规划）、[`TERMINAL_COMPARISON_XSHELL.md`](./TERMINAL_COMPARISON_XSHELL.md)（终端规划）、[`SFTP_COMPARISON_XFTP.md`](./SFTP_COMPARISON_XFTP.md)（SFTP 规划）。
 
 ---
 

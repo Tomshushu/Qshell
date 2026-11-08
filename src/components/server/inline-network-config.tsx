@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { useTranslation } from '@/i18n'
+import { getServerConnectionFlags } from '@/services/connection-targets'
 import {
   Eye,
   EyeOff,
@@ -344,8 +345,7 @@ export function InlineProxyEditor({
     return list.filter(
       (s) =>
         s.id !== currentServerId &&
-        s.targetType !== 'serial' &&
-        s.protocol !== 'serial',
+        !getServerConnectionFlags(s.targetType, s.protocol).isSerialServer,
     )
   }, [availableServers, storeServers, currentServerId])
 

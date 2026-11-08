@@ -14,6 +14,7 @@ import {
   updateSplitRatio,
 } from "@/utils/split-layout";
 import { sshService } from "@/services/ssh-service";
+import { getServerConnectionFlags } from "@/services/connection-targets";
 import { playSound, SoundType } from "@/lib/sound";
 import { recordConnection } from "@/lib/recent-connections";
 import { clearRemotePathCache } from "@/lib/command-intelligence/remote-path-completion";
@@ -66,9 +67,8 @@ export const createWorkspaceSlice: StateCreator<
     // 物理串口通常由操作系统独占；同一串口连接重复双击时复用已有工作台，
     // 避免第二个标签打开同一 COM/TTY 后只得到“端口被占用”。
     const targetServer = get().servers.find((server) => server.id === serverId);
-    const isSerialTerminal =
-      module === "terminal" &&
-      (targetServer?.targetType === "serial" || targetServer?.protocol === "serial");
+    const targetFlags = getServerConnectionFlags(targetServer?.targetType, targetServer?.protocol);
+    const isSerialTerminal = module === "terminal" && targetFlags.isSerialServer;
     const targetSerialPort = isSerialTerminal
       ? getSerialPortName(targetServer)
       : null;
@@ -148,10 +148,8 @@ export const createWorkspaceSlice: StateCreator<
     const occupiedSerialPorts = new Map<string, WorkspaceTab>();
     for (const tab of current.tabs) {
       const openedServer = current.servers.find((server) => server.id === tab.serverId);
-      if (
-        tab.module === "terminal" &&
-        (openedServer?.targetType === "serial" || openedServer?.protocol === "serial")
-      ) {
+      const openedFlags = getServerConnectionFlags(openedServer?.targetType, openedServer?.protocol);
+      if (tab.module === "terminal" && openedFlags.isSerialServer) {
         const port = getSerialPortName(openedServer);
         if (port) occupiedSerialPorts.set(port, tab);
       }
@@ -160,9 +158,8 @@ export const createWorkspaceSlice: StateCreator<
     let firstExistingSerialTab: WorkspaceTab | undefined;
     entries = entries.filter((entry) => {
       const target = current.servers.find((server) => server.id === entry.serverId);
-      const isSerial =
-        entry.module === "terminal" &&
-        (target?.targetType === "serial" || target?.protocol === "serial");
+      const targetFlags = getServerConnectionFlags(target?.targetType, target?.protocol);
+      const isSerial = entry.module === "terminal" && targetFlags.isSerialServer;
       if (!isSerial) return true;
       const port = getSerialPortName(target);
       if (!port) return true;
@@ -763,12 +760,9 @@ export const createWorkspaceSlice: StateCreator<
       .filter((t) => t.module === "terminal")
       .filter((t) => {
         const sv = servers.find((s) => s.id === t.serverId);
-        return (
-          sv &&
-          sv.targetType !== "serial" &&
-          sv.protocol !== "serial" &&
-          sv.protocol !== "rdp"
-        );
+        const flags = getServerConnectionFlags(sv?.targetType, sv?.protocol);
+        // 保留 protocol !== 'rdp' 的原始判断，确保广播范围与重构前一致
+        return sv && !flags.isSerialServer && sv.protocol !== "rdp";
       })
       .map((t) => t.id);
     playSound(SoundType.Toggle);
@@ -792,12 +786,9 @@ export const createWorkspaceSlice: StateCreator<
       .filter((t) => t.module === "terminal")
       .filter((t) => {
         const sv = servers.find((s) => s.id === t.serverId);
-        return (
-          sv &&
-          sv.targetType !== "serial" &&
-          sv.protocol !== "serial" &&
-          sv.protocol !== "rdp"
-        );
+        const flags = getServerConnectionFlags(sv?.targetType, sv?.protocol);
+        // 保留 protocol !== 'rdp' 的原始判断，确保广播范围与重构前一致
+        return sv && !flags.isSerialServer && sv.protocol !== "rdp";
       })
       .map((t) => t.id);
     playSound(SoundType.Toggle);

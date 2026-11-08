@@ -10,6 +10,7 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { useAIStore } from '@/store/ai-store'
 import { useAppStore } from '@/store'
+import { getServerConnectionFlags } from '@/services/connection-targets'
 import { getTerminalTheme } from '@/utils/terminal-themes'
 import { AIMascotAvatar } from './ai-mascot-avatar'
 import { useTranslation } from '@/i18n'
@@ -1035,7 +1036,8 @@ function UnattachedServerPicker({
 }: UnattachedServerPickerProps) {
   const servers = useAppStore((s) => s.servers) || []
   const validServers = useMemo(
-    () => servers.filter((s) => s.targetType !== 'bmc'),
+    // 仅按 BMC 形态排除；刻意不用 caps.probe，否则会连带排除 network/serial/telnet
+    () => servers.filter((s) => !getServerConnectionFlags(s.targetType, s.protocol).isDeviceManagedServer),
     [servers],
   )
   const [selectedIds, setSelectedIds] = useState<string[]>([])

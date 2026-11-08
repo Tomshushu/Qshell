@@ -7,6 +7,7 @@ import { playSound, SoundType } from '@/lib/sound'
 import { friendlyError } from '@/lib/error-messages'
 import { sshService } from '@/services/ssh-service'
 import { backend } from '@/services/api'
+import { resolveServerOpenAction } from '@/services/connection-targets'
 
 export function useServerCardActions({
   server,
@@ -68,35 +69,29 @@ export function useServerCardActions({
     if (now - lastDoubleClickTimeRef.current < 600) return
     lastDoubleClickTimeRef.current = now
 
-    // Windows 优先 SSH 终端，仅配 RDP 启远程桌面，皆无提示未配置连接端口
-    if (server.targetType === 'windows') {
-      const hasSsh = Boolean(server.port && server.port > 0)
-      const hasRdp = Boolean(server.rdpPort && server.rdpPort > 0)
-      if (hasSsh) {
-        openTab(server.id, server.name, 'terminal')
-      } else if (hasRdp) {
-        void (async () => {
-          try {
-            const result = await backend?.rdp.launch({ serverId: server.id, rdpPort: server.rdpPort })
-            if (!result?.success) {
-              toast.error(friendlyError(result?.error || '').message || t('err_generic_conn_failed'))
-            }
-          } catch (e) {
-            const raw = e instanceof Error ? e.message : String(e)
-            toast.error(friendlyError(raw).message || t('err_generic_conn_failed'))
-          }
-        })()
-      } else {
-        toast.warning(t('server_no_port') || '未配置连接端口')
-      }
-    } else if (server.targetType === 'bmc') {
+    // Phase 1-B：分派规则统一由能力表解析，protocols 声明参与判断
+    const action = resolveServerOpenAction(server)
+    if (action === 'terminal') {
+      openTab(server.id, server.name, 'terminal')
+    } else if (action === 'bmc') {
       // BMC 双击默认进入带外管理界面（Redfish，不依赖 SSH）
       openTab(server.id, server.name, 'bmc')
+    } else if (action === 'rdp') {
+      void (async () => {
+        try {
+          const result = await backend?.rdp.launch({ serverId: server.id, rdpPort: server.rdpPort })
+          if (!result?.success) {
+            toast.error(friendlyError(result?.error || '').message || t('err_generic_conn_failed'))
+          }
+        } catch (e) {
+          const raw = e instanceof Error ? e.message : String(e)
+          toast.error(friendlyError(raw).message || t('err_generic_conn_failed'))
+        }
+      })()
     } else {
-      // Linux/Unix 双击默认进入终端界面（核心功能优先）
-      openTab(server.id, server.name, 'terminal')
+      toast.warning(t('server_no_port') || '未配置连接端口')
     }
-  }, [server.id, server.name, server.targetType, server.port, server.rdpPort, openTab, toast, t])
+  }, [server.id, server.name, server.targetType, server.protocol, server.protocols, server.port, server.rdpPort, openTab, toast, t])
 
   return {
     t,

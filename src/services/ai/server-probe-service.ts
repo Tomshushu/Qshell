@@ -13,6 +13,7 @@
 
 import { backend } from '@/services/api'
 import { useAppStore } from '@/store'
+import { getServerConnectionFlags } from '@/services/connection-targets'
 import type { Server, ServerGroup, SystemMetrics } from '@/types'
 
 export type ProbeMetricType = 'disk' | 'memory' | 'cpu' | 'container' | 'network' | 'process' | 'all'
@@ -398,8 +399,12 @@ export function resolveProbePlan(
     metric = 'all'
   }
 
-  // 3. 过滤可执行 SSH 的有效服务器（排除 BMC 等非 SSH 目标）
-  const validServers = servers.filter((s) => s.targetType !== 'bmc')
+  // 3. 排除设备管理目标（BMC / ESXi / K8s）：它们没有 SSH 只读探针。
+  // 刻意不用 caps.probe：能力位还会排除 network / serial / telnet / rdp，会把原本可探测的范围变严格。
+  // 按注册表判定，新增设备族自动跟随，且不会因 protocol 脏数据误排除 linux 资产。
+  const validServers = servers.filter(
+    (s) => !getServerConnectionFlags(s.targetType, s.protocol).isDeviceManagedServer,
+  )
   if (validServers.length === 0) {
     return {
       shouldProbe: false,

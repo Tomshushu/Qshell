@@ -8,6 +8,7 @@ import { playSound, SoundType } from '@/lib/sound'
 import { extractBaseServerId } from '@/services/ssh-connection-state'
 import { cn } from '@/lib/utils'
 import { StatusBarMetricsPill } from '@/components/workspace/floating-metrics-hud'
+import { getServerConnectionFlags, deviceStatusKeys } from '@/services/connection-targets'
 
 /** 复制成功对勾的显示时长（ms） */
 const COPY_FEEDBACK_MS = 1500
@@ -58,11 +59,14 @@ export function StatusBar() {
         .map((k) => extractBaseServerId(k))
     ).size
   }, [connectedServers])
-  // BMC 带外管理通过 Redfish (HTTPS) 工作，不依赖 SSH 连接
-  const isBmcServer = server?.targetType === 'bmc'
-  const isRdpServer = server?.targetType === 'rdp' || server?.protocol === 'rdp'
-  const isSerialServer = server?.targetType === 'serial' || server?.protocol === 'serial'
-  const isNetworkServer = server?.targetType === 'network'
+  // Phase 0：形态判断统一查能力表（BMC 走 Redfish，不依赖 SSH 连接）
+  const serverFlags = getServerConnectionFlags(server?.targetType, server?.protocol)
+  // Phase 2-C：设备管理目标统一不走 SSH，避免误显示 SSH 模式 / 指标胶囊
+  const isBmcServer = serverFlags.isDeviceManagedServer
+  const deviceStatus = deviceStatusKeys(server?.targetType)
+  const isRdpServer = serverFlags.isRdpServer
+  const isSerialServer = serverFlags.isSerialServer
+  const supportsMetrics = serverFlags.supportsMetrics
 
   const connId =
     activeTab?.id && serverId && !isSerialServer && !isRdpServer && !isBmcServer
@@ -195,7 +199,7 @@ export function StatusBar() {
         ) : isBmcServer ? (
           <>
             <Wifi className="h-3 w-3 text-success flex-shrink-0" />
-            <span className="truncate">{t('status_bmc_ready')} · {server?.host || '?'}</span>
+            <span className="truncate">{t(deviceStatus.readyKey)} · {server?.host || '?'}</span>
             {copyIpButton}
           </>
         ) : isRdpServer ? (
@@ -235,7 +239,7 @@ export function StatusBar() {
       )}
 
       {/* 实时监控底栏触发胶囊 */}
-      {isConnected && !isSftpTab && !isSerialServer && !isRdpServer && !isBmcServer && !isNetworkServer && connId && (
+      {isConnected && !isSftpTab && !isSerialServer && !isRdpServer && !isBmcServer && supportsMetrics && connId && (
         <StatusBarMetricsPill
           serverId={connId}
           isConnected={isConnected}
@@ -247,7 +251,7 @@ export function StatusBar() {
         {isSftpTab
           ? 'SFTP'
           : isBmcServer
-            ? t('status_bmc_mode')
+            ? t(deviceStatus.modeKey)
             : isRdpServer
               ? t('module_rdp')
               : isSerialServer

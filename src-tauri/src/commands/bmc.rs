@@ -239,6 +239,9 @@ pub struct BmcTestConfig {
     pub connection_timeout: Option<u32>,
     #[serde(default)]
     pub bmc_allow_invalid_certs: Option<bool>,
+    /// 泛化后的 TLS 开关（新前端写入），None 时回退读取旧字段
+    #[serde(default)]
+    pub tls_allow_invalid_certs: Option<bool>,
 }
 
 fn redfish_base_url(host: &str, port: u16) -> String {
@@ -261,46 +264,27 @@ async fn load_ctx(server_id: &str) -> Result<RedfishCtx, String> {
         .ok()
         .filter(|value| *value > 0)
         .unwrap_or(443);
+    // 先取出开关，避免 username/password 被 move 后再借用 server
+    let allow_invalid_certs = server.allow_invalid_tls_certs();
     Ok(RedfishCtx {
         server_id: server_id.to_string(),
         base_url: redfish_base_url(&server.host, port),
         username: server.username,
         password: server.password.unwrap_or_default(),
         timeout_secs: server.connection_timeout.max(5) as u64,
-        allow_invalid_certs: server.bmc_allow_invalid_certs,
+        allow_invalid_certs,
     })
 }
 
-/// 构造 reqwest 客户端；严格校验是默认值，自签名兼容必须显式开启。
+/// 构造 reqwest 客户端；实现已下沉到通用 HTTPS 设备层，
+/// 保留薄包装以维持本模块既有 TLS 单测与调用点不变。
 fn build_client(timeout_secs: u64, allow_invalid_certs: bool) -> Result<reqwest::Client, String> {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(timeout_secs))
-        .connect_timeout(std::time::Duration::from_secs(timeout_secs))
-        .danger_accept_invalid_certs(allow_invalid_certs)
-        .build()
-        .map_err(|e| format!("HTTP 客户端初始化失败: {}", e))
+    crate::https_device::build_client(timeout_secs, allow_invalid_certs)
 }
 
-// ---------------------------------------------------------------------------
-// 连接复用：按超时缓存 client。reqwest Client 内置连接池（同 host 复用 TCP+TLS），
-// 旧实现每个请求新建 client = 每请求一次 TLS 握手，老 BMC 握手 1-3s 时轮询性能极差。
-// ---------------------------------------------------------------------------
-fn client_cache() -> &'static std::sync::Mutex<std::collections::HashMap<(u64, bool), std::sync::Arc<reqwest::Client>>> {
-    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<(u64, bool), std::sync::Arc<reqwest::Client>>>> =
-        std::sync::OnceLock::new();
-    CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
-}
-
-/// 取（或创建）共享 HTTP 客户端：同一 BMC 的所有请求复用连接池
+/// 取（或创建）共享 HTTP 客户端：连接池缓存由通用层按 (超时, 是否放宽证书) 维护。
 fn get_client(timeout_secs: u64, allow_invalid_certs: bool) -> Result<std::sync::Arc<reqwest::Client>, String> {
-    let mut cache = client_cache().lock().unwrap_or_else(|e| e.into_inner());
-    let key = (timeout_secs, allow_invalid_certs);
-    if let Some(c) = cache.get(&key) {
-        return Ok(std::sync::Arc::clone(c));
-    }
-    let client = std::sync::Arc::new(build_client(timeout_secs, allow_invalid_certs)?);
-    cache.insert(key, std::sync::Arc::clone(&client));
-    Ok(client)
+    crate::https_device::client(timeout_secs, allow_invalid_certs)
 }
 
 // ---------------------------------------------------------------------------
@@ -439,7 +423,7 @@ fn redfish_error_hint(detail: &str, is_connect: bool, is_timeout: bool) -> &'sta
         || lower.contains("tls")
         || lower.contains("ssl")
     {
-        "TLS 证书校验失败（自签名或不受信任的证书）。如确认设备可信，请在服务器设置中勾选「允许 BMC 使用自签名或无效 TLS 证书」后重试。"
+        "TLS 证书校验失败（自签名或不受信任的证书）。如确认设备可信，请在服务器设置中勾选「允许此设备使用自签名或无效 TLS 证书」后重试。"
     } else if is_connect {
         "无法建立连接：请检查主机地址、BMC 端口与网络可达性。"
     } else if is_timeout {
@@ -452,14 +436,7 @@ fn redfish_error_hint(detail: &str, is_connect: bool, is_timeout: bool) -> &'sta
 /// reqwest 的顶层 Display 只有 "error sending request for url"，不含 source。
 /// 展开错误链才能把「证书不受信任」这类原因告诉用户，而不是甩一句笼统的英文。
 fn format_redfish_error(url: &str, error: &reqwest::Error) -> String {
-    let root: &(dyn std::error::Error + 'static) = error;
-    let mut chain: Vec<String> = Vec::new();
-    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(root);
-    while let Some(err) = current {
-        chain.push(err.to_string());
-        current = std::error::Error::source(err);
-    }
-    let detail = chain.join(" -> ");
+    let detail = crate::https_device::error_detail(error);
     let hint = redfish_error_hint(&detail, error.is_connect(), error.is_timeout());
     let brief: String = detail.chars().take(240).collect();
     format!("无法连接 BMC ({})：{} [底层原因: {}]", url, hint, brief)
@@ -646,7 +623,10 @@ pub async fn bmc_test_connect_with_config(
         username: username.to_string(),
         password,
         timeout_secs: config.connection_timeout.unwrap_or(15).max(5) as u64,
-        allow_invalid_certs: config.bmc_allow_invalid_certs.unwrap_or(false),
+        allow_invalid_certs: config
+            .tls_allow_invalid_certs
+            .or(config.bmc_allow_invalid_certs)
+            .unwrap_or(false),
     };
 
     let result = match redfish_get(&ctx, "/redfish/v1/Systems").await {
@@ -1484,7 +1464,7 @@ mod tests {
             false,
         );
         assert!(hint.contains("TLS 证书校验失败"));
-        assert!(hint.contains("允许 BMC 使用自签名或无效 TLS 证书"));
+        assert!(hint.contains("允许此设备使用自签名或无效 TLS 证书"));
     }
 
     #[test]

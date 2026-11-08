@@ -27,9 +27,12 @@ import {
   ChevronDown,
 } from 'lucide-react'
 import {
-  CONNECTION_TARGETS,
+  getEnabledTargetTypes,
   getTargetTypeSpec,
   getProtocolSpec,
+  getTargetCapabilities,
+  getServerProtocols,
+  inferServerProtocols,
 } from '@/services/connection-targets'
 import { InlineProxyEditor, InlineTunnelEditor } from '@/components/server/inline-network-config'
 import { SelectKeyDialog } from '@/components/server/select-key-dialog'
@@ -349,6 +352,18 @@ export function ServerFormDialog({
   const [notes, setNotes] = useState('')
   const [connectionTimeout, setConnectionTimeout] = useState('30')
   const [rdpPort, setRdpPort] = useState('3389')
+  // Phase 1-D：用户显式取消的附加协议。空数组表示未干预，保存行为与重构前完全一致。
+  const [disabledProtocols, setDisabledProtocols] = useState<string[]>([])
+
+  // 表单当前推断出的协议集合，展示与保存共用同一份规则
+  const inferredProtocols = inferServerProtocols({
+    targetType, protocol, sshPort: port, rdpPort,
+  })
+  const primaryProtocol = inferredProtocols.includes('ssh') ? 'ssh' : inferredProtocols[0]
+  // 主协议始终保留（后端 normalize_protocols 同样会把它加回数组）
+  const enabledProtocols = inferredProtocols.filter(
+    (p) => p === primaryProtocol || !disabledProtocols.includes(p),
+  )
   const [bmcPort, setBmcPort] = useState('443')
   const [bmcAllowInvalidCerts, setBmcAllowInvalidCerts] = useState(false)
   const [proxyConfig, setProxyConfig] = useState<ProxyConfig | null>(null)
@@ -433,11 +448,8 @@ export function ServerFormDialog({
           let winSshPort = ''
           let winRdpPort = ''
           if (isWindows) {
-            const protocolsArr = Array.isArray(existingServer.protocols)
-              ? existingServer.protocols
-              : (typeof existingServer.protocols === 'string'
-                  ? (() => { try { return JSON.parse(existingServer.protocols) } catch { return [] } })()
-                  : [])
+            // allowEmpty：空数组要走下方「按端口推断」的旧分支，不能补主协议
+            const protocolsArr = getServerProtocols(existingServer, { allowEmpty: true })
             const hasSshConfigured = protocolsArr.length > 0
               ? protocolsArr.includes('ssh')
               : (existingServer.protocol === 'ssh' || (existingServer.port > 0 && existingServer.port !== 3389))
@@ -474,7 +486,24 @@ export function ServerFormDialog({
 
           const isPasswordOnlyTarget = isWindows ? !winSshPort : serverProtocol !== 'ssh'
 
-          setTargetType(existingServer.targetType || 'linux')
+          // Phase 1-D：把已保存的协议声明回填成「用户取消的附加协议」，
+          // 否则下次编辑保存会把用户的选择悄悄恢复成按端口推断的全集。
+          if (isWindows) {
+            const declared = getServerProtocols(existingServer, { allowEmpty: true })
+            const inferred = inferServerProtocols({
+              targetType: 'windows', sshPort: winSshPort, rdpPort: winRdpPort,
+            })
+            const primary = inferred.includes('ssh') ? 'ssh' : inferred[0]
+            setDisabledProtocols(
+              declared.length > 0
+                ? inferred.filter((p) => p !== primary && !declared.includes(p))
+                : [],
+            )
+          } else {
+            setDisabledProtocols([])
+          }
+
+          setTargetType(existingServer.targetType === 'unix' || existingServer.targetType === 'xinchuang' ? 'linux' : (existingServer.targetType || 'linux'))
           setProtocol(isWindows ? (winSshPort ? 'ssh' : 'rdp') : serverProtocol)
           setName(existingServer.name || '')
           setHost(existingServer.host || '')
@@ -539,7 +568,7 @@ export function ServerFormDialog({
             setRdpPort(String(existingServer.rdpPort || 3389))
           }
       setBmcPort(String(existingServer.bmcPort || 443))
-      setBmcAllowInvalidCerts(existingServer.bmcAllowInvalidCerts === true)
+      setBmcAllowInvalidCerts((existingServer.tlsAllowInvalidCerts ?? existingServer.bmcAllowInvalidCerts) === true)
       setProxyConfig(parseProxyConfig(existingServer.proxyConfig))
       setTunnelsConfig(parseTunnelsConfig(existingServer.tunnelsConfig))
 
@@ -565,7 +594,7 @@ export function ServerFormDialog({
     // 新建模式
       const isWin = initialTargetType === 'windows'
       const spec = getTargetTypeSpec(initialTargetType)
-      setTargetType(initialTargetType)
+      setTargetType(initialTargetType === 'unix' || initialTargetType === 'xinchuang' ? 'linux' : initialTargetType)
       setProtocol(isWin ? 'rdp' : (spec.supportedProtocols[0] || 'ssh'))
       setName('')
       setHost('')
@@ -585,6 +614,7 @@ export function ServerFormDialog({
       setGroupId(initialGroupId ?? '')
       setNotes('')
       setConnectionTimeout('30')
+      setDisabledProtocols([])
       setRdpPort(isWin ? '3389' : '3389')
       setBmcPort('443')
       setProxyConfig(null)
@@ -661,15 +691,16 @@ export function ServerFormDialog({
     const isWin = newType === 'windows'
     const spec = getTargetTypeSpec(newType)
     setActiveCategory('connection')
+    setDisabledProtocols([])
     setTargetType(newType)
     const defaultProto = spec.supportedProtocols[0] || 'ssh'
     setProtocol(isWin ? 'rdp' : defaultProto)
     setPort(isWin ? '' : String(spec.defaultPort))
     setRdpPort(isWin ? '3389' : '3389')
     setUsername(spec.defaultUsername)
-    if (newType === 'windows' || newType === 'bmc' || newType === 'serial') {
+    if (newType === 'windows' || newType === 'bmc' || newType === 'serial' || newType === 'esxi' || newType === 'kubernetes') {
       setAuthType('password')
-    } else     if (newType === 'linux') {
+    } else {
       setAuthType(spec.defaultAuthType)
     }
     // 串口列表由上面的 useEffect 统一加载，避免切换时重复扫描
@@ -679,6 +710,7 @@ export function ServerFormDialog({
   // 仍携带错误端口或隐藏的 SSH 凭据。
   const handleProtocolChange = (newProtocol: string) => {
     setProtocol(newProtocol)
+    setDisabledProtocols([])
     const protocolSpec = getProtocolSpec(newProtocol)
     const nextPort = newProtocol === 'rdp' && targetType === 'windows'
       ? (parseInt(rdpPort) || protocolSpec.defaultPort)
@@ -771,11 +803,53 @@ export function ServerFormDialog({
           password: password || undefined,
           connectionTimeout: parseInt(connectionTimeout) || 30,
           bmcAllowInvalidCerts,
+          tlsAllowInvalidCerts: bmcAllowInvalidCerts,
         })
         if (result.success) {
           toast.success(result.message || tr('Redfish 连接和认证成功', 'Redfish connection and authentication succeeded'), 3000)
         } else {
           toast.error(result.error || result.message || tr('BMC 连接失败', 'BMC connection failed'), 5000)
+        }
+        return
+      }
+
+      // Phase 2-C：Kubernetes 走 API Server + Bearer Token 测试连接
+      if (targetType === 'kubernetes' || protocol === 'k8s') {
+        const result = await sshService.testK8sConnectionWithConfig({
+          id: isEditMode && serverId ? serverId : undefined,
+          host: host.trim(),
+          port: parseInt(port) || 6443,
+          token: password || undefined,
+          connectionTimeout: parseInt(connectionTimeout) || 30,
+          tlsAllowInvalidCerts: bmcAllowInvalidCerts,
+        })
+        if (result.success) {
+          playSound(SoundType.Confirm)
+          toast.success(result.message || tr('K8s API 连接成功', 'K8s API connection succeeded'), 3000)
+        } else {
+          playSound(SoundType.Warn)
+          toast.error(result.error || result.message || tr('K8s 连接失败', 'K8s connection failed'), 5000)
+        }
+        return
+      }
+
+      // Phase 2-B：ESXi / vCenter 走 HTTPS REST 测试连接，不能落入 SSH 测试链路
+      if (targetType === 'esxi' || protocol === 'https') {
+        const result = await sshService.testEsxiConnectionWithConfig({
+          id: isEditMode && serverId ? serverId : undefined,
+          host: host.trim(),
+          port: parseInt(port) || 443,
+          username: username.trim(),
+          password: password || undefined,
+          connectionTimeout: parseInt(connectionTimeout) || 30,
+          tlsAllowInvalidCerts: bmcAllowInvalidCerts,
+        })
+        if (result.success) {
+          playSound(SoundType.Confirm)
+          toast.success(result.message || tr('ESXi HTTPS 连接和认证成功', 'ESXi HTTPS connection and authentication succeeded'), 3000)
+        } else {
+          playSound(SoundType.Warn)
+          toast.error(result.error || result.message || tr('ESXi 连接失败', 'ESXi connection failed'), 5000)
         }
         return
       }
@@ -1036,7 +1110,8 @@ export function ServerFormDialog({
       return
     }
 
-    if (!name.trim() || !host.trim() || !username.trim()) {
+    // Phase 2-C：K8s 用 Bearer Token（存在 password 字段），不需要用户名
+    if (!name.trim() || !host.trim() || (targetType !== 'kubernetes' && !username.trim())) {
       setValidationError('名称、主机地址和用户名为必填项')
       setActiveCategory('connection')
       return
@@ -1095,7 +1170,6 @@ export function ServerFormDialog({
           return
         }
         portNum = p
-        finalProtocols.push('ssh')
       }
 
       if (rdpTrim) {
@@ -1106,9 +1180,11 @@ export function ServerFormDialog({
           return
         }
         rdpPortNum = rp
-        finalProtocols.push('rdp')
       }
 
+      // Phase 1-D：与表单「已启用协议」展示共用同一份推断结果，
+      // 用户未干预时 enabledProtocols 与旧的按端口推断逐项等价。
+      finalProtocols = enabledProtocols
       finalProtocol = finalProtocols.includes('ssh') ? 'ssh' : 'rdp'
     } else {
       const p = parseInt(port.trim(), 10)
@@ -1120,7 +1196,8 @@ export function ServerFormDialog({
       portNum = p
       rdpPortNum = 3389
       finalProtocol = protocol
-      finalProtocols = [protocol]
+      // 非 Windows 目标恒为当前主协议，与重构前 [protocol] 等价
+      finalProtocols = enabledProtocols
     }
 
     const effectiveAuthType = targetType === 'windows'
@@ -1131,7 +1208,7 @@ export function ServerFormDialog({
       && existingServer?.authType === 'password'
       && Boolean(existingServer.password)
     if (effectiveAuthType === 'password' && !password && !canReuseStoredPassword) {
-      setValidationError(tr('请输入密码', 'Please enter password'))
+      setValidationError(targetType === 'kubernetes' ? tr('请输入 Bearer Token', 'Please enter Bearer Token') : tr('请输入密码', 'Please enter password'))
       setActiveCategory('connection')
       return
     }
@@ -1159,7 +1236,7 @@ export function ServerFormDialog({
     try {
       const keysConfigStr = authKeys.length > 0 ? JSON.stringify(authKeys) : null
       const keysConfigChanged = keysConfigStr !== initialKeysConfigRef.current
-      const canConfigureSshRouting = protocol === 'ssh'
+      const canConfigureSshRouting = finalProtocol === 'ssh'
       const proxyConfigStr =
         canConfigureSshRouting && proxyConfig && proxyConfig.type !== 'none' ? JSON.stringify(proxyConfig) : ''
       const tunnelsConfigStr = canConfigureSshRouting && tunnelsConfig.length > 0 ? JSON.stringify(tunnelsConfig) : ''
@@ -1179,7 +1256,8 @@ export function ServerFormDialog({
           connectionTimeout: parseInt(connectionTimeout) || 30,
           rdpPort: targetType === 'windows' ? rdpPortNum : 3389,
           bmcPort: targetType === 'bmc' ? portNum : 443,
-          bmcAllowInvalidCerts: targetType === 'bmc' ? bmcAllowInvalidCerts : false,
+          bmcAllowInvalidCerts: getTargetCapabilities(targetType, protocol).tlsCertOverride ? bmcAllowInvalidCerts : false,
+          tlsAllowInvalidCerts: getTargetCapabilities(targetType, protocol).tlsCertOverride ? bmcAllowInvalidCerts : false,
           proxyConfig: proxyConfigStr || null,
           tunnelsConfig: tunnelsConfigStr || null,
           groupId: groupId || HOST_GROUP_ID,
@@ -1261,7 +1339,8 @@ export function ServerFormDialog({
           protocols: finalProtocols,
           rdpPort: targetType === 'windows' ? rdpPortNum : 3389,
           bmcPort: targetType === 'bmc' ? portNum : 443,
-          bmcAllowInvalidCerts: targetType === 'bmc' ? bmcAllowInvalidCerts : false,
+          bmcAllowInvalidCerts: getTargetCapabilities(targetType, protocol).tlsCertOverride ? bmcAllowInvalidCerts : false,
+          tlsAllowInvalidCerts: getTargetCapabilities(targetType, protocol).tlsCertOverride ? bmcAllowInvalidCerts : false,
           proxyConfig: proxyConfigStr,
           tunnelsConfig: tunnelsConfigStr,
           keysConfig: keysConfigStr || undefined,
@@ -1299,7 +1378,7 @@ export function ServerFormDialog({
       : 'SSH连接'
 
   const isWindowsTarget = targetType === 'windows'
-  const canConfigureSshRouting = protocol === 'ssh'
+  const canConfigureSshRouting = isWindowsTarget ? Boolean(port.trim()) : protocol === 'ssh'
   const primaryPortLabel = targetType === 'bmc'
     ? tr('管理端口', 'Management port')
     : isWindowsTarget
@@ -1320,7 +1399,7 @@ export function ServerFormDialog({
                 <SelectPopover
                   value={targetType}
                   onChange={(v) => handleTargetTypeChange(v ?? '')}
-                  options={CONNECTION_TARGETS.filter((item) => item.enabled).map((spec) => ({ value: spec.id, label: t(spec.labelKey) }))}
+                  options={getEnabledTargetTypes().map((spec) => ({ value: spec.id, label: t(spec.labelKey) }))}
                   className="h-7"
                   ariaLabel={tr('设备类型', 'Device type')}
                 />
@@ -1793,25 +1872,65 @@ export function ServerFormDialog({
                             placeholder="127.0.0.1"
                             className="h-7 text-xs font-mono flex-1 bg-background"
                           />
-                          <label className="text-xs font-normal text-foreground shrink-0 whitespace-nowrap">SSH 端口:</label>
-                          <Input
-                            value={port}
-                            onChange={(e) => setPort(e.target.value)}
-                            maxLength={5}
-                            placeholder="22"
-                            className="h-7 text-xs font-mono w-16 text-center bg-background shrink-0"
-                          />
-                          <label className="text-xs font-normal text-foreground shrink-0 whitespace-nowrap">RDP 端口:</label>
-                          <Input
-                            value={rdpPort}
-                            onChange={(e) => setRdpPort(e.target.value)}
-                            maxLength={5}
-                            placeholder="3389"
-                            className="h-7 text-xs font-mono w-16 text-center bg-background shrink-0"
-                          />
                         </div>
-                        <div className="text-[11px] text-muted-foreground pl-15">
-                          {tr('可输入 SSH 端口、RDP 端口或两者同时配置（至少填写一个）', 'Enter SSH port, RDP port, or both (at least one is required)')}
+                        <div className="flex items-center gap-3 pt-1">
+                          <label className="text-xs font-normal text-foreground w-12 text-right shrink-0">
+                            {tr('协议:', 'Protocol:')}
+                          </label>
+                          <div className="flex flex-wrap items-center gap-5 flex-1">
+                            <div className="flex items-center gap-2">
+                              <label className="flex items-center gap-1.5 text-xs text-foreground cursor-pointer select-none font-medium">
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(rdpPort.trim())}
+                                  onChange={(e) => {
+                                    setRdpPort(e.target.checked ? '3389' : '')
+                                    setDisabledProtocols((prev) => prev.filter((x) => x !== 'rdp'))
+                                  }}
+                                  className="h-3.5 w-3.5 rounded border-input text-primary focus:ring-primary cursor-pointer"
+                                />
+                                {tr('RDP 远程桌面', 'RDP Desktop')}
+                              </label>
+                              <Input
+                                value={rdpPort}
+                                onChange={(e) => {
+                                  setRdpPort(e.target.value)
+                                  setDisabledProtocols((prev) => prev.filter((x) => x !== 'rdp'))
+                                }}
+                                maxLength={5}
+                                placeholder="3389"
+                                disabled={!rdpPort.trim()}
+                                className="h-7 text-xs font-mono w-16 text-center bg-background shrink-0 disabled:opacity-45"
+                              />
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <label className="flex items-center gap-1.5 text-xs text-foreground cursor-pointer select-none font-medium">
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(port.trim())}
+                                  onChange={(e) => {
+                                    setPort(e.target.checked ? '22' : '')
+                                    if (!e.target.checked) setAuthType('password')
+                                    setDisabledProtocols((prev) => prev.filter((x) => x !== 'ssh'))
+                                  }}
+                                  className="h-3.5 w-3.5 rounded border-input text-primary focus:ring-primary cursor-pointer"
+                                />
+                                {tr('SSH 终端', 'SSH Terminal')}
+                              </label>
+                              <Input
+                                value={port}
+                                onChange={(e) => {
+                                  setPort(e.target.value)
+                                  if (!e.target.value.trim()) setAuthType('password')
+                                  setDisabledProtocols((prev) => prev.filter((x) => x !== 'ssh'))
+                                }}
+                                maxLength={5}
+                                placeholder="22"
+                                disabled={!port.trim()}
+                                className="h-7 text-xs font-mono w-16 text-center bg-background shrink-0 disabled:opacity-45"
+                              />
+                            </div>
+                          </div>
                         </div>
                       </div>
                     )}
@@ -1834,7 +1953,7 @@ export function ServerFormDialog({
                       </div>
                     )}
 
-                    {targetType === 'bmc' && (
+                    {getTargetCapabilities(targetType, protocol).tlsCertOverride && (
                       <label className="flex items-start gap-2 text-xs text-foreground cursor-pointer select-none pt-1">
                         <input
                           type="checkbox"
@@ -1843,7 +1962,7 @@ export function ServerFormDialog({
                           className="mt-0.5 h-3.5 w-3.5 rounded border-input text-primary focus:ring-primary cursor-pointer"
                         />
                         <span>
-                          <span className="block">允许 BMC 使用自签名或无效 TLS 证书</span>
+                          <span className="block">允许此设备使用自签名或无效 TLS 证书</span>
                           <span className="block text-[10px] text-amber-500/90">仅在确认设备可信时启用，默认关闭</span>
                         </span>
                       </label>
@@ -1909,7 +2028,7 @@ export function ServerFormDialog({
                       </label>
                       {(!isWindowsTarget && protocol !== 'ssh') || (isWindowsTarget && !port.trim()) ? (
                         <div className="h-7 px-2.5 flex items-center text-xs text-muted-foreground bg-muted/30 border border-border/40 rounded flex-1 select-none font-medium">
-                          密码
+                          {targetType === 'kubernetes' ? 'Bearer Token' : '密码'}
                         </div>
                       ) : (
                         <SelectPopover
@@ -1926,7 +2045,7 @@ export function ServerFormDialog({
                       )}
                     </div>
 
-                    {/* 用户名 */}
+                    {/* 用户名（Kubernetes 使用 Bearer Token 认证，无需用户名） */}
                     <div className="flex items-center gap-3">
                       <label className="text-xs font-normal text-foreground w-12 text-right shrink-0">
                         用户名:
@@ -1935,7 +2054,7 @@ export function ServerFormDialog({
                         value={username}
                         onChange={(e) => setUsername(e.target.value)}
                         maxLength={100}
-                        placeholder="root"
+                        placeholder={targetType === 'kubernetes' ? '可选（Bearer Token 无需用户名）' : 'root'}
                         className="h-7 text-xs font-mono flex-1 bg-background"
                       />
                     </div>
@@ -1944,18 +2063,18 @@ export function ServerFormDialog({
                     {authType === 'password' && (
                       <div className="flex items-center gap-3">
                         <label className="text-xs font-normal text-foreground w-12 text-right shrink-0">
-                          密码:
+                          {targetType === 'kubernetes' ? 'Token:' : '密码:'}
                         </label>
                         <div className="relative flex-1">
                           <Input
                             type={showPassword ? 'text' : 'password'}
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
-                            maxLength={256}
+                            maxLength={targetType === 'kubernetes' ? 8192 : 256}
                             placeholder={
                               isEditMode
-                                ? '留空保留原密码'
-                                : '请输入密码'
+                                ? (targetType === 'kubernetes' ? '留空保留原 Token' : '留空保留原密码')
+                                : (targetType === 'kubernetes' ? '请输入 Bearer Token' : '请输入密码')
                             }
                             className="h-7 text-xs pr-8 font-mono bg-background"
                             autoComplete="new-password"
@@ -2099,7 +2218,7 @@ export function ServerFormDialog({
               onClick={handleTestConnection}
               disabled={
                 testing ||
-                (targetType === 'serial' ? !serialPortName.trim() : (!host.trim() || !username.trim()))
+                (targetType === 'serial' ? !serialPortName.trim() : (!host.trim() || (targetType !== 'kubernetes' && !username.trim())))
               }
               className="h-7 gap-1 px-3 text-xs cursor-pointer"
             >
@@ -2116,7 +2235,7 @@ export function ServerFormDialog({
                 disabled={
                   saving ||
                   !name.trim() ||
-                  (targetType === 'serial' ? !serialPortName.trim() : (!host.trim() || !username.trim()))
+                  (targetType === 'serial' ? !serialPortName.trim() : (!host.trim() || (targetType !== 'kubernetes' && !username.trim())))
                 }
                 className="h-7 px-5 text-xs font-semibold cursor-pointer"
               >

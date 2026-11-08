@@ -325,9 +325,13 @@ struct ExportServer {
     /// BMC Redfish HTTPS 端口，默认 443
     #[serde(default = "default_export_bmc_port")]
     bmc_port: i32,
-    /// 是否允许自签名/无效 BMC TLS 证书；旧导出文件缺省 false，不会被自动放宽校验
+    /// 是否允许自签名/无效 BMC TLS 证书；旧导出文件缺省 false，不会被自动放宽校验。
+    /// 保留此键以兼容旧版本客户端读取。
     #[serde(default)]
     bmc_allow_invalid_certs: bool,
+    /// 泛化后的开关（所有 HTTPS 设备共用）；缺省时回退读取 `bmcAllowInvalidCerts`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tls_allow_invalid_certs: Option<bool>,
     /// 关联的密钥库记录 ID
     #[serde(skip_serializing_if = "Option::is_none")]
     ssh_key_id: Option<String>,
@@ -349,9 +353,21 @@ struct ExportServer {
     /// 串口连接配置
     #[serde(skip_serializing_if = "Option::is_none")]
     serial_config: Option<String>,
+    /// 设备专属凭据配置（JSON，加密列）。整个导出 payload 已被用户密码加密，
+    /// 因此这里放解密后的明文，保证导出→导入能完整还原凭据。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    credentials_config: Option<String>,
     /// 所属分组路径（从根到直接父分组的名称链，用于跨机器还原分组结构）
     #[serde(skip_serializing_if = "Option::is_none")]
     group_path: Option<Vec<String>>,
+}
+
+impl ExportServer {
+    /// 泛化字段优先、历史字段兜底，保证旧导出文件不会被自动放宽 TLS 校验。
+    fn effective_tls_allow_invalid_certs(&self) -> bool {
+        self.tls_allow_invalid_certs
+            .unwrap_or(self.bmc_allow_invalid_certs)
+    }
 }
 
 fn default_export_target_type() -> String {
@@ -453,6 +469,7 @@ fn to_export_server(
         rdp_port: server.rdp_port,
         bmc_port: server.bmc_port,
         bmc_allow_invalid_certs: server.bmc_allow_invalid_certs,
+        tls_allow_invalid_certs: Some(server.allow_invalid_tls_certs()),
         ssh_key_id: server.ssh_key_id.clone(),
         private_key_content: None,
         certificate_content: None,
@@ -460,6 +477,7 @@ fn to_export_server(
         tunnels_config: server.tunnels_config.clone(),
         keys_config: server.keys_config.clone(),
         serial_config: server.serial_config.clone(),
+        credentials_config: server.credentials_config.clone(),
         group_path: server.group_id.as_ref().and_then(|gid| groups_paths.get(gid)).cloned(),
     })
 }
@@ -699,11 +717,13 @@ pub async fn servers_import(
                 "rdpPort": server.rdp_port,
                 "bmcPort": server.bmc_port,
                 "bmcAllowInvalidCerts": server.bmc_allow_invalid_certs,
+                "tlsAllowInvalidCerts": server.effective_tls_allow_invalid_certs(),
                 "sshKeyId": server.ssh_key_id,
                 "proxyConfig": server.proxy_config,
                 "tunnelsConfig": server.tunnels_config,
                 "keysConfig": keys_config,
                 "serialConfig": server.serial_config,
+                "credentialsConfig": server.credentials_config,
                 "groupId": group_id,
             });
             let input_str = input.to_string();
@@ -803,5 +823,96 @@ mod tests {
         }"#;
         let parsed: ExportServer = serde_json::from_str(json).expect("parse legacy export server");
         assert!(!parsed.bmc_allow_invalid_certs);
+        assert!(!parsed.effective_tls_allow_invalid_certs());
+    }
+
+    /// 泛化键优先于历史键；导出时两个键都写出，旧版本客户端仍可读
+    #[test]
+    fn new_tls_key_takes_precedence_and_export_emits_both_keys() {
+        let json = r#"{
+            "name": "bmc-new",
+            "host": "127.0.0.1",
+            "port": 443,
+            "username": "root",
+            "authType": "password",
+            "tags": [],
+            "connectionTimeout": 30,
+            "favorite": false,
+            "targetType": "bmc",
+            "protocol": "redfish",
+            "bmcPort": 443,
+            "bmcAllowInvalidCerts": false,
+            "tlsAllowInvalidCerts": true
+        }"#;
+        let parsed: ExportServer = serde_json::from_str(json).expect("parse export server");
+        assert!(parsed.effective_tls_allow_invalid_certs());
+        let encoded = serde_json::to_string(&parsed).expect("serialize export server");
+        assert!(encoded.contains("tlsAllowInvalidCerts"));
+        assert!(encoded.contains("bmcAllowInvalidCerts"));
+    }
+
+    /// 只有历史键的旧文件仍能打开证书开关，不会被泛化改动破坏
+    #[test]
+    fn legacy_tls_key_still_enables_switch() {
+        let json = r#"{
+            "name": "bmc-legacy",
+            "host": "127.0.0.1",
+            "port": 443,
+            "username": "root",
+            "authType": "password",
+            "tags": [],
+            "connectionTimeout": 30,
+            "favorite": false,
+            "targetType": "bmc",
+            "protocol": "redfish",
+            "bmcPort": 443,
+            "bmcAllowInvalidCerts": true
+        }"#;
+        let parsed: ExportServer = serde_json::from_str(json).expect("parse legacy export");
+        assert!(parsed.tls_allow_invalid_certs.is_none());
+        assert!(parsed.effective_tls_allow_invalid_certs());
+    }
+
+    /// 加密凭据列随导出写出并能被导入还原；旧导出文件缺省为 None
+    #[test]
+    fn credentials_config_round_trips_through_export() {
+        let json = r#"{
+            "name": "device-with-credentials",
+            "host": "127.0.0.1",
+            "port": 443,
+            "username": "root",
+            "authType": "password",
+            "tags": [],
+            "connectionTimeout": 30,
+            "favorite": false,
+            "targetType": "bmc",
+            "protocol": "redfish",
+            "bmcPort": 443,
+            "credentialsConfig": "{\"token\":\"abc\"}"
+        }"#;
+        let parsed: ExportServer = serde_json::from_str(json).expect("parse export with credentials");
+        assert_eq!(
+            parsed.credentials_config.as_deref(),
+            Some("{\"token\":\"abc\"}")
+        );
+        let encoded = serde_json::to_string(&parsed).expect("serialize export server");
+        assert!(encoded.contains("credentialsConfig"));
+        assert!(encoded.contains("token"));
+
+        let legacy_json = r#"{
+            "name": "old-device",
+            "host": "127.0.0.1",
+            "port": 22,
+            "username": "root",
+            "authType": "password",
+            "tags": [],
+            "connectionTimeout": 30,
+            "favorite": false,
+            "targetType": "linux",
+            "protocol": "ssh",
+            "bmcPort": 443
+        }"#;
+        let legacy: ExportServer = serde_json::from_str(legacy_json).expect("parse legacy export");
+        assert!(legacy.credentials_config.is_none());
     }
 }

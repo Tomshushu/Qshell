@@ -2242,6 +2242,30 @@ export const tauriAdapter: BackendAdapter = {
     },
   },
 
+  // ==================== Kubernetes API Server（Phase 2-C） ====================
+  k8s: {
+    async testConnectionWithConfig(config) {
+      return safeInvoke<OperationResult>("k8s_test_connect_with_config", { config });
+    },
+    async getOverview(serverId) {
+      return safeInvoke<import("./types").K8sOverview>("k8s_get_overview", {
+        serverId,
+      });
+    },
+  },
+
+  // ==================== ESXi / vCenter（HTTPS REST） ====================
+  esxi: {
+    async testConnectionWithConfig(config) {
+      return safeInvoke<OperationResult>("esxi_test_connect_with_config", { config });
+    },
+    async getOverview(serverId) {
+      return safeInvoke<import("./types").EsxiOverview>("esxi_get_overview", {
+        serverId,
+      });
+    },
+  },
+
   // ==================== BMC 带外管理（Redfish API） ====================
   bmc: {
     async testConnectionWithConfig(config): Promise<OperationResult> {

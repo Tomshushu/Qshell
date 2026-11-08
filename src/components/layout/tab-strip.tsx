@@ -39,6 +39,7 @@ import {
   type GroupTreeNode,
 } from "@/lib/server-groups";
 import { OsIcon } from "@/pages/dashboard";
+import { deviceStatusKeys, getServerConnectionFlags, resolveServerOpenAction } from "@/services/connection-targets";
 import { GroupFilterChip, UNGROUPED_FILTER } from "@/components/ui/group-tree-picker";
 import { Button } from "@/components/ui/button";
 
@@ -645,7 +646,7 @@ export function TabStrip({ tabs, className }: TabStripProps) {
         const dragServer = servers.find(
           (s) => s.id === tabs.find((t) => t.id === dragTabId)?.serverId,
         );
-        if (dragServer?.targetType === "bmc") {
+        if (getServerConnectionFlags(dragServer?.targetType, dragServer?.protocol).isDeviceManagedServer) {
           setSplitDropTarget(null);
           cleanupDrag();
           return;
@@ -832,40 +833,32 @@ export function TabStrip({ tabs, className }: TabStripProps) {
     (serverId: string) => {
       const server = servers.find((item) => item.id === serverId);
       if (!server) return;
-      if (server.targetType === "windows") {
-        const hasSsh = Boolean(server.port && server.port > 0);
-        const hasRdp = Boolean(server.rdpPort && server.rdpPort > 0);
-        if (hasSsh) {
-          openTab(server.id, server.name, "terminal");
-        } else if (hasRdp) {
-          void (async () => {
-            try {
-              const result = await backend?.rdp.launch({
-                serverId: server.id,
-                rdpPort: server.rdpPort,
-              });
-              if (!result?.success) {
-                toast.error(
-                  friendlyError(result?.error || "").message ||
-                    t("err_generic_conn_failed"),
-                );
-              }
-            } catch (e) {
-              const raw = e instanceof Error ? e.message : String(e);
+      // Phase 1-B：与卡片双击、仪表盘共用同一套分派规则
+      const action = resolveServerOpenAction(server);
+      if (action === "terminal" || action === "bmc") {
+        openTab(server.id, server.name, action === "bmc" ? "bmc" : "terminal");
+      } else if (action === "rdp") {
+        void (async () => {
+          try {
+            const result = await backend?.rdp.launch({
+              serverId: server.id,
+              rdpPort: server.rdpPort,
+            });
+            if (!result?.success) {
               toast.error(
-                friendlyError(raw).message || t("err_generic_conn_failed"),
+                friendlyError(result?.error || "").message ||
+                  t("err_generic_conn_failed"),
               );
             }
-          })();
-        } else {
-          toast.warning(t("server_no_port") || "未配置连接端口");
-        }
+          } catch (e) {
+            const raw = e instanceof Error ? e.message : String(e);
+            toast.error(
+              friendlyError(raw).message || t("err_generic_conn_failed"),
+            );
+          }
+        })();
       } else {
-        openTab(
-          server.id,
-          server.name,
-          server.targetType === "bmc" ? "bmc" : "terminal",
-        );
+        toast.warning(t("server_no_port") || "未配置连接端口");
       }
       setSelectedServerId(null);
       setServerQuery("");
@@ -1071,15 +1064,13 @@ export function TabStrip({ tabs, className }: TabStripProps) {
                   return s?.state === "connecting" || s?.state === "authenticating";
                 });
                 const wsServer = servers.find((s) => s.id === activeWsTab?.serverId);
-                const isWsBmc = wsServer?.targetType === "bmc";
-                const isWsRdp = wsServer?.targetType === "rdp" || wsServer?.protocol === "rdp";
-                const isWsSerial =
-                  wsServer?.targetType === "serial" ||
-                  wsServer?.protocol === "serial" ||
-                  wsServer?.osType === "serial";
+                const wsFlags = getServerConnectionFlags(wsServer?.targetType, wsServer?.protocol, wsServer?.osType);
+                const isWsBmc = wsFlags.isDeviceManagedServer;
+                const isWsRdp = wsFlags.isRdpServer;
+                const isWsSerial = wsFlags.isSerialServer;
                 const isWsOnline = isWsConnected || isWsBmc || isWsRdp;
                 const wsStatusTitle = isWsBmc
-                  ? t("bmc_ready") || "BMC 就绪"
+                  ? (wsFlags.isBmcServer ? (t("bmc_ready") || "BMC 就绪") : t(deviceStatusKeys(wsServer?.targetType).readyKey))
                   : isWsRdp
                     ? t("rdp_ready") || "远程桌面"
                     : isWsConnecting
@@ -1269,19 +1260,17 @@ export function TabStrip({ tabs, className }: TabStripProps) {
             // BMC 带外管理通过 Redfish (HTTPS) 工作，不依赖 SSH 连接，
             // 顶部 Tab 状态指示器应显示"已就绪"而非"已断开"
             const tabServer = servers.find((s) => s.id === tab.serverId);
-            const isBmcTab = tabServer?.targetType === "bmc";
-            const isRdpTab = tabServer?.targetType === "rdp" || tabServer?.protocol === "rdp";
             // OsIcon 只按 osType / targetType 判定类型，不识别 protocol，
             // 因此串口（protocol === 'serial'）需在此归一为 targetType='serial'，
             // 否则会被误显示成默认的 Linux 图标。
-            const isSerialTab =
-              tabServer?.targetType === "serial" ||
-              tabServer?.protocol === "serial" ||
-              tabServer?.osType === "serial";
+            const tabFlags = getServerConnectionFlags(tabServer?.targetType, tabServer?.protocol, tabServer?.osType);
+            const isBmcTab = tabFlags.isDeviceManagedServer;
+            const isRdpTab = tabFlags.isRdpServer;
+            const isSerialTab = tabFlags.isSerialServer;
 
             const isOnline = isConnected || isBmcTab || isRdpTab;
             const tabStatusTitle = isBmcTab
-              ? t("bmc_ready") || "BMC 就绪"
+              ? (tabFlags.isBmcServer ? (t("bmc_ready") || "BMC 就绪") : t(deviceStatusKeys(tabServer?.targetType).readyKey))
               : isRdpTab
                 ? t("rdp_ready") || "远程桌面"
                 : isConnecting
@@ -2009,12 +1998,10 @@ export function TabStrip({ tabs, className }: TabStripProps) {
               wsTabs.find((t) => t.id === activeTabId) ||
               wsTabs[0];
             const wsServer = servers.find((s) => s.id === activeWsTab?.serverId);
-            const isWsBmc = wsServer?.targetType === "bmc";
-            const isWsRdp = wsServer?.targetType === "rdp" || wsServer?.protocol === "rdp";
-            const isWsSerial =
-              wsServer?.targetType === "serial" ||
-              wsServer?.protocol === "serial" ||
-              wsServer?.osType === "serial";
+            const wsFlags = getServerConnectionFlags(wsServer?.targetType, wsServer?.protocol, wsServer?.osType);
+            const isWsBmc = wsFlags.isDeviceManagedServer;
+            const isWsRdp = wsFlags.isRdpServer;
+            const isWsSerial = wsFlags.isSerialServer;
             const isWsConnected = wsTabs.some(
               (t) => (connectedServers[`ws:${t.serverId}:${t.id}`] ?? connectedServers[t.serverId]) ?? false,
             );
@@ -2143,14 +2130,12 @@ export function TabStrip({ tabs, className }: TabStripProps) {
 
               {(() => {
                 const dragServer = servers.find((s) => s.id === dragTab.serverId);
-                const isDragBmc = dragServer?.targetType === "bmc";
-                const isDragRdp = dragServer?.targetType === "rdp" || dragServer?.protocol === "rdp";
                 // OsIcon 只按 osType / targetType 判定，不识别 protocol，
                 // 串口需归一为 targetType='serial'，否则回退成默认 Linux 图标。
-                const isDragSerial =
-                  dragServer?.targetType === "serial" ||
-                  dragServer?.protocol === "serial" ||
-                  dragServer?.osType === "serial";
+                const dragFlags = getServerConnectionFlags(dragServer?.targetType, dragServer?.protocol, dragServer?.osType);
+                const isDragBmc = dragFlags.isDeviceManagedServer;
+                const isDragRdp = dragFlags.isRdpServer;
+                const isDragSerial = dragFlags.isSerialServer;
                 const dragConnected =
                   dragTab.serverId
                     ? ((connectedServers[`ws:${dragTab.serverId}:${dragTab.id}`] ?? connectedServers[dragTab.serverId]) ?? false)

@@ -20,6 +20,8 @@ mod state;
 mod targets;
 mod rdp;
 mod telnet;
+mod session;
+mod https_device;
 pub mod serial;
 pub mod network;
 mod oauth;
@@ -193,6 +195,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // 目标能力位（Phase 3-B：能力表只读查询 / 守卫原语）
+            commands::capabilities::get_target_capabilities,
+            commands::capabilities::check_target_capability,
+            commands::capabilities::list_target_capabilities,
             // 服务器管理
             commands::servers::servers_list,
             commands::servers::servers_list_for_sync,
@@ -445,6 +451,12 @@ pub fn run() {
             commands::window::get_cursor_state,
             // RDP 远程桌面
             commands::rdp::rdp_launch,
+            // ESXi / vCenter（HTTPS REST，Phase 2-B）
+            commands::esxi::esxi_test_connect_with_config,
+            commands::esxi::esxi_get_overview,
+            // Kubernetes API Server（Phase 2-C）
+            commands::k8s::k8s_test_connect_with_config,
+            commands::k8s::k8s_get_overview,
             // BMC 带外管理（Redfish API）
             commands::bmc::bmc_test_connect_with_config,
             commands::bmc::bmc_get_overview,

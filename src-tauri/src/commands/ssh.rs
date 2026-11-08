@@ -17,6 +17,7 @@ use crate::db;
 use crate::ssh::connection::test_tcp_connection;
 use crate::ssh::manager::SshManager;
 use crate::ssh::state::{ConnectionState, SshErrorKind};
+use crate::session::{route, SessionKind};
 
 use super::{
     extract_base_server_id, is_secondary_connection, validate_server_id, CommandResult,
@@ -754,6 +755,13 @@ pub async fn ssh_connect(
     if protocol == "redfish" {
         return Ok(OperationResult::fail("BMC Redfish 会话请从带外管理模块启动"));
     }
+    // Phase 2-B-4：HTTPS 设备不能落入通用 SSH 分派（否则会用 443 端口尝试 SSH 握手）。
+    if protocol == "https" {
+        return Ok(OperationResult::fail("ESXi / vCenter 会话请从设备管理模块启动"));
+    }
+    if protocol == "k8s" {
+        return Ok(OperationResult::fail("Kubernetes 集群请从集群管理模块启动"));
+    }
     if protocol == "telnet" {
         let addr = format!("{}:{}", server.host, port);
         match tokio::time::timeout(
@@ -889,9 +897,13 @@ pub async fn ssh_connect(
                 // （延迟 500ms 可确保前端开终端的 PTY Shell 已经顺利创建，彻底消除通道竞争）
                 let target_type = crate::connection::TargetType::from_str_lossy(&server.target_type);
                 let os_type_empty = server.os_type.as_deref().unwrap_or("").is_empty();
-                if target_type != crate::connection::TargetType::Network
-                    && target_type != crate::connection::TargetType::Bmc
-                    && os_type_empty
+                // Phase 3-A/B：改由能力表驱动「是否补充 OS 探测」，统一走 has_capability 查询入口，
+                // 与 IPC 能力守卫同源。串口历史上也走这条路径（metrics=false），显式保留兼容。
+                let os_probe_supported = crate::connection::has_capability(
+                    target_type,
+                    crate::connection::CapabilityKey::Metrics,
+                ) || target_type == crate::connection::TargetType::Serial;
+                if os_probe_supported && os_type_empty
             {
                 let sid = server_id.clone();
                 let app_for_os = app.clone();
@@ -1525,8 +1537,16 @@ pub async fn ssh_test_connect_with_config(
         .get("authType")
         .and_then(|v| v.as_str())
         .unwrap_or("password");
-    if protocol != "ssh" && requested_auth != "password" {
-        return Ok(OperationResult::fail(format!("协议 {} 仅支持密码认证", protocol)));
+    // 与 servers_add / servers_update 共用同一张协议认证能力表，
+    // 不再保留「非 SSH 一刀切强制 password」的旧判断。
+    let parsed_protocol = crate::connection::ConnectionProtocol::from_str_lossy(protocol);
+    if !crate::connection::is_auth_allowed(parsed_protocol, requested_auth) {
+        return Ok(OperationResult::fail(format!(
+            "协议 {} 不支持认证方式 {}，可选：{}",
+            protocol,
+            requested_auth,
+            crate::connection::allowed_auth_types(parsed_protocol).join(", ")
+        )));
     }
 
     let timeout = config
@@ -1836,7 +1856,13 @@ pub async fn ssh_test_connect_with_config(
             let target = crate::connection::TargetType::from_str_lossy(target_type_str);
             let mut detected_os_type = None;
             let mut detected_os_info = None;
-            if target != crate::connection::TargetType::Network && target != crate::connection::TargetType::Bmc {
+            // Phase 3-B：与 ssh_connect / ssh_detect_os_info 同源的能力位条件
+            //（等价替换旧 `!= Network && != Bmc`，串口显式例外）。逐类型等价断言见 connection::tests。
+            let os_probe_supported = crate::connection::has_capability(
+                target,
+                crate::connection::CapabilityKey::Metrics,
+            ) || target == crate::connection::TargetType::Serial;
+            if os_probe_supported {
                 let os_cmd = target.os_detect_command().to_string();
                 if let Ok(os_res) = SshManager::global().execute(&temp_id, &os_cmd, 5).await {
                     let parts: Vec<&str> = os_res.stdout.split("---SEP---").collect();
@@ -2189,16 +2215,27 @@ pub async fn ssh_detect_os_info(
     }
 
     let target_type = crate::connection::TargetType::from_str_lossy(&server.target_type);
-    if target_type == crate::connection::TargetType::Network || target_type == crate::connection::TargetType::Bmc {
+    // Phase 3-A/B：能力表判定「无指标采集能力且非串口」= 网络设备 / BMC 快捷返回（等价替换）
+    let is_network_like = !crate::connection::has_capability(
+        target_type,
+        crate::connection::CapabilityKey::Metrics,
+    ) && target_type != crate::connection::TargetType::Serial;
+    if is_network_like {
+        let (os_type, os_info) = match target_type {
+            crate::connection::TargetType::Bmc => ("bmc", "BMC / IPMI"),
+            crate::connection::TargetType::Esxi => ("esxi", "VMware ESXi / vCenter"),
+            crate::connection::TargetType::Kubernetes => ("kubernetes", "Kubernetes Cluster"),
+            _ => ("network", "Network Device"),
+        };
         let update_json = serde_json::json!({
-            "osType": "network",
-            "osInfo": "Network Device",
+            "osType": os_type,
+            "osInfo": os_info,
             "arch": "",
             "kernel": "",
         })
         .to_string();
         db_update_async(server_id.clone(), update_json);
-        return Ok(DetectOsResult::ok("network", "Network Device"));
+        return Ok(DetectOsResult::ok(os_type, os_info));
     }
 
     // 获取 OS 信息
@@ -2351,74 +2388,73 @@ pub async fn ssh_create_shell(
 
 /// 向 Shell 写入数据（fire-and-forget，保证输入顺序）
 ///
-/// 路由：session_id 以 `telnet-` 开头时转发到 Telnet 模块；以 `serial-` 开头时转发到串口模块；否则走 SSH shell。
+/// 路由：由 `crate::session::route` 按前缀解析驱动，未命中走 SSH shell。
 #[tauri::command]
 pub async fn ssh_write_to_shell(session_id: String, data: String) -> Result<(), String> {
-    if session_id.starts_with("serial-") {
-        return crate::serial::write_to_serial(&session_id, &data).await;
+    match route(&session_id) {
+        SessionKind::Serial => crate::serial::write_to_serial(&session_id, &data).await,
+        SessionKind::Telnet => crate::telnet::telnet_write(session_id, data).await,
+        SessionKind::Ssh => crate::ssh::shell::shell_write(String::new(), session_id, data).await,
     }
-    if session_id.starts_with("telnet-") {
-        return crate::telnet::telnet_write(session_id, data).await;
-    }
-    crate::ssh::shell::shell_write(String::new(), session_id, data).await
 }
 
 /// 通过独立快速通道向交互式 SSH PTY 发送 Ctrl+C。
 #[tauri::command]
 pub async fn ssh_interrupt_shell(session_id: String) -> Result<u64, String> {
-    if session_id.starts_with("serial-") {
-        crate::serial::write_to_serial(&session_id, "\x03").await?;
-        return Ok(0);
+    match route(&session_id) {
+        SessionKind::Serial => {
+            crate::serial::write_to_serial(&session_id, "\x03").await?;
+            Ok(0)
+        }
+        SessionKind::Telnet => {
+            crate::telnet::telnet_write(session_id, "\x03".to_string()).await?;
+            Ok(0)
+        }
+        SessionKind::Ssh => crate::ssh::shell::shell_interrupt(session_id).await,
     }
-    if session_id.starts_with("telnet-") {
-        crate::telnet::telnet_write(session_id, "\x03".to_string()).await?;
-        return Ok(0);
-    }
-    crate::ssh::shell::shell_interrupt(session_id).await
 }
 
 #[tauri::command]
 pub async fn ssh_set_shell_encoding(session_id: String, encoding: String) -> Result<(), String> {
-    if session_id.starts_with("telnet-") {
-        return crate::telnet::telnet_set_encoding(session_id, encoding).await;
+    // 历史行为：仅 Telnet 有独立编码通道，串口仍走 SSH 侧实现
+    match route(&session_id) {
+        SessionKind::Telnet => crate::telnet::telnet_set_encoding(session_id, encoding).await,
+        _ => crate::ssh::shell::shell_set_encoding(session_id, encoding).await,
     }
-    crate::ssh::shell::shell_set_encoding(session_id, encoding).await
 }
 
 /// 调整 Shell PTY 大小（fire-and-forget）
 ///
-/// 路由：session_id 以 `telnet-` 开头时转发到 Telnet 模块（NAWS），串口无需 resize，否则走 SSH PTY resize。
+/// 路由：Telnet 使用 NAWS，串口无需 resize，其余走 SSH PTY resize。
 #[tauri::command]
 pub async fn ssh_resize_shell(
     session_id: String,
     cols: u32,
     rows: u32,
 ) -> Result<(), String> {
-    if session_id.starts_with("serial-") {
-        return Ok(());
+    match route(&session_id) {
+        SessionKind::Serial => Ok(()),
+        SessionKind::Telnet => crate::telnet::telnet_resize(session_id, cols, rows).await,
+        SessionKind::Ssh => crate::ssh::shell::shell_resize(String::new(), session_id, cols, rows).await,
     }
-    if session_id.starts_with("telnet-") {
-        return crate::telnet::telnet_resize(session_id, cols, rows).await;
-    }
-    crate::ssh::shell::shell_resize(String::new(), session_id, cols, rows).await
 }
 
 /// 暂停 Shell 会话读取（前端高水位背压）
 #[tauri::command]
 pub async fn ssh_pause_shell(session_id: String) -> Result<(), String> {
-    if session_id.starts_with("serial-") || session_id.starts_with("telnet-") {
-        return Ok(());
+    match route(&session_id) {
+        SessionKind::Serial | SessionKind::Telnet => Ok(()),
+        SessionKind::Ssh => crate::ssh::shell::shell_pause(String::new(), session_id).await,
     }
-    crate::ssh::shell::shell_pause(String::new(), session_id).await
 }
 
 /// 恢复 Shell 会话读取（前端低水位背压解除）
 #[tauri::command]
 pub async fn ssh_resume_shell(session_id: String) -> Result<(), String> {
-    if session_id.starts_with("serial-") || session_id.starts_with("telnet-") {
-        return Ok(());
+    match route(&session_id) {
+        SessionKind::Serial | SessionKind::Telnet => Ok(()),
+        SessionKind::Ssh => crate::ssh::shell::shell_resume(String::new(), session_id).await,
     }
-    crate::ssh::shell::shell_resume(String::new(), session_id).await
 }
 
 /// 向 Shell 写入 Zmodem 协议响应字节
@@ -2430,15 +2466,18 @@ pub async fn ssh_shell_zmodem_write(
     session_id: String,
     data: String,
 ) -> Result<(), String> {
-    if session_id.starts_with("serial-") {
-        let bytes = base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            data.as_bytes(),
-        )
-        .map_err(|e| format!("Base64 解码失败: {}", e))?;
-        return crate::serial::write_raw_to_serial(&session_id, &bytes).await;
+    // 历史行为：仅串口有 raw 字节通道，Telnet 与 SSH 共用同一实现
+    match route(&session_id) {
+        SessionKind::Serial => {
+            let bytes = base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                data.as_bytes(),
+            )
+            .map_err(|e| format!("Base64 解码失败: {}", e))?;
+            crate::serial::write_raw_to_serial(&session_id, &bytes).await
+        }
+        _ => crate::ssh::shell::shell_zmodem_write(String::new(), session_id, data).await,
     }
-    crate::ssh::shell::shell_zmodem_write(String::new(), session_id, data).await
 }
 
 /// 通知 Zmodem 传输结束，退出 passthrough 模式
@@ -2446,50 +2485,47 @@ pub async fn ssh_shell_zmodem_write(
 /// 前端 zmodem.js 检测到传输完成（ZEOF）或用户主动取消时调用。
 #[tauri::command]
 pub async fn ssh_shell_zmodem_end(session_id: String) -> Result<OperationResult, String> {
-    if session_id.starts_with("serial-") {
-        return Ok(OperationResult::ok());
-    }
-    match crate::ssh::shell::shell_zmodem_end(String::new(), session_id).await {
-        Ok(()) => Ok(OperationResult::ok()),
-        Err(e) => Ok(OperationResult::fail(e)),
+    // 历史行为：仅串口直接退出 passthrough，Telnet 与 SSH 共用同一实现
+    match route(&session_id) {
+        SessionKind::Serial => Ok(OperationResult::ok()),
+        _ => match crate::ssh::shell::shell_zmodem_end(String::new(), session_id).await {
+            Ok(()) => Ok(OperationResult::ok()),
+            Err(e) => Ok(OperationResult::fail(e)),
+        },
     }
 }
 
 /// 关闭 Shell 会话
 ///
-/// 路由：session_id 以 `telnet-` / `serial-` 开头时转发到对应模块。
+/// 路由：由 `crate::session::route` 按前缀解析驱动。
 #[tauri::command]
 pub async fn ssh_close_shell(session_id: String) -> Result<OperationResult, String> {
-    if session_id.starts_with("serial-") {
-        return match crate::serial::close_serial_shell(&session_id) {
+    match route(&session_id) {
+        SessionKind::Serial => match crate::serial::close_serial_shell(&session_id) {
             Ok(()) => Ok(OperationResult::ok()),
             Err(e) => Ok(OperationResult::fail(e)),
-        };
-    }
-    if session_id.starts_with("telnet-") {
-        return match crate::telnet::telnet_close(session_id).await {
+        },
+        SessionKind::Telnet => match crate::telnet::telnet_close(session_id).await {
             Ok(()) => Ok(OperationResult::ok()),
             Err(e) => Ok(OperationResult::fail(e)),
-        };
-    }
-    match crate::ssh::shell::shell_close(String::new(), session_id).await {
-        Ok(()) => Ok(OperationResult::ok()),
-        Err(e) => Ok(OperationResult::fail(e)),
+        },
+        SessionKind::Ssh => match crate::ssh::shell::shell_close(String::new(), session_id).await {
+            Ok(()) => Ok(OperationResult::ok()),
+            Err(e) => Ok(OperationResult::fail(e)),
+        },
     }
 }
 
 /// 获取 Shell 会话的历史输出（用于跨窗口迁移时恢复终端内容）
 ///
-/// 路由：session_id 以 `telnet-` / `serial-` 开头时转发到对应模块。
+/// 路由：由 `crate::session::route` 按前缀解析驱动。
 #[tauri::command]
 pub async fn ssh_get_shell_history(session_id: String) -> Result<String, String> {
-    if session_id.starts_with("serial-") {
-        return crate::serial::get_serial_history(&session_id);
+    match route(&session_id) {
+        SessionKind::Serial => crate::serial::get_serial_history(&session_id),
+        SessionKind::Telnet => crate::telnet::telnet_get_history(session_id).await,
+        SessionKind::Ssh => crate::ssh::shell::shell_get_history(session_id).await,
     }
-    if session_id.starts_with("telnet-") {
-        return crate::telnet::telnet_get_history(session_id).await;
-    }
-    crate::ssh::shell::shell_get_history(session_id).await
 }
 
 // ============================================================

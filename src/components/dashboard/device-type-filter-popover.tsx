@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { Check, ChevronDown } from 'lucide-react'
 import { useTranslation } from '@/i18n'
 import { useAppStore } from '@/store'
-import { CONNECTION_TARGETS } from '@/services/connection-targets'
+import { getEnabledTargetTypes } from '@/services/connection-targets'
 import { cn } from '@/lib/utils'
 
 interface DeviceTypeFilterPopoverProps {
@@ -58,7 +58,7 @@ export function DeviceTypeFilterPopover({ value, onChange }: DeviceTypeFilterPop
     }
   }, [open])
 
-  const specs = CONNECTION_TARGETS.filter((s) => s.enabled)
+  const specs = getEnabledTargetTypes()
   const selectedLabel = value
     ? t(specs.find((s) => s.id === value)?.labelKey ?? value)
     : ''

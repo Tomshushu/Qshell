@@ -1,5 +1,6 @@
 import type { Server } from '@/types'
 import { SshErrorKind } from '@/services/ssh-connection-state'
+import { getServerConnectionFlags } from '@/services/connection-targets'
 
 export type ConnectionDiagnosticCode =
   | 'config'
@@ -72,7 +73,9 @@ function parseProxy(server: Server, allServers?: Server[]): { host: string; port
 
 export function validateConnectionConfiguration(server: Server, allServers?: Server[]): string[] {
   const issues: string[] = []
-  if (server.targetType === 'serial' || server.protocol === 'serial') {
+  // 串口只需校验串口名并提前短路，跳过后续 host/port/认证校验
+  const flags = getServerConnectionFlags(server.targetType, server.protocol)
+  if (flags.isSerialServer) {
     if (!server.host?.trim()) issues.push('serialPort')
     return issues
   }

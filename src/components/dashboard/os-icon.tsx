@@ -1,4 +1,4 @@
-import { Router, Cpu, Cable } from 'lucide-react'
+import { Router, Cpu, Cable, Server, Boxes } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export interface OsIconProps {
@@ -29,6 +29,24 @@ export function OsIcon({ osType, osInfo, targetType, className }: OsIconProps) {
     return (
       <div className={cn(className, "flex items-center justify-center bg-orange-600/20 text-orange-500 rounded-lg")}>
         <Cpu className="h-3/5 w-3/5" />
+      </div>
+    )
+  }
+
+  // 2b. ESXi / vCenter HTTPS 设备
+  if (tt === 'esxi' || os === 'esxi') {
+    return (
+      <div className={cn(className, "flex items-center justify-center bg-blue-600/20 text-blue-500 rounded-lg")}>
+        <Server className="h-3/5 w-3/5" />
+      </div>
+    )
+  }
+
+  // 2c. Kubernetes 集群
+  if (tt === 'kubernetes' || os === 'kubernetes') {
+    return (
+      <div className={cn(className, "flex items-center justify-center bg-indigo-600/20 text-indigo-500 rounded-lg")}>
+        <Boxes className="h-3/5 w-3/5" />
       </div>
     )
   }

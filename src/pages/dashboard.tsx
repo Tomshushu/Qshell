@@ -67,7 +67,7 @@ import type { Server as ServerType, WorkspaceModule } from '@/types'
 import { useTranslation } from '@/i18n'
 import { useMarqueeSelection } from '@/hooks/use-marquee-selection'
 import { MarqueeRect } from '@/components/ui/marquee-rect'
-import { isModuleAvailable } from '@/services/connection-targets'
+import { deviceModuleLabelKey, getServerConnectionFlags, isModuleAvailable, resolveServerOpenAction } from '@/services/connection-targets'
 import { ServerGroupTree } from '@/components/dashboard/server-group-tree'
 import { RecycleBinDialog } from '@/components/dashboard/recycle-bin-dialog'
 import {
@@ -81,6 +81,22 @@ import { TagFilterPopover } from '@/components/dashboard/tag-filter-popover'
 import { DeviceTypeFilterPopover } from '@/components/dashboard/device-type-filter-popover'
 import { SERVER_DRAG_MIME, collectSubtreeIds, HOST_GROUP_ID } from '@/lib/server-groups'
 import { GroupTreePicker } from '@/components/ui/group-tree-picker'
+
+/**
+ * Phase 0：把散落的类型硬编码收敛到能力表。
+ * 这里只用「形态布尔」，刻意不用 supportsFiles / sshBacked：
+ * 后者还会排除 network / telnet / rdp，会把原本允许的批量操作范围变严格。
+ */
+type TargetRef = Pick<ServerType, 'targetType' | 'protocol'>
+const flagsOf = (s: TargetRef) => getServerConnectionFlags(s.targetType, s.protocol)
+/** 等价于 targetType !== 'bmc' && targetType !== 'serial' && protocol !== 'serial' */
+const hasSshChannel = (s: TargetRef) => {
+  const flags = flagsOf(s)
+  return !flags.isDeviceManagedServer && !flags.isSerialServer
+}
+const isBmcTarget = (s: TargetRef) => flagsOf(s).isBmcServer
+const isDeviceManaged = (s: TargetRef) => flagsOf(s).isDeviceManagedServer
+const isWindowsTarget = (s: TargetRef) => flagsOf(s).isWindowsServer
 
 /** 侧边栏宽度 clamp：拖拽后的值取整并限制在允许范围内 */
 function clampSidebarWidth(width: number): number {
@@ -390,7 +406,7 @@ export function Dashboard() {
       list = list.filter((s) => (s.tags ?? []).includes(tagFilter!))
     }
     if (deviceTypeFilter) {
-      list = list.filter((s) => s.targetType === deviceTypeFilter)
+      list = list.filter((s) => deviceTypeFilter === 'linux' ? (!s.targetType || s.targetType === 'linux' || s.targetType === 'unix' || s.targetType === 'xinchuang') : s.targetType === deviceTypeFilter)
     }
     if (deferredSearch.trim()) {
       const q = deferredSearch.trim().toLowerCase()
@@ -461,19 +477,19 @@ export function Dashboard() {
     const selected = servers.filter((s) => selectedServerIds.has(s.id))
     if (selected.length === 0) return
     const windowsRdpOnly = selected.filter(
-      (s) => s.targetType === 'windows' && (!s.port || s.port <= 0) && Boolean(s.rdpPort && s.rdpPort > 0)
+      (s) => isWindowsTarget(s) && (!s.port || s.port <= 0) && Boolean(s.rdpPort && s.rdpPort > 0)
     )
-    const bmcServers = selected.filter((s) => s.targetType === 'bmc')
+    const bmcServers = selected.filter((s) => isDeviceManaged(s))
     // 可分屏的服务器：Windows (配置了 SSH 端口) 或 Linux/Unix/网络设备等
     const tabServers = selected.filter((s) => {
-      if (s.targetType === 'bmc') return false
-      if (s.targetType === 'windows') {
+      if (isDeviceManaged(s)) return false
+      if (isWindowsTarget(s)) {
         return Boolean(s.port && s.port > 0)
       }
       return true
     })
     const noPortServers = selected.filter(
-      (s) => s.targetType === 'windows' && (!s.port || s.port <= 0) && (!s.rdpPort || s.rdpPort <= 0)
+      (s) => isWindowsTarget(s) && (!s.port || s.port <= 0) && (!s.rdpPort || s.rdpPort <= 0)
     )
     if (noPortServers.length > 0) {
       toast.warning(t('server_no_port'))
@@ -499,21 +515,16 @@ export function Dashboard() {
     const selected = servers.filter((s) => selectedServerIds.has(s.id))
     if (selected.length === 0) return
     for (const s of selected) {
-      if (s.targetType === 'windows') {
-        const hasSsh = Boolean(s.port && s.port > 0)
-        const hasRdp = Boolean(s.rdpPort && s.rdpPort > 0)
-        if (hasSsh) {
-          openTab(s.id, s.name, 'terminal')
-        } else if (hasRdp) {
-          backend?.rdp.launch({ serverId: s.id, rdpPort: s.rdpPort })
-        } else {
-          toast.warning(`${s.name}: ${t('server_no_port')}`)
-        }
-      } else if (s.targetType === 'bmc') {
-        // BMC 默认进入带外管理模块（与双击行为一致）
-        openTab(s.id, s.name, 'bmc')
-      } else {
+      // Phase 1-B：与双击、标签条共用同一套分派规则
+      const action = resolveServerOpenAction(s)
+      if (action === 'terminal') {
         openTab(s.id, s.name, 'terminal')
+      } else if (action === 'bmc') {
+        openTab(s.id, s.name, 'bmc')
+      } else if (action === 'rdp') {
+        backend?.rdp.launch({ serverId: s.id, rdpPort: s.rdpPort })
+      } else {
+        toast.warning(`${s.name}: ${t('server_no_port')}`)
       }
     }
     setSelectedServerIds(new Set())
@@ -526,7 +537,7 @@ export function Dashboard() {
     const selected = servers.filter((s) => selectedServerIds.has(s.id))
     if (selected.length === 0) return
     const eligible = selected.filter(
-      (s) => s.targetType !== 'bmc' && s.targetType !== 'serial' && s.protocol !== 'serial' && !(s.targetType === 'windows' && (!s.port || s.port <= 0))
+      (s) => hasSshChannel(s) && !(isWindowsTarget(s) && (!s.port || s.port <= 0))
     )
     if (eligible.length === 0) {
       toast.info(t('dash_batch_no_sftp_servers'))
@@ -542,7 +553,7 @@ export function Dashboard() {
     const selected = servers.filter((s) => selectedServerIds.has(s.id))
     if (selected.length === 0) return
     const eligible = selected.filter(
-      (s) => s.targetType !== 'bmc' && s.targetType !== 'serial' && s.protocol !== 'serial' && !(s.targetType === 'windows' && (!s.port || s.port <= 0))
+      (s) => hasSshChannel(s) && !(isWindowsTarget(s) && (!s.port || s.port <= 0))
     )
     if (eligible.length === 0) {
       toast.info(t('dash_batch_no_sftp_servers'))
@@ -677,13 +688,13 @@ export function Dashboard() {
     onImport: () => setShowImportDialog(true),
     // 批量 BMC 电源操作：入口在多选右键菜单，仅当选中集合含 BMC 服务器时可用
     onBatchBmcPower: () => {
-      if (servers.some((s) => selectedServerIds.has(s.id) && s.targetType === 'bmc')) {
+      if (servers.some((s) => selectedServerIds.has(s.id) && isBmcTarget(s))) {
         setBatchBmcPowerOpen(true)
       }
     },
     // 批量命令执行：入口在多选右键菜单，仅当选中集合含可执行 SSH 命令的服务器（非 BMC、非 Serial）时可用
     onBatchCommand: () => {
-      if (servers.some((s) => selectedServerIds.has(s.id) && s.targetType !== 'bmc' && s.targetType !== 'serial' && s.protocol !== 'serial')) {
+      if (servers.some((s) => selectedServerIds.has(s.id) && hasSshChannel(s))) {
         setBatchCommandOpen(true)
       }
     },
@@ -1131,14 +1142,14 @@ export function Dashboard() {
       {/* 批量 BMC 电源操作（选中集合中的 BMC 子集） */}
       <BatchBmcPowerDialog
         open={batchBmcPowerOpen}
-        servers={servers.filter((s) => selectedServerIds.has(s.id) && s.targetType === 'bmc')}
+        servers={servers.filter((s) => selectedServerIds.has(s.id) && isBmcTarget(s))}
         onClose={() => setBatchBmcPowerOpen(false)}
       />
 
       {/* 批量命令执行（选中集合中可执行 SSH 命令的服务器子集，排除 BMC 与 Serial） */}
       <BatchCommandDialog
         open={batchCommandOpen}
-        servers={servers.filter((s) => selectedServerIds.has(s.id) && s.targetType !== 'bmc' && s.targetType !== 'serial' && s.protocol !== 'serial')}
+        servers={servers.filter((s) => selectedServerIds.has(s.id) && hasSshChannel(s))}
         onClose={() => setBatchCommandOpen(false)}
       />
     </div>
@@ -1242,14 +1253,14 @@ function ServerContextMenu({ children, server, selected, selectedCount, selected
               </ContextMenuItem>
             )}
             {/* 批量 BMC 电源操作：右键的服务器为 BMC 类型时展示（弹窗内自动过滤选中集合中的 BMC 子集） */}
-            {server.targetType === 'bmc' && (
+            {isBmcTarget(server) && (
               <ContextMenuItem onClick={onBatchBmcPower}>
                 <ServerCog className="h-4 w-4" />
                 {t('dash_batch_bmc_power')}
               </ContextMenuItem>
             )}
             {/* 批量命令执行：右键的服务器为 SSH/Linux 类型时展示（排除 BMC 与 Serial） */}
-            {server.targetType !== 'bmc' && server.targetType !== 'serial' && server.protocol !== 'serial' && (
+            {hasSshChannel(server) && (
               <ContextMenuItem onClick={onBatchCommand}>
                 <TerminalSquare className="h-4 w-4" />
                 {t('dash_batch_command')}
@@ -1276,7 +1287,7 @@ function ServerContextMenu({ children, server, selected, selectedCount, selected
             </ContextMenuItem>
             {isModuleAvailable(server.targetType, 'terminal') && (
               <ContextMenuItem onClick={() => {
-                if (server.targetType === 'windows' && (!server.port || server.port <= 0)) {
+                if (isWindowsTarget(server) && (!server.port || server.port <= 0)) {
                   toast.warning(t('server_no_ssh_port') || '未配置 SSH 端口')
                   return
                 }
@@ -1289,7 +1300,7 @@ function ServerContextMenu({ children, server, selected, selectedCount, selected
             {isModuleAvailable(server.targetType, 'files') && (
               <>
                 <ContextMenuItem onClick={() => {
-                  if (server.targetType === 'windows' && (!server.port || server.port <= 0)) {
+                  if (isWindowsTarget(server) && (!server.port || server.port <= 0)) {
                     toast.warning(t('server_no_ssh_port') || '未配置 SSH 端口')
                     return
                   }
@@ -1299,7 +1310,7 @@ function ServerContextMenu({ children, server, selected, selectedCount, selected
                   {t('dash_open_sftp')}
                 </ContextMenuItem>
                 <ContextMenuItem onClick={() => {
-                  if (server.targetType === 'windows' && (!server.port || server.port <= 0)) {
+                  if (isWindowsTarget(server) && (!server.port || server.port <= 0)) {
                     toast.warning(t('server_no_ssh_port') || '未配置 SSH 端口')
                     return
                   }
@@ -1313,10 +1324,10 @@ function ServerContextMenu({ children, server, selected, selectedCount, selected
             {isModuleAvailable(server.targetType, 'bmc') && (
               <ContextMenuItem onClick={() => openTab(server.id, server.name, 'bmc')}>
                 <ServerCog className="h-4 w-4" />
-                {t('dash_open_bmc') || '打开带外管理'}
+                {isBmcTarget(server) ? (t('dash_open_bmc') || '打开带外管理') : t(deviceModuleLabelKey(server.targetType))}
               </ContextMenuItem>
             )}
-            {server.targetType === 'windows' && (
+            {isWindowsTarget(server) && (
               <ContextMenuItem onClick={async () => {
                 if (!server.rdpPort || server.rdpPort <= 0) {
                   toast.warning(t('server_no_rdp_port') || '未配置 RDP 端口')
@@ -1335,7 +1346,7 @@ function ServerContextMenu({ children, server, selected, selectedCount, selected
             )}
             {isModuleAvailable(server.targetType, 'overview') && (
               <ContextMenuItem onClick={() => {
-                if (server.targetType === 'windows' && (!server.port || server.port <= 0)) {
+                if (isWindowsTarget(server) && (!server.port || server.port <= 0)) {
                   toast.warning(t('server_no_ssh_port') || '未配置 SSH 端口')
                   return
                 }
@@ -1482,31 +1493,27 @@ const ServerListView = memo(function ServerListView({ servers, selectedServerIds
     if (now - (lastConnectTimeRef.current[server.id] || 0) < 600) return
     lastConnectTimeRef.current[server.id] = now
 
-    if (server.targetType === 'windows') {
-      const hasSsh = Boolean(server.port && server.port > 0)
-      const hasRdp = Boolean(server.rdpPort && server.rdpPort > 0)
-      if (hasSsh) {
-        openTab(server.id, server.name, 'terminal')
-      } else if (hasRdp) {
-        recordConnection(server.id)
-        void (async () => {
-          try {
-            const result = await backend?.rdp.launch({ serverId: server.id, rdpPort: server.rdpPort })
-            if (!result?.success) {
-              toast.error(friendlyError(result?.error || '').message || t('err_generic_conn_failed'))
-            }
-          } catch (e) {
-            const raw = e instanceof Error ? e.message : String(e)
-            toast.error(friendlyError(raw).message || t('err_generic_conn_failed'))
-          }
-        })()
-      } else {
-        toast.warning(t('server_no_port') || '未配置连接端口')
-      }
-    } else if (server.targetType === 'bmc') {
-      openTab(server.id, server.name, 'bmc')
-    } else {
+    // Phase 1-B：与卡片双击、批量打开、标签条共用同一套分派规则
+    const action = resolveServerOpenAction(server)
+    if (action === 'terminal') {
       openTab(server.id, server.name, 'terminal')
+    } else if (action === 'bmc') {
+      openTab(server.id, server.name, 'bmc')
+    } else if (action === 'rdp') {
+      recordConnection(server.id)
+      void (async () => {
+        try {
+          const result = await backend?.rdp.launch({ serverId: server.id, rdpPort: server.rdpPort })
+          if (!result?.success) {
+            toast.error(friendlyError(result?.error || '').message || t('err_generic_conn_failed'))
+          }
+        } catch (e) {
+          const raw = e instanceof Error ? e.message : String(e)
+          toast.error(friendlyError(raw).message || t('err_generic_conn_failed'))
+        }
+      })()
+    } else {
+      toast.warning(t('server_no_port') || '未配置连接端口')
     }
   }, [openTab, toast, t])
 
@@ -1603,9 +1610,9 @@ const ServerListView = memo(function ServerListView({ servers, selectedServerIds
                         handleConnectServer(server)
                       }}
                     >
-                      {server.targetType === 'windows'
+                      {isWindowsTarget(server)
                         ? ((!server.port || server.port <= 0) && server.rdpPort && server.rdpPort > 0 ? <Monitor className="h-3 w-3" /> : <Terminal className="h-3 w-3" />)
-                        : server.targetType === 'bmc'
+                        : isDeviceManaged(server)
                           ? <ServerCog className="h-3 w-3" />
                           : <Terminal className="h-3 w-3" />}
                       {t('dash_btn_connect')}

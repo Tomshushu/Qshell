@@ -712,8 +712,56 @@ export interface BmcTestConfig {
   username: string;
   password?: string;
   connectionTimeout?: number;
-  /** 仅在用户明确选择时允许自签名/无效 BMC TLS 证书 */
+  /** 仅在用户明确选择时允许自签名/无效 BMC TLS 证书（历史字段名） */
   bmcAllowInvalidCerts?: boolean;
+  /** 泛化后的 TLS 开关，适用于所有 HTTPS 设备 */
+  tlsAllowInvalidCerts?: boolean;
+}
+
+/** ESXi / vCenter HTTPS 测试连接配置（Phase 2-B） */
+export interface EsxiTestConfig {
+  /** 编辑场景下传入，用于沿用未重新输入的已保存密码 */
+  id?: string;
+  host: string;
+  port?: number;
+  username: string;
+  password?: string;
+  connectionTimeout?: number;
+  tlsAllowInvalidCerts?: boolean;
+}
+
+/** ESXi / vCenter 主机概览；失败时只填充 error，不猜测字段 */
+export interface EsxiOverview {
+  success: boolean;
+  error?: string;
+  productName?: string;
+  apiVersion?: string;
+  hostName?: string;
+  version?: string;
+  hostCount?: number;
+  webUrl?: string;
+}
+
+/** Kubernetes 集群测试连接配置（Phase 2-C，最小形态：URL + Bearer Token） */
+export interface K8sTestConfig {
+  id?: string;
+  host: string;
+  port?: number;
+  token?: string;
+  connectionTimeout?: number;
+  tlsAllowInvalidCerts?: boolean;
+}
+
+/** Kubernetes 集群概览 */
+export interface K8sOverview {
+  success: boolean;
+  error?: string;
+  gitVersion?: string;
+  platform?: string;
+  nodeCount?: number;
+  readyNodeCount?: number;
+  namespaceCount?: number;
+  apiUrl?: string;
 }
 
 export interface EndpointDiagnosticCheck {
@@ -1649,6 +1697,22 @@ export interface BackendAdapter {
     restart: (forwardId: string) => Promise<OperationResult>;
     /** 停止指定服务器的所有转发 */
     stopAll: (serverId: string) => Promise<OperationResult>;
+  };
+
+  // ==================== Kubernetes API Server（Phase 2-C） ====================
+  k8s: {
+    /** 测试未保存 / 正在编辑的集群配置，真实验证 Bearer Token */
+    testConnectionWithConfig: (config: K8sTestConfig) => Promise<OperationResult>;
+    /** 获取集群概览（版本 / 节点 / 命名空间） */
+    getOverview: (serverId: string) => Promise<K8sOverview>;
+  };
+
+  // ==================== ESXi / vCenter（HTTPS REST） ====================
+  esxi: {
+    /** 测试未保存 / 正在编辑的 ESXi 配置，真实验证 HTTPS 与账号认证 */
+    testConnectionWithConfig: (config: EsxiTestConfig) => Promise<OperationResult>;
+    /** 获取主机概览（版本 / API 版本 / 主机数） */
+    getOverview: (serverId: string) => Promise<EsxiOverview>;
   };
 
   // ==================== BMC 带外管理（Redfish API） ====================

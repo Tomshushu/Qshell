@@ -22,6 +22,7 @@ import {
   Download,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getServerConnectionFlags } from "@/services/connection-targets";
 import {
   SerialSequenceDialog,
   type SerialSequenceItem,
@@ -236,7 +237,9 @@ export function TerminalModule({
       ? serverId.slice(5)
       : serverId;
   const server = useAppStore((s) => s.servers.find((sv) => sv.id === baseServerId));
-  const isSerialConsole = server?.targetType === "serial" || server?.protocol === "serial";
+  // Phase 0：连接形态统一由能力表派生；此处刻意不传 osType，保持与原有 targetType/protocol 判断等价
+  const serverFlags = getServerConnectionFlags(server?.targetType, server?.protocol);
+  const isSerialConsole = serverFlags.isSerialServer;
   const serialToolbarAvailable = (termId: string | null, terminalMap: Map<string, TerminalInstance>) =>
     Boolean(termId && terminalMap.get(termId)?.status === "connected");
   const serialConfigSummary = useMemo(() => {
@@ -409,7 +412,7 @@ export function TerminalModule({
   const serialHexViewModeRef = useLatestRef(serialHexViewMode);
 
   useEffect(() => {
-    if (server?.targetType !== "serial" && server?.protocol !== "serial") return;
+    if (!server || !serverFlags.isSerialServer) return;
     try {
       const config = server.serialConfig ? JSON.parse(server.serialConfig) : {};
       setSerialEncodingLabel(config.encoding || "utf-8");
@@ -970,12 +973,13 @@ export function TerminalModule({
   const ensureAliasesLoaded = useCallback((sid: string) => {
     if (!sid || isUserAliasesLoaded(sid) || aliasFetchInflightRef.current.has(sid)) return;
     const srv = serverRef.current;
+    // 仅在具备 POSIX shell + SSH 远程执行能力的会话加载别名；语义等价，不扩大/缩小范围
+    const srvFlags = getServerConnectionFlags(srv?.targetType, srv?.protocol);
     if (
-      srv?.targetType === "serial" ||
-      srv?.protocol === "serial" ||
-      srv?.protocol === "telnet" ||
-      srv?.targetType === "network" ||
-      srv?.targetType === "bmc"
+      srvFlags.isSerialServer ||
+      srvFlags.isTelnetServer ||
+      srvFlags.isNetworkServer ||
+      srvFlags.isDeviceManagedServer
     ) {
       return;
     }
@@ -2021,7 +2025,7 @@ export function TerminalModule({
     const cleanData = data.includes("\r\n") ? normalizeShellCommandText(data) : data;
     lastActivityTimesRef.current.set(currentSid, Date.now());
     // 串口会话不参与输入广播：字节精确的点对点通道，既不做广播源也不做广播目标
-    const isSerial = server?.targetType === "serial" || server?.protocol === "serial";
+    const isSerial = serverFlags.isSerialServer;
     if (sshService.isSessionAlive(currentSid)) {
       // A raw file transfer must remain byte-exact. Drop interactive input while
       // it owns the port so keyboard/paste bytes cannot corrupt the file stream.
@@ -2055,7 +2059,7 @@ export function TerminalModule({
       // 串口目标跳过广播
       const otherTab = tabs.find((t) => t.id === otherTabId);
       const otherServer = otherTab ? servers.find((sv) => sv.id === otherTab.serverId) : undefined;
-      if (otherServer?.targetType === "serial" || otherServer?.protocol === "serial") continue;
+      if (getServerConnectionFlags(otherServer?.targetType, otherServer?.protocol).isSerialServer) continue;
       const sid = sshService.getTabActiveSessionId(otherTabId);
       if (sid && sshService.isSessionAlive(sid)) {
         lastActivityTimesRef.current.set(sid, Date.now());
@@ -2177,7 +2181,7 @@ export function TerminalModule({
             // 串口目标不支持 SIGINT，跳过
             const otherTab = tabs.find((t) => t.id === otherTabId);
             const otherServer = otherTab ? servers.find((sv) => sv.id === otherTab.serverId) : undefined;
-            if (otherServer?.targetType === "serial" || otherServer?.protocol === "serial") continue;
+            if (getServerConnectionFlags(otherServer?.targetType, otherServer?.protocol).isSerialServer) continue;
             const otherSid = sshService.getTabActiveSessionId(otherTabId);
             if (otherSid && sshService.isSessionAlive(otherSid)) {
               sigintActiveUntilRef.current.set(otherSid, Date.now() + 1000);
@@ -3058,7 +3062,7 @@ export function TerminalModule({
         }
       }
 
-      const isSerialSession = server?.targetType === "serial" || server?.protocol === "serial";
+      const isSerialSession = serverFlags.isSerialServer;
       if (isSerialSession) {
         if (serialHexViewModeRef.current) {
           const bytes = rawData ? decodeBase64Bytes(rawData) : new TextEncoder().encode(data);
@@ -3393,11 +3397,12 @@ export function TerminalModule({
       reconnectingRef.current.add(termId);
 
       const currentServer = server || useAppStore.getState().servers.find((s) => s.id === baseServerId);
+      const currentFlags = getServerConnectionFlags(currentServer?.targetType, currentServer?.protocol);
       const host = currentServer?.host;
       const port = currentServer?.port || 22;
       const username = currentServer?.username;
-      const isTelnet = currentServer?.protocol === "telnet";
-      const isSerial = currentServer?.targetType === "serial" || currentServer?.protocol === "serial";
+      const isTelnet = currentFlags.isTelnetServer;
+      const isSerial = currentFlags.isSerialServer;
 
       // 手动重连：重置计数器与 autoReconnect 标记，并通知全局 ReconnectManager 立即重连
       if (!isAutoReconnect) {
@@ -4199,8 +4204,8 @@ export function TerminalModule({
   // 订阅全局统一 ReconnectManager，使终端内状态、重试倒计时与顶部工作台标签完全同步收敛
   useEffect(() => {
     if (!serverId) return;
-    const isTelnet = server?.protocol === "telnet";
-    const isSerial = server?.targetType === "serial" || server?.protocol === "serial";
+    const isTelnet = serverFlags.isTelnetServer;
+    const isSerial = serverFlags.isSerialServer;
     if (isTelnet || isSerial) return;
 
     let lastStatus = "";
@@ -5514,11 +5519,12 @@ export function TerminalModule({
         let bannerText: string | undefined;
 
         const currentServer = server || useAppStore.getState().servers.find((s) => s.id === baseServerId);
+        const currentFlags = getServerConnectionFlags(currentServer?.targetType, currentServer?.protocol);
         const host = currentServer?.host;
         const port = currentServer?.port || 22;
         const username = currentServer?.username || "root";
-        const isTelnet = currentServer?.protocol === "telnet";
-        const isSerial = currentServer?.targetType === "serial" || currentServer?.protocol === "serial";
+        const isTelnet = currentFlags.isTelnetServer;
+        const isSerial = currentFlags.isSerialServer;
 
         if (isSerial) {
           // ===== Serial 串口路径：直连本地/USB串口硬件，跳过 SSH 与 MOTD =====
@@ -8063,7 +8069,7 @@ export function TerminalModule({
   // 串口硬件引脚状态 (CTS/DSR/RI/CD) 周期性轮询
   const activeSessionId = activeTermId ? terminals.get(activeTermId)?.sessionId : null;
   useEffect(() => {
-    if (!isActive || (server?.targetType !== "serial" && server?.protocol !== "serial")) return;
+    if (!isActive || (!serverFlags.isSerialServer)) return;
     const sessionId = activeSessionId || (activeTermId ? xtermInstances.current.get(activeTermId)?.sessionId : null);
     if (!sessionId) return;
 
@@ -8618,7 +8624,7 @@ export function TerminalModule({
   // 将串口状态与操作实时注册给外层 ModuleTabs 顶栏（实现整齐单行无缝内嵌）
   useEffect(() => {
     if (!registerSerialToolbar) return;
-    if (!isActive || (server?.targetType !== "serial" && server?.protocol !== "serial")) {
+    if (!isActive || (!serverFlags.isSerialServer)) {
       registerSerialToolbar(null);
       return;
     }
@@ -9213,7 +9219,7 @@ export function TerminalModule({
       </div>
 
       <SerialQuickSendEditor
-        open={Boolean((server?.targetType === "serial" || server?.protocol === "serial") && serialQuickSendOpen)}
+        open={Boolean((serverFlags.isSerialServer) && serialQuickSendOpen)}
         onClose={() => setSerialQuickSendOpen(false)}
         serialSendEditorHeight={serialSendEditorHeight}
         setSerialSendEditorHeight={setSerialSendEditorHeight}

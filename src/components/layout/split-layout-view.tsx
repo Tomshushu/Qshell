@@ -9,6 +9,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useAppStore } from "@/store";
+import { getServerConnectionFlags } from "@/services/connection-targets";
 import type {
   DropZone,
   SplitContainerNode,
@@ -643,13 +644,11 @@ function TabGroupView({ groupId }: { groupId: string }) {
           <div className="flex items-center gap-1.5 min-w-0 mr-2">
             {(() => {
               const srv = servers.find((s) => s.id === activeTab.serverId);
-              const isBmc = srv?.targetType === "bmc";
-              const isSerial =
-                srv?.targetType === "serial" ||
-                srv?.protocol === "serial" ||
-                srv?.osType === "serial";
-              const isNetwork =
-                srv?.targetType === "network" || srv?.osType === "network";
+              const srvFlags = getServerConnectionFlags(srv?.targetType, srv?.protocol, srv?.osType);
+              const isBmc = srvFlags.isDeviceManagedServer;
+              const isSerial = srvFlags.isSerialServer;
+              // osType === "network" 是旧资产兜底，能力表不识别，必须显式保留
+              const isNetwork = srvFlags.isNetworkServer || srv?.osType === "network";
               const PaneIcon = isSerial
                 ? Cable
                 : isBmc

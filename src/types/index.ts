@@ -34,9 +34,9 @@ export interface Server {
   osType?: string
   osInfo?: string
   lastAccessedAt?: number
-  /** 连接目标类型（linux/windows/network/unix/bmc/xinchuang），旧数据缺省为 linux */
+  /** 连接目标类型（linux/windows/network/unix/bmc/xinchuang/serial/esxi/kubernetes），旧数据缺省为 linux */
   targetType?: string
-  /** 连接协议（ssh/winrm/telnet/vnc），旧数据缺省为 ssh */
+  /** 连接协议（ssh/rdp/telnet/serial/redfish/https/k8s；winrm/vnc 仅兼容旧数据），旧数据缺省为 ssh */
   protocol?: string
   /** 用户启用的协议列表（如 ['ssh','rdp']），旧数据缺省为 ['ssh'] */
   protocols?: string[]
@@ -44,8 +44,10 @@ export interface Server {
   rdpPort?: number
   /** BMC Redfish HTTPS 管理端口，默认 443 */
   bmcPort?: number
-  /** 是否允许 BMC 使用自签名/无效 TLS 证书，默认关闭 */
+  /** 是否允许 BMC 使用自签名/无效 TLS 证书，默认关闭（历史字段名） */
   bmcAllowInvalidCerts?: boolean
+  /** 泛化后的 TLS 证书开关，适用于所有 HTTPS 设备；缺省时回退读取 bmcAllowInvalidCerts */
+  tlsAllowInvalidCerts?: boolean
   /**
    * FinalShell 模式：代理随服务器内联配置。
    * 后端以加密 JSON 字符串存储；前端以 JSON 字符串在数据中传递。
@@ -67,6 +69,8 @@ export interface Server {
    * 串口连接参数（JSON 字符串存储于 Server.serialConfig 或独立字段）。
    */
   serialConfig?: string | null
+  /** 设备专属凭据配置（JSON 字符串，后端加密存储）：token / kubeconfig / VNC 密码等，预留给未来设备类型 */
+  credentialsConfig?: string | null
   /** 所属服务器分组 ID（指向 server_groups 表 id），null/空表示未分组 */
   groupId?: string | null
   /** 回收站删除时间（毫秒时间戳）；为空表示正常，非 NULL 表示待删除 */

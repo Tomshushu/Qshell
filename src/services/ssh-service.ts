@@ -570,9 +570,53 @@ export const sshService = {
     password?: string;
     connectionTimeout?: number;
     bmcAllowInvalidCerts?: boolean;
+    tlsAllowInvalidCerts?: boolean;
   }): Promise<OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
     return backend.bmc.testConnectionWithConfig(config);
+  },
+
+  /** 测试 Kubernetes API Server 连接与 Bearer Token（未保存配置） */
+  async testK8sConnectionWithConfig(config: {
+    id?: string;
+    host: string;
+    port?: number;
+    token?: string;
+    connectionTimeout?: number;
+    tlsAllowInvalidCerts?: boolean;
+  }): Promise<OperationResult> {
+    if (!backend) throw new Error(NOT_AVAILABLE);
+    return backend.k8s.testConnectionWithConfig(config);
+  },
+
+  /** 获取 Kubernetes 集群概览 */
+  async getK8sOverview(
+    serverId: string,
+  ): Promise<import("./api/types").K8sOverview> {
+    if (!backend) throw new Error(NOT_AVAILABLE);
+    return backend.k8s.getOverview(serverId);
+  },
+
+  /** 测试 ESXi / vCenter HTTPS 连接与认证（未保存配置） */
+  async testEsxiConnectionWithConfig(config: {
+    id?: string;
+    host: string;
+    port?: number;
+    username: string;
+    password?: string;
+    connectionTimeout?: number;
+    tlsAllowInvalidCerts?: boolean;
+  }): Promise<OperationResult> {
+    if (!backend) throw new Error(NOT_AVAILABLE);
+    return backend.esxi.testConnectionWithConfig(config);
+  },
+
+  /** 获取 ESXi / vCenter 主机概览 */
+  async getEsxiOverview(
+    serverId: string,
+  ): Promise<import("./api/types").EsxiOverview> {
+    if (!backend) throw new Error(NOT_AVAILABLE);
+    return backend.esxi.getOverview(serverId);
   },
 
   async diagnoseEndpoint(host: string, port: number, timeoutSecs = 6) {

@@ -13,6 +13,9 @@
 //    无需通过 tauri::State 注入。
 
 pub mod servers;
+pub mod capabilities;
+pub mod esxi;
+pub mod k8s;
 pub mod server_groups;
 pub mod server_import;
 pub mod ssh;

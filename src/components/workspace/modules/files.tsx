@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo, useDeferredValue } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
+import { getServerConnectionFlags } from '@/services/connection-targets'
 import { useMarqueeSelection } from '@/hooks/use-marquee-selection'
 import { MarqueeRect } from '@/components/ui/marquee-rect'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -217,9 +218,10 @@ export function FilesModule({
   const server = useAppStore((s) => s.servers.find((sv) => sv.id === baseServerId))
   // 用户设置里的 SFTP 并发数（1-8）：本模块此前写死 3，导致设置不生效且内外层并发相乘
   const sftpTransferConcurrency = useAppStore((s) => Number(s.sftpTransferConcurrency) || 3)
-  const isWindows = server?.targetType === 'windows'
-  const isTelnet = server?.protocol === 'telnet'
-  const isNetwork = server?.targetType === 'network'
+  const serverFlags = getServerConnectionFlags(server?.targetType, server?.protocol)
+  const isWindows = serverFlags.isWindowsServer
+  const isTelnet = serverFlags.isTelnetServer
+  const isNetwork = serverFlags.isNetworkServer
   const [currentPath, setCurrentPath] = useState('')
   const [files, setFiles] = useState<FileEntry[]>([])
   const [selectedFiles, setSelectedFiles] = useState<string[]>([])
