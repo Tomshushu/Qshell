@@ -120,18 +120,50 @@ export function ComposeBar({
   const inputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // Focus input helper across microtask, RAF, and timeouts
+  const focusInput = useCallback(() => {
+    const doFocus = () => {
+      if (expanded) {
+        textareaRef.current?.focus();
+      } else {
+        inputRef.current?.focus();
+      }
+    };
+    doFocus();
+    requestAnimationFrame(doFocus);
+    setTimeout(doFocus, 30);
+    setTimeout(doFocus, 80);
+  }, [expanded]);
+
+  // Listen for focus-compose-bar custom event to restore focus from terminal
+  useEffect(() => {
+    const handleFocusEvent = () => {
+      focusInput();
+    };
+    window.addEventListener("qshell:focus-compose-bar", handleFocusEvent);
+    return () => {
+      window.removeEventListener("qshell:focus-compose-bar", handleFocusEvent);
+    };
+  }, [focusInput]);
+
   // Focus input when visible toggles to true
   useEffect(() => {
     if (visible) {
-      setTimeout(() => {
-        if (expanded) {
-          textareaRef.current?.focus();
-        } else {
-          inputRef.current?.focus();
-        }
-      }, 50);
+      focusInput();
     }
-  }, [visible, expanded]);
+  }, [visible, focusInput]);
+
+  // Click on background of compose bar automatically brings focus to input
+  const handleContainerClick = useCallback(
+    (e: React.MouseEvent) => {
+      const el = e.target as HTMLElement;
+      if (el.closest('button, [role="button"], [role="menuitem"], a, select, textarea, input')) {
+        return;
+      }
+      focusInput();
+    },
+    [focusInput]
+  );
 
   // Update text with undo tracking
   const handleTextChange = useCallback(
@@ -344,7 +376,7 @@ export function ComposeBar({
       handleSend();
     } else if (e.key === "Escape") {
       e.preventDefault();
-      setExpanded(false);
+      setVisible(false);
       onFocusTerminal?.();
     }
   };
@@ -400,12 +432,14 @@ export function ComposeBar({
     <>
       <div
         className={cn(
-          "w-full shrink-0 flex flex-col select-none transition-all duration-150 border-t z-20",
+          "terminal-compose-bar w-full shrink-0 flex flex-col transition-all duration-150 border-t z-20",
           isBroadcast
             ? "border-amber-500/50 bg-amber-500/[0.04] dark:bg-amber-950/20"
             : "border-border/60 bg-background/95 dark:bg-zinc-900/90",
           "backdrop-blur-md shadow-md"
         )}
+        data-terminal-compose-bar="true"
+        onClick={handleContainerClick}
         style={{
           height: expanded ? `${height}px` : undefined,
         }}

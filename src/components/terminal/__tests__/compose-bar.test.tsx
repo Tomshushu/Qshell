@@ -325,4 +325,29 @@ describe("ComposeBar Component (终端命令撰写与多机分发系统)", () =>
     fireEvent.keyDown(input, { key: "ArrowDown" });
     expect(input.value).toBe("");
   });
+
+  it("focuses input when 'qshell:focus-compose-bar' event is dispatched", async () => {
+    render(
+      <ComposeBar
+        activeTermId="t1"
+        activeSessionId="sess-1"
+        tabId="tab-1"
+      />
+    );
+
+    const input = screen.getByPlaceholderText(
+      "在此输入要发送到终端的命令... (Enter 发送，Shift+Enter 换行，Esc 退出)"
+    );
+
+    // Blur first
+    input.blur();
+    expect(document.activeElement).not.toBe(input);
+
+    // Dispatch focus event
+    window.dispatchEvent(new CustomEvent("qshell:focus-compose-bar"));
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(input);
+    });
+  });
 });

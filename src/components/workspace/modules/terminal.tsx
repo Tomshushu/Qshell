@@ -181,8 +181,12 @@ export {
 
 function isInteractiveOrInputElement(el: Element | null): boolean {
   if (!el || typeof (el as any).closest !== "function") return false;
-  // 1. 处于搜索栏内部
-  if (el.closest(".terminal-search-bar, [data-terminal-search]")) {
+  // 1. 处于搜索栏或撰写栏内部
+  if (
+    el.closest(
+      ".terminal-search-bar, [data-terminal-search], .terminal-compose-bar, [data-terminal-compose-bar]"
+    )
+  ) {
     return true;
   }
   // 2. 处于 AI 助手悬浮窗、代码卡片或抽屉内部
@@ -1871,9 +1875,12 @@ export function TerminalModule({
   const focusActiveTerm = useCallback((force = false) => {
     if (isUnmountedRef.current) return;
     const activeEl = document.activeElement;
-    // 搜索栏优先级最高：无论是否强制聚焦，只要搜索栏已打开且焦点在其内部，
-    // 就绝不抢占（否则用户点击搜索框时会被随后排队的多帧 RAF 抢回终端焦点）
+    // 搜索栏与撰写栏优先级最高：无论是否强制聚焦，只要搜索栏或撰写栏已打开且焦点在其内部，
+    // 就绝不抢占（否则用户点击/聚焦输入框时会被随后排队的多帧 RAF 抢回终端焦点）
     if (showSearchRef.current && activeEl?.closest?.(".terminal-search-bar, [data-terminal-search]")) {
+      return;
+    }
+    if (activeEl?.closest?.(".terminal-compose-bar, [data-terminal-compose-bar]")) {
       return;
     }
 
@@ -1893,8 +1900,9 @@ export function TerminalModule({
     const doFocus = () => {
       if (isUnmountedRef.current) return;
       const el = document.activeElement;
-      // 同上：多帧 RAF 回调里也必须尊重搜索栏焦点，force 模式不能越过
+      // 同上：多帧 RAF 回调里也必须尊重搜索栏和撰写栏焦点，force 模式不能越过
       if (showSearchRef.current && el?.closest?.(".terminal-search-bar, [data-terminal-search]")) return;
+      if (el?.closest?.(".terminal-compose-bar, [data-terminal-compose-bar]")) return;
       if (el?.closest?.('[role="dialog"], [role="alertdialog"], .modal, .dialog')) return;
       if (!force && isInteractiveOrInputElement(el)) return;
       if (!force && (!isActiveRef.current || !isVisibleRef.current)) return;
@@ -7598,7 +7606,31 @@ export function TerminalModule({
 
     const handleToggleComposeBar = () => {
       if (!isActiveRef.current || !isVisibleRef.current || isSplitPane) return;
-      useAppStore.getState().setTerminalComposeBarVisible((v) => !v);
+      const isVisible = useAppStore.getState().terminalComposeBarVisible;
+      const activeEl = document.activeElement;
+      const isInsideComposeBar = Boolean(
+        activeEl?.closest?.(".terminal-compose-bar, [data-terminal-compose-bar]")
+      );
+
+      // 核心焦点切换机制：
+      // 1. 如果撰写栏已处于打开状态，但焦点在终端（或其它地方）：
+      // 用户再次按下快捷键（Ctrl+Shift+U）或点击底栏时，将输入光标无缝切回聚焦撰写栏，而不是关闭！
+      if (isVisible && !isInsideComposeBar) {
+        window.dispatchEvent(new CustomEvent("qshell:focus-compose-bar"));
+        return;
+      }
+
+      // 2. 如果撰写栏未打开，打开并自动聚焦
+      if (!isVisible) {
+        useAppStore.getState().setTerminalComposeBarVisible(true);
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent("qshell:focus-compose-bar"));
+        }, 30);
+      } else {
+        // 3. 如果焦点已在撰写栏内部，则按快捷键关闭并归还焦点给终端
+        useAppStore.getState().setTerminalComposeBarVisible(false);
+        focusActiveTerm(true);
+      }
     };
 
     window.addEventListener("insert-terminal-command", handleInsertCommand);
@@ -7621,8 +7653,12 @@ export function TerminalModule({
       const target = e.target as Element | null;
       if (!target) return;
 
-      // 1. 若点击在搜索栏内部，绝对不打扰搜索栏输入
-      if (target.closest?.(".terminal-search-bar, [data-terminal-search]")) {
+      // 1. 若点击在搜索栏或撰写栏内部，绝对不打扰输入
+      if (
+        target.closest?.(
+          ".terminal-search-bar, [data-terminal-search], .terminal-compose-bar, [data-terminal-compose-bar]"
+        )
+      ) {
         return;
       }
 
