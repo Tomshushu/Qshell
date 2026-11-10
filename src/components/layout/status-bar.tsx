@@ -154,10 +154,6 @@ export function StatusBar() {
     }
   }, [server?.host])
 
-  // 分屏模式下不渲染底部状态栏（此处为本组件最后一个 hook 之后，hook 数量恒定）
-  // 分屏模式下不渲染底部状态栏（此处为本组件最后一个 hook 之后，hook 数量恒定）
-  if (isSplitMode) return null
-
   // 复制 IP 按钮：仅在状态栏确实展示 host 时挂载
   const copyIpButton = server?.host ? (
     <button
@@ -199,6 +195,11 @@ export function StatusBar() {
                 : `${t('status_connected_to')} ${server?.host || '?'}`}
             </span>
             {copyIpButton}
+            {isSplitMode && (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-mono bg-muted/60 text-muted-foreground border border-border/40 shrink-0">
+                分屏
+              </span>
+            )}
           </>
         ) : isBmcServer ? (
           <>

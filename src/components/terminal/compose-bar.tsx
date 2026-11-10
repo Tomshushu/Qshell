@@ -17,6 +17,7 @@ import {
   Layers,
   Globe,
   Trash2,
+  PenSquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -544,6 +545,53 @@ export function ComposeBar({
           </div>
         )}
 
+        {/* Multiline Header Bar (对标 Xshell 8 撰写窗口顶部标题栏与窗口控制) */}
+        {expanded && (
+          <div className="flex items-center justify-between px-2.5 py-1 bg-muted/40 border-b border-border/40 select-none text-xs shrink-0">
+            <div className="flex items-center gap-1.5 text-foreground/85 font-medium">
+              <PenSquare className="h-3.5 w-3.5 text-sky-500 shrink-0" />
+              <span className="text-[11.5px] font-sans font-semibold tracking-tight">
+                {target === "active"
+                  ? "撰写: 仅将文本发送到当前会话"
+                  : target === "split"
+                  ? `撰写: 发送到当前分屏所有终端 (${resolvedTargets.length}台)`
+                  : `撰写: 发送到全部已连接会话 (${resolvedTargets.length}台)`}
+              </span>
+            </div>
+
+            {/* 右上角窗口控制按钮群 (对标 Xshell 8 标题栏右上角按钮) */}
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setExpanded(false)}
+                className="h-5 w-5 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors cursor-pointer"
+                title={t("compose_btn_collapse") || "收起为单行撰写栏"}
+              >
+                <Minimize2 className="h-3 w-3" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setHeight(height > 250 ? 160 : 340)}
+                className="h-5 w-5 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors cursor-pointer"
+                title="切换窗口高度 (160px / 340px)"
+              >
+                <Maximize2 className="h-3 w-3" />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setVisible(false);
+                  returnFocus();
+                }}
+                className="h-5 w-5 flex items-center justify-center rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors cursor-pointer"
+                title="关闭撰写窗口 (Esc)"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* 主编辑与交互区域 */}
         {expanded ? (
           /* =====================================================================
@@ -727,7 +775,30 @@ export function ComposeBar({
 
               {/* 多行窗格底栏信息与执行按钮 */}
               <div className="flex items-center justify-between pt-1 border-t border-border/30 px-1 text-[11px]">
-                <div className="flex items-center gap-2 text-muted-foreground">
+                <div className="flex items-center gap-3 text-muted-foreground">
+                  {/* 对标 Xshell 的底部一键多机/分屏广播勾选框 */}
+                  {isSplitWorkspace ? (
+                    <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-foreground/80 hover:text-foreground select-none">
+                      <input
+                        type="checkbox"
+                        checked={target === "split"}
+                        onChange={(e) => setTarget(e.target.checked ? "split" : "active")}
+                        className="h-3.5 w-3.5 rounded border-border text-primary focus:ring-0 cursor-pointer"
+                      />
+                      <span>发送文本到当前分屏全部会话</span>
+                    </label>
+                  ) : (
+                    <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-foreground/80 hover:text-foreground select-none">
+                      <input
+                        type="checkbox"
+                        checked={target === "all"}
+                        onChange={(e) => setTarget(e.target.checked ? "all" : "active")}
+                        className="h-3.5 w-3.5 rounded border-border text-primary focus:ring-0 cursor-pointer"
+                      />
+                      <span>广播到全部已连接会话</span>
+                    </label>
+                  )}
+
                   {/* 目标提示胶囊 */}
                   <span
                     className={cn(
@@ -747,7 +818,7 @@ export function ComposeBar({
                     </span>
                   </span>
 
-                  <span>
+                  <span className="hidden lg:inline-block text-muted-foreground/60 text-[10px]">
                     {sendMode === "enter"
                       ? "Enter 发送 · Shift+Enter 换行"
                       : "Ctrl+Enter 发送 · Enter 换行"}
