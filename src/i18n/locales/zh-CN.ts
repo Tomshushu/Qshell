@@ -365,6 +365,8 @@ export default {
   status_sftp_connected_count: "{n} 台已连接",
   status_copy_ip: "复制 IP",
   status_ip_copied: "已复制",
+  status_split_mode: "分屏模式 (共 {count} 个终端)",
+  status_current_focus: "当前焦点",
 
   db_add_server: "添加服务器",
   db_tab_general: "常规设置",

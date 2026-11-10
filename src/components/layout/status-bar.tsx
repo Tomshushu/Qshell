@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '@/store'
-import { Wifi, WifiOff, Server, Copy, Check, Monitor, Zap, PenSquare } from 'lucide-react'
+import { Wifi, WifiOff, Server, Copy, Check, Monitor, Zap, PenSquare, Layers } from 'lucide-react'
 import { useTranslation } from '@/i18n'
 import { sshService } from '@/services/ssh-service'
 import { collectGroupIds } from '@/utils/split-layout'
@@ -47,6 +47,21 @@ export function StatusBar() {
     return wsLayout ? collectGroupIds(wsLayout).length > 1 : false
   }, [layout, activeTabId, tabs, workspaces])
 
+  const splitTerminalCount = useMemo(() => {
+    if (!isSplitMode) return 1
+    const wsId = tabs.find((t) => t.id === activeTabId)?.workspaceId
+    if (wsId && workspaces[wsId]?.layout) {
+      const gids = collectGroupIds(workspaces[wsId].layout)
+      if (gids.length > 1) return gids.length
+    }
+    const globalGids = collectGroupIds(layout)
+    if (globalGids.length > 1) return globalGids.length
+    const wsTabs = wsId
+      ? tabs.filter((t) => t.workspaceId === wsId && t.module === 'terminal')
+      : []
+    return wsTabs.length > 0 ? wsTabs.length : 2
+  }, [isSplitMode, tabs, activeTabId, layout, workspaces])
+
   // SFTP 标签的 serverId 是特殊值 'sftp'，并非真实服务器 ID，
   // 全局 connectedServers 中不会有该条目，会被误判为"未连接"。
   // SFTP 模块内部 tab 栏已显示每个连接的状态，底部状态栏不应重复显示连接状态，
@@ -82,6 +97,17 @@ export function StatusBar() {
         connectedServers[serverId || ''] ??
         false)
     : false
+
+  const focusTitle = useMemo(() => {
+    if (isSerialServer) {
+      return server?.name ? `${server.name} (${server.host || 'COM'})` : server?.host || 'COM'
+    }
+    if (!server) return activeTab?.title || activeTab?.serverName || '?'
+    if (server.name && server.name !== server.host) {
+      return `${server.name} (${server.host})`
+    }
+    return server.host || server.name || '?'
+  }, [server, activeTab, isSerialServer])
 
   const [serialStats, setSerialStats] = useState({ rxBytes: 0, txBytes: 0, rxRate: 0, txRate: 0 })
 
@@ -187,20 +213,29 @@ export function StatusBar() {
             )}
           </>
         ) : isConnected ? (
-          <>
-            <Wifi className="h-3 w-3 text-success flex-shrink-0" />
-            <span className="truncate">
-              {isSerialServer
-                ? `${t('status_serial_mode')} · ${server?.host || 'COM'}`
-                : `${t('status_connected_to')} ${server?.host || '?'}`}
-            </span>
-            {copyIpButton}
-            {isSplitMode && (
-              <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-mono bg-muted/60 text-muted-foreground border border-border/40 shrink-0">
-                分屏
+          isSplitMode ? (
+            <>
+              <Layers className="h-3 w-3 text-primary flex-shrink-0" />
+              <span className="truncate">
+                {t('status_split_mode', { count: splitTerminalCount })}
+                {' · '}
+                <span className="text-foreground/90 font-medium">
+                  {t('status_current_focus')}: {focusTitle}
+                </span>
               </span>
-            )}
-          </>
+              {copyIpButton}
+            </>
+          ) : (
+            <>
+              <Wifi className="h-3 w-3 text-success flex-shrink-0" />
+              <span className="truncate">
+                {isSerialServer
+                  ? `${t('status_serial_mode')} · ${server?.host || 'COM'}`
+                  : `${t('status_connected_to')} ${server?.host || '?'}`}
+              </span>
+              {copyIpButton}
+            </>
+          )
         ) : isBmcServer ? (
           <>
             <Wifi className="h-3 w-3 text-success flex-shrink-0" />
@@ -226,10 +261,24 @@ export function StatusBar() {
             {copyIpButton}
           </>
         ) : serverId ? (
-          <>
-            <WifiOff className="h-3 w-3 text-destructive flex-shrink-0" />
-            <span className="truncate">{t('status_disconnected')}</span>
-          </>
+          isSplitMode ? (
+            <>
+              <Layers className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+              <span className="truncate">
+                {t('status_split_mode', { count: splitTerminalCount })}
+                {' · '}
+                <span className="text-foreground/90 font-medium">
+                  {t('status_current_focus')}: {focusTitle}
+                </span>
+                {' ('}{t('status_disconnected')}{')'}
+              </span>
+            </>
+          ) : (
+            <>
+              <WifiOff className="h-3 w-3 text-destructive flex-shrink-0" />
+              <span className="truncate">{t('status_disconnected')}</span>
+            </>
+          )
         ) : (
           <>
             <Server className="h-3 w-3 text-muted-foreground/60 flex-shrink-0" />

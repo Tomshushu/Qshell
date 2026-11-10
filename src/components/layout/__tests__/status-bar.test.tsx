@@ -112,4 +112,62 @@ describe('StatusBar Component Protocol & Dashboard Mode Guard', () => {
 
     expect(screen.getByText('SSH 模式')).toBeDefined()
   })
+
+  it('renders split mode summary and current focus information on the left while preserving right side tools', () => {
+    const tab1: WorkspaceTab = {
+      id: 'tab-1',
+      serverId: 'srv-1',
+      serverName: 'Web Server',
+      module: 'terminal',
+      title: 'Web Server',
+      workspaceId: 'ws-1',
+    }
+    const tab2: WorkspaceTab = {
+      id: 'tab-2',
+      serverId: 'srv-2',
+      serverName: 'Switch 1',
+      module: 'terminal',
+      title: 'Switch 1',
+      workspaceId: 'ws-1',
+    }
+
+    useAppStore.setState({
+      activeTabId: 'tab-1',
+      tabs: [tab1, tab2],
+      connectedServers: {
+        'ws:srv-1:tab-1': true,
+        'ws:srv-2:tab-2': true,
+      },
+      workspaces: {
+        'ws-1': {
+          id: 'ws-1',
+          name: 'Workspace 1',
+          layout: {
+            type: 'split',
+            id: 'split-root',
+            direction: 'row',
+            ratio: 0.5,
+            children: [
+              { type: 'group', groupId: 'group-1' },
+              { type: 'group', groupId: 'group-2' },
+            ],
+          },
+        },
+      },
+    })
+
+    render(
+      <I18nProvider>
+        <StatusBar />
+      </I18nProvider>
+    )
+
+    // Left side displays split mode total terminal count and focused target info
+    expect(screen.getByText(/分屏模式 \(共 2 个终端\)/)).toBeDefined()
+    expect(screen.getByText(/当前焦点: Web Server \(192\.168\.1\.100\)/)).toBeDefined()
+
+    // Right side tools (Quick Command, Compose Bar) are preserved
+    expect(screen.getByText(/快捷命令/)).toBeDefined()
+    expect(screen.getByText(/撰写/)).toBeDefined()
+  })
 })

@@ -368,6 +368,8 @@ export default {
   status_sftp_connected_count: "{n} connected",
   status_copy_ip: "Copy IP",
   status_ip_copied: "Copied",
+  status_split_mode: "Split Mode ({count} terminals)",
+  status_current_focus: "Focus",
 
   db_add_server: "Add Server",
   db_tab_general: "General",
