@@ -10,6 +10,8 @@ import type {
   TabGroup,
   WorkspaceDef,
   SftpViewMode,
+  LogonScriptsConfig,
+  SessionLogFormat,
 } from "@/types";
 import type { TerminalTheme, TerminalThemeOverride } from "@/utils/terminal-themes";
 import type { HighlightRule } from "@/utils/terminal-highlighter";
@@ -272,6 +274,24 @@ export interface TerminalSlice {
   /** 单个终端录制分卷的最大文件大小（MB），范围 50-2048 */
   terminalRecordingMaxSizeMb: number;
   setTerminalRecordingMaxSizeMb: (size: number) => void;
+  /** 终端常驻快捷命令栏是否开启（默认 true） */
+  terminalQuickCommandBarVisible: boolean;
+  setTerminalQuickCommandBarVisible: (visible: boolean) => void;
+  /** 终端快捷命令栏折叠状态（默认 false） */
+  terminalQuickCommandBarCollapsed: boolean;
+  setTerminalQuickCommandBarCollapsed: (collapsed: boolean) => void;
+  /** 全局默认登录与交互脚本配置 (Send-Expect) */
+  globalLogonScriptsConfig: LogonScriptsConfig;
+  setGlobalLogonScriptsConfig: (config: LogonScriptsConfig) => void;
+  /** 全局终端默认是否显示每行时间戳前缀 */
+  terminalShowTimestamps: boolean;
+  setTerminalShowTimestamps: (show: boolean) => void;
+  /** 全局是否默认所有会话自动落盘记录日志 */
+  terminalAutoLogSession: boolean;
+  setTerminalAutoLogSession: (auto: boolean) => void;
+  /** 全局会话日志默认落盘格式 */
+  terminalSessionLogFormat: SessionLogFormat;
+  setTerminalSessionLogFormat: (format: SessionLogFormat) => void;
 }
 
 export interface SftpSlice {
@@ -321,6 +341,9 @@ export interface SftpSlice {
   /** SFTP 上传时是否自动遵循项目根及子目录下的 .gitignore 规则 */
   sftpRespectGitignore: boolean;
   setSftpRespectGitignore: (respect: boolean) => void;
+  /** SFTP 符号链接（软链接）处理策略：skip | follow */
+  sftpSymlinkPolicy: 'skip' | 'follow';
+  setSftpSymlinkPolicy: (policy: 'skip' | 'follow') => void;
 
   // 路径收藏与工作台文件偏好（统一管理）
   pathBookmarks: Record<string, string[]>;

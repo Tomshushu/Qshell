@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useAppStore } from "@/store";
 import { useMetricsStore } from "@/store/metrics-store";
-import { getServerConnectionFlags } from "@/services/connection-targets";
+import { getServerConnectionFlags, isPureVncServer, hasFtpFileTransfer } from "@/services/connection-targets";
 import { ModuleTabs, type SerialToolbarState } from "@/components/workspace/module-tabs";
 import { OverviewModule } from "@/components/workspace/modules/overview";
 import { FloatingMetricsHud } from "@/components/workspace/floating-metrics-hud";
@@ -13,6 +13,7 @@ import { PortsModule } from "@/components/workspace/modules/ports";
 import { FilesModule } from "@/components/workspace/modules/files";
 import { DockerModule } from "@/components/workspace/modules/docker";
 import { RdpViewerModule } from "@/components/workspace/modules/rdp-viewer";
+import { VncViewerModule } from "@/components/workspace/modules/vnc-viewer";
 import { BmcModule } from "@/components/workspace/modules/bmc";
 import { EsxiModule } from "@/components/workspace/modules/esxi";
 import { K8sModule } from "@/components/workspace/modules/k8s";
@@ -200,9 +201,12 @@ export function WorkspacePage({
   const deviceTargetType = server?.targetType;
   const isSerialServer = serverFlags.isSerialServer;
   const isRdpServer = serverFlags.isRdpServer;
+  const isPureVnc = isPureVncServer(server);
+  const hasFtp = hasFtpFileTransfer(server);
+  const hasSsh = !isPureVnc && !isSerialServer && !isRdpServer && !isBmcServer && !serverFlags.isTelnetServer;
   // 没有系统指标采集链路的设备（网络设备 / Telnet / 外部启动器）不展示监控，避免全 0 假值
   const supportsMetrics = serverFlags.supportsMetrics;
-  const connId = tabId && serverId && !isSerialServer && !isRdpServer && !isBmcServer
+  const connId = tabId && serverId && !isSerialServer && !isRdpServer && !isBmcServer && !isPureVnc
     ? `ws:${serverId}:${tabId}`
     : serverId;
   // 顶部「实时监控悬浮窗」开关只在确实有指标可展示时保留：
@@ -212,7 +216,7 @@ export function WorkspacePage({
     (s) => s.serverStates[connId]?.metrics?.metricsAvailable,
   );
   const floatingMonitorAvailable =
-    !isSerialServer && !isRdpServer && !isBmcServer && supportsMetrics &&
+    !isSerialServer && !isRdpServer && !isBmcServer && !isPureVnc && supportsMetrics &&
     metricsAvailable !== false;
 
   // 监听底栏胶囊点击切换监控卡片事件
@@ -571,15 +575,43 @@ export function WorkspacePage({
       targetModule = "ports";
       targetContext = { ...context, subTab: "forward" };
     }
-    // 文件模块：改为终端下方可折叠面板，点击切换开/关（不切换模块、不弹窗）
+    // 文件模块处理：
     if (targetModule === "files") {
-      // telnet / 不支持文件管理的目标类型：不响应，避免按钮高亮但面板不出现
       const filesAvailable =
         isModuleAvailable(server?.targetType, "files") && !serverFlags.isTelnetServer;
       if (!filesAvailable) return;
-      // 面板高度动画期间冻结终端画布（复用分屏拖拽的 split-resize-start/end 机制）：
-      // 否则 ResizeObserver 逐帧 fit 导致 rows 反复变化，日志文字上下跳动。
-      // 冻结期间画布纹丝不动（底部被面板逐渐覆盖），动画结束后一次性对齐最终尺寸
+
+      // 纯 VNC 模式下（若配置了 FTP）：直接切换为全屏文件模块
+      if (isPureVnc) {
+        if (currentTab) {
+          switchModule(currentTab.id, "files");
+        }
+        return;
+      }
+
+      // 如果当前处在 VNC / RDP / BMC / 模态模块，切回终端视图并展开文件抽屉
+      if (isRdpModule || isBmcModule || isVncModule || isModalModule) {
+        if (currentTab) {
+          switchModule(currentTab.id, "terminal");
+        }
+        setFilesPanelOpen(true);
+      } else {
+        // 在终端视图下，点击「文件」按钮切换展开/收起
+        setFilesPanelOpen((v) => !v);
+      }
+
+      // 核心：若文件传输依赖 SSH (SFTP) 且 SSH 尚未建立连接（例如直接打开 VNC 进入），立即触发 SSH 连接
+      if (
+        !isConnected &&
+        !connecting &&
+        sshService.isAvailable() &&
+        !hasFtpFileTransfer(server) &&
+        !isPureVnc
+      ) {
+        reconnectManager.retryImmediately(connId);
+        handleConnect();
+      }
+
       window.dispatchEvent(new CustomEvent("split-resize-start"));
       if (filesPanelAnimTimerRef.current) {
         window.clearTimeout(filesPanelAnimTimerRef.current);
@@ -588,16 +620,9 @@ export function WorkspacePage({
         filesPanelAnimTimerRef.current = null;
         window.dispatchEvent(new CustomEvent("split-resize-end"));
       }, FILES_PANEL_ANIM_MS + 60);
-      // 仅在「由关到开」时挂载滑出动画类（见 filesPanelAnimActive 注释）
       if (!filesPanelOpen) {
         setFilesPanelAnimActive(true);
         window.setTimeout(() => setFilesPanelAnimActive(false), FILES_PANEL_ANIM_MS + 120);
-      }
-      setFilesPanelOpen((v) => !v);
-      // 断连状态下打开文件面板时自动触发重连（与切换模块的行为保持一致）
-      if (!isConnected && !connecting && wasConnected && sshService.isAvailable()) {
-        reconnectManager.retryImmediately(connId);
-        handleConnect();
       }
       return;
     }
@@ -619,12 +644,14 @@ export function WorkspacePage({
     } else {
       setModuleContext(null);
     }
-    // 断连状态下切换模块时自动触发重连
+    // 切换至依赖 SSH 的模块（终端、管理、Docker 等）或支持 SSH 隧道穿透的 VNC 模块时，若尚未连接则自动触发连接
     if (
       !isConnected &&
       !connecting &&
-      wasConnected &&
-      sshService.isAvailable()
+      sshService.isAvailable() &&
+      !isPureVnc &&
+      targetModule !== "rdp" &&
+      targetModule !== "bmc"
     ) {
       reconnectManager.retryImmediately(connId);
       handleConnect();
@@ -654,7 +681,7 @@ export function WorkspacePage({
 
   const handleConnect = useCallback(async () => {
     // 这些目标由各自模块建立连接，不能落入通用 SSH 连接链路。
-    if (isBmcServer || isSerialServer || isRdpServer) return;
+    if (isBmcServer || isSerialServer || isRdpServer || server?.protocol === 'vnc' || isPureVnc) return;
     const skipCredentialPrecheck = credentialJustSavedRef.current;
     credentialJustSavedRef.current = false;
     if (!skipCredentialPrecheck && !wasConnectedRef.current && serverStateEntry?.errorKind === SshErrorKind.AuthError) {
@@ -925,8 +952,8 @@ export function WorkspacePage({
       // （由各模块内部自行初始化硬件/API 连接）
       if (isBmcServer) return;
       if (isSerialServer) return;
-      // RDP 由独立系统客户端启动，不应自动调用 ssh_connect。
-      if (isRdpServer) return;
+      // RDP / 纯 VNC 不应自动调用 ssh_connect（具备 SSH 能力的服务器在进入 VNC 标签时仍自动连接 SSH，以打通 Direct-TCPIP 隧道）。
+      if (isRdpServer || server?.protocol === 'vnc' || isPureVnc) return;
       handleConnect();
     }
   }, [
@@ -936,7 +963,6 @@ export function WorkspacePage({
     isBmcServer,
     isSerialServer,
     isRdpServer,
-    currentTab?.module,
   ]);
 
   const handleDisconnect = async () => {
@@ -963,24 +989,27 @@ export function WorkspacePage({
   // 早期返回放在所有 Hooks 之后
   if (!currentTab) return null;
 
-  // 分屏窗格模式：强制只显示终端模块，不渲染模块切换栏与连接按钮行
-  const effectiveModule = isSplitPane ? "terminal" : currentTab.module;
+  // 分屏窗格模式：强制只显示终端模块（纯 VNC 模式除外），不渲染模块切换栏与连接按钮行
+  const effectiveModule = isSplitPane ? (isPureVnc ? "vnc" : "terminal") : currentTab.module;
   const isTerminalModule = effectiveModule === "terminal";
-  // RDP 模块独立于 SSH 连接，不需要等待 SSH ready
+  // RDP / VNC 模块独立于 SSH 连接，不需要等待 SSH ready
   const isRdpModule = effectiveModule === "rdp";
+  const isVncModule = effectiveModule === "vnc";
   // BMC 模块通过 Redfish API (HTTPS) 工作，独立于 SSH 连接
   const isBmcModule = effectiveModule === "bmc";
   const isFullyReady =
     isRdpModule ||
+    isVncModule ||
     isBmcModule ||
     isSerialServer ||
     (isConnected && (!isTerminalModule || terminalReady));
 
-  // 是否开启附属功能弹窗（除终端、RDP、BMC、文件外的所有模块，点击后作为工作台附属弹窗弹出）
+  // 是否开启附属功能弹窗（除终端、RDP、VNC、BMC、文件外的所有模块，点击后作为工作台附属弹窗弹出）
   const isModalModule =
     !isSplitPane &&
     !isTerminalModule &&
     !isRdpModule &&
+    !isVncModule &&
     !isBmcModule &&
     effectiveModule !== "files";
 
@@ -990,8 +1019,14 @@ export function WorkspacePage({
     !isSplitPane &&
     isModuleAvailable(server?.targetType, "files") &&
     !serverFlags.isTelnetServer;
-  // 文件面板是否可见：可用且用户已展开
-  const showFilesPanel = filesPanelOpen && filesPanelAvailable;
+  // 文件面板是否可见：可用且用户已展开，且当前不在全屏独立远程桌面（RDP/VNC/BMC）下
+  const showFilesPanel =
+    filesPanelOpen &&
+    filesPanelAvailable &&
+    !isRdpModule &&
+    !isBmcModule &&
+    !isVncModule &&
+    !isPureVnc;
   // 文件面板是否处于激活态（供 FilesModule 处理拖拽/直达等全局事件）
   const filesPanelActive = isActive && showFilesPanel && !isModalModule;
 
@@ -1038,7 +1073,7 @@ export function WorkspacePage({
       onShowDiagnostics={() => setShowConnectionDiagnostics(true)}
       toolbarPosition="top"
       serialToolbar={isSerialServer && currentTab.module === "terminal" ? null : serialToolbar}
-      filesPanelOpen={filesPanelOpen}
+      filesPanelOpen={isPureVnc ? effectiveModule === "files" : (!isRdpModule && !isBmcModule && !isVncModule && filesPanelOpen)}
       floatingMonitorVisible={floatingMonitorVisible}
       floatingMonitorAvailable={floatingMonitorAvailable}
       onToggleFloatingMonitor={handleToggleFloatingMonitor}
@@ -1190,7 +1225,7 @@ export function WorkspacePage({
 
   return (
     <div className="flex flex-col h-full bg-background">
-      {moduleTabs}
+      {!isVncModule && moduleTabs}
       {/* Module content */}
       <div ref={contentAreaRef} className="flex-1 overflow-hidden relative bg-canvas/30 flex flex-col">
         {/* RDP / BMC 专属连接遮罩 */}
@@ -1203,61 +1238,69 @@ export function WorkspacePage({
             - RDP 模块：独立于 SSH 连接，始终可渲染
             - 其他模块：仅在已连接(Ready)时渲染，避免在 Connecting 阶段发起请求报错，
               且断开→重连后自然 remount 触发数据重新加载 */}
-        {/* 终端主模块：作为工作台底座常驻（文件面板打开时收缩为上方区域），永不卸载断连，日志实时可见 */}
-        <div
-          className={cn(
-            "flex-1 min-h-0 w-full relative",
-            (isRdpModule || isBmcModule) && "hidden",
-          )}
-          onMouseDown={() => {
-            window.dispatchEvent(new CustomEvent("focus-active-terminal"));
-          }}
-        >
-          <TerminalModule
-            serverId={connId}
-            isActive={isActive && effectiveModule === "terminal" && !isModalModule}
-            isVisible={isVisible && !isRdpModule && !isBmcModule}
-            isConnected={isConnected}
-            connectionBlocked={connectionBlockedByCredentials}
-            connectionBlockedReason={terminalAuthenticationBlockReason}
-            initialCommand={currentTab.initialCommand}
-            tabId={tabId}
-            onShellReady={onShellReady}
-            isSplitPane={isSplitPane}
-            isFullscreen={isTerminalFullscreen}
-            onToggleFullscreen={() => setIsTerminalFullscreen((v) => !v)}
-            registerSearchTrigger={registerTerminalSearchTrigger}
-            registerOutputActions={registerTerminalOutputActions}
-            registerSerialToolbar={setSerialToolbar}
-            registerGetCwd={registerTerminalGetCwd}
-            onCwdChange={notifyTerminalCwdChanged}
-            onReconnect={handleConnect}
-          />
-
-          {/* 实时性能悬浮监控卡片 (原生拖拽、FinalShell 经典监控、全交互波形与进程) */}
-          {!isSerialServer && !isRdpServer && !isBmcServer && supportsMetrics && (
-            <FloatingMetricsHud
+        {/* 终端主模块：作为工作台底座常驻（非纯 VNC 模式下保持挂载，文件面板打开时收缩为上方区域），永不卸载断连，日志实时可见 */}
+        {!isPureVnc && (
+          <div
+            className={cn(
+              "flex-1 min-h-0 w-full relative",
+              (isRdpModule || isBmcModule || isVncModule) && "hidden",
+            )}
+            onMouseDown={() => {
+              window.dispatchEvent(new CustomEvent("focus-active-terminal"));
+            }}
+          >
+            <TerminalModule
               serverId={connId}
-              isConnected={isConnected && isFullyReady}
-              visible={floatingMonitorVisible && effectiveModule === "terminal" && !isModalModule}
-              onClose={() => {
-                setFloatingMonitorVisible(false);
-                try {
-                  localStorage.setItem(FLOATING_MONITOR_KEY, "false");
-                } catch {
-                  /* ignore */
-                }
-              }}
-              onOpenFullOverview={() => handleModuleChange("overview")}
+              isActive={isActive && effectiveModule === "terminal" && !isModalModule}
+              isVisible={isVisible && !isRdpModule && !isBmcModule && !isVncModule}
+              isConnected={isConnected}
+              connectionBlocked={connectionBlockedByCredentials}
+              connectionBlockedReason={terminalAuthenticationBlockReason}
+              initialCommand={currentTab.initialCommand}
+              tabId={tabId}
+              onShellReady={onShellReady}
+              isSplitPane={isSplitPane}
+              isFullscreen={isTerminalFullscreen}
+              onToggleFullscreen={() => setIsTerminalFullscreen((v) => !v)}
+              registerSearchTrigger={registerTerminalSearchTrigger}
+              registerOutputActions={registerTerminalOutputActions}
+              registerSerialToolbar={setSerialToolbar}
+              registerGetCwd={registerTerminalGetCwd}
+              onCwdChange={notifyTerminalCwdChanged}
+              onReconnect={handleConnect}
             />
-          )}
-        </div>
+
+            {/* 实时性能悬浮监控卡片 (原生拖拽、FinalShell 经典监控、全交互波形与进程) */}
+            {!isSerialServer && !isRdpServer && !isBmcServer && supportsMetrics && (
+              <FloatingMetricsHud
+                serverId={connId}
+                isConnected={isConnected && isFullyReady}
+                visible={floatingMonitorVisible && effectiveModule === "terminal" && !isModalModule}
+                onClose={() => {
+                  setFloatingMonitorVisible(false);
+                  try {
+                    localStorage.setItem(FLOATING_MONITOR_KEY, "false");
+                  } catch {
+                    /* ignore */
+                  }
+                }}
+                onOpenFullOverview={() => handleModuleChange("overview")}
+              />
+            )}
+          </div>
+        )}
 
         {/* 文件模块：终端下方可折叠面板（边用终端边上传/管理文件）。
             保活渲染：面板收起时仅 CSS 隐藏不卸载，SFTP 连接/目录树/滚动位置得以保留
-            （与旧弹窗 keepMounted 语义一致）；收起时 filesPanelActive=false，轮询与订阅自动停止 */}
-        {filesPanelAvailable && (
-          <>
+            （与旧弹窗 keepMounted 语义一致）；收起时 filesPanelActive=false，轮询与订阅自动停止。
+            注意：仅在常规终端模式下展示；进入 VNC / RDP / BMC 全屏图形桌面时彻底隐藏把手与抽屉 */}
+        {filesPanelAvailable && !isPureVnc && (
+          <div
+            className={cn(
+              "shrink-0 flex flex-col",
+              (isRdpModule || isBmcModule || isVncModule) && "hidden",
+            )}
+          >
             {/* 抽屉把手：始终渲染——收起后仍要能再次拉出（不能随面板一起消失）。
                 交互只发生在中间胶囊上：左右空白区域不响应点击/拖动，避免误触。
                 点击 = 收起/展开；上下拖动 = 调节面板高度；双击 = 恢复默认高度。
@@ -1335,7 +1378,20 @@ export function WorkspacePage({
                 />
               </div>
             </div>
-          </>
+          </div>
+        )}
+
+        {/* 纯 VNC 模式下的全屏文件模块（若配置了 FTP/FTPS） */}
+        {isPureVnc && effectiveModule === "files" && (
+          <div className="flex-1 w-full h-full min-h-0 bg-background overflow-hidden">
+            <FilesModule
+              serverId={connId}
+              isConnected={isConnected}
+              isActive={isActive && effectiveModule === "files"}
+              getTerminalCwd={resolveTerminalCwd}
+              subscribeTerminalCwd={subscribeTerminalCwd}
+            />
+          </div>
         )}
 
         {/* 附属功能弹窗（监控、Docker、服务、进程、网络、端口等） */}
@@ -1422,6 +1478,21 @@ export function WorkspacePage({
 
         {/* RDP 模块：独立于 SSH 连接，无需先建立 SSH 即可启动远程桌面 */}
         {isRdpModule && <RdpViewerModule serverId={serverId} />}
+
+        {/* VNC 模块：软件内嵌远程桌面画布，支持 SSH Direct-TCPIP 自动穿透打洞或直接 TCP 连接 */}
+        {isVncModule && (
+          <VncViewerModule
+            serverId={serverId}
+            tabId={tabId}
+            isActive={isActive}
+            hasSsh={hasSsh}
+            isSshConnected={isConnected}
+            isSshConnecting={connecting}
+            hasFtp={hasFtp}
+            onSwitchToSsh={() => handleModuleChange("terminal")}
+            onSwitchToFileTransfer={() => handleModuleChange("files")}
+          />
+        )}
 
         {/* 设备管理模块：按目标类型分派 BMC / ESXi / K8s，独立于 SSH 连接 */}
         {isBmcModule && (deviceTargetType === "kubernetes"

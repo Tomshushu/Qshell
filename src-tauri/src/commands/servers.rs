@@ -322,6 +322,12 @@ struct ExportServer {
     /// RDP 端口，默认 3389
     #[serde(default = "default_export_rdp_port")]
     rdp_port: i32,
+    /// VNC 端口，默认 5900
+    #[serde(default = "default_export_vnc_port")]
+    vnc_port: i32,
+    /// 明文 VNC 密码（如有）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    vnc_password: Option<String>,
     /// BMC Redfish HTTPS 端口，默认 443
     #[serde(default = "default_export_bmc_port")]
     bmc_port: i32,
@@ -353,10 +359,15 @@ struct ExportServer {
     /// 串口连接配置
     #[serde(skip_serializing_if = "Option::is_none")]
     serial_config: Option<String>,
+    /// 文件传输配置（SFTP / FTP / FTPS）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    file_transfer_config: Option<String>,
     /// 设备专属凭据配置（JSON，加密列）。整个导出 payload 已被用户密码加密，
     /// 因此这里放解密后的明文，保证导出→导入能完整还原凭据。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     credentials_config: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    logon_scripts_config: Option<String>,
     /// 所属分组路径（从根到直接父分组的名称链，用于跨机器还原分组结构）
     #[serde(skip_serializing_if = "Option::is_none")]
     group_path: Option<Vec<String>>,
@@ -384,6 +395,10 @@ fn default_export_protocols() -> String {
 
 fn default_export_rdp_port() -> i32 {
     3389
+}
+
+fn default_export_vnc_port() -> i32 {
+    5900
 }
 
 fn default_export_bmc_port() -> i32 {
@@ -446,6 +461,13 @@ fn to_export_server(
         _ => None,
     };
 
+    let vnc_password = match &server.vnc_password {
+        Some(encrypted) if !encrypted.is_empty() => {
+            crypto::decrypt_password(encrypted, mk).ok()
+        }
+        _ => None,
+    };
+
     Ok(ExportServer {
         name: server.name.clone(),
         host: server.host.clone(),
@@ -467,6 +489,8 @@ fn to_export_server(
         protocol: server.protocol.clone(),
         protocols: server.protocols.clone(),
         rdp_port: server.rdp_port,
+        vnc_port: server.vnc_port,
+        vnc_password,
         bmc_port: server.bmc_port,
         bmc_allow_invalid_certs: server.bmc_allow_invalid_certs,
         tls_allow_invalid_certs: Some(server.allow_invalid_tls_certs()),
@@ -477,7 +501,9 @@ fn to_export_server(
         tunnels_config: server.tunnels_config.clone(),
         keys_config: server.keys_config.clone(),
         serial_config: server.serial_config.clone(),
+        file_transfer_config: server.file_transfer_config.clone(),
         credentials_config: server.credentials_config.clone(),
+        logon_scripts_config: server.logon_scripts_config.clone(),
         group_path: server.group_id.as_ref().and_then(|gid| groups_paths.get(gid)).cloned(),
     })
 }
@@ -715,6 +741,8 @@ pub async fn servers_import(
                 "protocol": server.protocol,
                 "protocols": server.protocols,
                 "rdpPort": server.rdp_port,
+                "vncPort": server.vnc_port,
+                "vncPassword": server.vnc_password,
                 "bmcPort": server.bmc_port,
                 "bmcAllowInvalidCerts": server.bmc_allow_invalid_certs,
                 "tlsAllowInvalidCerts": server.effective_tls_allow_invalid_certs(),
@@ -723,7 +751,9 @@ pub async fn servers_import(
                 "tunnelsConfig": server.tunnels_config,
                 "keysConfig": keys_config,
                 "serialConfig": server.serial_config,
+                "fileTransferConfig": server.file_transfer_config,
                 "credentialsConfig": server.credentials_config,
+                "logonScriptsConfig": server.logon_scripts_config,
                 "groupId": group_id,
             });
             let input_str = input.to_string();

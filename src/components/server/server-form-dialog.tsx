@@ -10,10 +10,13 @@ import { Button } from '@/components/ui/button'
 import { SelectPopover } from '@/components/ui/select-popover'
 import { GroupTreeSelect } from '@/components/ui/group-tree-picker'
 import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
+import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { useToast } from '@/components/ui/toast'
 import { useAppStore } from '@/store'
 import { HOST_GROUP_ID, HOST_GROUP_NAME } from '@/lib/server-groups'
 import { sshService } from '@/services/ssh-service'
+import { backend } from '@/services/api'
 import { useTranslation } from '@/i18n'
 import { cn } from '@/lib/utils'
 import { playSound, SoundType } from '@/lib/sound'
@@ -33,8 +36,11 @@ import {
   getTargetCapabilities,
   getServerProtocols,
   inferServerProtocols,
+  parseFileTransferConfig,
 } from '@/services/connection-targets'
 import { InlineProxyEditor, InlineTunnelEditor } from '@/components/server/inline-network-config'
+import { LogonScriptsTab } from './logon-scripts-tab'
+import type { LogonScriptsConfig } from '@/types'
 import { SelectKeyDialog } from '@/components/server/select-key-dialog'
 import type {
   Server as ServerType,
@@ -43,10 +49,12 @@ import type {
   ServerKeyEntry,
   SerialPortInfo,
   SerialConfig,
+  FileTransferConfig,
+  SessionLogFormat,
 } from '@/types'
 import type { SshAgentIdentity, SshAgentStatus } from '@/services/api/types'
 
-export type FormCategory = 'connection' | 'proxy' | 'tunnels' | 'advanced'
+export type FormCategory = 'connection' | 'fileTransfer' | 'proxy' | 'tunnels' | 'logonScripts' | 'advanced'
 
 export interface ServerFormDialogProps {
   open: boolean
@@ -323,6 +331,14 @@ export function ServerFormDialog({
   )
 
   const [activeCategory, setActiveCategory] = useState<FormCategory>('connection')
+  const [logonScriptsConfig, setLogonScriptsConfig] = useState<LogonScriptsConfig>({
+    enabled: false,
+    rules: [],
+  })
+  const [sessionLoggingEnabled, setSessionLoggingEnabled] = useState(false)
+  const [sessionLoggingFormat, setSessionLoggingFormat] = useState<SessionLogFormat>('plain')
+  const [sessionLoggingDir, setSessionLoggingDir] = useState('')
+  const [sessionLoggingPattern, setSessionLoggingPattern] = useState('')
 
   // 表单字段状态（FinalShell 结构）
   const initialSpec = getTargetTypeSpec(initialTargetType)
@@ -352,12 +368,19 @@ export function ServerFormDialog({
   const [notes, setNotes] = useState('')
   const [connectionTimeout, setConnectionTimeout] = useState('30')
   const [rdpPort, setRdpPort] = useState('3389')
+  const [vncPort, setVncPort] = useState('')
+  const [vncPassword, setVncPassword] = useState('')
+  const [showVncPassword, setShowVncPassword] = useState(false)
   // Phase 1-D：用户显式取消的附加协议。空数组表示未干预，保存行为与重构前完全一致。
   const [disabledProtocols, setDisabledProtocols] = useState<string[]>([])
 
   // 表单当前推断出的协议集合，展示与保存共用同一份规则
   const inferredProtocols = inferServerProtocols({
-    targetType, protocol, sshPort: port, rdpPort,
+    targetType,
+    protocol,
+    sshPort: port,
+    rdpPort,
+    vncPort: targetType === 'windows' || targetType === 'linux' ? vncPort : undefined,
   })
   const primaryProtocol = inferredProtocols.includes('ssh') ? 'ssh' : inferredProtocols[0]
   // 主协议始终保留（后端 normalize_protocols 同样会把它加回数组）
@@ -370,6 +393,19 @@ export function ServerFormDialog({
   const [tunnelsConfig, setTunnelsConfig] = useState<TunnelConfig[]>([])
   const [detectedOsType, setDetectedOsType] = useState<string | null>(null)
   const [detectedOsInfo, setDetectedOsInfo] = useState<string | null>(null)
+
+  // 文件传输设置（SFTP / FTP / FTPS）
+  const [ftProtocol, setFtProtocol] = useState<'sftp' | 'ftp' | 'ftps'>('sftp')
+  const [ftPort, setFtPort] = useState('21')
+  const [ftTlsMode, setFtTlsMode] = useState<'explicit' | 'implicit'>('explicit')
+  const [ftUseServerCredentials, setFtUseServerCredentials] = useState(true)
+  const [ftAnonymous, setFtAnonymous] = useState(false)
+  const [ftUsername, setFtUsername] = useState('')
+  const [ftPassword, setFtPassword] = useState('')
+  const [showFtPassword, setShowFtPassword] = useState(false)
+  const [ftTransferMode, setFtTransferMode] = useState<'passive' | 'active'>('passive')
+  const [ftEncoding, setFtEncoding] = useState<'utf-8' | 'gbk'>('utf-8')
+  const [ftAllowInvalidCerts, setFtAllowInvalidCerts] = useState(true)
 
   // 串口 (Serial / COM) 参数状态
   const [serialPortName, setSerialPortName] = useState('COM1')
@@ -436,6 +472,7 @@ export function ServerFormDialog({
       setValidationError(null)
       setError(null)
       setShowPassword(false)
+      setShowVncPassword(false)
       setShowPassphrase(false)
 
       if (isEditMode) {
@@ -503,22 +540,29 @@ export function ServerFormDialog({
             setDisabledProtocols([])
           }
 
-          setTargetType(existingServer.targetType === 'unix' || existingServer.targetType === 'xinchuang' ? 'linux' : (existingServer.targetType || 'linux'))
+          const normalizedTarget = existingServer.targetType === 'unix' || existingServer.targetType === 'xinchuang' ? 'linux' : (existingServer.targetType || 'linux')
+          const declaredProtos = getServerProtocols(existingServer, { allowEmpty: true })
+          const isLinuxPureVnc = normalizedTarget === 'linux' && (serverProtocol === 'vnc' || (declaredProtos.length > 0 && !declaredProtos.includes('ssh') && declaredProtos.includes('vnc')))
+          setTargetType(normalizedTarget)
           setProtocol(isWindows ? (winSshPort ? 'ssh' : 'rdp') : serverProtocol)
           setName(existingServer.name || '')
           setHost(existingServer.host || '')
           setPort(
             isWindows
               ? winSshPort
-              : String(
-                  serverProtocol === 'rdp'
-                    ? (existingServer.rdpPort || 3389)
-                    : serverProtocol === 'redfish'
-                      ? (existingServer.bmcPort || 443)
-                      : (existingServer.port || 22)
-                )
+              : isLinuxPureVnc
+                ? ''
+                : String(
+                    serverProtocol === 'rdp'
+                      ? (existingServer.rdpPort || 3389)
+                      : serverProtocol === 'redfish'
+                        ? (existingServer.bmcPort || 443)
+                        : (existingServer.port || 22)
+                  )
           )
           setRdpPort(isWindows ? winRdpPort : String(existingServer.rdpPort || 3389))
+          const hasVncConfigured = getServerProtocols(existingServer, { allowEmpty: true }).includes('vnc') || existingServer.protocol === 'vnc'
+          setVncPort(hasVncConfigured ? String(existingServer.vncPort || (existingServer.protocol === 'vnc' ? existingServer.port : 5900) || 5900) : '')
           setUsername(existingServer.username || '')
           setAuthType(
             (isPasswordOnlyTarget
@@ -526,6 +570,7 @@ export function ServerFormDialog({
               : existingServer.authType || 'password') as 'password' | 'privateKey' | 'sshAgent' | 'certificate'
           )
           setPassword('') // 编辑时不回显密码
+          setVncPassword('') // 编辑时不回显 VNC 密码
           setPrivateKeyPath(isPasswordOnlyTarget ? '' : existingServer.privateKeyPath || '')
           setPrivateKeyPassphrase('')
           setAgentIdentity(isPasswordOnlyTarget ? '' : existingServer.agentIdentity || '')
@@ -572,6 +617,77 @@ export function ServerFormDialog({
       setProxyConfig(parseProxyConfig(existingServer.proxyConfig))
       setTunnelsConfig(parseTunnelsConfig(existingServer.tunnelsConfig))
 
+      if (existingServer.logonScriptsConfig) {
+        try {
+          const lsc = JSON.parse(existingServer.logonScriptsConfig)
+          setLogonScriptsConfig({
+            enabled: Boolean(lsc.enabled),
+            mode: lsc.mode || 'rules',
+            inheritGlobal: Boolean(lsc.inheritGlobal),
+            timeoutPolicy: lsc.timeoutPolicy || 'ignore',
+            rules: Array.isArray(lsc.rules) ? lsc.rules : [],
+            customScript: typeof lsc.customScript === 'string' ? lsc.customScript : '',
+          })
+        } catch {
+          setLogonScriptsConfig({ enabled: false, rules: [] })
+      setSessionLoggingEnabled(false)
+      setSessionLoggingFormat('plain')
+      setSessionLoggingDir('')
+      setSessionLoggingPattern('')
+        }
+      } else {
+        setLogonScriptsConfig({ enabled: false, rules: [] })
+      setSessionLoggingEnabled(false)
+      setSessionLoggingFormat('plain')
+      setSessionLoggingDir('')
+      setSessionLoggingPattern('')
+      }
+
+      if (existingServer.sessionLoggingConfig) {
+        try {
+          const slc = JSON.parse(existingServer.sessionLoggingConfig)
+          setSessionLoggingEnabled(Boolean(slc.enabled))
+          setSessionLoggingFormat(slc.format || 'plain')
+          setSessionLoggingDir(slc.directory || '')
+          setSessionLoggingPattern(slc.fileNamePattern || '')
+        } catch {
+          setSessionLoggingEnabled(false)
+          setSessionLoggingFormat('plain')
+          setSessionLoggingDir('')
+          setSessionLoggingPattern('')
+        }
+      } else {
+        setSessionLoggingEnabled(false)
+        setSessionLoggingFormat('plain')
+        setSessionLoggingDir('')
+        setSessionLoggingPattern('')
+      }
+
+      const ftCfg = parseFileTransferConfig(existingServer.fileTransferConfig)
+      if (ftCfg) {
+        setFtProtocol(ftCfg.protocol || 'sftp')
+        setFtPort(String(ftCfg.port || (ftCfg.protocol === 'ftps' && ftCfg.tlsMode === 'implicit' ? 990 : 21)))
+        setFtTlsMode(ftCfg.tlsMode || 'explicit')
+        setFtUseServerCredentials(ftCfg.useServerCredentials ?? true)
+        setFtAnonymous(ftCfg.anonymous ?? false)
+        setFtUsername(ftCfg.username || '')
+        setFtPassword('')
+        setFtTransferMode(ftCfg.transferMode || 'passive')
+        setFtEncoding(ftCfg.encoding || 'utf-8')
+        setFtAllowInvalidCerts(ftCfg.allowInvalidCerts ?? true)
+      } else {
+        setFtProtocol('sftp')
+        setFtPort('21')
+        setFtTlsMode('explicit')
+        setFtUseServerCredentials(true)
+        setFtAnonymous(false)
+        setFtUsername('')
+        setFtPassword('')
+        setFtTransferMode('passive')
+        setFtEncoding('utf-8')
+        setFtAllowInvalidCerts(true)
+      }
+
       if (existingServer.targetType === 'serial' || existingServer.protocol === 'serial') {
         const sc = parseSerialConfig(existingServer.serialConfig)
         setSerialPortName(sc.portName || existingServer.host || 'COM1')
@@ -616,9 +732,26 @@ export function ServerFormDialog({
       setConnectionTimeout('30')
       setDisabledProtocols([])
       setRdpPort(isWin ? '3389' : '3389')
+      setVncPort('')
+      setVncPassword('')
       setBmcPort('443')
       setProxyConfig(null)
       setTunnelsConfig([])
+      setLogonScriptsConfig({ enabled: false, rules: [] })
+      setSessionLoggingEnabled(false)
+      setSessionLoggingFormat('plain')
+      setSessionLoggingDir('')
+      setSessionLoggingPattern('')
+      setFtProtocol('sftp')
+      setFtPort('21')
+      setFtTlsMode('explicit')
+      setFtUseServerCredentials(true)
+      setFtAnonymous(false)
+      setFtUsername('')
+      setFtPassword('')
+      setFtTransferMode('passive')
+      setFtEncoding('utf-8')
+      setFtAllowInvalidCerts(true)
       setSerialPortName('COM1')
       setSerialBaudRate('115200')
       setSerialDataBits('8')
@@ -687,7 +820,6 @@ export function ServerFormDialog({
 
   // 切换目标类型
   const handleTargetTypeChange = (newType: string) => {
-    if (isEditMode) return
     const isWin = newType === 'windows'
     const spec = getTargetTypeSpec(newType)
     setActiveCategory('connection')
@@ -697,10 +829,13 @@ export function ServerFormDialog({
     setProtocol(isWin ? 'rdp' : defaultProto)
     setPort(isWin ? '' : String(spec.defaultPort))
     setRdpPort(isWin ? '3389' : '3389')
-    setUsername(spec.defaultUsername)
+    setVncPort('')
+    if (!isEditMode || !username.trim() || ['root', 'Administrator', 'admin', 'serial', 'vnc'].includes(username.trim())) {
+      setUsername(spec.defaultUsername)
+    }
     if (newType === 'windows' || newType === 'bmc' || newType === 'serial' || newType === 'esxi' || newType === 'kubernetes') {
       setAuthType('password')
-    } else {
+    } else if (!isEditMode) {
       setAuthType(spec.defaultAuthType)
     }
     // 串口列表由上面的 useEffect 统一加载，避免切换时重复扫描
@@ -752,7 +887,7 @@ export function ServerFormDialog({
     const now = Date.now()
     if (now < testCooldownUntilRef.current) {
       const waitSeconds = Math.ceil((testCooldownUntilRef.current - now) / 1000)
-      toast.info(`请稍后再试（${waitSeconds} 秒后可重新测试）`, 1800)
+      toast.info(tr(`请稍后再试（${waitSeconds} 秒后可重新测试）`, `Please try again later (${waitSeconds}s)`), 1800)
       return
     }
 
@@ -785,6 +920,45 @@ export function ServerFormDialog({
       } catch (e) {
         playSound(SoundType.Warn)
         toast.error(`${tr('串口探测异常', 'Serial test error')}: ${e instanceof Error ? e.message : String(e)}`, 4000)
+      } finally {
+        setTesting(false)
+      }
+      return
+    }
+
+    if (activeCategory === 'fileTransfer' && (ftProtocol === 'ftp' || ftProtocol === 'ftps')) {
+      if (!host.trim()) {
+        toast.warning(tr('请先填写主机地址', 'Please enter host address first'))
+        return
+      }
+      testCooldownUntilRef.current = now + 3000
+      setTesting(true)
+      try {
+        const testRes = await sshService.testFtpConnection({
+          serverId: isEditMode && serverId ? serverId : undefined,
+          host: host.trim(),
+          port: parseInt(ftPort) || (ftProtocol === 'ftps' && ftTlsMode === 'implicit' ? 990 : 21),
+          protocol: ftProtocol,
+          tlsMode: ftTlsMode,
+          useServerCredentials: ftUseServerCredentials,
+          anonymous: ftAnonymous,
+          username: ftUseServerCredentials ? username.trim() : (ftAnonymous ? 'anonymous' : ftUsername.trim()),
+          password: ftUseServerCredentials ? password : (ftAnonymous ? '' : ftPassword),
+          serverPassword: password || undefined,
+          transferMode: ftTransferMode,
+          encoding: ftEncoding,
+          allowInvalidCerts: ftAllowInvalidCerts,
+        })
+        if (testRes.success) {
+          playSound(SoundType.Confirm)
+          toast.success(testRes.message || tr('FTP 连接测试成功', 'FTP connection test succeeded'), 3000)
+        } else {
+          playSound(SoundType.Warn)
+          toast.error(`${tr('FTP 测试失败', 'FTP test failed')}: ${testRes.error || testRes.message || tr('连接超时或认证失败', 'Connection timeout or auth failed')}`, 5000)
+        }
+      } catch (e) {
+        playSound(SoundType.Warn)
+        toast.error(`${tr('FTP 测试异常', 'FTP test error')}: ${e instanceof Error ? e.message : String(e)}`, 4500)
       } finally {
         setTesting(false)
       }
@@ -854,13 +1028,33 @@ export function ServerFormDialog({
         return
       }
 
+      if ((targetType === 'linux' || targetType === 'windows') && !port.trim() && (targetType !== 'windows' || !rdpPort.trim()) && vncPort.trim()) {
+        const vncRes = await backend?.vnc.testConnection({
+          host: host.trim(),
+          port: parseInt(vncPort.trim(), 10) || 5900,
+          timeout: parseInt(connectionTimeout) || 15,
+        })
+        if (vncRes?.success) {
+          playSound(SoundType.Confirm)
+          toast.success(vncRes.message || tr('VNC 服务连接成功', 'VNC connection test succeeded'), 3000)
+        } else {
+          playSound(SoundType.Warn)
+          toast.error(vncRes?.error || tr('VNC 连接测试失败', 'VNC connection test failed'), 4500)
+        }
+        return
+      }
+
       if (targetType === 'windows') {
         const hasSsh = port.trim() !== ''
         const hasRdp = rdpPort.trim() !== ''
-        if (!hasSsh && !hasRdp) {
-          toast.warning(tr('请先输入 SSH 端口或 RDP 端口', 'Please enter SSH port or RDP port first'))
+        const hasVnc = vncPort.trim() !== ''
+        if (!hasSsh && !hasRdp && !hasVnc) {
+          toast.warning(tr('请至少勾选并填写一个协议端口', 'Please enable and enter at least one protocol port'))
           return
         }
+        const okParts: string[] = []
+        const errParts: string[] = []
+
         if (hasSsh) {
           const config = {
             id: isEditMode && serverId ? serverId : undefined,
@@ -886,18 +1080,17 @@ export function ServerFormDialog({
             sshKeyId: sshKeyId || undefined,
           }
           const result = await sshService.testConnectWithConfig(config)
-          const success = result.success !== false
-          if (success) {
+          if (result.success !== false) {
             if (result.osType) setDetectedOsType(result.osType)
             if (result.osInfo) setDetectedOsInfo(result.osInfo)
             const osBadge = result.osInfo ? ` (${result.osInfo})` : (result.osType ? ` [${result.osType}]` : '')
-            const message = result.message ? `${result.message}${osBadge}` : `连接成功${osBadge}`
-            toast.success(message, 3000)
+            okParts.push(`SSH (${port.trim() || 22}): ${result.message || tr('连接成功', 'OK')}${osBadge}`)
           } else {
-            const message = result.error || result.message || tr('连接失败', 'Connection failed')
-            toast.error(message, 5000)
+            errParts.push(`SSH (${port.trim() || 22}): ${result.error || result.message || tr('连接失败', 'Failed')}`)
           }
-        } else {
+        }
+
+        if (hasRdp) {
           const config = {
             id: isEditMode && serverId ? serverId : undefined,
             host: host.trim(),
@@ -910,10 +1103,32 @@ export function ServerFormDialog({
           }
           const result = await sshService.testConnectWithConfig(config)
           if (result.success !== false) {
-            toast.success(result.message || tr('RDP 端口连通测试成功', 'RDP port reachability test succeeded'), 3000)
+            okParts.push(`RDP (${rdpPort.trim() || 3389}): ${result.message || tr('端口连通正常', 'OK')}`)
           } else {
-            toast.error(result.error || result.message || tr('RDP 端口连通失败', 'RDP port reachability failed'), 5000)
+            errParts.push(`RDP (${rdpPort.trim() || 3389}): ${result.error || result.message || tr('端口连通失败', 'Failed')}`)
           }
+        }
+
+        if (hasVnc) {
+          const vPort = parseInt(vncPort.trim(), 10) || 5900
+          const vncRes = await backend?.vnc.testConnection({
+            host: host.trim(),
+            port: vPort,
+            timeout: parseInt(connectionTimeout) || 15,
+          })
+          if (vncRes?.success) {
+            okParts.push(`VNC (${vPort}): ${vncRes.message || tr('握手正常', 'OK')}`)
+          } else {
+            errParts.push(`VNC (${vPort}): ${vncRes?.error || tr('连接失败', 'Failed')}`)
+          }
+        }
+
+        if (errParts.length === 0) {
+          playSound(SoundType.Confirm)
+          toast.success(okParts.join(' · '), 3500)
+        } else {
+          playSound(SoundType.Warn)
+          toast.error([...errParts, ...okParts].join(' · '), 5000)
         }
         return
       }
@@ -946,11 +1161,40 @@ export function ServerFormDialog({
       }
       const result = await sshService.testConnectWithConfig(config)
       const success = result.success !== false
-      if (success) {
+      if (targetType === 'linux' && vncPort.trim()) {
+        const vPort = parseInt(vncPort.trim(), 10) || 5900
+        const vncRes = await backend?.vnc.testConnection({
+          host: host.trim(),
+          port: vPort,
+          timeout: parseInt(connectionTimeout) || 15,
+        })
+        const osBadge = result.osInfo ? ` (${result.osInfo})` : (result.osType ? ` [${result.osType}]` : '')
+        if (success && result.osType) setDetectedOsType(result.osType)
+        if (success && result.osInfo) setDetectedOsInfo(result.osInfo)
+        const sshPart = success
+          ? `SSH (${port.trim() || 22}): ${result.message || '连接成功'}${osBadge}`
+          : `SSH (${port.trim() || 22}): ${result.error || result.message || '连接失败'}`
+        const vncPart = vncRes?.success
+          ? `VNC (${vPort}): ${vncRes.message || '握手正常'}`
+          : `VNC (${vPort}): ${vncRes?.error || '连接失败'}`
+        if (success && vncRes?.success) {
+          playSound(SoundType.Confirm)
+          toast.success(`${sshPart} · ${vncPart}`, 3500)
+        } else if (success && !vncRes?.success) {
+          playSound(SoundType.Warn)
+          toast.warning(`${sshPart} · ${vncPart}`, 5000)
+        } else {
+          playSound(SoundType.Warn)
+          toast.error(`${sshPart} · ${vncPart}`, 5000)
+        }
+      } else if (success) {
         if (result.osType) setDetectedOsType(result.osType)
         if (result.osInfo) setDetectedOsInfo(result.osInfo)
         const osBadge = result.osInfo ? ` (${result.osInfo})` : (result.osType ? ` [${result.osType}]` : '')
-        const message = result.message ? `${result.message}${osBadge}` : `连接成功${osBadge}`
+        const defaultSuccessMsg = tr('连接成功', 'Connection successful')
+        const rawMsg = result.message || ''
+        const translatedMsg = (!rawMsg || rawMsg.toLowerCase().startsWith('connection successful')) ? defaultSuccessMsg : rawMsg
+        const message = `${translatedMsg}${osBadge}`
         toast.success(message, 3000)
       } else {
         const message = result.error || result.message || tr('连接失败', 'Connection failed')
@@ -1067,7 +1311,7 @@ export function ServerFormDialog({
             return
           }
           updateServer(serverId, updates)
-          toast.success('保存成功')
+          toast.success(tr('保存成功', 'Saved successfully'))
           if (onSaved) onSaved(serverId)
         } else {
           const newId = `server-${crypto.randomUUID()}`
@@ -1097,7 +1341,7 @@ export function ServerFormDialog({
             createdAt: Date.now(),
             updatedAt: Date.now(),
           })
-          toast.success('添加成功')
+          toast.success(tr('添加成功', 'Added successfully'))
           if (onSaved) onSaved(newId)
         }
         onClose()
@@ -1110,9 +1354,15 @@ export function ServerFormDialog({
       return
     }
 
+    // 纯 VNC 协议连接时用户名非必填（默认填充为 vnc）
+    const isPureVnc = (targetType === 'linux' || targetType === 'windows')
+      && !port.trim()
+      && (targetType !== 'windows' || !rdpPort.trim())
+      && Boolean(vncPort.trim())
+
     // Phase 2-C：K8s 用 Bearer Token（存在 password 字段），不需要用户名
-    if (!name.trim() || !host.trim() || (targetType !== 'kubernetes' && !username.trim())) {
-      setValidationError('名称、主机地址和用户名为必填项')
+    if (!name.trim() || !host.trim() || (targetType !== 'kubernetes' && !isPureVnc && !username.trim())) {
+      setValidationError(tr('名称、主机地址和用户名为必填项', 'Name, Host, and Username are required'))
       setActiveCategory('connection')
       return
     }
@@ -1149,15 +1399,37 @@ export function ServerFormDialog({
 
     let portNum = 0
     let rdpPortNum = 0
+    let vncPortNum = 5900
     let finalProtocol: string
     let finalProtocols: string[] = []
+
+    if (vncPort.trim()) {
+      const vp = parseInt(vncPort.trim(), 10)
+      if (isNaN(vp) || vp < 1 || vp > 65535) {
+        setValidationError(tr('VNC 端口必须在 1-65535 之间', 'VNC port must be between 1 and 65535'))
+        setActiveCategory('connection')
+        return
+      }
+      vncPortNum = vp
+    }
+
+    if ((targetType === 'linux' || targetType === 'windows') && ftProtocol !== 'sftp') {
+      const ftpPortNum = parseInt(ftPort.trim(), 10)
+      if (isNaN(ftpPortNum) || ftpPortNum < 1 || ftpPortNum > 65535) {
+        setValidationError(tr('文件传输端口必须在 1-65535 之间', 'File transfer port must be between 1 and 65535'))
+        setActiveCategory('fileTransfer')
+        return
+      }
+    }
 
     if (targetType === 'windows') {
       const sshTrim = port.trim()
       const rdpTrim = rdpPort.trim()
+      const vncTrim = vncPort.trim()
+      const isPureFtp = ftProtocol !== 'sftp'
 
-      if (!sshTrim && !rdpTrim) {
-        setValidationError(tr('请输入 SSH 端口或 RDP 端口（至少填写一个）', 'Please enter SSH port or RDP port (at least one is required)'))
+      if (!sshTrim && !rdpTrim && !vncTrim && !isPureFtp) {
+        setValidationError(tr('请至少启用一个协议并填写端口（RDP / SSH / VNC / 文件传输）', 'Please enable at least one protocol and enter its port'))
         setActiveCategory('connection')
         return
       }
@@ -1182,10 +1454,31 @@ export function ServerFormDialog({
         rdpPortNum = rp
       }
 
-      // Phase 1-D：与表单「已启用协议」展示共用同一份推断结果，
-      // 用户未干预时 enabledProtocols 与旧的按端口推断逐项等价。
       finalProtocols = enabledProtocols
-      finalProtocol = finalProtocols.includes('ssh') ? 'ssh' : 'rdp'
+      finalProtocol = finalProtocols.includes('ssh') ? 'ssh' : (finalProtocols.includes('rdp') ? 'rdp' : (finalProtocols.includes('vnc') ? 'vnc' : 'rdp'))
+    } else if (targetType === 'linux') {
+      const sshTrim = port.trim()
+      const vncTrim = vncPort.trim()
+      const isPureFtp = ftProtocol !== 'sftp'
+      if (!sshTrim && !vncTrim && !isPureFtp) {
+        setValidationError(tr('请至少启用 SSH 或 VNC 协议或文件传输并填写端口', 'Please enable SSH, VNC, or file transfer'))
+        setActiveCategory('connection')
+        return
+      }
+      if (sshTrim) {
+        const p = parseInt(sshTrim, 10)
+        if (isNaN(p) || p < 1 || p > 65535) {
+          setValidationError(tr('SSH 端口必须在 1-65535 之间', 'SSH port must be between 1 and 65535'))
+          setActiveCategory('connection')
+          return
+        }
+        portNum = p
+      } else {
+        portNum = vncPortNum
+      }
+      rdpPortNum = 3389
+      finalProtocols = enabledProtocols
+      finalProtocol = finalProtocols.includes('ssh') ? 'ssh' : (finalProtocols.includes('vnc') ? 'vnc' : 'ssh')
     } else {
       const p = parseInt(port.trim(), 10)
       if (isNaN(p) || p < 1 || p > 65535) {
@@ -1207,7 +1500,7 @@ export function ServerFormDialog({
     const canReuseStoredPassword = isEditMode
       && existingServer?.authType === 'password'
       && Boolean(existingServer.password)
-    if (effectiveAuthType === 'password' && !password && !canReuseStoredPassword) {
+    if (effectiveAuthType === 'password' && !isPureVnc && !password && !canReuseStoredPassword) {
       setValidationError(targetType === 'kubernetes' ? tr('请输入 Bearer Token', 'Please enter Bearer Token') : tr('请输入密码', 'Please enter password'))
       setActiveCategory('connection')
       return
@@ -1241,12 +1534,44 @@ export function ServerFormDialog({
         canConfigureSshRouting && proxyConfig && proxyConfig.type !== 'none' ? JSON.stringify(proxyConfig) : ''
       const tunnelsConfigStr = canConfigureSshRouting && tunnelsConfig.length > 0 ? JSON.stringify(tunnelsConfig) : ''
 
+      const logonScriptsStr =
+        logonScriptsConfig.enabled &&
+        (logonScriptsConfig.rules.length > 0 ||
+          Boolean(logonScriptsConfig.inheritGlobal) ||
+          (logonScriptsConfig.mode === 'script' && Boolean(logonScriptsConfig.customScript?.trim())))
+          ? JSON.stringify(logonScriptsConfig)
+          : null
+      const sessionLoggingStr = sessionLoggingEnabled
+        ? JSON.stringify({
+            enabled: true,
+            format: sessionLoggingFormat,
+            directory: sessionLoggingDir.trim() || undefined,
+            fileNamePattern: sessionLoggingPattern.trim() || undefined,
+          })
+        : null
+      let fileTransferConfigStr: string | null = null
+      if (targetType === 'linux' || targetType === 'windows') {
+        const ftObj: FileTransferConfig = {
+          protocol: ftProtocol,
+          port: parseInt(ftPort) || (ftProtocol === 'ftps' && ftTlsMode === 'implicit' ? 990 : 21),
+          tlsMode: ftProtocol === 'ftps' ? ftTlsMode : undefined,
+          useServerCredentials: ftUseServerCredentials,
+          anonymous: ftAnonymous,
+          username: ftUseServerCredentials ? undefined : (ftAnonymous ? undefined : ftUsername.trim()),
+          password: ftUseServerCredentials ? undefined : (ftAnonymous ? undefined : (ftPassword || undefined)),
+          transferMode: ftTransferMode,
+          encoding: ftEncoding,
+          allowInvalidCerts: ftProtocol === 'ftps' ? ftAllowInvalidCerts : undefined,
+        }
+        fileTransferConfigStr = JSON.stringify(ftObj)
+      }
+
       if (isEditMode && serverId) {
         const updates: Partial<ServerType> = {
           name: name.trim(),
           host: host.trim(),
           port: portNum,
-          username: username.trim(),
+          username: username.trim() || (isPureVnc ? 'vnc' : ''),
           authType: effectiveAuthType,
           targetType,
           protocol: finalProtocol,
@@ -1255,11 +1580,15 @@ export function ServerFormDialog({
           notes: notes.trim() || undefined,
           connectionTimeout: parseInt(connectionTimeout) || 30,
           rdpPort: targetType === 'windows' ? rdpPortNum : 3389,
+          vncPort: vncPortNum,
           bmcPort: targetType === 'bmc' ? portNum : 443,
           bmcAllowInvalidCerts: getTargetCapabilities(targetType, protocol).tlsCertOverride ? bmcAllowInvalidCerts : false,
           tlsAllowInvalidCerts: getTargetCapabilities(targetType, protocol).tlsCertOverride ? bmcAllowInvalidCerts : false,
           proxyConfig: proxyConfigStr || null,
           tunnelsConfig: tunnelsConfigStr || null,
+          fileTransferConfig: fileTransferConfigStr,
+          logonScriptsConfig: logonScriptsStr,
+          sessionLoggingConfig: sessionLoggingStr,
           groupId: groupId || HOST_GROUP_ID,
         }
         // 仅当密钥列表确实被改动时才回写，避免脱敏后的空 passphrase 覆盖库中已加密的凭据
@@ -1269,6 +1598,9 @@ export function ServerFormDialog({
 
         if (password) {
           updates.password = password
+        }
+        if (vncPassword) {
+          updates.vncPassword = vncPassword
         }
         if (effectiveAuthType === 'password' || !finalProtocols.includes('ssh')) {
           // 切回密码/RDP/Telnet 时解除活动密钥关联，避免 UI 显示密码认证，
@@ -1306,7 +1638,7 @@ export function ServerFormDialog({
           return
         }
         updateServer(serverId, updates)
-        toast.success('保存成功')
+        toast.success(tr('保存成功', 'Saved successfully'))
         if (onSaved) onSaved(serverId)
       } else {
         const newId = `server-${crypto.randomUUID()}`
@@ -1315,9 +1647,10 @@ export function ServerFormDialog({
           name: name.trim(),
           host: host.trim(),
           port: portNum,
-          username: username.trim(),
+          username: username.trim() || (isPureVnc ? 'vnc' : ''),
           authType: effectiveAuthType,
-          password: effectiveAuthType === 'password' ? password : undefined,
+          password: (effectiveAuthType === 'password' || (targetType === 'windows' && Boolean(rdpPort.trim()))) ? (password || undefined) : undefined,
+          vncPassword: vncPassword || undefined,
           privateKeyPath:
             effectiveAuthType === 'privateKey' || effectiveAuthType === 'certificate' ? privateKeyPath : undefined,
           privateKeyPassphrase:
@@ -1338,11 +1671,15 @@ export function ServerFormDialog({
           protocol: finalProtocol,
           protocols: finalProtocols,
           rdpPort: targetType === 'windows' ? rdpPortNum : 3389,
+          vncPort: vncPortNum,
           bmcPort: targetType === 'bmc' ? portNum : 443,
           bmcAllowInvalidCerts: getTargetCapabilities(targetType, protocol).tlsCertOverride ? bmcAllowInvalidCerts : false,
           tlsAllowInvalidCerts: getTargetCapabilities(targetType, protocol).tlsCertOverride ? bmcAllowInvalidCerts : false,
           proxyConfig: proxyConfigStr,
           tunnelsConfig: tunnelsConfigStr,
+          fileTransferConfig: fileTransferConfigStr,
+          logonScriptsConfig: logonScriptsStr || undefined,
+          sessionLoggingConfig: sessionLoggingStr || undefined,
           keysConfig: keysConfigStr || undefined,
           groupId: groupId || HOST_GROUP_ID,
           createdAt: Date.now(),
@@ -1355,7 +1692,7 @@ export function ServerFormDialog({
           return
         }
         addServer({ ...serverData, id: result.id || newId })
-        toast.success('添加成功')
+        toast.success(tr('添加成功', 'Added successfully'))
         if (onSaved) onSaved(result.id || newId)
       }
       onClose()
@@ -1367,14 +1704,20 @@ export function ServerFormDialog({
     }
   }
 
-  // 导航项定义（FinalShell 结构）
+  // 导航项定义（FinalShell 结构，按实际目标类型和协议准确显示）
   const connectionNavTitle =
     targetType === 'windows'
       ? 'Windows连接'
       : targetType === 'bmc'
       ? 'BMC连接'
+      : targetType === 'esxi'
+      ? 'ESXi连接'
+      : targetType === 'network'
+      ? '设备连接'
       : targetType === 'serial'
       ? '串口连接'
+      : (!port.trim() && Boolean(vncPort.trim()))
+      ? 'VNC连接'
       : 'SSH连接'
 
   const isWindowsTarget = targetType === 'windows'
@@ -1395,15 +1738,13 @@ export function ServerFormDialog({
               <DialogTitle className="text-sm font-semibold text-foreground whitespace-nowrap">
                 {isEditMode ? `${name || tr('服务器', 'Server')} - ${tr('编辑', 'Edit')}` : tr('新建连接', 'New connection')}
               </DialogTitle>
-              {!isEditMode && (
-                <SelectPopover
-                  value={targetType}
-                  onChange={(v) => handleTargetTypeChange(v ?? '')}
-                  options={getEnabledTargetTypes().map((spec) => ({ value: spec.id, label: t(spec.labelKey) }))}
-                  className="h-7"
-                  ariaLabel={tr('设备类型', 'Device type')}
-                />
-              )}
+              <SelectPopover
+                value={targetType}
+                onChange={(v) => handleTargetTypeChange(v ?? '')}
+                options={getEnabledTargetTypes().map((spec) => ({ value: spec.id, label: t(spec.labelKey) }))}
+                className="h-7"
+                ariaLabel={tr('设备类型', 'Device type')}
+              />
             </div>
             <DialogDescription className="sr-only">
               {isEditMode ? `${name} - ${tr('编辑', 'Edit')}` : tr('新建连接', 'New connection')}
@@ -1434,6 +1775,24 @@ export function ServerFormDialog({
                 >
                   {connectionNavTitle}
                 </button>
+                {(targetType === 'linux' || targetType === 'windows') && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveCategory('fileTransfer')}
+                    className={`w-full text-left px-2.5 py-1.5 rounded-md text-xs font-medium transition-all active:scale-[0.98] cursor-pointer flex items-center justify-between ${
+                      activeCategory === 'fileTransfer'
+                        ? 'bg-primary text-primary-foreground font-semibold'
+                        : 'text-foreground hover:bg-muted'
+                    }`}
+                  >
+                    <span>{tr('文件传输', 'File Transfer')}</span>
+                    {ftProtocol !== 'sftp' && (
+                      <span className="text-[10px] px-1 py-0.2 rounded font-mono font-semibold bg-amber-500/20 text-amber-600 dark:text-amber-400">
+                        {ftProtocol.toUpperCase()}
+                      </span>
+                    )}
+                  </button>
+                )}
                 {canConfigureSshRouting && (
                   <button
                     type="button"
@@ -1445,6 +1804,28 @@ export function ServerFormDialog({
                     }`}
                   >
                     代理服务器
+                  </button>
+                )}
+                {canConfigureSshRouting && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveCategory('logonScripts')}
+                    className={`w-full text-left px-2.5 py-1.5 rounded-md text-xs font-medium transition-all active:scale-[0.98] cursor-pointer flex items-center justify-between ${
+                      activeCategory === 'logonScripts'
+                        ? 'bg-primary text-primary-foreground font-semibold'
+                        : 'text-foreground hover:bg-muted'
+                    }`}
+                  >
+                    <span>{tr('登录脚本', 'Logon Scripts')}</span>
+                    {logonScriptsConfig.enabled && (
+                      <span className="text-[10px] px-1.5 py-0.2 rounded-full font-mono font-semibold bg-emerald-500/20 text-emerald-600 dark:text-emerald-400">
+                        {logonScriptsConfig.mode === 'script'
+                          ? 'JS'
+                          : logonScriptsConfig.inheritGlobal
+                            ? `${logonScriptsConfig.rules.length}+`
+                            : logonScriptsConfig.rules.length}
+                      </span>
+                    )}
                   </button>
                 )}
                 {canConfigureSshRouting && (
@@ -1820,7 +2201,7 @@ export function ServerFormDialog({
 
                     {/* 名称 */}
                     <div className="flex items-center gap-3">
-                      <label className="text-xs font-normal text-foreground w-12 text-right shrink-0">
+                      <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
                         名称:
                       </label>
                       <Input
@@ -1833,10 +2214,10 @@ export function ServerFormDialog({
                       />
                     </div>
 
-                    {/* 主机与端口 */}
-                    {!isWindowsTarget ? (
+                    {/* 主机与端口：Linux / Windows 统一为「整行主机 + 协议复选框自带端口输入框」 */}
+                    {!isWindowsTarget && targetType !== 'linux' ? (
                       <div className="flex items-center gap-3">
-                        <label className="text-xs font-normal text-foreground w-12 text-right shrink-0">
+                        <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
                           主机:
                         </label>
                         <Input
@@ -1846,7 +2227,7 @@ export function ServerFormDialog({
                           placeholder="127.0.0.1"
                           className="h-7 text-xs font-mono flex-1 bg-background"
                         />
-                        <label className="text-xs font-normal text-foreground shrink-0">{primaryPortLabel}:</label>
+                        <label className="text-xs font-normal text-foreground shrink-0 whitespace-nowrap">{primaryPortLabel}:</label>
                         <Input
                           value={port}
                           onChange={(e) => {
@@ -1862,7 +2243,7 @@ export function ServerFormDialog({
                     ) : (
                       <div className="space-y-1">
                         <div className="flex items-center gap-3">
-                          <label className="text-xs font-normal text-foreground w-12 text-right shrink-0">
+                          <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
                             主机:
                           </label>
                           <Input
@@ -1874,37 +2255,39 @@ export function ServerFormDialog({
                           />
                         </div>
                         <div className="flex items-center gap-3 pt-1">
-                          <label className="text-xs font-normal text-foreground w-12 text-right shrink-0">
+                          <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
                             {tr('协议:', 'Protocol:')}
                           </label>
                           <div className="flex flex-wrap items-center gap-5 flex-1">
-                            <div className="flex items-center gap-2">
-                              <label className="flex items-center gap-1.5 text-xs text-foreground cursor-pointer select-none font-medium">
-                                <input
-                                  type="checkbox"
-                                  checked={Boolean(rdpPort.trim())}
+                            {isWindowsTarget && (
+                              <div className="flex items-center gap-2">
+                                <label className="flex items-center gap-1.5 text-xs text-foreground cursor-pointer select-none font-medium whitespace-nowrap">
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(rdpPort.trim())}
+                                    onChange={(e) => {
+                                      setRdpPort(e.target.checked ? '3389' : '')
+                                      setDisabledProtocols((prev) => prev.filter((x) => x !== 'rdp'))
+                                    }}
+                                    className="h-3.5 w-3.5 rounded border-input text-primary focus:ring-primary cursor-pointer"
+                                  />
+                                  {tr('RDP 远程桌面', 'RDP Desktop')}
+                                </label>
+                                <Input
+                                  value={rdpPort}
                                   onChange={(e) => {
-                                    setRdpPort(e.target.checked ? '3389' : '')
+                                    setRdpPort(e.target.value)
                                     setDisabledProtocols((prev) => prev.filter((x) => x !== 'rdp'))
                                   }}
-                                  className="h-3.5 w-3.5 rounded border-input text-primary focus:ring-primary cursor-pointer"
+                                  maxLength={5}
+                                  placeholder="3389"
+                                  disabled={!rdpPort.trim()}
+                                  className="h-7 text-xs font-mono w-16 text-center bg-background shrink-0 disabled:opacity-45"
                                 />
-                                {tr('RDP 远程桌面', 'RDP Desktop')}
-                              </label>
-                              <Input
-                                value={rdpPort}
-                                onChange={(e) => {
-                                  setRdpPort(e.target.value)
-                                  setDisabledProtocols((prev) => prev.filter((x) => x !== 'rdp'))
-                                }}
-                                maxLength={5}
-                                placeholder="3389"
-                                disabled={!rdpPort.trim()}
-                                className="h-7 text-xs font-mono w-16 text-center bg-background shrink-0 disabled:opacity-45"
-                              />
-                            </div>
+                              </div>
+                            )}
                             <div className="flex items-center gap-2">
-                              <label className="flex items-center gap-1.5 text-xs text-foreground cursor-pointer select-none font-medium">
+                              <label className="flex items-center gap-1.5 text-xs text-foreground cursor-pointer select-none font-medium whitespace-nowrap">
                                 <input
                                   type="checkbox"
                                   checked={Boolean(port.trim())}
@@ -1930,15 +2313,43 @@ export function ServerFormDialog({
                                 className="h-7 text-xs font-mono w-16 text-center bg-background shrink-0 disabled:opacity-45"
                               />
                             </div>
+                            <div className="flex items-center gap-2">
+                              <label
+                                className="flex items-center gap-1.5 text-xs text-foreground cursor-pointer select-none font-medium whitespace-nowrap"
+                                title={tr('VNC 远程桌面（支持标准 RFB、VeNCrypt / TLS 证书加密通道与 SSH 隧道自动穿透）', 'VNC Desktop (supports standard RFB, VeNCrypt / TLS encryption, and SSH tunneling)')}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(vncPort.trim())}
+                                  onChange={(e) => {
+                                    setVncPort(e.target.checked ? '5900' : '')
+                                    setDisabledProtocols((prev) => prev.filter((x) => x !== 'vnc'))
+                                  }}
+                                  className="h-3.5 w-3.5 rounded border-input text-primary focus:ring-primary cursor-pointer"
+                                />
+                                {tr('VNC 桌面', 'VNC Desktop')}
+                              </label>
+                              <Input
+                                value={vncPort}
+                                onChange={(e) => {
+                                  setVncPort(e.target.value)
+                                  setDisabledProtocols((prev) => prev.filter((x) => x !== 'vnc'))
+                                }}
+                                maxLength={5}
+                                placeholder="5900"
+                                disabled={!vncPort.trim()}
+                                className="h-7 text-xs font-mono w-16 text-center bg-background shrink-0 disabled:opacity-45"
+                              />
+                            </div>
                           </div>
                         </div>
                       </div>
                     )}
 
-                    {/* 协议：只展示当前目标真正可用的传输方式（非 Windows 才展示） */}
-                    {!isWindowsTarget && (
+                    {/* 其他非 Linux / 非 Windows 设备显示协议下拉 */}
+                    {!isWindowsTarget && targetType !== 'linux' && (
                       <div className="flex items-center gap-3">
-                        <label className="text-xs font-normal text-foreground w-12 text-right shrink-0">
+                        <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
                           协议:
                         </label>
                         <SelectPopover
@@ -1970,7 +2381,7 @@ export function ServerFormDialog({
 
                     {/* 备注 */}
                     <div className="flex items-start gap-3">
-                      <label className="text-xs font-normal text-foreground w-12 text-right shrink-0 pt-1">
+                      <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 pt-1 whitespace-nowrap">
                         备注:
                       </label>
                       <div className="flex-1 space-y-1">
@@ -1991,7 +2402,7 @@ export function ServerFormDialog({
 
                     {/* 所属分组 */}
                     <div className="flex items-center gap-3">
-                      <label className="text-xs font-normal text-foreground w-12 text-right shrink-0">
+                      <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
                         {tr('分组:', 'Group:')}
                       </label>
                       <GroupTreeSelect
@@ -2005,7 +2416,7 @@ export function ServerFormDialog({
 
                     {/* 标签 */}
                     <div className="flex items-start gap-3">
-                      <label className="text-xs font-normal text-foreground w-12 text-right shrink-0 pt-1">
+                      <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 pt-1 whitespace-nowrap">
                         标签:
                       </label>
                       <ServerTagInput
@@ -2021,60 +2432,108 @@ export function ServerFormDialog({
                   <fieldset className="border border-border/70 rounded-md p-3.5 pt-1 space-y-2.5 bg-card/20 shadow-2xs">
                     <legend className="px-1.5 text-xs font-medium text-foreground">认证</legend>
 
-                    {/* 方法：单认证方式直接显示静态文本，多认证方式显示下拉选择 */}
-                    <div className="flex items-center gap-3">
-                      <label className="text-xs font-normal text-foreground w-12 text-right shrink-0">
-                        方法:
-                      </label>
-                      {(!isWindowsTarget && protocol !== 'ssh') || (isWindowsTarget && !port.trim()) ? (
-                        <div className="h-7 px-2.5 flex items-center text-xs text-muted-foreground bg-muted/30 border border-border/40 rounded flex-1 select-none font-medium">
-                          {targetType === 'kubernetes' ? 'Bearer Token' : '密码'}
+                    {/* 仅当启用了 SSH / RDP（或非纯 VNC 目标）时才显示系统用户名与主认证方式；纯 VNC 无需用户名，仅需 VNC 密码 */}
+                    {!((targetType === 'linux' || targetType === 'windows') && !port.trim() && (targetType !== 'windows' || !rdpPort.trim()) && Boolean(vncPort.trim())) && (
+                      <>
+                        {/* 方法：单认证方式直接显示静态文本，多认证方式显示下拉选择 */}
+                        <div className="flex items-center gap-3">
+                          <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
+                            方法:
+                          </label>
+                          {(!isWindowsTarget && protocol !== 'ssh') || (isWindowsTarget && !port.trim()) ? (
+                            <div className="h-7 px-2.5 flex items-center text-xs text-muted-foreground bg-muted/30 border border-border/40 rounded flex-1 select-none font-medium">
+                              {targetType === 'kubernetes' ? 'Bearer Token' : '密码'}
+                            </div>
+                          ) : (
+                            <SelectPopover
+                              value={authType}
+                              onChange={(v) => setAuthType(v as 'password' | 'privateKey' | 'sshAgent' | 'certificate')}
+                              options={[
+                                { value: "password", label: "密码" },
+                                { value: "privateKey", label: "私钥" },
+                                { value: "certificate", label: "证书" },
+                                { value: "sshAgent", label: "SSH Agent" },
+                              ]}
+                              className="h-7 flex-1"
+                            />
+                          )}
                         </div>
-                      ) : (
-                        <SelectPopover
-                          value={authType}
-                          onChange={(v) => setAuthType(v as 'password' | 'privateKey' | 'sshAgent' | 'certificate')}
-                          options={[
-                            { value: "password", label: "密码" },
-                            { value: "privateKey", label: "私钥" },
-                            { value: "certificate", label: "证书" },
-                            { value: "sshAgent", label: "SSH Agent" },
-                          ]}
-                          className="h-7 flex-1"
-                        />
-                      )}
-                    </div>
 
-                    {/* 用户名（Kubernetes 使用 Bearer Token 认证，无需用户名） */}
-                    <div className="flex items-center gap-3">
-                      <label className="text-xs font-normal text-foreground w-12 text-right shrink-0">
-                        用户名:
-                      </label>
-                      <Input
-                        value={username}
-                        onChange={(e) => setUsername(e.target.value)}
-                        maxLength={100}
-                        placeholder={targetType === 'kubernetes' ? '可选（Bearer Token 无需用户名）' : 'root'}
-                        className="h-7 text-xs font-mono flex-1 bg-background"
-                      />
-                    </div>
+                        {/* 用户名（Kubernetes 使用 Bearer Token 认证，无需用户名） */}
+                        <div className="flex items-center gap-3">
+                          <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
+                            用户名:
+                          </label>
+                          <Input
+                            value={username}
+                            onChange={(e) => setUsername(e.target.value)}
+                            maxLength={100}
+                            placeholder={targetType === 'kubernetes' ? '可选（Bearer Token 无需用户名）' : 'root'}
+                            className="h-7 text-xs font-mono flex-1 bg-background"
+                          />
+                        </div>
 
-                    {/* 密码输入框：仅在密码认证模式下显示 */}
-                    {authType === 'password' && (
+                        {/* 密码输入框：在密码认证模式下显示，或 Windows 同时启用了 RDP + SSH(非密码认证) 时供 RDP 使用 */}
+                        {(authType === 'password' || (isWindowsTarget && Boolean(rdpPort.trim()))) && (
+                          <div className="flex items-center gap-3">
+                            <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
+                              {targetType === 'kubernetes'
+                                ? 'Token:'
+                                : authType !== 'password' && isWindowsTarget && Boolean(rdpPort.trim())
+                                  ? tr('RDP密码:', 'RDP Pwd:')
+                                  : '密码:'}
+                            </label>
+                            <div className="relative flex-1">
+                              <Input
+                                type={showPassword ? 'text' : 'password'}
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                maxLength={targetType === 'kubernetes' ? 8192 : 256}
+                                placeholder={
+                                  authType !== 'password' && isWindowsTarget && Boolean(rdpPort.trim())
+                                    ? (isEditMode ? tr('留空保留原 RDP 密码', 'Leave blank to keep saved RDP password') : tr('选填，供 RDP 远程桌面登录使用', 'Optional, used for RDP login'))
+                                    : isEditMode
+                                      ? (targetType === 'kubernetes' ? '留空保留原 Token' : '留空保留原密码')
+                                      : (targetType === 'kubernetes' ? '请输入 Bearer Token' : '请输入密码')
+                                }
+                                className="h-7 text-xs pr-8 font-mono bg-background"
+                                autoComplete="new-password"
+                                spellCheck={false}
+                              />
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                tabIndex={-1}
+                                onClick={() => setShowPassword((v) => !v)}
+                                className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground hover:text-foreground"
+                              >
+                                {showPassword ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    {/* 独立的 VNC 密码输入框：仅在勾选启用 VNC 协议时按需显示 */}
+                    {(targetType === 'linux' || targetType === 'windows') && Boolean(vncPort.trim()) && (
                       <div className="flex items-center gap-3">
-                        <label className="text-xs font-normal text-foreground w-12 text-right shrink-0">
-                          {targetType === 'kubernetes' ? 'Token:' : '密码:'}
+                        <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap" title="VNC 独立访问密码">
+                          {tr('VNC密码:', 'VNC Pwd:')}
                         </label>
                         <div className="relative flex-1">
                           <Input
-                            type={showPassword ? 'text' : 'password'}
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            maxLength={targetType === 'kubernetes' ? 8192 : 256}
+                            type={showVncPassword ? 'text' : 'password'}
+                            value={vncPassword}
+                            onChange={(e) => setVncPassword(e.target.value)}
+                            maxLength={64}
                             placeholder={
-                              isEditMode
-                                ? (targetType === 'kubernetes' ? '留空保留原 Token' : '留空保留原密码')
-                                : (targetType === 'kubernetes' ? '请输入 Bearer Token' : '请输入密码')
+                              isEditMode && existingServer?.vncPassword
+                                ? tr('留空保留已保存的 VNC 密码', 'Leave blank to keep saved VNC password')
+                                : (!port.trim() && (targetType !== 'windows' || !rdpPort.trim()))
+                                  ? tr('请输入 VNC 访问密码（若免密可留空）', 'Enter VNC password (optional if passwordless)')
+                                  : tr('选填，留空则复用登录密码或连接时询问', 'Optional, falls back to login password or prompts on connect')
                             }
                             className="h-7 text-xs pr-8 font-mono bg-background"
                             autoComplete="new-password"
@@ -2085,10 +2544,10 @@ export function ServerFormDialog({
                             variant="ghost"
                             size="icon"
                             tabIndex={-1}
-                            onClick={() => setShowPassword((v) => !v)}
+                            onClick={() => setShowVncPassword((v) => !v)}
                             className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground hover:text-foreground"
                           >
-                            {showPassword ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                            {showVncPassword ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
                           </Button>
                         </div>
                       </div>
@@ -2098,7 +2557,7 @@ export function ServerFormDialog({
                     {(authType === 'privateKey' || authType === 'certificate') && (
                       <>
                         <div className="flex items-center gap-3">
-                          <label className="text-xs font-normal text-foreground w-12 text-right shrink-0">
+                          <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
                             私钥:
                           </label>
                           <div className="flex-1 flex gap-2 items-center">
@@ -2136,7 +2595,7 @@ export function ServerFormDialog({
                     {/* SSH Agent 身份选择 */}
                     {authType === 'sshAgent' && (
                       <div className="flex items-center gap-3">
-                        <label className="text-xs font-normal text-foreground w-12 text-right shrink-0">
+                        <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
                           Agent:
                         </label>
                         <div className="flex-1 flex gap-2 items-center">
@@ -2166,6 +2625,256 @@ export function ServerFormDialog({
                 </>
               )}
 
+              {/* ======================= 文件传输面板 (SFTP / FTP / FTPS) ======================= */}
+              {activeCategory === 'fileTransfer' && (targetType === 'linux' || targetType === 'windows') && (
+                <div className="space-y-3.5">
+                  <fieldset className="border border-border/70 rounded-md p-3.5 pt-1 space-y-3 bg-card/20 shadow-2xs">
+                    <legend className="px-1.5 text-xs font-medium text-foreground">{tr('传输协议与端口', 'Protocol & Port')}</legend>
+                    
+                    {/* 协议选择 */}
+                    <div className="flex items-center gap-3">
+                      <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
+                        {tr('协议:', 'Protocol:')}
+                      </label>
+                      <div className="flex items-center gap-4 text-xs">
+                        <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="ftProtocol"
+                            value="sftp"
+                            checked={ftProtocol === 'sftp'}
+                            onChange={() => setFtProtocol('sftp')}
+                            className="rounded text-primary focus:ring-primary"
+                          />
+                          <span>SFTP ({tr('复用 SSH 通道', 'Reuses SSH')})</span>
+                        </label>
+                        <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="ftProtocol"
+                            value="ftp"
+                            checked={ftProtocol === 'ftp'}
+                            onChange={() => {
+                              setFtProtocol('ftp')
+                              if (!ftPort || ftPort === '22' || ftPort === '990') setFtPort('21')
+                            }}
+                            className="rounded text-primary focus:ring-primary"
+                          />
+                          <span>FTP (标准/明文)</span>
+                        </label>
+                        <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="ftProtocol"
+                            value="ftps"
+                            checked={ftProtocol === 'ftps'}
+                            onChange={() => {
+                              setFtProtocol('ftps')
+                              if (!ftPort || ftPort === '22') setFtPort(ftTlsMode === 'implicit' ? '990' : '21')
+                            }}
+                            className="rounded text-primary focus:ring-primary"
+                          />
+                          <span>FTPS (SSL/TLS 安全加密)</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* SFTP 模式提示 */}
+                    {ftProtocol === 'sftp' && (
+                      <div className="text-xs text-muted-foreground bg-muted/40 p-2.5 rounded border border-border/40">
+                        {tr(
+                          '当前配置为 SFTP 模式。文件模块与文件传输面板将自动复用上述 SSH 端口、用户及私钥/密码认证凭据，无需额外配置。',
+                          'SFTP mode is active. File manager and transfer panels will reuse SSH credentials and port automatically.'
+                        )}
+                      </div>
+                    )}
+
+                    {/* FTP / FTPS 独立配置 */}
+                    {ftProtocol !== 'sftp' && (
+                      <>
+                        <div className="flex items-center gap-3">
+                          <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
+                            {tr('端口:', 'Port:')}
+                          </label>
+                          <Input
+                            type="number"
+                            value={ftPort}
+                            onChange={(e) => setFtPort(e.target.value)}
+                            placeholder={ftProtocol === 'ftps' && ftTlsMode === 'implicit' ? '990' : '21'}
+                            className="h-7 text-xs font-mono w-24 bg-background"
+                          />
+                          {ftProtocol === 'ftps' && (
+                            <div className="flex items-center gap-3 ml-4 text-xs">
+                              <span className="text-muted-foreground">{tr('加密方式:', 'TLS Mode:')}</span>
+                              <label className="inline-flex items-center gap-1 cursor-pointer">
+                                <input
+                                  type="radio"
+                                  name="ftTlsMode"
+                                  value="explicit"
+                                  checked={ftTlsMode === 'explicit'}
+                                  onChange={() => {
+                                    setFtTlsMode('explicit')
+                                    if (ftPort === '990') setFtPort('21')
+                                  }}
+                                  className="text-primary focus:ring-primary"
+                                />
+                                <span>Explicit (显式/AUTH TLS, 默认21)</span>
+                              </label>
+                              <label className="inline-flex items-center gap-1 cursor-pointer">
+                                <input
+                                  type="radio"
+                                  name="ftTlsMode"
+                                  value="implicit"
+                                  checked={ftTlsMode === 'implicit'}
+                                  onChange={() => {
+                                    setFtTlsMode('implicit')
+                                    if (ftPort === '21') setFtPort('990')
+                                  }}
+                                  className="text-primary focus:ring-primary"
+                                />
+                                <span>Implicit (隐式, 默认990)</span>
+                              </label>
+                            </div>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </fieldset>
+
+                  {/* FTP / FTPS 认证与传输选项 */}
+                  {ftProtocol !== 'sftp' && (
+                    <fieldset className="border border-border/70 rounded-md p-3.5 pt-1 space-y-3 bg-card/20 shadow-2xs">
+                      <legend className="px-1.5 text-xs font-medium text-foreground">{tr('认证与传输选项', 'Auth & Transfer Settings')}</legend>
+                      
+                      {/* 复用凭据 / 匿名登录勾选框 */}
+                      <div className="flex items-center gap-6 text-xs">
+                        <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={ftUseServerCredentials}
+                            onChange={(e) => {
+                              setFtUseServerCredentials(e.target.checked)
+                              if (e.target.checked) setFtAnonymous(false)
+                            }}
+                            className="rounded text-primary focus:ring-primary"
+                          />
+                          <span className="font-medium text-foreground">{tr('复用当前服务器的用户名与密码', 'Reuse server username and password')}</span>
+                        </label>
+                        {!ftUseServerCredentials && (
+                          <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={ftAnonymous}
+                              onChange={(e) => setFtAnonymous(e.target.checked)}
+                              className="rounded text-primary focus:ring-primary"
+                            />
+                            <span>{tr('匿名登录 (Anonymous)', 'Anonymous Login')}</span>
+                          </label>
+                        )}
+                      </div>
+
+                      {/* 独立用户名密码 */}
+                      {!ftUseServerCredentials && !ftAnonymous && (
+                        <div className="space-y-2 pt-1 border-t border-border/40">
+                          <div className="flex items-center gap-3">
+                            <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
+                              {tr('用户名:', 'User:')}
+                            </label>
+                            <Input
+                              value={ftUsername}
+                              onChange={(e) => setFtUsername(e.target.value)}
+                              placeholder="FTP 用户名"
+                              className="h-7 text-xs flex-1 bg-background"
+                            />
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
+                              {tr('密码:', 'Password:')}
+                            </label>
+                            <div className="relative flex-1">
+                              <Input
+                                type={showFtPassword ? 'text' : 'password'}
+                                value={ftPassword}
+                                onChange={(e) => setFtPassword(e.target.value)}
+                                placeholder={isEditMode ? tr('留空保留已保存的密码', 'Leave blank to keep saved password') : tr('请输入 FTP 密码', 'Enter FTP password')}
+                                className="h-7 text-xs pr-8 font-mono bg-background"
+                              />
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                tabIndex={-1}
+                                onClick={() => setShowFtPassword((v) => !v)}
+                                className="absolute right-1 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground hover:text-foreground"
+                              >
+                                {showFtPassword ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 高级传输模式与编码 */}
+                      <div className="pt-2 border-t border-border/40 space-y-2">
+                        <div className="flex items-center gap-6 text-xs">
+                          <div className="flex items-center gap-2">
+                            <span className="text-muted-foreground">{tr('数据连接:', 'Mode:')}</span>
+                            <label className="inline-flex items-center gap-1 cursor-pointer">
+                              <input
+                                type="radio"
+                                name="ftTransferMode"
+                                value="passive"
+                                checked={ftTransferMode === 'passive'}
+                                onChange={() => setFtTransferMode('passive')}
+                                className="text-primary focus:ring-primary"
+                              />
+                              <span>被动模式 (PASV，推荐)</span>
+                            </label>
+                            <label className="inline-flex items-center gap-1 cursor-pointer">
+                              <input
+                                type="radio"
+                                name="ftTransferMode"
+                                value="active"
+                                checked={ftTransferMode === 'active'}
+                                onChange={() => setFtTransferMode('active')}
+                                className="text-primary focus:ring-primary"
+                              />
+                              <span>主动模式 (PORT)</span>
+                            </label>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <span className="text-muted-foreground">{tr('编码:', 'Encoding:')}</span>
+                            <select
+                              value={ftEncoding}
+                              onChange={(e) => setFtEncoding(e.target.value as 'utf-8' | 'gbk')}
+                              className="h-7 text-xs bg-background border border-input rounded px-2"
+                            >
+                              <option value="utf-8">UTF-8 (通用)</option>
+                              <option value="gbk">GBK (Windows 中文常见)</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        {ftProtocol === 'ftps' && (
+                          <div className="flex items-center gap-1.5 text-xs">
+                            <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={ftAllowInvalidCerts}
+                                onChange={(e) => setFtAllowInvalidCerts(e.target.checked)}
+                                className="rounded text-primary focus:ring-primary"
+                              />
+                              <span className="text-muted-foreground">{tr('允许自签名或无效 SSL 证书 (跳过证书链校验)', 'Allow self-signed or invalid SSL certificates')}</span>
+                            </label>
+                          </div>
+                        )}
+                      </div>
+                    </fieldset>
+                  )}
+                </div>
+              )}
+
               {/* ======================= 代理服务器面板 ======================= */}
               {activeCategory === 'proxy' && canConfigureSshRouting && (
                 <fieldset className="border border-border/70 rounded-md p-3.5 pt-1 space-y-3 bg-card/20 shadow-2xs">
@@ -2182,28 +2891,152 @@ export function ServerFormDialog({
                 </fieldset>
               )}
 
+              {/* ======================= 登录脚本面板 ======================= */}
+              {activeCategory === 'logonScripts' && (
+                <LogonScriptsTab
+                  config={logonScriptsConfig}
+                  onChange={setLogonScriptsConfig}
+                  tr={tr}
+                />
+              )}
+
               {/* ======================= 高级设置面板 ======================= */}
               {activeCategory === 'advanced' && (
-                <fieldset className="border border-border/70 rounded-md p-3.5 pt-1 space-y-3 bg-card/20 shadow-2xs">
-                  <legend className="px-1.5 text-xs font-medium text-foreground">高级连接设置</legend>
-                  {/* 连接超时 */}
-                  <div className="flex items-center gap-3 pt-2 border-t border-border/40">
-                    <label className="text-xs font-normal text-foreground shrink-0">
-                      连接超时:
-                    </label>
-                    <div className="flex items-center gap-1.5">
-                      <Input
-                        type="number"
-                        value={connectionTimeout}
-                        onChange={(e) => setConnectionTimeout(e.target.value)}
-                        maxLength={4}
-                        placeholder="30"
-                        className="h-7 text-xs font-mono w-20 bg-background text-center"
-                      />
-                      <span className="text-xs text-muted-foreground">秒</span>
+                <div className="space-y-4">
+                  <fieldset className="border border-border/70 rounded-md p-3.5 pt-1 space-y-3 bg-card/20 shadow-2xs">
+                    <legend className="px-1.5 text-xs font-medium text-foreground">基础高级设置</legend>
+                    {/* 连接超时 */}
+                    <div className="flex items-center gap-3 pt-2">
+                      <label className="text-xs font-normal text-foreground shrink-0">
+                        连接超时:
+                      </label>
+                      <div className="flex items-center gap-1.5">
+                        <Input
+                          type="number"
+                          value={connectionTimeout}
+                          onChange={(e) => setConnectionTimeout(e.target.value)}
+                          maxLength={4}
+                          placeholder="30"
+                          className="h-7 text-xs font-mono w-20 bg-background text-center"
+                        />
+                        <span className="text-xs text-muted-foreground">秒</span>
+                      </div>
                     </div>
-                  </div>
-                </fieldset>
+                  </fieldset>
+
+                  {/* 会话日志自动落盘 */}
+                  <fieldset className="border border-border/70 rounded-md p-3.5 pt-1 space-y-3 bg-card/20 shadow-2xs">
+                    <legend className="px-1.5 text-xs font-medium text-foreground">会话日志与审计自动落盘</legend>
+                    <div className="flex items-center justify-between pt-1">
+                      <div className="space-y-0.5">
+                        <span className="text-xs font-medium text-foreground">
+                          {tr('连接时自动保存会话日志', 'Auto-save session log on connect')}
+                        </span>
+                        <p className="text-[11px] text-muted-foreground">
+                          {tr('会话建立后自动将所有终端输入输出记录到文本日志文件，符合等保审计合规要求。', 'Automatically records terminal output to disk upon connection.')}
+                        </p>
+                      </div>
+                      <Switch
+                        checked={sessionLoggingEnabled}
+                        onCheckedChange={setSessionLoggingEnabled}
+                      />
+                    </div>
+
+                    {sessionLoggingEnabled && (
+                      <div className="space-y-3 pt-2 border-t border-border/40 text-xs animate-in fade-in">
+                        {/* 日志格式选择 */}
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-muted-foreground shrink-0">{tr('日志格式:', 'Log Format:')}</span>
+                          <div className="flex items-center gap-1 bg-background border border-border rounded-md p-0.5">
+                            <button
+                              type="button"
+                              onClick={() => setSessionLoggingFormat('plain')}
+                              className={cn(
+                                "px-2 py-0.5 rounded text-[11px] transition-colors cursor-pointer",
+                                sessionLoggingFormat === 'plain'
+                                  ? "bg-primary text-primary-foreground font-medium shadow-xs"
+                                  : "text-muted-foreground hover:text-foreground"
+                              )}
+                            >
+                              {tr('纯文本 (无 ANSI 乱码)', 'Plain text (No ANSI)')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setSessionLoggingFormat('timestamped')}
+                              className={cn(
+                                "px-2 py-0.5 rounded text-[11px] transition-colors cursor-pointer",
+                                sessionLoggingFormat === 'timestamped'
+                                  ? "bg-primary text-primary-foreground font-medium shadow-xs"
+                                  : "text-muted-foreground hover:text-foreground"
+                              )}
+                            >
+                              {tr('逐行时间戳纯文本', 'Timestamped')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setSessionLoggingFormat('raw')}
+                              className={cn(
+                                "px-2 py-0.5 rounded text-[11px] transition-colors cursor-pointer",
+                                sessionLoggingFormat === 'raw'
+                                  ? "bg-primary text-primary-foreground font-medium shadow-xs"
+                                  : "text-muted-foreground hover:text-foreground"
+                              )}
+                            >
+                              {tr('原始终端控制流', 'Raw')}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* 自定义保存目录 */}
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between">
+                            <span className="text-muted-foreground">{tr('自定义保存目录 (留空使用全局默认目录):', 'Custom Directory (leave blank for default):')}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              value={sessionLoggingDir}
+                              onChange={(e) => setSessionLoggingDir(e.target.value)}
+                              placeholder="C:\Users\...\Logs 或留空"
+                              className="h-7 text-xs font-mono flex-1 bg-background"
+                            />
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs shrink-0 cursor-pointer"
+                              onClick={async () => {
+                                const selected = await openDialog({
+                                  directory: true,
+                                  multiple: false,
+                                  title: tr('选择日志保存目录', 'Select Log Directory'),
+                                })
+                                if (typeof selected === 'string' && selected) {
+                                  setSessionLoggingDir(selected)
+                                }
+                              }}
+                            >
+                              {tr('选择', 'Browse')}
+                            </Button>
+                          </div>
+                        </div>
+
+                        {/* 自定义文件名模版 */}
+                        <div className="space-y-1">
+                          <span className="text-muted-foreground">{tr('文件名格式模版:', 'File Name Pattern:')}</span>
+                          <Input
+                            value={sessionLoggingPattern}
+                            onChange={(e) => setSessionLoggingPattern(e.target.value)}
+                            placeholder="%n_%h_%d_%t.log"
+                            className="h-7 text-xs font-mono bg-background"
+                          />
+                          <p className="text-[10px] text-muted-foreground/80">
+                            {tr('支持宏变量: %n(服务器名) %h(主机) %p(端口) %u(用户名) %d(年月日) %t(时分秒)', 'Macros: %n(name) %h(host) %p(port) %u(user) %d(date) %t(time)')}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </fieldset>
+                </div>
               )}
             </div>
           </div>
@@ -2218,7 +3051,11 @@ export function ServerFormDialog({
               onClick={handleTestConnection}
               disabled={
                 testing ||
-                (targetType === 'serial' ? !serialPortName.trim() : (!host.trim() || (targetType !== 'kubernetes' && !username.trim())))
+                (targetType === 'serial'
+                  ? !serialPortName.trim()
+                  : activeCategory === 'fileTransfer' && (ftProtocol === 'ftp' || ftProtocol === 'ftps')
+                  ? !host.trim()
+                  : (!host.trim() || (targetType !== 'kubernetes' && !username.trim())))
               }
               className="h-7 gap-1 px-3 text-xs cursor-pointer"
             >

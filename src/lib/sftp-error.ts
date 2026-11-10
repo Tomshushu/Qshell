@@ -174,7 +174,7 @@ export function isSftpConnectionError(raw: string | null | undefined): boolean {
   if (!raw || typeof raw !== 'string') return false
   const lower = raw.toLowerCase()
   const patterns = [
-    'timed out', 'timeout', 'etimedout', '连接超时', '操作超时',
+    'timed out', 'timeout', 'etimedout', '连接超时', '操作超时', '加载目录超时', 'directory load timeout',
     'disconnected', 'connection closed', 'broken pipe', 'econnreset',
     'reset by peer', 'not connected', 'connection lost', 'session closed',
     '连接已断开', '连接断开', '未连接',

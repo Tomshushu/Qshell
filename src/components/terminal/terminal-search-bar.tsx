@@ -1,7 +1,6 @@
 import React, { useRef, useEffect, memo } from "react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Search, Loader2, Regex, ArrowUp, ArrowDown, X } from "lucide-react";
+import { Search, Loader2, ChevronUp, ChevronDown, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "@/i18n";
 import type { SearchState } from "./terminal-types";
@@ -65,16 +64,66 @@ export const TerminalSearchBar = memo(function TerminalSearchBar({
 
   if (!open) return null;
 
+  const handleInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    e.stopPropagation();
+
+    // Escape 键关闭搜索栏并将焦点无缝返还给终端
+    if (e.key === "Escape") {
+      e.preventDefault();
+      onClose();
+      return;
+    }
+
+    // Alt+C 快捷切换区分大小写
+    if (e.altKey && (e.key === "c" || e.key === "C")) {
+      e.preventDefault();
+      onToggleCaseSensitive();
+      return;
+    }
+
+    // Alt+W 快捷切换整词匹配
+    if (e.altKey && (e.key === "w" || e.key === "W")) {
+      e.preventDefault();
+      onToggleWholeWord();
+      return;
+    }
+
+    // Alt+R 快捷切换正则匹配
+    if (e.altKey && (e.key === "r" || e.key === "R")) {
+      e.preventDefault();
+      onToggleRegex();
+      return;
+    }
+
+    // Enter 键查找下一个，Shift+Enter 键查找上一个（对标 VS Code / Windows Terminal 标准）
+    if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      if (e.shiftKey) {
+        onFindPrev();
+      } else {
+        onFindNext();
+      }
+      return;
+    }
+
+    onKeyDown(e);
+  };
+
   return (
     <div
-      className="absolute top-2 right-2 z-30 flex items-center gap-1 rounded-xl border border-slate-200/90 dark:border-white/15 bg-white/98 dark:bg-zinc-950/98 backdrop-blur-2xl shadow-[0_16px_36px_-6px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.9)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-1.5 terminal-search-bar select-none animate-in fade-in-0 zoom-in-95 origin-top-right duration-100"
+      className={cn(
+        "absolute top-2 right-2 z-30 flex items-center gap-1.5 px-2.5 py-1 rounded-xl select-none",
+        "border border-slate-200/90 dark:border-white/15",
+        "bg-white/95 dark:bg-zinc-900/95 backdrop-blur-2xl",
+        "shadow-[0_14px_36px_-6px_rgba(0,0,0,0.18),inset_0_1px_0_0_rgba(255,255,255,0.9)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)]",
+        "terminal-search-bar animate-in fade-in-0 zoom-in-95 origin-top-right duration-100"
+      )}
       data-terminal-search="true"
       onMouseDown={(e) => {
         e.stopPropagation();
         const target = e.target as HTMLElement | null;
         if (target?.closest("button")) return;
-        // 点击非 input 区域（内边距、图标等）时阻止浏览器默认的聚焦/失焦行为，
-        // 否则默认 blur 会排在我们手动 focus 之后执行，导致“点了没反应、需点两次”
+        // 点击非 input 区域时阻止浏览器默认行为，确保聚焦不中断
         if (target !== inputRef.current) {
           e.preventDefault();
         }
@@ -89,38 +138,34 @@ export const TerminalSearchBar = memo(function TerminalSearchBar({
         }
       }}
     >
-      <Search className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-      <Input
-        ref={inputRef}
-        value={searchText}
-        onChange={(e) => onSearchTextChange(e.target.value)}
-        onFocus={onFocus}
-        onKeyDown={(e) => {
-          e.stopPropagation();
-          // Escape 键关闭搜索栏并将焦点无缝返还给终端
-          if (e.key === "Escape") {
-            e.preventDefault();
-            onClose();
-            return;
-          }
-          // Enter 键查找下一个，Shift+Enter 键查找上一个（对标 VS Code / Windows Terminal 标准）
-          if (e.key === "Enter" && !e.nativeEvent.isComposing) {
-            e.preventDefault();
-            if (e.shiftKey) {
-              onFindPrev();
-            } else {
-              onFindNext();
-            }
-            return;
-          }
-          onKeyDown(e);
-        }}
-        placeholder={t("tm_search_placeholder")}
-        className="h-6 w-48 text-xs border-0 focus-visible:ring-0 focus-visible:ring-offset-0"
-        autoFocus
-      />
+      {/* 搜索图标与无缝内联输入框 */}
+      <div className="flex items-center gap-1.5 flex-1 min-w-0">
+        <Search className="h-3.5 w-3.5 text-muted-foreground/60 shrink-0 ml-0.5" />
+        <input
+          ref={inputRef}
+          type="text"
+          value={searchText}
+          onChange={(e) => onSearchTextChange(e.target.value)}
+          onFocus={onFocus}
+          onKeyDown={handleInputKeyDown}
+          placeholder={t("tm_search_placeholder") || "搜索..."}
+          className="h-6 w-44 sm:w-52 text-xs bg-transparent border-0 outline-none text-foreground placeholder:text-muted-foreground/45 font-sans focus:outline-none"
+          autoFocus
+        />
+      </div>
+
+      {/* 匹配结果计数指示胶囊 */}
       {searchText && (
-        <span className="text-[10px] font-mono tabular-nums text-muted-foreground whitespace-nowrap min-w-[40px] text-center flex items-center justify-center gap-1">
+        <span
+          className={cn(
+            "text-[10.5px] font-mono tabular-nums px-1.5 py-0.5 rounded-md whitespace-nowrap min-w-[34px] text-center flex items-center justify-center gap-1 shrink-0 border transition-colors",
+            searchState.resultCount > 0
+              ? "bg-muted/70 text-muted-foreground border-border/50"
+              : searchState.isSearching
+                ? "bg-muted/40 text-muted-foreground/60 border-border/30"
+                : "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/25 font-medium"
+          )}
+        >
           {searchState.isSearching && (
             <Loader2 className="h-2.5 w-2.5 animate-spin text-primary shrink-0" />
           )}
@@ -131,83 +176,105 @@ export const TerminalSearchBar = memo(function TerminalSearchBar({
               : "0/0"}
         </span>
       )}
-      {/* E7：正则模式切换按钮 */}
+
+      {/* 搜索选项微型切换胶囊组 (.* / Aa / \\b) */}
+      <div className="flex items-center gap-0.5 shrink-0 bg-muted/40 dark:bg-white/[0.04] p-0.5 rounded-lg border border-border/40">
+        {/* 正则模式切换按钮 */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn(
+            "h-5.5 w-5.5 rounded-md flex-shrink-0 transition-all cursor-pointer",
+            searchRegex
+              ? "bg-primary/20 text-primary dark:text-primary-foreground font-semibold shadow-2xs"
+              : "text-muted-foreground/70 hover:text-foreground hover:bg-muted/80"
+          )}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onToggleRegex}
+          title={
+            searchRegex
+              ? `${t("tm_search_regex_on")} (Alt+R)`
+              : `${t("tm_search_regex_off")} (Alt+R)`
+          }
+        >
+          <span className="font-mono text-[11px] font-bold leading-none tracking-tighter">.*</span>
+        </Button>
+
+        {/* 区分大小写切换按钮 */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn(
+            "h-5.5 w-5.5 rounded-md flex-shrink-0 transition-all cursor-pointer",
+            searchCaseSensitive
+              ? "bg-primary/20 text-primary dark:text-primary-foreground font-semibold shadow-2xs"
+              : "text-muted-foreground/70 hover:text-foreground hover:bg-muted/80"
+          )}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onToggleCaseSensitive}
+          title={`${t("tm_search_case_sensitive")} (Alt+C)`}
+        >
+          <span className="font-sans text-[11px] font-semibold leading-none">Aa</span>
+        </Button>
+
+        {/* 全词匹配切换按钮 */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn(
+            "h-5.5 w-5.5 rounded-md flex-shrink-0 transition-all cursor-pointer",
+            searchWholeWord
+              ? "bg-primary/20 text-primary dark:text-primary-foreground font-semibold shadow-2xs"
+              : "text-muted-foreground/70 hover:text-foreground hover:bg-muted/80"
+          )}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onToggleWholeWord}
+          title={`${t("tm_search_whole_word")} (Alt+W)`}
+        >
+          <span className="font-mono text-[11px] font-medium leading-none">\b</span>
+        </Button>
+      </div>
+
+      {/* 视觉微细分割线 */}
+      <div className="h-3.5 w-px bg-border/60 mx-0.5 shrink-0" />
+
+      {/* 结果翻页导航按钮组 */}
+      <div className="flex items-center gap-0.5 shrink-0">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-5.5 w-5.5 rounded-md flex-shrink-0 text-muted-foreground hover:text-foreground hover:bg-muted/80 active:scale-95 transition-all cursor-pointer"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onFindPrev}
+          title={`${t("tm_search_prev")} (Shift+Enter)`}
+        >
+          <ChevronUp className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-5.5 w-5.5 rounded-md flex-shrink-0 text-muted-foreground hover:text-foreground hover:bg-muted/80 active:scale-95 transition-all cursor-pointer"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onFindNext}
+          title={`${t("tm_search_next")} (Enter)`}
+        >
+          <ChevronDown className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+
+      {/* 视觉微细分割线 */}
+      <div className="h-3.5 w-px bg-border/60 mx-0.5 shrink-0" />
+
+      {/* 关闭按钮 */}
       <Button
         variant="ghost"
         size="icon"
-        className={cn(
-          "h-5 w-5 flex-shrink-0",
-          searchRegex
-            ? "bg-accent text-emerald-400"
-            : "text-muted-foreground",
-        )}
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={onToggleRegex}
-        title={
-          searchRegex ? t("tm_search_regex_on") : t("tm_search_regex_off")
-        }
-      >
-        <Regex className="h-3 w-3" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        className={cn(
-          "h-5 w-5 flex-shrink-0 text-[10px] font-semibold active:scale-90 transition-all cursor-pointer",
-          searchCaseSensitive
-            ? "bg-accent text-foreground"
-            : "text-muted-foreground",
-        )}
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={onToggleCaseSensitive}
-        title={t("tm_search_case_sensitive")}
-      >
-        Aa
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        className={cn(
-          "h-5 w-5 flex-shrink-0 text-[10px] font-semibold active:scale-90 transition-all cursor-pointer",
-          searchWholeWord
-            ? "bg-accent text-foreground"
-            : "text-muted-foreground",
-        )}
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={onToggleWholeWord}
-        title={t("tm_search_whole_word")}
-      >
-        \b
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-5 w-5 flex-shrink-0 active:scale-90 transition-all cursor-pointer"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={onFindPrev}
-        title={t("tm_search_prev")}
-      >
-        <ArrowUp className="h-3 w-3" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-5 w-5 flex-shrink-0 active:scale-90 transition-all cursor-pointer"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={onFindNext}
-        title={t("tm_search_next")}
-      >
-        <ArrowDown className="h-3 w-3" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-5 w-5 flex-shrink-0 active:scale-90 transition-all cursor-pointer"
+        className="h-5.5 w-5.5 rounded-md flex-shrink-0 text-muted-foreground/70 hover:text-destructive hover:bg-destructive/10 active:scale-95 transition-all cursor-pointer"
         onMouseDown={(e) => e.preventDefault()}
         onClick={onClose}
-        title={t("tm_search_close")}
+        title={`${t("tm_search_close")} (Esc)`}
       >
-        <X className="h-3 w-3" />
+        <X className="h-3.5 w-3.5" />
       </Button>
     </div>
   );

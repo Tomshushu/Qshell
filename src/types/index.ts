@@ -42,6 +42,10 @@ export interface Server {
   protocols?: string[]
   /** Windows RDP 协议连接端口，默认 3389 */
   rdpPort?: number
+  /** VNC 远程桌面连接端口，默认 5900 */
+  vncPort?: number
+  /** VNC 远程桌面独立密码（为空时回退复用主登录密码） */
+  vncPassword?: string
   /** BMC Redfish HTTPS 管理端口，默认 443 */
   bmcPort?: number
   /** 是否允许 BMC 使用自签名/无效 TLS 证书，默认关闭（历史字段名） */
@@ -71,12 +75,122 @@ export interface Server {
   serialConfig?: string | null
   /** 设备专属凭据配置（JSON 字符串，后端加密存储）：token / kubeconfig / VNC 密码等，预留给未来设备类型 */
   credentialsConfig?: string | null
+  /**
+   * 服务器文件传输配置（JSON 字符串，后端加密存储）：
+   * 支持 SFTP（默认复用 SSH）、FTP（明文）、FTPS（显式/隐式 TLS）及凭据复用/独立账号/匿名登录。
+   */
+  fileTransferConfig?: string | null
+  /**
+   * 登录自动化与交互式会话脚本配置（Send-Expect，JSON 字符串，加密存储）：
+   * 包含匹配规则列表（期望输出 -> 自动响应内容，支持密码脱敏与超时控制）。
+   */
+  logonScriptsConfig?: string | null
+  /**
+   * 自动化会话日志落盘配置（JSON 字符串存储于 Server.sessionLoggingConfig）：
+   * 连接成功后自动开启会话记录，落盘为纯文本/时间戳审计日志。
+   */
+  sessionLoggingConfig?: string | null
   /** 所属服务器分组 ID（指向 server_groups 表 id），null/空表示未分组 */
   groupId?: string | null
   /** 回收站删除时间（毫秒时间戳）；为空表示正常，非 NULL 表示待删除 */
   deletedAt?: number | null
   createdAt: number
   updatedAt: number
+}
+
+/**
+ * 服务器内联文件传输配置（解析自 Server.fileTransferConfig JSON）
+ */
+
+/**
+ * 登录与交互自动化脚本单条规则 (Send-Expect)
+ */
+export interface SendExpectRule {
+  id: string
+  // 期望匹配的文本或正则模式，如 "password:", "[Pp]assword:", "/pattern/i"
+  expect: string
+  /** 响应发送的文本（支持 \p 延时、转义字符及 %u, %h, %p 等宏变量） */
+  send: string
+  /** 是否敏感内容（如密码），在日志与通知中脱敏显示为 ****** */
+  isSecret?: boolean
+  /** 发送时是否追加回车（默认 true） */
+  sendEnter?: boolean
+  /** 单步超时时间（秒，默认 30） */
+  timeoutSec?: number
+  /** 是否仅响应一次（默认 true） */
+  once?: boolean
+  /** 匹配后延时发送毫秒数（防远端输入缓冲未就绪丢字，默认 0） */
+  delayMs?: number
+  /** 超时未匹配时的处置策略：'ignore' 忽略并继续 | 'warn' 提示警告 | 'disconnect' 强制断开会话 */
+  onTimeoutAction?: 'ignore' | 'warn' | 'disconnect'
+}
+
+/** 登录脚本运行上下文（提供宏变量插值与脚本上下文） */
+export interface LogonScriptContext {
+  username?: string
+  host?: string
+  port?: number | string
+  serverName?: string
+}
+
+export type LogonScriptMode = 'rules' | 'script'
+
+/**
+ * 登录自动化会话脚本配置（存储于 Server.logonScriptsConfig JSON）
+ */
+export interface LogonScriptsConfig {
+  enabled: boolean
+  /** 模式：'rules' 声明式规则表格 (默认) | 'script' JavaScript 可编程脚本 */
+  mode?: LogonScriptMode
+  /** 是否继承全局/分组默认登录脚本 */
+  inheritGlobal?: boolean
+  /** 全局默认超时处置策略 */
+  timeoutPolicy?: 'ignore' | 'warn' | 'disconnect'
+  /** 声明式规则列表 */
+  rules: SendExpectRule[]
+  /** JavaScript 可编程脚本源码（当 mode === 'script' 时生效） */
+  customScript?: string
+}
+
+/** 会话日志落盘格式：纯文本（无 ANSI 格式码）、带时间戳纯文本、原始终端控制流 */
+export type SessionLogFormat = 'plain' | 'timestamped' | 'raw'
+
+/**
+ * 自动化会话日志记录配置（存储于 Server.sessionLoggingConfig JSON）
+ */
+export interface SessionLoggingConfig {
+  enabled: boolean
+  /** 日志格式：'plain' 纯文本无 ANSI (默认) | 'timestamped' 逐行时间戳 | 'raw' 原始含 ANSI */
+  format?: SessionLogFormat
+  /** 自定义日志保存目录（为空时使用全局默认目录） */
+  directory?: string
+  /** 自定义文件名模版（支持宏: %n 服务器名, %h 主机, %p 端口, %u 用户名, %d 日期, %t 时间） */
+  fileNamePattern?: string
+}
+
+export interface FileTransferConfig {
+  /** 文件传输协议：默认 'sftp'（零配置复用 SSH） */
+  protocol: 'sftp' | 'ftp' | 'ftps'
+  /** FTP/FTPS 端口：FTP/显式 FTPS 默认 21，隐式 FTPS 默认 990 */
+  port?: number
+  /** FTPS 加密模式：'explicit' (AUTH TLS, 21) | 'implicit' (990) */
+  tlsMode?: 'explicit' | 'implicit'
+  /** 是否默认复用当前服务器的主用户名与密码（默认 true） */
+  useServerCredentials?: boolean
+  /** 是否使用 anonymous 匿名登录 */
+  anonymous?: boolean
+  /** 独立 FTP 账号（useServerCredentials=false 且 anonymous=false 时生效） */
+  username?: string
+  /** 独立 FTP 密码（前端读取列表时掩码为空串，由 hasPassword 标记已保存密码） */
+  password?: string
+  /** 后端标记：数据库中是否已保存非空独立 FTP 密码 */
+  hasPassword?: boolean
+  /** 数据连接模式：'passive' (PASV/EPSV，默认) | 'active' (PORT) */
+  transferMode?: 'passive' | 'active'
+  /** 文件名字符编码：'utf-8' (默认) | 'gbk' */
+  encoding?: 'utf-8' | 'gbk'
+  /** FTPS 是否信任自签名证书（默认 true） */
+  allowInvalidCerts?: boolean
 }
 
 // ============================================================================
@@ -603,7 +717,7 @@ export interface FileEntry {
   gid?: number
 }
 
-export type WorkspaceModule = 'overview' | 'terminal' | 'services' | 'processes' | 'network' | 'ports' | 'files' | 'docker' | 'rdp' | 'bmc' | 'forward'
+export type WorkspaceModule = 'overview' | 'terminal' | 'services' | 'processes' | 'network' | 'ports' | 'files' | 'docker' | 'rdp' | 'vnc' | 'bmc' | 'forward'
 
 export interface NavigationContext {
   searchQuery?: string

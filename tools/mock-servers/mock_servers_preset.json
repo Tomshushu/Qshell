@@ -20,8 +20,8 @@
     ],
     "notes": "全功能 Linux 模拟机：支持 /proc/stat, /proc/meminfo, df, ps, systemctl, ss, SFTP 虚拟文件系统",
     "favorite": true,
-    "createdAt": 1794035850498,
-    "updatedAt": 1794035850498
+    "createdAt": 1794142452910,
+    "updatedAt": 1794142452910
   },
   {
     "id": "mock-ubuntu-rsa-key",
@@ -45,8 +45,8 @@
     ],
     "notes": "RSA 2048 密钥认证，私钥文件: D:/SSHTOOL/Qshell/tools/mock-servers/certs/id_rsa_test",
     "favorite": true,
-    "createdAt": 1794035850498,
-    "updatedAt": 1794035850498
+    "createdAt": 1794142452910,
+    "updatedAt": 1794142452910
   },
   {
     "id": "mock-ubuntu-passphrase-key",
@@ -71,8 +71,8 @@
     ],
     "notes": "AES 加密私钥认证，口令: Secret@123，私钥路径: D:/SSHTOOL/Qshell/tools/mock-servers/certs/id_rsa_passphrase",
     "favorite": true,
-    "createdAt": 1794035850498,
-    "updatedAt": 1794035850498
+    "createdAt": 1794142452910,
+    "updatedAt": 1794142452910
   },
   {
     "id": "mock-ubuntu-ed25519-key",
@@ -96,8 +96,8 @@
     ],
     "notes": "Ed25519 现代高性能签名密钥，私钥路径: D:/SSHTOOL/Qshell/tools/mock-servers/certs/id_ed25519_test",
     "favorite": true,
-    "createdAt": 1794035850498,
-    "updatedAt": 1794035850498
+    "createdAt": 1794142452910,
+    "updatedAt": 1794142452910
   },
   {
     "id": "mock-ubuntu-cert",
@@ -123,8 +123,8 @@
     ],
     "notes": "由 CA 签发的 OpenSSH 用户证书，证书路径: D:/SSHTOOL/Qshell/tools/mock-servers/certs/id_ed25519_test-cert.pub",
     "favorite": true,
-    "createdAt": 1794035850498,
-    "updatedAt": 1794035850498
+    "createdAt": 1794142452910,
+    "updatedAt": 1794142452910
   },
   {
     "id": "mock-kylin-01",
@@ -146,8 +146,8 @@
     ],
     "notes": "信创操作系统模拟机",
     "favorite": true,
-    "createdAt": 1794035850498,
-    "updatedAt": 1794035850498
+    "createdAt": 1794142452910,
+    "updatedAt": 1794142452910
   },
   {
     "id": "mock-win-01",
@@ -171,8 +171,8 @@
     ],
     "notes": "Windows OpenSSH 模拟机：支持 PowerShell Get-Process, Get-Service, Get-Volume, C:/ 盘符 SFTP",
     "favorite": true,
-    "createdAt": 1794035850498,
-    "updatedAt": 1794035850498
+    "createdAt": 1794142452910,
+    "updatedAt": 1794142452910
   },
   {
     "id": "mock-switch-huawei",
@@ -195,8 +195,8 @@
     ],
     "notes": "华为 VRP 交换机：支持 <Huawei> 提示符, display version/interface, Telnet IAC 协商",
     "favorite": false,
-    "createdAt": 1794035850498,
-    "updatedAt": 1794035850498
+    "createdAt": 1794142452910,
+    "updatedAt": 1794142452910
   },
   {
     "id": "mock-switch-cisco",
@@ -219,8 +219,8 @@
     ],
     "notes": "思科 IOS 路由器：支持 Router# 提示符, show version, show ip int brief",
     "favorite": false,
-    "createdAt": 1794035850498,
-    "updatedAt": 1794035850498
+    "createdAt": 1794142452910,
+    "updatedAt": 1794142452910
   },
   {
     "id": "mock-bmc-dell",
@@ -245,8 +245,8 @@
     ],
     "notes": "Dell iDRAC9 Redfish 带外管理：支持开机引导项设定 (Boot Override)、动态温度/风扇/功耗、SEL 日志",
     "favorite": true,
-    "createdAt": 1794035850498,
-    "updatedAt": 1794035850498
+    "createdAt": 1794142452910,
+    "updatedAt": 1794142452910
   },
   {
     "id": "mock-bmc-hpe",
@@ -271,8 +271,8 @@
     ],
     "notes": "HPE iLO5 Redfish 带外管理",
     "favorite": false,
-    "createdAt": 1794035850498,
-    "updatedAt": 1794035850498
+    "createdAt": 1794142452910,
+    "updatedAt": 1794142452910
   },
   {
     "id": "mock-bastion-jump",
@@ -293,7 +293,31 @@
     ],
     "notes": "SSH 跳板机：支持端口转发与代理穿透",
     "favorite": false,
-    "createdAt": 1794035850498,
-    "updatedAt": 1794035850498
+    "createdAt": 1794142452910,
+    "updatedAt": 1794142452910
+  },
+  {
+    "id": "mock-vnc-desktop",
+    "name": "🖥️ 虚拟图形工作站 (Pure VNC Desktop)",
+    "host": "127.0.0.1",
+    "port": 5900,
+    "vncPort": 5900,
+    "username": "vnc",
+    "authType": "password",
+    "targetType": "linux",
+    "protocol": "vnc",
+    "protocols": [
+      "vnc"
+    ],
+    "tags": [
+      "模拟环境",
+      "VNC",
+      "远程桌面",
+      "图形化"
+    ],
+    "notes": "纯 VNC 虚拟桌面模拟机：端口 5900，免密码，支持键鼠交互、Ctrl+Alt+Del 及快捷键菜单测试",
+    "favorite": true,
+    "createdAt": 1794142452910,
+    "updatedAt": 1794142452910
   }
 ]

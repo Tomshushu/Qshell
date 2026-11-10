@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useAppStore } from "@/store";
 import type { WorkspaceModule } from "@/types";
 import { useTranslation } from "@/i18n";
-import { deviceModuleLabelKey, getServerConnectionFlags, isModuleVisibleForServer } from "@/services/connection-targets";
+import { deviceModuleLabelKey, getServerConnectionFlags, isModuleVisibleForServer, isPureVncServer } from "@/services/connection-targets";
 import {
   Terminal,
   Wrench,
@@ -54,6 +54,7 @@ const modules: {
   { key: "terminal", icon: Terminal },
   { key: "files", icon: FolderOpen },
   { key: "rdp", icon: Monitor },
+  { key: "vnc", icon: Monitor },
   { key: "docker", icon: Container },
   { key: "services", icon: Wrench },
   { key: "processes", icon: Cpu },
@@ -235,40 +236,42 @@ export function ModuleTabs({
           </button>
         ))}
 
-        {/* 文本格式化器：全局浮动弹框入口 */}
-        <button
-          className={cn(
-            "theme-module-item flex flex-shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap text-[11px] rounded-lg transition-all active:scale-[0.97]",
-            vertical
-              ? "w-full justify-start px-3.5 py-2 is-vertical"
-              : "mx-0.5 my-0.5 px-2.5 py-1 is-horizontal",
-            isFormatterOpen && "is-active",
-          )}
-          onClick={async () => {
-            if (!isFormatterOpen) {
-              let clip = "";
-              try {
-                if (navigator.clipboard?.readText) {
-                  clip = await navigator.clipboard.readText();
+        {/* 文本格式化器：全局浮动弹框入口（仅在支持 Shell/终端的环境显示，纯 VNC / 纯 RDP 模式下隐藏） */}
+        {!isPureVncServer(server) && !flags.isRdpServer && (
+          <button
+            className={cn(
+              "theme-module-item flex flex-shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap text-[11px] rounded-lg transition-all active:scale-[0.97]",
+              vertical
+                ? "w-full justify-start px-3.5 py-2 is-vertical"
+                : "mx-0.5 my-0.5 px-2.5 py-1 is-horizontal",
+              isFormatterOpen && "is-active",
+            )}
+            onClick={async () => {
+              if (!isFormatterOpen) {
+                let clip = "";
+                try {
+                  if (navigator.clipboard?.readText) {
+                    clip = await navigator.clipboard.readText();
+                  }
+                } catch {
+                  /* ignore */
                 }
-              } catch {
-                /* ignore */
-              }
-              if (clip && clip.trim().length > 0 && clip.trim().length <= 50000) {
-                openTextFormatter(clip.trim());
+                if (clip && clip.trim().length > 0 && clip.trim().length <= 50000) {
+                  openTextFormatter(clip.trim());
+                } else {
+                  toggleTextFormatter();
+                }
               } else {
                 toggleTextFormatter();
               }
-            } else {
-              toggleTextFormatter();
-            }
-            playSound(isFormatterOpen ? SoundType.Close : SoundType.Open);
-          }}
-          title={t("fmt_dialog_title")}
-        >
-          <Braces className="h-3.5 w-3.5 flex-shrink-0 opacity-85 text-sky-400" />
-          <span className="truncate max-w-[120px]">{t("fmt_short_label")}</span>
-        </button>
+              playSound(isFormatterOpen ? SoundType.Close : SoundType.Open);
+            }}
+            title={t("fmt_dialog_title")}
+          >
+            <Braces className="h-3.5 w-3.5 flex-shrink-0 opacity-85 text-sky-400" />
+            <span className="truncate max-w-[120px]">{t("fmt_short_label")}</span>
+          </button>
+        )}
 
         {/* 串口专属控制组（直插顶栏单行，零遮挡终端画布） */}
         {flags.isSerialServer && serialToolbar && !vertical && (
@@ -460,7 +463,7 @@ export function ModuleTabs({
             </DropdownMenu>
           </div>
         )}
-        {activeModule !== "bmc" && !flags.isSerialServer && server?.protocol !== "rdp" && (
+        {activeModule !== "bmc" && activeModule !== "vnc" && !flags.isSerialServer && server?.protocol !== "rdp" && (
           <>
             {!isConnected ? (
               <Button

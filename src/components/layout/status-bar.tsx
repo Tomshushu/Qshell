@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '@/store'
-import { Wifi, WifiOff, Server, Copy, Check, Monitor } from 'lucide-react'
+import { Wifi, WifiOff, Server, Copy, Check, Monitor, Zap } from 'lucide-react'
 import { useTranslation } from '@/i18n'
 import { sshService } from '@/services/ssh-service'
 import { collectGroupIds } from '@/utils/split-layout'
@@ -8,7 +8,7 @@ import { playSound, SoundType } from '@/lib/sound'
 import { extractBaseServerId } from '@/services/ssh-connection-state'
 import { cn } from '@/lib/utils'
 import { StatusBarMetricsPill } from '@/components/workspace/floating-metrics-hud'
-import { getServerConnectionFlags, deviceStatusKeys } from '@/services/connection-targets'
+import { getServerConnectionFlags, deviceStatusKeys, isPureVncServer } from '@/services/connection-targets'
 
 /** 复制成功对勾的显示时长（ms） */
 const COPY_FEEDBACK_MS = 1500
@@ -66,10 +66,14 @@ export function StatusBar() {
   const deviceStatus = deviceStatusKeys(server?.targetType)
   const isRdpServer = serverFlags.isRdpServer
   const isSerialServer = serverFlags.isSerialServer
+  const isTelnetServer = serverFlags.isTelnetServer || server?.protocol === 'telnet'
+  const isFtpServer = server?.protocol === 'ftp'
+  const isVncMode = activeTab?.module === 'vnc' || isPureVncServer(server)
   const supportsMetrics = serverFlags.supportsMetrics
+  const isDashboard = !activeTab || !serverId
 
   const connId =
-    activeTab?.id && serverId && !isSerialServer && !isRdpServer && !isBmcServer
+    activeTab?.id && serverId && !isSerialServer && !isRdpServer && !isBmcServer && !isVncMode
       ? `ws:${serverId}:${activeTab.id}`
       : serverId
   const isConnected = connId
@@ -208,6 +212,12 @@ export function StatusBar() {
             <span className="truncate">{t('rdp_ready')} · {server?.host || '?'}</span>
             {copyIpButton}
           </>
+        ) : isVncMode ? (
+          <>
+            <Monitor className="h-3 w-3 text-primary flex-shrink-0" />
+            <span className="truncate">VNC · {server?.host || '?'}</span>
+            {copyIpButton}
+          </>
         ) : isSerialServer ? (
           <>
             <WifiOff className="h-3 w-3 text-muted-foreground flex-shrink-0" />
@@ -220,44 +230,77 @@ export function StatusBar() {
             <span className="truncate">{t('status_disconnected')}</span>
           </>
         ) : (
-          <span className="truncate">{t('status_ready')}</span>
+          <>
+            <Server className="h-3 w-3 text-muted-foreground/60 flex-shrink-0" />
+            <span className="truncate">
+              {t('status_ready')} · {t('dashboard_filter_all') || '全部主机'} {servers.length}
+              {connectedCount > 0 && ` (${t('status_connected_count', { count: connectedCount })})`}
+            </span>
+          </>
         )}
       </div>
 
-      {isSerialServer && (
-        <span
-          className="hidden items-center gap-2 font-mono tabular-nums text-[10px] sm:flex"
-          title={`${t('serial_rx_total')}: ${formatSerialBytes(serialStats.rxBytes)} · ${t('serial_tx_total')}: ${formatSerialBytes(serialStats.txBytes)}`}
-        >
-          <span className={serialStats.rxRate > 0 ? 'text-emerald-500' : 'text-muted-foreground/55'}>
-            RX {formatSerialBytes(serialStats.rxRate)}/s
+      {/* 右侧工具胶囊组（快捷命令、资源监控、协议模式），紧凑微距排布 */}
+      <div className="flex items-center gap-1.5 shrink-0">
+        {isSerialServer && (
+          <span
+            className="hidden items-center gap-2 font-mono tabular-nums text-[10px] sm:flex mr-1"
+            title={`${t('serial_rx_total')}: ${formatSerialBytes(serialStats.rxBytes)} · ${t('serial_tx_total')}: ${formatSerialBytes(serialStats.txBytes)}`}
+          >
+            <span className={cn('inline-flex items-center w-[76px] tabular-nums truncate', serialStats.rxRate > 0 ? 'text-emerald-500' : 'text-muted-foreground/55')}>
+              RX {formatSerialBytes(serialStats.rxRate)}/s
+            </span>
+            <span className={cn('inline-flex items-center w-[76px] tabular-nums truncate', serialStats.txRate > 0 ? 'text-sky-500' : 'text-muted-foreground/55')}>
+              TX {formatSerialBytes(serialStats.txRate)}/s
+            </span>
           </span>
-          <span className={serialStats.txRate > 0 ? 'text-sky-500' : 'text-muted-foreground/55'}>
-            TX {formatSerialBytes(serialStats.txRate)}/s
+        )}
+
+        {/* 快捷命令底栏触发按钮（位于资源监控左侧） */}
+        {isConnected && !isSftpTab && (
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent('qshell:toggle-quick-commands'))}
+            className="flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-medium rounded border border-border/50 bg-muted/30 hover:bg-muted/80 text-foreground/80 hover:text-foreground transition-all duration-150 cursor-pointer shadow-2xs active:scale-95 flex-shrink-0"
+            title={`${t('quick_cmd_bar') || '快捷命令'} (Alt+C)`}
+          >
+            <Zap className="h-3 w-3 text-amber-500 fill-amber-500/20" />
+            <span>{t('quick_cmd_bar') || '快捷命令'}</span>
+            <kbd className="hidden sm:inline-block text-[9px] font-mono text-muted-foreground/70 px-1 py-0.2 rounded bg-background/50 border border-border/40">
+              Alt+C
+            </kbd>
+          </button>
+        )}
+
+        {/* 实时监控底栏触发胶囊 */}
+        {isConnected && !isSftpTab && !isSerialServer && !isRdpServer && !isBmcServer && !isVncMode && supportsMetrics && connId && (
+          <StatusBarMetricsPill
+            serverId={connId}
+            isConnected={isConnected}
+          />
+        )}
+
+        {/* Workspace mode（仅在具体会话标签页下展示协议模式，首页/仪表盘不展示任何模式胶囊） */}
+        {!isDashboard && (
+          <span className="text-muted-foreground/70 flex-shrink-0 font-mono text-[10px] uppercase tracking-wider bg-muted/40 border border-border/40 px-1.5 py-0.5 rounded shadow-2xs">
+            {isSftpTab
+              ? 'SFTP'
+              : isBmcServer
+                ? t(deviceStatus.modeKey)
+                : isRdpServer
+                  ? t('module_rdp')
+                  : isVncMode
+                    ? 'VNC'
+                    : isSerialServer
+                      ? t('status_serial_mode')
+                      : isTelnetServer
+                        ? 'TELNET'
+                        : isFtpServer
+                          ? 'FTP'
+                          : t('status_ssh_mode')}
           </span>
-        </span>
-      )}
-
-      {/* 实时监控底栏触发胶囊 */}
-      {isConnected && !isSftpTab && !isSerialServer && !isRdpServer && !isBmcServer && supportsMetrics && connId && (
-        <StatusBarMetricsPill
-          serverId={connId}
-          isConnected={isConnected}
-        />
-      )}
-
-      {/* Workspace mode */}
-      <span className="text-muted-foreground/70 flex-shrink-0 font-mono text-[10px] uppercase tracking-wider bg-muted/40 border border-border/40 px-1.5 py-0.5 rounded shadow-2xs">
-        {isSftpTab
-          ? 'SFTP'
-          : isBmcServer
-            ? t(deviceStatus.modeKey)
-            : isRdpServer
-              ? t('module_rdp')
-              : isSerialServer
-                ? t('status_serial_mode')
-                : t('status_ssh_mode')}
-      </span>
+        )}
+      </div>
     </div>
   )
 }

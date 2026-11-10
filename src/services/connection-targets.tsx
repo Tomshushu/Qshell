@@ -21,7 +21,7 @@ import {
   Boxes,
 } from 'lucide-react'
 import type { ComponentType } from 'react'
-import type { WorkspaceModule } from '@/types'
+import type { WorkspaceModule, FileTransferConfig } from '@/types'
 import { WindowsIcon } from '@/components/ui/windows-icon'
 
 // ============================================================================
@@ -116,13 +116,13 @@ export interface ProtocolSpec {
 
 /** Linux 全部模块（含统信 UOS、银河麒麟等 Linux 发行版） */
 const LINUX_MODULES: WorkspaceModule[] = [
-  'overview', 'terminal', 'files', 'docker',
+  'overview', 'terminal', 'files', 'vnc', 'docker',
   'services', 'processes', 'network', 'ports',
 ]
 
-/** Windows 通过 OpenSSH 连接时复用标准运维工作区；RDP 仍显示独立桌面模块。 */
+/** Windows 通过 OpenSSH 连接时复用标准运维工作区；RDP / VNC 显示独立桌面模块。 */
 const WINDOWS_MODULES: WorkspaceModule[] = [
-  'terminal', 'overview', 'files', 'services', 'processes', 'network', 'ports', 'rdp',
+  'terminal', 'overview', 'files', 'services', 'processes', 'network', 'ports', 'rdp', 'vnc',
 ]
 
 /**
@@ -141,7 +141,7 @@ export const CONNECTION_TARGETS: TargetTypeSpec[] = [
     defaultUsername: 'root',
     defaultAuthType: 'password',
     availableModules: LINUX_MODULES,
-    supportedProtocols: ['ssh'],
+    supportedProtocols: ['ssh', 'vnc'],
     enabled: true,
   },
   {
@@ -152,7 +152,7 @@ export const CONNECTION_TARGETS: TargetTypeSpec[] = [
     defaultUsername: 'root',
     defaultAuthType: 'password',
     availableModules: LINUX_MODULES,
-    supportedProtocols: ['ssh'],
+    supportedProtocols: ['ssh', 'vnc'],
     enabled: false,
   },
   {
@@ -163,7 +163,7 @@ export const CONNECTION_TARGETS: TargetTypeSpec[] = [
     defaultUsername: 'root',
     defaultAuthType: 'password',
     availableModules: LINUX_MODULES,
-    supportedProtocols: ['ssh'],
+    supportedProtocols: ['ssh', 'vnc'],
     enabled: false,
   },
   {
@@ -175,7 +175,7 @@ export const CONNECTION_TARGETS: TargetTypeSpec[] = [
     defaultUsername: 'Administrator',
     defaultAuthType: 'password',
     availableModules: WINDOWS_MODULES,
-    supportedProtocols: ['rdp', 'ssh'],
+    supportedProtocols: ['rdp', 'ssh', 'vnc'],
     enabled: true,
   },
   {
@@ -435,6 +435,7 @@ export interface ServerConnectionFlags {
   isWindowsServer: boolean
   isSerialServer: boolean
   isRdpServer: boolean
+  isVncServer: boolean
   isTelnetServer: boolean
   isNetworkServer: boolean
   supportsMetrics: boolean
@@ -470,6 +471,7 @@ export function getServerConnectionFlags(
     // 刻意不用 connectionKind === 'external'：那会把 winrm / vnc 一并判成 RDP，
     // 扩大排除范围并改变 connId / 模块可见性。
     isRdpServer: protocol === 'rdp' || targetType === 'rdp',
+    isVncServer: protocol === 'vnc',
     // 精确等价于 protocol === 'telnet'：不夹带其他形态，供终端三路分派使用
     isTelnetServer: connectionKind === 'telnet',
     isNetworkServer: spec.id === 'network',
@@ -545,31 +547,54 @@ export function getServerProtocols(
  *   资产即使残留 SSH 端口也不会误开终端）；
  * - 多协议资产仍保持「SSH 优先」的历史优先级。
  */
-export type ServerOpenAction = 'terminal' | 'bmc' | 'rdp' | 'no-port'
+export type ServerOpenAction = 'terminal' | 'bmc' | 'rdp' | 'vnc' | 'no-port'
 
 export interface ServerOpenInput extends ServerProtocolSource {
   targetType?: string | null
   protocol?: string | null
   port?: number | null
   rdpPort?: number | null
+  vncPort?: number | null
 }
 
 export function resolveServerOpenAction(server: ServerOpenInput): ServerOpenAction {
   const flags = getServerConnectionFlags(server.targetType, server.protocol)
+  const declared = getServerProtocols(server, { allowEmpty: true })
   if (flags.isWindowsServer) {
-    const declared = getServerProtocols(server, { allowEmpty: true })
     const hasSshPort = Boolean(server.port && server.port > 0)
     const hasRdpPort = Boolean(server.rdpPort && server.rdpPort > 0)
+    const hasVncPort = Boolean(server.vncPort && server.vncPort > 0)
     const hasSsh = hasSshPort && (declared.length === 0 || declared.includes('ssh'))
     const hasRdp = hasRdpPort && (declared.length === 0 || declared.includes('rdp'))
+    const hasVnc = (hasVncPort || server.protocol === 'vnc') && declared.includes('vnc')
     if (hasSsh) return 'terminal'
     if (hasRdp) return 'rdp'
+    if (hasVnc) return 'vnc'
     return 'no-port'
   }
   // Phase 2-C：设备管理目标统一走「设备管理」工作台容器（BMC / ESXi / K8s），
   // 都不建立 SSH 连接；保留 'bmc' 动作值以复用既有四处打开分派。
   if (flags.isDeviceManagedServer) return 'bmc'
+  if (server.protocol === 'vnc' || isPureVncServer(server) || (declared.length > 0 && !declared.includes('ssh') && declared.includes('vnc'))) {
+    return 'vnc'
+  }
   return 'terminal'
+}
+
+/**
+ * 判断服务器是否为「纯 VNC」目标（仅启用了 VNC，未启用任何 SSH / Telnet / 串口连接）
+ */
+export function isPureVncServer(
+  server?: (ServerProtocolSource & { targetType?: string | null; protocol?: string | null }) | null,
+): boolean {
+  if (!server) return false
+  const flags = getServerConnectionFlags(server.targetType, server.protocol)
+  if (flags.isDeviceManagedServer || flags.isSerialServer || flags.isNetworkServer) return false
+  const protocols = getServerProtocols(server)
+  const hasVnc = protocols.includes('vnc') || server.protocol === 'vnc' || flags.isVncServer
+  if (!hasVnc) return false
+  const hasSshOrTerminal = protocols.includes('ssh') || protocols.includes('telnet') || protocols.includes('serial')
+  return !hasSshOrTerminal
 }
 
 /**
@@ -585,6 +610,55 @@ export function resolveServerOpenAction(server: ServerOpenInput): ServerOpenActi
 export interface ModuleVisibilityInput extends ServerProtocolSource {
   targetType?: string | null
   protocol?: string | null
+  fileTransferConfig?: string | null
+}
+
+/**
+ * 解析服务器内联的 fileTransferConfig JSON 字符串
+ */
+export function parseFileTransferConfig(raw?: string | null): FileTransferConfig | null {
+  if (!raw || typeof raw !== 'string' || !raw.trim()) return null
+  try {
+    const parsed = JSON.parse(raw) as Partial<FileTransferConfig>
+    if (!parsed || typeof parsed !== 'object') return null
+    const proto = String(parsed.protocol || 'sftp').trim().toLowerCase()
+    if (proto !== 'ftp' && proto !== 'ftps' && proto !== 'sftp') return null
+    return {
+      protocol: proto as 'sftp' | 'ftp' | 'ftps',
+      port: typeof parsed.port === 'number' ? parsed.port : undefined,
+      tlsMode: parsed.tlsMode === 'implicit' ? 'implicit' : 'explicit',
+      useServerCredentials: parsed.useServerCredentials !== false,
+      anonymous: Boolean(parsed.anonymous),
+      username: typeof parsed.username === 'string' ? parsed.username : '',
+      password: typeof parsed.password === 'string' ? parsed.password : '',
+      hasPassword: Boolean(parsed.hasPassword),
+      transferMode: parsed.transferMode === 'active' ? 'active' : 'passive',
+      encoding: parsed.encoding === 'gbk' ? 'gbk' : 'utf-8',
+      allowInvalidCerts: parsed.allowInvalidCerts !== false,
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 获取当前服务器使用的文件传输协议（默认 'sftp'）
+ */
+export function getServerFileTransferProtocol(
+  server?: { fileTransferConfig?: string | null } | null,
+): 'sftp' | 'ftp' | 'ftps' {
+  const cfg = parseFileTransferConfig(server?.fileTransferConfig)
+  return cfg?.protocol || 'sftp'
+}
+
+/**
+ * 判断服务器是否配置了 FTP 或 FTPS 文件传输
+ */
+export function hasFtpFileTransfer(
+  server?: { fileTransferConfig?: string | null } | null,
+): boolean {
+  const proto = getServerFileTransferProtocol(server)
+  return proto === 'ftp' || proto === 'ftps'
 }
 
 export function isModuleVisibleForServer(
@@ -594,10 +668,16 @@ export function isModuleVisibleForServer(
   if (!isModuleAvailable(server.targetType, module)) return false
   const flags = getServerConnectionFlags(server.targetType, server.protocol)
   const protocols = getServerProtocols(server)
-  // 旧数据 protocols 缺省 / 单元素时保持「纯 RDP 只显示 rdp」的历史行为
+  const hasFtp = hasFtpFileTransfer(server)
+  // 旧数据 protocols 缺省 / 单元素时保持「纯 RDP 只显示 rdp」的历史行为（若显式开启了 FTP/FTPS，则额外展示文件模块）
   const declared = getServerProtocols(server, { allowEmpty: true })
-  if (flags.isRdpServer && declared.length <= 1) return module === 'rdp'
+  if (flags.isRdpServer && declared.length <= 1) return module === 'rdp' || (module === 'files' && hasFtp)
+  // 纯 VNC 模式：仅展示 vnc 模块（若显式开启了 FTP/FTPS，则额外展示文件模块），彻底隐藏终端与 SSH 运维模块
+  if (isPureVncServer(server)) {
+    return module === 'vnc' || (module === 'files' && hasFtp)
+  }
   if (module === 'rdp') return protocols.includes('rdp')
+  if (module === 'vnc') return protocols.includes('vnc')
   if (module === 'terminal') {
     return protocols.includes('ssh')
       || protocols.includes('telnet')
@@ -605,7 +685,8 @@ export function isModuleVisibleForServer(
       || flags.isSerialServer
       || flags.isNetworkServer
   }
-  if (module === 'files' || module === 'forward') return protocols.includes('ssh')
+  if (module === 'files') return protocols.includes('ssh') || hasFtp
+  if (module === 'forward') return protocols.includes('ssh')
   return true
 }
 
@@ -620,6 +701,7 @@ export interface ProtocolInferenceInput {
   protocol?: string | null
   sshPort?: string | number | null
   rdpPort?: string | number | null
+  vncPort?: string | number | null
 }
 
 export function inferServerProtocols(input: ProtocolInferenceInput): string[] {
@@ -627,8 +709,15 @@ export function inferServerProtocols(input: ProtocolInferenceInput): string[] {
     const list: string[] = []
     if (String(input.sshPort ?? '').trim()) list.push('ssh')
     if (String(input.rdpPort ?? '').trim()) list.push('rdp')
-    // 两个端口都为空时保存会被校验拦下，这里仅给展示一个稳定值
+    if (String(input.vncPort ?? '').trim()) list.push('vnc')
+    // 端口都为空时保存会被校验拦下，这里仅给展示一个稳定值
     return list.length > 0 ? list : ['rdp']
+  }
+  if (input.targetType === 'linux' && input.vncPort !== undefined) {
+    const list: string[] = []
+    if (String(input.sshPort ?? '').trim()) list.push('ssh')
+    if (String(input.vncPort ?? '').trim()) list.push('vnc')
+    return list.length > 0 ? list : ['ssh']
   }
   return [input.protocol || 'ssh']
 }

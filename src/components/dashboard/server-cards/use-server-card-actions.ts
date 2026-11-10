@@ -7,7 +7,7 @@ import { playSound, SoundType } from '@/lib/sound'
 import { friendlyError } from '@/lib/error-messages'
 import { sshService } from '@/services/ssh-service'
 import { backend } from '@/services/api'
-import { resolveServerOpenAction } from '@/services/connection-targets'
+import { getServerProtocols, resolveServerOpenAction } from '@/services/connection-targets'
 
 export function useServerCardActions({
   server,
@@ -22,6 +22,12 @@ export function useServerCardActions({
   const updateServer = useAppStore(s => s.updateServer)
   const [copied, setCopied] = useState(false)
   const copiedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const hasVnc = getServerProtocols(server).includes('vnc')
+
+  const handleOpenVnc = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation()
+    openTab(server.id, server.name, 'vnc')
+  }, [server.id, server.name, openTab])
 
   const handleCopyIp = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -76,6 +82,8 @@ export function useServerCardActions({
     } else if (action === 'bmc') {
       // BMC 双击默认进入带外管理界面（Redfish，不依赖 SSH）
       openTab(server.id, server.name, 'bmc')
+    } else if (action === 'vnc') {
+      openTab(server.id, server.name, 'vnc')
     } else if (action === 'rdp') {
       void (async () => {
         try {
@@ -91,14 +99,16 @@ export function useServerCardActions({
     } else {
       toast.warning(t('server_no_port') || '未配置连接端口')
     }
-  }, [server.id, server.name, server.targetType, server.protocol, server.protocols, server.port, server.rdpPort, openTab, toast, t])
+  }, [server.id, server.name, server.targetType, server.protocol, server.protocols, server.port, server.rdpPort, server.vncPort, openTab, toast, t])
 
   return {
     t,
     copied,
+    hasVnc,
     handleCopyIp,
     handleToggleFavorite,
     handleClick,
     handleDoubleClick,
+    handleOpenVnc,
   }
 }

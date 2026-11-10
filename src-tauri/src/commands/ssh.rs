@@ -1652,9 +1652,11 @@ pub async fn ssh_test_connect_with_config(
                             }
                         }
                     }
-                    if auth_type == "privateKey" && private_key_path.as_deref().unwrap_or("").is_empty() {
-                        // 注意：使用 clone 而非 move，避免后续 certificate 分支再次访问字段时 borrow-after-move
-                        private_key_path = original_server.private_key_path.clone();
+                    if auth_type == "privateKey" {
+                        if private_key_path.as_deref().unwrap_or("").is_empty() {
+                            // 注意：使用 clone 而非 move，避免后续 certificate 分支再次访问字段时 borrow-after-move
+                            private_key_path = original_server.private_key_path.clone();
+                        }
                         if private_key_passphrase.as_deref().unwrap_or("").is_empty() {
                             if let Some(ref enc) = original_server.private_key_passphrase {
                                 if !enc.is_empty() {
@@ -1680,12 +1682,12 @@ pub async fn ssh_test_connect_with_config(
                             // 注意：此处使用 clone() 而非 move，避免编译器跨分支借用检查失败
                             // （privateKey 分支也会用到 original_server.private_key_path）
                             private_key_path = original_server.private_key_path.clone();
-                            if private_key_passphrase.as_deref().unwrap_or("").is_empty() {
-                                if let Some(ref enc) = original_server.private_key_passphrase {
-                                    if !enc.is_empty() {
-                                        if let Ok(dec) = crypto::decrypt_password(enc, db::master_key()) {
-                                            private_key_passphrase = Some(dec);
-                                        }
+                        }
+                        if private_key_passphrase.as_deref().unwrap_or("").is_empty() {
+                            if let Some(ref enc) = original_server.private_key_passphrase {
+                                if !enc.is_empty() {
+                                    if let Ok(dec) = crypto::decrypt_password(enc, db::master_key()) {
+                                        private_key_passphrase = Some(dec);
                                     }
                                 }
                             }

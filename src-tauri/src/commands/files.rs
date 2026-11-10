@@ -598,6 +598,20 @@ pub async fn files_set_exclusion_config(
     Ok(())
 }
 
+/// 全局符号链接（软链接）传输策略：0=Skip(跳过，默认安全), 1=Follow(跟随解析内容)
+pub(crate) static SYMLINK_POLICY: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// 设置 SFTP 传输软链接处理策略（"skip" | "follow"）
+#[tauri::command]
+pub async fn files_set_symlink_policy(policy: String) -> Result<(), String> {
+    let val = match policy.to_ascii_lowercase().as_str() {
+        "follow" => 1,
+        _ => 0, // default "skip"
+    };
+    SYMLINK_POLICY.store(val, Ordering::Relaxed);
+    Ok(())
+}
+
 /// 递归搜索远程文件
 /// Linux 执行 `find <dir> -name '*<pattern>*' -type f`，Windows 执行 `Get-ChildItem -Recurse`。
 /// 返回匹配的文件路径列表（JSON 字符串），限制结果数量为 `max_results`。
@@ -679,10 +693,141 @@ async fn to_target_path(server_id: &str, path: &str) -> String {
     }
 }
 
+/// 测试 FTP / FTPS 连通性、TLS 握手与登录认证（支持新建与编辑模式自动回退已存密码）
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FtpTestConfigInput {
+    pub host: String,
+    pub port: u16,
+    pub protocol: String,
+    #[serde(default)]
+    pub tls_mode: Option<String>,
+    #[serde(default)]
+    pub anonymous: bool,
+    #[serde(default)]
+    pub use_server_credentials: bool,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+    #[serde(default)]
+    pub server_username: String,
+    #[serde(default)]
+    pub server_password: String,
+    #[serde(default)]
+    pub server_id: Option<String>,
+    #[serde(default)]
+    pub transfer_mode: Option<String>,
+    #[serde(default)]
+    pub encoding: Option<String>,
+    #[serde(default)]
+    pub allow_invalid_certs: bool,
+}
+
+#[tauri::command]
+pub async fn files_test_ftp_connection(config: FtpTestConfigInput) -> Result<OperationResult, String> {
+    let saved_server = if let Some(ref sid) = config.server_id {
+        if !sid.trim().is_empty() {
+            crate::commands::ssh::load_server_config(sid).await.ok()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let (username, password) = if config.anonymous {
+        ("anonymous".to_string(), "anonymous@qshell.local".to_string())
+    } else if config.use_server_credentials {
+        let user = if !config.server_username.trim().is_empty() {
+            config.server_username.trim().to_string()
+        } else {
+            saved_server
+                .as_ref()
+                .map(|s| s.username.clone())
+                .unwrap_or_else(|| "root".to_string())
+        };
+        let pass = if !config.server_password.is_empty() {
+            config.server_password.clone()
+        } else {
+            saved_server
+                .as_ref()
+                .and_then(|s| s.password.clone())
+                .unwrap_or_default()
+        };
+        (user, pass)
+    } else {
+        let user = config.username.trim().to_string();
+        let pass = if !config.password.is_empty() {
+            config.password.clone()
+        } else {
+            saved_server
+                .as_ref()
+                .and_then(|s| s.file_transfer_config.as_deref())
+                .and_then(crate::ftp::parse_file_transfer_config)
+                .map(|c| c.password)
+                .unwrap_or_default()
+        };
+        (user, pass)
+    };
+
+    let proto = config.protocol.trim().to_lowercase();
+    let tls_mode = config
+        .tls_mode
+        .unwrap_or_else(|| "explicit".to_string())
+        .to_lowercase();
+    let is_ftps = proto == "ftps";
+    let implicit_tls = is_ftps && tls_mode == "implicit";
+    let port = if config.port > 0 {
+        config.port
+    } else if implicit_tls {
+        990
+    } else {
+        21
+    };
+
+    let resolved = crate::ftp::ResolvedFtpConfig {
+        host: config.host.trim().to_string(),
+        port,
+        is_ftps,
+        implicit_tls,
+        username,
+        password,
+        passive_mode: !config
+            .transfer_mode
+            .unwrap_or_else(|| "passive".to_string())
+            .trim()
+            .eq_ignore_ascii_case("active"),
+        use_gbk: config
+            .encoding
+            .unwrap_or_else(|| "utf-8".to_string())
+            .trim()
+            .eq_ignore_ascii_case("gbk"),
+        allow_invalid_certs: config.allow_invalid_certs,
+        timeout_secs: 15,
+    };
+
+    match crate::ftp::ftp_test_connection(resolved).await {
+        Ok(msg) => Ok(OperationResult {
+            success: true,
+            error: None,
+            message: Some(msg),
+            id: None,
+            os_type: None,
+            os_info: None,
+        }),
+        Err(e) => Ok(OperationResult::fail(e)),
+    }
+}
+
 /// 列出远程目录内容
 /// 返回 JSON 字符串（FileEntry[]）
 #[tauri::command]
 pub async fn files_list(server_id: String, dir_path: String) -> Result<String, String> {
+    if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(&server_id).await {
+        let entries = crate::ftp::ftp_list_dir(ftp_cfg, &dir_path).await?;
+        return serde_json::to_string(&entries).map_err(|e| format!("Serialize error: {}", e));
+    }
     let target_type = load_target_type(&server_id).await;
     let entries = if target_type.eq_ignore_ascii_case("windows") {
         if dir_path == "/" {
@@ -725,6 +870,9 @@ pub async fn files_list(server_id: String, dir_path: String) -> Result<String, S
 /// Linux 无盘符概念，直接返回空数组
 #[tauri::command]
 pub async fn files_list_drives(server_id: String) -> Result<String, String> {
+    if crate::ftp::is_ftp_backed_server(&server_id).await {
+        return Ok("[]".to_string());
+    }
     let target_type = load_target_type(&server_id).await;
     if !target_type.eq_ignore_ascii_case("windows") {
         return Ok(serde_json::to_string(&Vec::<String>::new())
@@ -754,6 +902,15 @@ pub async fn files_diagnose_sftp(server_id: String) -> Result<String, String> {
 /// 读取远程文件内容
 #[tauri::command]
 pub async fn files_read(server_id: String, path: String) -> Result<CommandResult, String> {
+    if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(&server_id).await {
+        return match crate::ftp::ftp_read_bytes(ftp_cfg, &path, 5 * 1024 * 1024).await {
+            Ok(bytes) => {
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+                Ok(CommandResult::ok(text))
+            }
+            Err(e) => Ok(CommandResult::err(e)),
+        };
+    }
     let target_type = load_target_type(&server_id).await;
     let content_result = if target_type.eq_ignore_ascii_case("windows") {
         let win_path = crate::targets::windows::validators::posix_to_windows_path(&path);
@@ -781,6 +938,11 @@ pub async fn files_read(server_id: String, path: String) -> Result<CommandResult
 /// 路径校验按目标类型分发：Windows 允许盘符路径，其余沿用 POSIX。
 #[tauri::command]
 pub async fn files_read_binary(server_id: String, path: String) -> Result<String, String> {
+    if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(&server_id).await {
+        use base64::Engine as _;
+        let bytes = crate::ftp::ftp_read_bytes(ftp_cfg, &path, 10 * 1024 * 1024).await?;
+        return Ok(base64::engine::general_purpose::STANDARD.encode(&bytes));
+    }
     // 按目标类型校验路径
     let target_type = crate::commands::ssh::load_server_config(&server_id)
         .await
@@ -806,6 +968,21 @@ pub async fn files_write(
     path: String,
     content: String,
 ) -> Result<CommandResult, String> {
+    if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(&server_id).await {
+        use base64::Engine as _;
+        let bytes = if let Some(b64) = content.strip_prefix("::base64::") {
+            match base64::engine::general_purpose::STANDARD.decode(b64.trim()) {
+                Ok(b) => b,
+                Err(e) => return Ok(CommandResult::err(format!("Base64 decode failed: {}", e))),
+            }
+        } else {
+            content.into_bytes()
+        };
+        return match crate::ftp::ftp_write_bytes(ftp_cfg, &path, &bytes).await {
+            Ok(()) => Ok(CommandResult::ok("File written successfully")),
+            Err(e) => Ok(CommandResult::err(e)),
+        };
+    }
     let target_type = load_target_type(&server_id).await;
     let result = if target_type.eq_ignore_ascii_case("windows") {
         let win_path = crate::targets::windows::validators::posix_to_windows_path(&path);
@@ -822,6 +999,12 @@ pub async fn files_write(
 /// 创建远程目录
 #[tauri::command]
 pub async fn files_mkdir(server_id: String, path: String) -> Result<CommandResult, String> {
+    if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(&server_id).await {
+        return match crate::ftp::ftp_mkdir(ftp_cfg, &path).await {
+            Ok(()) => Ok(CommandResult::ok("Directory created")),
+            Err(e) => Ok(CommandResult::err(e)),
+        };
+    }
     let target_type = load_target_type(&server_id).await;
     let result = if target_type.eq_ignore_ascii_case("windows") {
         let win_path = crate::targets::windows::validators::posix_to_windows_path(&path);
@@ -838,6 +1021,12 @@ pub async fn files_mkdir(server_id: String, path: String) -> Result<CommandResul
 /// 删除远程文件或目录
 #[tauri::command]
 pub async fn files_delete(server_id: String, path: String) -> Result<CommandResult, String> {
+    if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(&server_id).await {
+        return match crate::ftp::ftp_delete(ftp_cfg, &path).await {
+            Ok(()) => Ok(CommandResult::ok("Deleted")),
+            Err(e) => Ok(CommandResult::err(e)),
+        };
+    }
     let target_type = load_target_type(&server_id).await;
     let result = if target_type.eq_ignore_ascii_case("windows") {
         let win_path = crate::targets::windows::validators::posix_to_windows_path(&path);
@@ -858,6 +1047,12 @@ pub async fn files_rename(
     old_path: String,
     new_path: String,
 ) -> Result<CommandResult, String> {
+    if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(&server_id).await {
+        return match crate::ftp::ftp_rename(ftp_cfg, &old_path, &new_path).await {
+            Ok(()) => Ok(CommandResult::ok("Renamed")),
+            Err(e) => Ok(CommandResult::err(e)),
+        };
+    }
     let target_type = load_target_type(&server_id).await;
     let result = if target_type.eq_ignore_ascii_case("windows") {
         let win_old = crate::targets::windows::validators::posix_to_windows_path(&old_path);
@@ -878,6 +1073,9 @@ pub async fn files_get_permissions(
     server_id: String,
     path: String,
 ) -> Result<CommandResult, String> {
+    if crate::ftp::is_ftp_backed_server(&server_id).await {
+        return Ok(CommandResult::ok("755"));
+    }
     let target_type = load_target_type(&server_id).await;
     let result = if target_type.eq_ignore_ascii_case("windows") {
         let win_path = crate::targets::windows::validators::posix_to_windows_path(&path);
@@ -899,6 +1097,12 @@ pub async fn files_set_permissions(
     mode: String,
     recursive: Option<bool>,
 ) -> Result<CommandResult, String> {
+    if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(&server_id).await {
+        return match crate::ftp::ftp_set_permissions(ftp_cfg, &path, &mode).await {
+            Ok(msg) => Ok(CommandResult::ok(msg)),
+            Err(e) => Ok(CommandResult::err(e)),
+        };
+    }
     let recursive = recursive.unwrap_or(false);
     let target_type = load_target_type(&server_id).await;
     let result = if target_type.eq_ignore_ascii_case("windows") {
@@ -916,6 +1120,17 @@ pub async fn files_set_permissions(
 /// 备份远程文件（创建 .bak 副本）
 #[tauri::command]
 pub async fn files_backup(server_id: String, path: String) -> Result<CommandResult, String> {
+    if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(&server_id).await {
+        let bytes = match crate::ftp::ftp_read_bytes(ftp_cfg.clone(), &path, 20 * 1024 * 1024).await {
+            Ok(b) => b,
+            Err(e) => return Ok(CommandResult::err(e)),
+        };
+        let bak_path = format!("{}.bak", path);
+        return match crate::ftp::ftp_write_bytes(ftp_cfg, &bak_path, &bytes).await {
+            Ok(()) => Ok(CommandResult::ok(format!("Backed up to {}", bak_path))),
+            Err(e) => Ok(CommandResult::err(e)),
+        };
+    }
     let target_type = load_target_type(&server_id).await;
     let result = if target_type.eq_ignore_ascii_case("windows") {
         let win_path = crate::targets::windows::validators::posix_to_windows_path(&path);
@@ -976,6 +1191,9 @@ pub async fn files_create_symlink(
 /// 返回 JSON 字符串
 #[tauri::command]
 pub async fn files_stat_info(server_id: String, path: String) -> Result<String, String> {
+    if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(&server_id).await {
+        return crate::ftp::ftp_stat_info(ftp_cfg, &path).await;
+    }
     let target_type = load_target_type(&server_id).await;
     if target_type.eq_ignore_ascii_case("windows") {
         let win_path = crate::targets::windows::validators::posix_to_windows_path(&path);
@@ -1005,6 +1223,210 @@ pub async fn files_get_quick_access() -> Result<String, String> {
 #[tauri::command]
 pub async fn files_list_local_directory(path: String) -> Result<String, String> {
     files::local::list_local_directory(path)
+}
+
+/// 目录树扫描条目（用于目录差异比对与一键同步向导）
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncFileItem {
+    pub relative_path: String,
+    pub name: String,
+    pub is_directory: bool,
+    pub size: i64,
+    pub modified_time: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncScanTreeProgress {
+    pub server_id: Option<String>,
+    pub current_path: String,
+    pub count: usize,
+}
+
+fn scan_local_tree_inner(
+    app: &AppHandle,
+    base_path: &str,
+    max_depth: u32,
+    max_files: usize,
+) -> Result<Vec<SyncFileItem>, String> {
+    let mut results = Vec::new();
+    let root = std::path::Path::new(base_path);
+    if !root.exists() {
+        return Err(format!("Local path does not exist: {}", base_path));
+    }
+    let norm_base = base_path.trim_end_matches(['/', '\\']).replace('\\', "/");
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back((root.to_path_buf(), 0u32));
+
+    while let Some((dir_path, depth)) = queue.pop_front() {
+        let _ = app.emit("files:scan-tree-progress", SyncScanTreeProgress {
+            server_id: None,
+            current_path: dir_path.to_string_lossy().to_string(),
+            count: results.len(),
+        });
+        if depth > max_depth || results.len() >= max_files {
+            break;
+        }
+        let read_dir = match std::fs::read_dir(&dir_path) {
+            Ok(rd) => rd,
+            Err(_) => continue,
+        };
+        for entry in read_dir.flatten() {
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            if file_name == "." || file_name == ".." || crate::validators::is_ignored(&file_name) {
+                continue;
+            }
+            let path_buf = entry.path();
+            let meta = match entry.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            let is_dir = meta.is_dir();
+            let full_str = path_buf.to_string_lossy().replace('\\', "/");
+            let rel = if full_str.starts_with(&norm_base) {
+                full_str[norm_base.len()..].trim_start_matches('/').to_string()
+            } else {
+                file_name.clone()
+            };
+            if rel.is_empty() {
+                continue;
+            }
+            let size = if is_dir { 0 } else { meta.len() as i64 };
+            let modified = meta.modified().ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let modified_str = if modified > 0 {
+                let dt = chrono::DateTime::from_timestamp(modified as i64, 0).unwrap_or_default();
+                let local_dt = chrono::DateTime::<chrono::Local>::from(dt);
+                local_dt.format("%Y-%m-%d %H:%M:%S").to_string()
+            } else {
+                String::new()
+            };
+
+            results.push(SyncFileItem {
+                relative_path: rel,
+                name: file_name,
+                is_directory: is_dir,
+                size,
+                modified_time: modified_str,
+            });
+
+            if is_dir && depth + 1 <= max_depth && results.len() < max_files {
+                queue.push_back((path_buf, depth + 1));
+            }
+        }
+    }
+
+    Ok(results)
+}
+
+async fn scan_remote_tree_inner(
+    app: &AppHandle,
+    server_id: &str,
+    base_path: &str,
+    max_depth: u32,
+    max_files: usize,
+) -> Result<Vec<SyncFileItem>, String> {
+    let mut results = Vec::new();
+    let norm_base = base_path.trim_end_matches(['/', '\\']).replace('\\', "/");
+    let target_type = load_target_type(server_id).await;
+    let is_ftp = crate::ftp::resolve_ftp_config_for_server(server_id).await.ok().flatten();
+
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back((base_path.to_string(), 0u32));
+
+    while let Some((dir_path, depth)) = queue.pop_front() {
+        let _ = app.emit("files:scan-tree-progress", SyncScanTreeProgress {
+            server_id: Some(server_id.to_string()),
+            current_path: dir_path.clone(),
+            count: results.len(),
+        });
+        if depth > max_depth || results.len() >= max_files {
+            break;
+        }
+
+        let entries = if let Some(ref ftp_cfg) = is_ftp {
+            match crate::ftp::ftp_list_dir(ftp_cfg.clone(), &dir_path).await {
+                Ok(e) => e,
+                Err(_) => continue,
+            }
+        } else {
+            match crate::files::remote::files_list_with_target(
+                server_id.to_string(),
+                dir_path.clone(),
+                &target_type,
+            )
+            .await
+            {
+                Ok(e) => e,
+                Err(_) => continue,
+            }
+        };
+
+        for entry in entries {
+            if entry.name == "." || entry.name == ".." || crate::validators::is_ignored(&entry.name) {
+                continue;
+            }
+            if entry.is_symlink && SYMLINK_POLICY.load(Ordering::Relaxed) == 0 {
+                continue;
+            }
+            let full_str = entry.path.trim_end_matches(['/', '\\']).replace('\\', "/");
+            let rel = if full_str.starts_with(&norm_base) {
+                full_str[norm_base.len()..].trim_start_matches('/').to_string()
+            } else {
+                entry.name.clone()
+            };
+            if rel.is_empty() {
+                continue;
+            }
+
+            results.push(SyncFileItem {
+                relative_path: rel,
+                name: entry.name,
+                is_directory: entry.is_directory,
+                size: entry.size,
+                modified_time: entry.modified_time,
+            });
+
+            if entry.is_directory && depth + 1 <= max_depth && results.len() < max_files {
+                queue.push_back((entry.path, depth + 1));
+            }
+        }
+    }
+
+    Ok(results)
+}
+
+/// 递归扫描指定本地或远程目录树，返回所有文件与子目录的相对路径元数据清单
+#[tauri::command]
+pub async fn files_scan_directory_tree(
+    app: AppHandle,
+    server_id: Option<String>,
+    base_path: String,
+    max_depth: Option<u32>,
+    max_files: Option<usize>,
+) -> Result<Vec<SyncFileItem>, String> {
+    let depth = max_depth.unwrap_or(20);
+    let limit = max_files.unwrap_or(50_000);
+
+    match server_id {
+        None => {
+            let app_clone = app.clone();
+            tokio::task::spawn_blocking(move || {
+                scan_local_tree_inner(&app_clone, &base_path, depth, limit)
+            })
+            .await
+            .map_err(|e| e.to_string())?
+        }
+        Some(sid) => {
+            scan_remote_tree_inner(&app, &sid, &base_path, depth, limit).await
+        }
+    }
 }
 
 /// 校验并解压本地或远程压缩文件。server_id=None 表示左侧本地文件。
@@ -1791,7 +2213,11 @@ pub async fn files_download(
         });
     }
 
-    let target_remote_path = if target_type.eq_ignore_ascii_case("windows") {
+    let ftp_cfg = crate::ftp::resolve_ftp_config_for_server(&server_id).await.ok().flatten();
+
+    let target_remote_path = if ftp_cfg.is_some() {
+        remote_path.replace('\\', "/")
+    } else if target_type.eq_ignore_ascii_case("windows") {
         crate::targets::windows::validators::posix_to_windows_path(&remote_path)
     } else {
         remote_path.clone()
@@ -1805,19 +2231,27 @@ pub async fn files_download(
         .unwrap_or("file")
         .to_string();
 
-    // 先做快速 sftp_stat 判断是文件还是目录（~10ms），确保预检阶段就能正确下发 total_type（目录=count，单文件=bytes）
-    let is_remote_dir = match crate::ssh::manager::sftp_stat(&server_id, &target_remote_path).await {
-        Ok(meta) => meta.is_dir(),
-        Err(_) => {
-            if target_type.eq_ignore_ascii_case("windows") {
-                false
-            } else {
-                let escaped_path = crate::validators::escape_shell_arg(target_remote_path.clone());
-                let stat_cmd = format!("test -d {} && echo \"dir\" || echo \"file\"", escaped_path);
-                let stat_res = ssh_execute_command(&server_id, &stat_cmd).await;
-                stat_res.stdout.trim() == "dir"
-            }
+    // 先做快速 stat 判断是文件还是目录，确保预检阶段就能正确下发 total_type（目录=count，单文件=bytes）
+    let (is_remote_dir, ftp_size_opt) = if let Some(ref fcfg) = ftp_cfg {
+        match crate::ftp::ftp_stat_basic(fcfg, &target_remote_path).await {
+            Ok((is_dir, sz)) => (is_dir, if !is_dir && sz > 0 { Some(sz) } else { None }),
+            Err(_) => (false, None),
         }
+    } else {
+        let is_dir = match crate::ssh::manager::sftp_stat(&server_id, &target_remote_path).await {
+            Ok(meta) => meta.is_dir(),
+            Err(_) => {
+                if target_type.eq_ignore_ascii_case("windows") {
+                    false
+                } else {
+                    let escaped_path = crate::validators::escape_shell_arg(target_remote_path.clone());
+                    let stat_cmd = format!("test -d {} && echo \"dir\" || echo \"file\"", escaped_path);
+                    let stat_res = ssh_execute_command(&server_id, &stat_cmd).await;
+                    stat_res.stdout.trim() == "dir"
+                }
+            }
+        };
+        (is_dir, None)
     };
 
     let initial_total_type = if is_remote_dir { "count" } else { "bytes" };
@@ -1926,7 +2360,9 @@ pub async fn files_download(
 
     // 磁盘空间预检：查询远程文件/目录大小，与本地可用空间对比
     // 失败（查询不到大小、超时或磁盘空间查询失败）时跳过预检，不阻塞下载
-    let remote_size_hint = if is_remote_dir {
+    let remote_size_hint = if ftp_cfg.is_some() {
+        ftp_size_opt
+    } else if is_remote_dir {
         // 目录用 du -sb（3s 超时）；超时返回 None 直接跳过，避免阻塞下载启动
         get_remote_dir_size(&server_id, &target_remote_path).await
     } else {
@@ -2011,31 +2447,50 @@ pub async fn files_download(
                 error: None,
             },
         );
-        // 递归下载目录：按 concurrency 并发下载子文件（内部连接池复用 Dedicated SFTP Session）
+        // 递归下载目录
         let local_base = local_path.clone();
-        match download_dir_recursive(
-            &app,
-            &server_id,
-            &target_remote_path,
-            &local_base,
-            send.clone(),
-            cancel_ref,
-            &transfer_id,
-            &file_name,
-            skip_existing.unwrap_or(false),
-            concurrency.unwrap_or(3),
-        )
-        .await
-        {
-            Ok(summary) => {
-                // 部分成功：先下发失败明细，再由前端把记录标为 partial
-                send_transfer_failures(&app, &transfer_id, "download", &server_id, &summary);
-                match summary.fatal {
-                    Some(fatal) => Err(fatal),
-                    None => Ok(()),
+        if let Some(ref fcfg) = ftp_cfg {
+            let send_clone = send.clone();
+            let on_file_done: Arc<dyn Fn(u64, u64, &str) + Send + Sync> =
+                Arc::new(move |done, total, name| {
+                    send_clone(done, total, name, "count", None);
+                });
+            let completed = Arc::new(AtomicU64::new(0));
+            crate::ftp::ftp_download_dir_recursive(
+                fcfg,
+                &target_remote_path,
+                &local_base,
+                &on_file_done,
+                &completed,
+                cancel_ref,
+                0,
+            )
+            .await
+        } else {
+            match download_dir_recursive(
+                &app,
+                &server_id,
+                &target_remote_path,
+                &local_base,
+                send.clone(),
+                cancel_ref,
+                &transfer_id,
+                &file_name,
+                skip_existing.unwrap_or(false),
+                concurrency.unwrap_or(3),
+            )
+            .await
+            {
+                Ok(summary) => {
+                    // 部分成功：先下发失败明细，再由前端把记录标为 partial
+                    send_transfer_failures(&app, &transfer_id, "download", &server_id, &summary);
+                    match summary.fatal {
+                        Some(fatal) => Err(fatal),
+                        None => Ok(()),
+                    }
                 }
+                Err(e) => Err(e),
             }
-            Err(e) => Err(e),
         }
     } else {
         // 单文件下载：生成临时文件路径，发送携带 tmp_path 的初始事件（前端用于断点续传）
@@ -2056,7 +2511,24 @@ pub async fn files_download(
                 error: None,
             },
         );
-        download_single_file(&server_id, &target_remote_path, &local_path, &tmp_local_path, &|c, t, n, tt, d| send(c, t, n, tt, d), cancel_ref).await
+        if let Some(ref fcfg) = ftp_cfg {
+            let send_clone = send.clone();
+            let fname_clone = file_name.clone();
+            crate::ftp::ftp_download_file(
+                fcfg,
+                &target_remote_path,
+                &local_path,
+                &tmp_local_path,
+                None,
+                move |transferred, total| {
+                    send_clone(transferred, total, &fname_clone, "bytes", None);
+                },
+                cancel_ref,
+            )
+            .await
+        } else {
+            download_single_file(&server_id, &target_remote_path, &local_path, &tmp_local_path, &|c, t, n, tt, d| send(c, t, n, tt, d), cancel_ref).await
+        }
     };
 
     // 无论成功/失败/取消都注销，避免内存泄漏和过期取消
@@ -2569,12 +3041,12 @@ async fn walk_remote_dir_to_channel(
         if entry.name == "." || entry.name == ".." || crate::validators::is_ignored(&entry.name) {
             continue;
         }
-        // 直接复用 readdir 已返回的 is_symlink，避免为每个条目额外发一次 stat
-        //（大目录下会退化成 1+N 次串行 RTT，是扫描吞吐的硬上限）
+        // 符号链接处理策略：0=Skip(跳过并记入 skipped), 1=Follow(跟随下载真实目标)
         if entry.is_symlink {
-            // 符号链接记入 skipped，前端汇总提示（默认策略为跳过）
-            skipped.fetch_add(1, Ordering::Relaxed);
-            continue;
+            if SYMLINK_POLICY.load(Ordering::Relaxed) == 0 {
+                skipped.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
         }
 
         if entry.is_directory {
@@ -3617,9 +4089,11 @@ pub async fn files_upload_from_paths(
         None
     };
 
-    // 写权限预检：在目标目录尝试创建一个 0 字节临时文件并立即删除。
+    let is_ftp = crate::ftp::is_ftp_backed_server(&server_id).await;
+
+    // 写权限预检：在目标目录尝试创建一个 0 字节临时文件并立即删除（仅 SFTP 执行；FTP 在 STOR 时直接校验）。
     // 无写入权限或目录不存在时立即返回明确错误，避免静默上传到错误位置（如用户目录）。
-    {
+    if !is_ftp {
         let conn = match crate::ssh::manager::SshManager::global().get_connection(&server_id) {
             Ok(c) => c,
             Err(e) => {
@@ -3702,31 +4176,33 @@ pub async fn files_upload_from_paths(
     }
 
     // 远端空间预检：按待传总字节数 + 5% 余量检查（预检失败不阻塞传输）
-    if let Some(available) = get_remote_available_space(&server_id, &target_remote_dir).await {
-        let paths_for_size: Vec<String> = local_paths.clone();
-        let needed = tokio::task::spawn_blocking(move || local_paths_total_size(&paths_for_size))
-            .await
-            .unwrap_or(0);
-        let required = needed.saturating_add(needed / 20);
-        if needed > 0 && required > available {
-            let msg = format!(
-                "Insufficient remote disk space: required ~{} bytes ({} with 5% margin), available {} bytes",
-                needed, required, available
-            );
-            send_progress(&app, TransferProgress {
-                transfer_id: transfer_id.clone(),
-                r#type: "upload".to_string(),
-                current: 0,
-                total: 0,
-                file_name: String::new(),
-                done: Some(false),
-                phase: None,
-                total_type: None,
-                tmp_path: None,
-                error: Some(msg.clone()),
-            });
-            unregister_transfer(&transfer_id);
-            return Ok(FileUploadResult { success: false, error: Some(msg), results: Vec::new() });
+    if !is_ftp {
+        if let Some(available) = get_remote_available_space(&server_id, &target_remote_dir).await {
+            let paths_for_size: Vec<String> = local_paths.clone();
+            let needed = tokio::task::spawn_blocking(move || local_paths_total_size(&paths_for_size))
+                .await
+                .unwrap_or(0);
+            let required = needed.saturating_add(needed / 20);
+            if needed > 0 && required > available {
+                let msg = format!(
+                    "Insufficient remote disk space: required ~{} bytes ({} with 5% margin), available {} bytes",
+                    needed, required, available
+                );
+                send_progress(&app, TransferProgress {
+                    transfer_id: transfer_id.clone(),
+                    r#type: "upload".to_string(),
+                    current: 0,
+                    total: 0,
+                    file_name: String::new(),
+                    done: Some(false),
+                    phase: None,
+                    total_type: None,
+                    tmp_path: None,
+                    error: Some(msg.clone()),
+                });
+                unregister_transfer(&transfer_id);
+                return Ok(FileUploadResult { success: false, error: Some(msg), results: Vec::new() });
+            }
         }
     }
 
@@ -3850,6 +4326,8 @@ async fn perform_upload(
         }
     }
 
+    let is_ftp = crate::ftp::is_ftp_backed_server(server_id).await;
+
     // 仅在单文件上传或纯扁平文件批次时创建预置会话；
     // 目录递归传输内部具备专用的生产者-消费者会话池，外部预创建的会话完全不被使用，
     // 若盲目创建会空占一个 SSH Channel 额度，导致大目录上传逼近或超过 OpenSSH MaxSessions 产生 ConnectFailed。
@@ -3857,7 +4335,7 @@ async fn perform_upload(
         std::fs::metadata(p).map(|m| m.is_dir()).unwrap_or(false)
     });
 
-    let sftp: Option<Arc<russh_sftp::client::SftpSession>> = if has_any_dir {
+    let sftp: Option<Arc<russh_sftp::client::SftpSession>> = if has_any_dir || is_ftp {
         None
     } else {
         match crate::ssh::manager::SshManager::global().get_connection(server_id) {
@@ -4154,6 +4632,60 @@ async fn upload_path(
     let metadata = std::fs::metadata(local_path)
         .map_err(|e| format!("Failed to read local file: {}", e))?;
 
+    if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(server_id).await {
+        let ftp_remote_path = remote_path.replace('\\', "/");
+        if metadata.is_dir() {
+            let send_clone = send.clone();
+            let on_file_done: Arc<dyn Fn(u64, u64, &str) + Send + Sync> =
+                Arc::new(move |done, total, name| {
+                    send_clone(done, total, name, "count");
+                });
+            crate::ftp::ftp_upload_dir_recursive(
+                &ftp_cfg,
+                local_path,
+                &ftp_remote_path,
+                &on_file_done,
+                completed,
+                total_files,
+                cancel,
+                0,
+            )
+            .await?;
+            return Ok(TransferSummary {
+                succeeded: completed.load(Ordering::Relaxed),
+                skipped: 0,
+                failed: Vec::new(),
+                fatal: None,
+            });
+        } else {
+            let file_name = StdPath::new(local_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file")
+                .to_string();
+            let owned_tmp = format!("{}.sw-upload-tmp-{}", ftp_remote_path, uuid::Uuid::new_v4());
+            let tmp_remote_path = tmp_path_override.unwrap_or(&owned_tmp);
+            crate::ftp::ftp_upload_file(
+                &ftp_cfg,
+                local_path,
+                &ftp_remote_path,
+                tmp_remote_path,
+                None,
+                |transferred, total| {
+                    send(transferred, total, &file_name, "bytes");
+                },
+                cancel,
+            )
+            .await?;
+            return Ok(TransferSummary {
+                succeeded: 1,
+                skipped: 0,
+                failed: Vec::new(),
+                fatal: None,
+            });
+        }
+    }
+
     if metadata.is_dir() {
         upload_dir_recursive(
             server_id,
@@ -4313,7 +4845,7 @@ async fn walk_local_dir_to_channel(
 
         let metadata = entry.metadata().map_err(|e| format!("Failed to read metadata: {}", e))?;
         let file_type = entry.file_type().map_err(|e| format!("Failed to read file type: {}", e))?;
-        if file_type.is_symlink() {
+        if file_type.is_symlink() && SYMLINK_POLICY.load(Ordering::Relaxed) == 0 {
             // 符号链接记入 skipped（默认策略为跳过）
             skipped.fetch_add(1, Ordering::Relaxed);
             continue;
@@ -4723,6 +5255,93 @@ pub async fn files_resume_upload(
     let _transfer_guard = TransferRegistrationGuard::new(&transfer_id);
     let cancel_ref: Option<&Arc<AtomicBool>> = Some(&cancel_flag);
 
+    if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(&server_id).await {
+        let ftp_remote_path = remote_path.replace('\\', "/");
+        let ftp_tmp_remote_path = tmp_remote_path.replace('\\', "/");
+        let (effective_tmp_path, effective_offset, need_reset_progress) =
+            match crate::ftp::ftp_stat_basic(&ftp_cfg, &ftp_tmp_remote_path).await {
+                Ok((false, actual_size)) if actual_size >= offset && actual_size > 0 => {
+                    (ftp_tmp_remote_path.clone(), Some(actual_size), false)
+                }
+                Ok(_) => {
+                    let _ = crate::ftp::ftp_delete(ftp_cfg.clone(), &ftp_tmp_remote_path).await;
+                    (
+                        format!("{}.sw-upload-tmp-{}", ftp_remote_path, uuid::Uuid::new_v4()),
+                        None,
+                        true,
+                    )
+                }
+                Err(_) => (
+                    format!("{}.sw-upload-tmp-{}", ftp_remote_path, uuid::Uuid::new_v4()),
+                    None,
+                    true,
+                ),
+            };
+        if need_reset_progress {
+            send_progress(
+                &app,
+                TransferProgress {
+                    transfer_id: transfer_id.clone(),
+                    r#type: "upload".to_string(),
+                    current: 0,
+                    total: 0,
+                    file_name: file_name.clone(),
+                    done: None,
+                    phase: Some("tmpLost".to_string()),
+                    total_type: Some("bytes".to_string()),
+                    tmp_path: Some(effective_tmp_path.clone()),
+                    error: None,
+                },
+            );
+        }
+        let result = crate::ftp::ftp_upload_file(
+            &ftp_cfg,
+            &local_path,
+            &ftp_remote_path,
+            &effective_tmp_path,
+            effective_offset,
+            |transferred, total| {
+                send(transferred, total, &file_name, "bytes");
+            },
+            cancel_ref,
+        )
+        .await;
+        unregister_transfer(&transfer_id);
+        let dl_ok = result.is_ok();
+        let dl_err = if dl_ok { None } else { result.as_ref().err().map(|e| e.to_string()) };
+        send_progress(
+            &app,
+            TransferProgress {
+                transfer_id,
+                r#type: "upload".to_string(),
+                current: 0,
+                total: 0,
+                file_name: String::new(),
+                done: Some(dl_ok),
+                phase: None,
+                total_type: None,
+                tmp_path: None,
+                error: dl_err,
+            },
+        );
+        return match result {
+            Ok(()) => Ok(FileUploadResult {
+                success: true,
+                error: None,
+                results: vec![UploadFileResult {
+                    file_name,
+                    success: true,
+                    error: None,
+                }],
+            }),
+            Err(e) => Ok(FileUploadResult {
+                success: false,
+                error: Some(e),
+                results: Vec::new(),
+            }),
+        };
+    }
+
     // 获取 SFTP 会话
     let conn = match crate::ssh::manager::SshManager::global().get_connection(&server_id) {
         Ok(c) => c,
@@ -4998,21 +5617,37 @@ pub async fn files_resume_download(
     // keep_tmp_on_failure=true：失败/暂停保留临时文件供断点续传；
     // 取消时由前端显式调用 files_cleanup_tmp_file 清理
     // 断连（含 1GiB rekey 崩溃）时自动重连并从本地 tmp 实际大小续传
-    let result = download_file_with_auto_retry(
-        &server_id,
-        &remote_path,
-        &local_path,
-        &effective_tmp_path,
-        None,
-        |transferred, total| {
-            send(transferred, total, &file_name, "bytes");
-        },
-        cancel_ref,
-        effective_offset,
-        true,
-        true,
-    )
-    .await;
+    let result = if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(&server_id).await {
+        let ftp_remote_path = remote_path.replace('\\', "/");
+        crate::ftp::ftp_download_file(
+            &ftp_cfg,
+            &ftp_remote_path,
+            &local_path,
+            &effective_tmp_path,
+            effective_offset,
+            |transferred, total| {
+                send(transferred, total, &file_name, "bytes");
+            },
+            cancel_ref,
+        )
+        .await
+    } else {
+        download_file_with_auto_retry(
+            &server_id,
+            &remote_path,
+            &local_path,
+            &effective_tmp_path,
+            None,
+            |transferred, total| {
+                send(transferred, total, &file_name, "bytes");
+            },
+            cancel_ref,
+            effective_offset,
+            true,
+            true,
+        )
+        .await
+    };
 
     unregister_transfer(&transfer_id);
 
@@ -5077,6 +5712,10 @@ pub async fn files_cleanup_tmp_file(
     }
 
     if is_remote {
+        if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(&server_id).await {
+            let _ = crate::ftp::ftp_delete(ftp_cfg, &tmp_path.replace('\\', "/")).await;
+            return Ok(true);
+        }
         let conn = crate::ssh::manager::SshManager::global()
             .get_connection(&server_id)
             .map_err(|e| e.to_string())?;
@@ -5438,9 +6077,8 @@ async fn walk_s2s_dir_to_channel(
             continue;
         }
 
-        // symlink 检测：直接复用 readdir 返回的 is_symlink（零额外 RTT）
-        if entry.is_symlink {
-            // 符号链接记入 skipped（默认策略为跳过）
+        // symlink 检测：默认策略为跳过并记入 skipped；Follow 策略下继续传输目标
+        if entry.is_symlink && SYMLINK_POLICY.load(Ordering::Relaxed) == 0 {
             skipped.fetch_add(1, Ordering::Relaxed);
             continue;
         }
@@ -6133,5 +6771,399 @@ pub async fn files_server_to_server_transfer(
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// 外部编辑器联动回传 (External Editor Auto-Sync on Save)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalEditSession {
+    pub session_id: String,
+    pub server_id: String,
+    pub remote_path: String,
+    pub local_path: String,
+    pub file_name: String,
+    pub editor_cmd: Option<String>,
+    pub last_synced_at: Option<String>,
+    pub last_synced_size: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalSyncEventPayload {
+    pub session_id: String,
+    pub server_id: String,
+    pub remote_path: String,
+    pub local_path: String,
+    pub file_name: String,
+    pub size: u64,
+    pub timestamp: String,
+}
+
+struct ActiveExternalEdit {
+    session: ExternalEditSession,
+    cancel_flag: Arc<AtomicBool>,
+}
+
+static EXTERNAL_EDIT_REGISTRY: std::sync::OnceLock<
+    Mutex<std::collections::HashMap<String, ActiveExternalEdit>>,
+> = std::sync::OnceLock::new();
+
+fn external_edit_registry() -> &'static Mutex<std::collections::HashMap<String, ActiveExternalEdit>> {
+    EXTERNAL_EDIT_REGISTRY.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+/// 启动外部编辑器联动：下载远程文件到临时缓存目录，启动外部编辑器，并在后台监听保存自动同步回传
+#[tauri::command]
+pub async fn files_start_external_edit(
+    app: AppHandle,
+    server_id: String,
+    remote_path: String,
+    editor_cmd: Option<String>,
+) -> Result<ExternalEditSession, String> {
+    use base64::Engine as _;
+
+    // 1. 读取远程文件内容 (Base64)
+    let b64_content = files_read_binary(server_id.clone(), remote_path.clone()).await?;
+    let file_bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64_content.trim())
+        .map_err(|e| format!("Decode remote file content failed: {}", e))?;
+
+    // 2. 提取文件名并准备本地独立隔离临时目录
+    let raw_file_name = remote_path
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("untitled")
+        .to_string();
+    let file_name = if raw_file_name.is_empty() {
+        "untitled".to_string()
+    } else {
+        raw_file_name
+    };
+
+    // 检查并清理同一文件已有的旧会话，防止多余 watcher 泄露
+    {
+        let mut old_cleanup_path = None;
+        if let Ok(mut reg) = external_edit_registry().lock() {
+            let existing_id = reg
+                .iter()
+                .find(|(_, v)| v.session.server_id == server_id && v.session.remote_path == remote_path)
+                .map(|(k, _)| k.clone());
+            if let Some(old_id) = existing_id {
+                if let Some(old_session) = reg.remove(&old_id) {
+                    old_session.cancel_flag.store(true, Ordering::Relaxed);
+                    old_cleanup_path = Some(old_session.session.local_path);
+                }
+            }
+        }
+        if let Some(old_path) = old_cleanup_path {
+            let p = std::path::PathBuf::from(old_path);
+            if let Some(parent) = p.parent() {
+                let _ = tokio::fs::remove_dir_all(parent).await;
+            }
+        }
+    }
+
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let temp_base = std::env::temp_dir()
+        .join("qshell_external_edits")
+        .join(&session_id);
+
+    tokio::fs::create_dir_all(&temp_base)
+        .await
+        .map_err(|e| format!("Create temp cache directory failed: {}", e))?;
+
+    let local_file_path = temp_base.join(&file_name);
+    tokio::fs::write(&local_file_path, &file_bytes)
+        .await
+        .map_err(|e| format!("Write local temp file failed: {}", e))?;
+
+    let local_path_str = local_file_path.to_string_lossy().to_string();
+    let initial_size = file_bytes.len() as u64;
+    let initial_time = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    let session_info = ExternalEditSession {
+        session_id: session_id.clone(),
+        server_id: server_id.clone(),
+        remote_path: remote_path.clone(),
+        local_path: local_path_str.clone(),
+        file_name: file_name.clone(),
+        editor_cmd: editor_cmd.clone(),
+        last_synced_at: Some(initial_time),
+        last_synced_size: initial_size,
+    };
+
+    // 3. 启动后台文件监听与同步回传 Task
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    let cancel_flag_clone = cancel_flag.clone();
+    let app_clone = app.clone();
+    let server_id_clone = server_id.clone();
+    let remote_path_clone = remote_path.clone();
+    let local_path_for_watch = local_file_path.clone();
+    let session_id_clone = session_id.clone();
+    let file_name_clone = file_name.clone();
+
+    tokio::spawn(async move {
+        let mut last_mtime = std::fs::metadata(&local_path_for_watch)
+            .ok()
+            .and_then(|m| m.modified().ok());
+        let mut last_len = std::fs::metadata(&local_path_for_watch)
+            .ok()
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let mut last_synced_bytes = file_bytes;
+
+        tracing::info!(
+            "Started external editor watcher for session {} on file {}",
+            session_id_clone,
+            file_name_clone
+        );
+
+        let mut not_found_count = 0u32;
+        while !cancel_flag_clone.load(Ordering::Relaxed) {
+            tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+
+            if cancel_flag_clone.load(Ordering::Relaxed) {
+                break;
+            }
+
+            let meta = match std::fs::metadata(&local_path_for_watch) {
+                Ok(m) => {
+                    not_found_count = 0;
+                    m
+                }
+                Err(_) => {
+                    not_found_count += 1;
+                    // 文件若被用户或系统清理连续 15 秒不存在，自动退出 watcher 杜绝协程泄露
+                    if not_found_count >= 15 {
+                        tracing::info!(
+                            "External file {} disappeared, exiting watcher",
+                            file_name_clone
+                        );
+                        break;
+                    }
+                    continue;
+                }
+            };
+
+            let current_mtime = meta.modified().ok();
+            let current_len = meta.len();
+
+            let mtime_changed = match (last_mtime, current_mtime) {
+                (Some(a), Some(b)) => a != b,
+                _ => false,
+            };
+
+            if mtime_changed || current_len != last_len {
+                // 防抖 debounce 600ms，等待外部编辑器完成磁盘写入
+                tokio::time::sleep(tokio::time::Duration::from_millis(600)).await;
+                if cancel_flag_clone.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                if let Ok(new_bytes) = tokio::fs::read(&local_path_for_watch).await {
+                    // 若内容实际上未变化则跳过
+                    if new_bytes == last_synced_bytes {
+                        last_mtime = current_mtime;
+                        last_len = current_len;
+                        continue;
+                    }
+
+                    tracing::info!(
+                        "External edit detected for {}: {} bytes, syncing back to server {} ...",
+                        file_name_clone,
+                        new_bytes.len(),
+                        server_id_clone
+                    );
+
+                    let b64_payload = format!(
+                        "::base64::{}",
+                        base64::engine::general_purpose::STANDARD.encode(&new_bytes)
+                    );
+
+                    match files_write(
+                        server_id_clone.clone(),
+                        remote_path_clone.clone(),
+                        b64_payload,
+                    )
+                    .await
+                    {
+                        Ok(res) if res.exit_code == 0 => {
+                            last_synced_bytes = new_bytes;
+                            last_len = last_synced_bytes.len() as u64;
+                            last_mtime = std::fs::metadata(&local_path_for_watch)
+                                .ok()
+                                .and_then(|m| m.modified().ok());
+
+                            let now_str = chrono::Local::now()
+                                .format("%Y-%m-%d %H:%M:%S")
+                                .to_string();
+
+                            // 更新注册表中的状态
+                            if let Ok(mut reg) = external_edit_registry().lock() {
+                                if let Some(active) = reg.get_mut(&session_id_clone) {
+                                    active.session.last_synced_at = Some(now_str.clone());
+                                    active.session.last_synced_size = last_len;
+                                }
+                            }
+
+                            // 发送前端事件，通知自动同步成功
+                            let _ = app_clone.emit(
+                                "files:external-file-synced",
+                                ExternalSyncEventPayload {
+                                    session_id: session_id_clone.clone(),
+                                    server_id: server_id_clone.clone(),
+                                    remote_path: remote_path_clone.clone(),
+                                    local_path: local_path_for_watch.to_string_lossy().to_string(),
+                                    file_name: file_name_clone.clone(),
+                                    size: last_len,
+                                    timestamp: now_str,
+                                },
+                            );
+                        }
+                        Ok(res) => {
+                            tracing::warn!(
+                                "External file auto-sync returned error: {}",
+                                res.stderr
+                            );
+                            let _ = app_clone.emit(
+                                "files:external-file-sync-failed",
+                                serde_json::json!({
+                                    "sessionId": session_id_clone.clone(),
+                                    "fileName": file_name_clone.clone(),
+                                    "error": res.stderr
+                                }),
+                            );
+                        }
+                        Err(e) => {
+                            tracing::error!("External file auto-sync failed: {}", e);
+                            let _ = app_clone.emit(
+                                "files:external-file-sync-failed",
+                                serde_json::json!({
+                                    "sessionId": session_id_clone.clone(),
+                                    "fileName": file_name_clone.clone(),
+                                    "error": e
+                                }),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // 退出循环时，确保自动从全局注册表中移除
+        if let Ok(mut reg) = external_edit_registry().lock() {
+            reg.remove(&session_id_clone);
+        }
+
+        tracing::info!(
+            "External editor watcher stopped for session {}",
+            session_id_clone
+        );
+    });
+
+    // 4. 将该会话加入全局活跃注册表
+    if let Ok(mut reg) = external_edit_registry().lock() {
+        reg.insert(
+            session_id.clone(),
+            ActiveExternalEdit {
+                session: session_info.clone(),
+                cancel_flag,
+            },
+        );
+    }
+
+    // 5. 启动外部编辑器打开该本地文件
+    let editor_choice = editor_cmd.as_deref().unwrap_or("default");
+    let open_res = match editor_choice {
+        "code" => {
+            #[cfg(target_os = "windows")]
+            {
+                std::process::Command::new("cmd")
+                    .args(["/c", "code", &local_path_str])
+                    .spawn()
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                std::process::Command::new("code")
+                    .arg(&local_path_str)
+                    .spawn()
+            }
+        }
+        "default" | "" => {
+            #[cfg(target_os = "windows")]
+            {
+                std::process::Command::new("cmd")
+                    .args(["/c", "start", "", &local_path_str])
+                    .spawn()
+            }
+            #[cfg(target_os = "macos")]
+            {
+                std::process::Command::new("open")
+                    .arg(&local_path_str)
+                    .spawn()
+            }
+            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+            {
+                std::process::Command::new("xdg-open")
+                    .arg(&local_path_str)
+                    .spawn()
+            }
+        }
+        custom_exe => {
+            std::process::Command::new(custom_exe)
+                .arg(&local_path_str)
+                .spawn()
+        }
+    };
+
+    if let Err(e) = open_res {
+        tracing::warn!(
+            "Spawn external editor '{}' returned error: {}, but file is cached and being watched.",
+            editor_choice,
+            e
+        );
+    }
+
+    Ok(session_info)
+}
+
+/// 停止外部编辑器监听并清理会话
+#[tauri::command]
+pub async fn files_stop_external_edit(session_id: String) -> Result<bool, String> {
+    let removed_local_path = {
+        let mut reg = external_edit_registry()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(active) = reg.remove(&session_id) {
+            active.cancel_flag.store(true, Ordering::Relaxed);
+            Some(active.session.local_path)
+        } else {
+            None
+        }
+    };
+
+    if let Some(path_str) = removed_local_path {
+        let local_path = std::path::PathBuf::from(path_str);
+        if let Some(parent) = local_path.parent() {
+            let _ = tokio::fs::remove_dir_all(parent).await;
+        }
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// 列出所有当前活动的外部编辑器监听会话
+#[tauri::command]
+pub async fn files_list_active_external_edits() -> Result<Vec<ExternalEditSession>, String> {
+    let reg = external_edit_registry()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let sessions = reg.values().map(|v| v.session.clone()).collect();
+    Ok(sessions)
+}
+
 
 

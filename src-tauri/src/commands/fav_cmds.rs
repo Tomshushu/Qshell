@@ -18,6 +18,12 @@ pub struct FavoriteCommand {
     pub cmd: String,
     pub desc: String,
     pub created_at: i64,
+    #[serde(default)]
+    pub auto_execute: Option<bool>,
+    #[serde(default)]
+    pub pinned_to_bar: Option<bool>,
+    #[serde(default)]
+    pub color: Option<String>,
 }
 
 /// 获取 favorite-commands.json 文件路径
@@ -65,6 +71,9 @@ pub async fn fav_cmds_add(
     app: AppHandle,
     cmd: String,
     desc: String,
+    auto_execute: Option<bool>,
+    pinned_to_bar: Option<bool>,
+    color: Option<String>,
 ) -> Result<OperationResult, String> {
     let mut cmds = read_fav_cmds(&app);
     let id = format!(
@@ -77,6 +86,9 @@ pub async fn fav_cmds_add(
         cmd,
         desc,
         created_at: chrono::Utc::now().timestamp_millis(),
+        auto_execute,
+        pinned_to_bar,
+        color,
     });
     write_fav_cmds(&app, &cmds)?;
     Ok(OperationResult::ok_with_id(id))
@@ -89,6 +101,9 @@ pub async fn fav_cmds_update(
     id: String,
     cmd: String,
     desc: String,
+    auto_execute: Option<bool>,
+    pinned_to_bar: Option<bool>,
+    color: Option<String>,
 ) -> Result<OperationResult, String> {
     let mut cmds = read_fav_cmds(&app);
     let idx = cmds.iter().position(|c| c.id == id);
@@ -96,11 +111,30 @@ pub async fn fav_cmds_update(
         Some(i) => {
             cmds[i].cmd = cmd;
             cmds[i].desc = desc;
+            if auto_execute.is_some() {
+                cmds[i].auto_execute = auto_execute;
+            }
+            if pinned_to_bar.is_some() {
+                cmds[i].pinned_to_bar = pinned_to_bar;
+            }
+            if color.is_some() {
+                cmds[i].color = if color.as_deref() == Some("") { None } else { color };
+            }
             write_fav_cmds(&app, &cmds)?;
             Ok(OperationResult::ok())
         }
         None => Ok(OperationResult::fail("Not found")),
     }
+}
+
+/// 覆盖设置所有收藏指令（用于排序与批量状态更新）
+#[tauri::command]
+pub async fn fav_cmds_set_all(
+    app: AppHandle,
+    cmds: Vec<FavoriteCommand>,
+) -> Result<OperationResult, String> {
+    write_fav_cmds(&app, &cmds)?;
+    Ok(OperationResult::ok())
 }
 
 /// 删除收藏指令

@@ -53,6 +53,10 @@ codepage-strings = "1.0"
 # Redfish API 客户端（BMC 带外管理）：rustls-tls 避免 OpenSSL 依赖；BMC 普遍使用自签名证书，
 # 运行时通过 danger_accept_invalid_certs 兼容
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "gzip"] }
+# FTPS (Explicit AUTH TLS / Implicit TLS) 客户端复用 reqwest 同版本的 rustls + ring 后端，零额外 C 依赖
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+webpki-roots = "1"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"

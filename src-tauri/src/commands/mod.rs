@@ -34,6 +34,7 @@ pub mod fav_cmds;
 pub mod bookmarks;
 pub mod window;
 pub mod rdp;
+pub mod vnc;
 pub mod bmc;
 pub mod port_forward;
 pub mod telnet;

@@ -183,6 +183,24 @@ export interface FileStatInfo {
   symlinkTarget?: string;
 }
 
+/** FTP / FTPS 连接测试参数 */
+export interface FtpTestConfigInput {
+  host: string;
+  port: number;
+  protocol: "ftp" | "ftps";
+  tlsMode?: "explicit" | "implicit";
+  anonymous?: boolean;
+  useServerCredentials?: boolean;
+  username?: string;
+  password?: string;
+  serverUsername?: string;
+  serverPassword?: string;
+  serverId?: string;
+  transferMode?: "passive" | "active";
+  encoding?: "utf-8" | "gbk";
+  allowInvalidCerts?: boolean;
+}
+
 // ==================== 批量命令执行（P0-4） ====================
 
 /** 单台服务器的批量执行结果 */
@@ -624,6 +642,9 @@ export interface FavoriteCommand {
   cmd: string;
   desc: string;
   createdAt: number;
+  autoExecute?: boolean;
+  pinnedToBar?: boolean;
+  color?: string;
 }
 
 /** 本地目录条目（用于文件上传对话框） */
@@ -654,6 +675,38 @@ export interface QuickAccessPath {
   type: string;
   path: string;
   platform: string;
+}
+
+/** 目录递归扫描条目（用于一键同步向导） */
+export interface SyncFileItem {
+  relativePath: string;
+  name: string;
+  isDirectory: boolean;
+  size: number;
+  modifiedTime: string;
+}
+
+/** 外部编辑器联动会话信息 */
+export interface ExternalEditSession {
+  sessionId: string;
+  serverId: string;
+  remotePath: string;
+  localPath: string;
+  fileName: string;
+  editorCmd?: string;
+  lastSyncedAt?: string;
+  lastSyncedSize: number;
+}
+
+/** 外部文件保存并自动同步回传事件载荷 */
+export interface ExternalSyncEventPayload {
+  sessionId: string;
+  serverId: string;
+  remotePath: string;
+  localPath: string;
+  fileName: string;
+  size: number;
+  timestamp: string;
 }
 
 /** SFTP 配置诊断结果 */
@@ -1227,6 +1280,7 @@ export interface BackendAdapter {
 
   // ==================== 文件管理 ====================
   files: {
+    testFtpConnection: (config: FtpTestConfigInput) => Promise<OperationResult>;
     list: (serverId: string, path: string) => Promise<FileEntry[]>;
     read: (serverId: string, path: string) => Promise<CommandResult>;
     /** 读取文件原始字节，返回 base64（不带 ::base64:: 前缀），用于二进制预览/编码兜底重读 */
@@ -1343,6 +1397,11 @@ export interface BackendAdapter {
       respectGitignore: boolean,
     ) => Promise<void>;
     /**
+     * 设置 SFTP 传输符号链接（软链接）处理策略
+     * @param policy 'skip'=跳过(默认安全), 'follow'=跟随目标内容
+     */
+    setSymlinkPolicy: (policy: "skip" | "follow") => Promise<void>;
+    /**
      * 递归搜索远程文件
      * @param serverId 服务器 ID
      * @param dir 搜索起始目录
@@ -1408,6 +1467,37 @@ export interface BackendAdapter {
      * @returns 诊断结果，包含 status/issues/recommendations
      */
     diagnoseSftp: (serverId: string) => Promise<SftpDiagnostics>;
+    /**
+     * 递归扫描本地或远程目录树，返回所有文件与子目录的相对路径元数据清单
+     */
+    scanDirectoryTree: (
+      serverId: string | null | undefined,
+      basePath: string,
+      maxDepth?: number,
+      maxFiles?: number,
+    ) => Promise<SyncFileItem[]>;
+    /**
+     * 启动外部编辑器打开远程文件，并在保存时自动将修改内容推送到服务器
+     */
+    startExternalEdit: (
+      serverId: string,
+      remotePath: string,
+      editorCmd?: string,
+    ) => Promise<ExternalEditSession>;
+    /**
+     * 停止指定的外部编辑器监听并清理本地缓存
+     */
+    stopExternalEdit: (sessionId: string) => Promise<boolean>;
+    /**
+     * 获取所有当前处于监听中的外部编辑会话
+     */
+    listActiveExternalEdits: () => Promise<ExternalEditSession[]>;
+    /**
+     * 监听外部文件保存并自动同步成功的事件
+     */
+    onExternalFileSynced: (
+      callback: (data: ExternalSyncEventPayload) => void,
+    ) => () => void;
   };
 
   // ==================== Docker ====================
@@ -1600,8 +1690,22 @@ export interface BackendAdapter {
   // ==================== 收藏指令 ====================
   favCmds: {
     list: () => Promise<FavoriteCommand[]>;
-    add: (cmd: string, desc: string) => Promise<OperationResult>;
-    update: (id: string, cmd: string, desc: string) => Promise<OperationResult>;
+    add: (
+      cmd: string,
+      desc: string,
+      autoExecute?: boolean,
+      pinnedToBar?: boolean,
+      color?: string
+    ) => Promise<OperationResult>;
+    update: (
+      id: string,
+      cmd: string,
+      desc: string,
+      autoExecute?: boolean,
+      pinnedToBar?: boolean,
+      color?: string
+    ) => Promise<OperationResult>;
+    setAll?: (cmds: FavoriteCommand[]) => Promise<OperationResult>;
     delete: (id: string) => Promise<OperationResult>;
     restore?: (cmds: FavoriteCommand[]) => Promise<OperationResult>;
   };
@@ -1683,6 +1787,32 @@ export interface BackendAdapter {
       fullscreen?: boolean;
       /** 颜色深度 16/24/32，默认 32 */
       colorDepth?: number;
+    }) => Promise<OperationResult>;
+  };
+
+  // ==================== VNC 内嵌远程桌面 ====================
+  vnc: {
+    startSession: (config: {
+      serverId: string;
+      vncPort?: number;
+    }) => Promise<{
+      success: boolean;
+      error?: string;
+      session?: {
+        sessionId: string;
+        wsUrl: string;
+        host: string;
+        port: number;
+        password?: string;
+        isTunneled?: boolean;
+        isTls?: boolean;
+      };
+    }>;
+    stopSession: (sessionId: string) => Promise<OperationResult>;
+    testConnection: (config: {
+      host: string;
+      port?: number;
+      timeout?: number;
     }) => Promise<OperationResult>;
   };
 

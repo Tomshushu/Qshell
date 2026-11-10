@@ -67,7 +67,7 @@ import type { Server as ServerType, WorkspaceModule } from '@/types'
 import { useTranslation } from '@/i18n'
 import { useMarqueeSelection } from '@/hooks/use-marquee-selection'
 import { MarqueeRect } from '@/components/ui/marquee-rect'
-import { deviceModuleLabelKey, getServerConnectionFlags, isModuleAvailable, resolveServerOpenAction } from '@/services/connection-targets'
+import { deviceModuleLabelKey, getServerConnectionFlags, getServerProtocols, isModuleAvailable, resolveServerOpenAction } from '@/services/connection-targets'
 import { ServerGroupTree } from '@/components/dashboard/server-group-tree'
 import { RecycleBinDialog } from '@/components/dashboard/recycle-bin-dialog'
 import {
@@ -521,6 +521,8 @@ export function Dashboard() {
         openTab(s.id, s.name, 'terminal')
       } else if (action === 'bmc') {
         openTab(s.id, s.name, 'bmc')
+      } else if (action === 'vnc') {
+        openTab(s.id, s.name, 'vnc')
       } else if (action === 'rdp') {
         backend?.rdp.launch({ serverId: s.id, rdpPort: s.rdpPort })
       } else {
@@ -1344,6 +1346,12 @@ function ServerContextMenu({ children, server, selected, selectedCount, selected
                 {t('dash_open_rdp') || '打开远程桌面'}
               </ContextMenuItem>
             )}
+            {getServerProtocols(server).includes('vnc') && (
+              <ContextMenuItem onClick={() => openTab(server.id, server.name, 'vnc')}>
+                <Monitor className="h-4 w-4" />
+                {t('dash_open_vnc') || '打开 VNC 桌面'}
+              </ContextMenuItem>
+            )}
             {isModuleAvailable(server.targetType, 'overview') && (
               <ContextMenuItem onClick={() => {
                 if (isWindowsTarget(server) && (!server.port || server.port <= 0)) {
@@ -1499,6 +1507,8 @@ const ServerListView = memo(function ServerListView({ servers, selectedServerIds
       openTab(server.id, server.name, 'terminal')
     } else if (action === 'bmc') {
       openTab(server.id, server.name, 'bmc')
+    } else if (action === 'vnc') {
+      openTab(server.id, server.name, 'vnc')
     } else if (action === 'rdp') {
       recordConnection(server.id)
       void (async () => {
@@ -1600,7 +1610,22 @@ const ServerListView = memo(function ServerListView({ servers, selectedServerIds
                     {(Array.isArray(server.tags) ? server.tags.length : 0) > 2 && <span className="text-[9px] text-muted-foreground">+{(Array.isArray(server.tags) ? server.tags.length : 0) - 2}</span>}
                   </div>
                   <span className="text-xs text-muted-foreground truncate">{server.notes || '-'}</span>
-                  <div className="flex justify-end">
+                  <div className="flex justify-end items-center gap-1">
+                    {getServerProtocols(server).includes('vnc') && resolveServerOpenAction(server) !== 'vnc' && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 px-1.5 text-[11px] gap-1 text-primary hover:text-primary"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          openTab(server.id, server.name, 'vnc')
+                        }}
+                        title={t('dash_open_vnc') || '打开 VNC 桌面'}
+                      >
+                        <Monitor className="h-3 w-3" />
+                        VNC
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       variant="ghost"
@@ -1610,8 +1635,8 @@ const ServerListView = memo(function ServerListView({ servers, selectedServerIds
                         handleConnectServer(server)
                       }}
                     >
-                      {isWindowsTarget(server)
-                        ? ((!server.port || server.port <= 0) && server.rdpPort && server.rdpPort > 0 ? <Monitor className="h-3 w-3" /> : <Terminal className="h-3 w-3" />)
+                      {resolveServerOpenAction(server) === 'vnc' || resolveServerOpenAction(server) === 'rdp'
+                        ? <Monitor className="h-3 w-3" />
                         : isDeviceManaged(server)
                           ? <ServerCog className="h-3 w-3" />
                           : <Terminal className="h-3 w-3" />}

@@ -44,6 +44,9 @@ import type {
   QuickAccessPath,
   KnownHostRecord,
   SftpDiagnostics,
+  SyncFileItem,
+  ExternalEditSession,
+  ExternalSyncEventPayload,
   TailHandle,
   SshStateResult,
   ConnectionStateData,
@@ -538,6 +541,10 @@ function normalizeServer(raw: Record<string, unknown> | null): Server {
     rdpPort: raw.rdp_port !== undefined && raw.rdp_port !== null
       ? Number(raw.rdp_port)
       : (raw.rdpPort !== undefined && raw.rdpPort !== null ? Number(raw.rdpPort) : 0),
+    vncPort: raw.vnc_port !== undefined && raw.vnc_port !== null
+      ? Number(raw.vnc_port)
+      : (raw.vncPort !== undefined && raw.vncPort !== null ? Number(raw.vncPort) : 0),
+    vncPassword: (raw.vnc_password || raw.vncPassword) as string | undefined,
     bmcPort: raw.bmc_port || raw.bmcPort || 443,
     osType: raw.os_type || raw.osType || "",
     osInfo: raw.os_info || raw.osInfo || "",
@@ -1471,6 +1478,11 @@ export const tauriAdapter: BackendAdapter = {
 
   // ==================== 文件管理 ====================
   files: {
+    async testFtpConnection(config): Promise<OperationResult> {
+      return safeInvoke<OperationResult>("files_test_ftp_connection", {
+        config,
+      });
+    },
     async list(serverId, path): Promise<FileEntry[]> {
       return invokeJson<FileEntry[]>("files_list", {
         serverId,
@@ -1650,6 +1662,11 @@ export const tauriAdapter: BackendAdapter = {
         respectGitignore,
       });
     },
+    async setSymlinkPolicy(policy: "skip" | "follow"): Promise<void> {
+      await safeInvoke<void>("files_set_symlink_policy", {
+        policy,
+      });
+    },
     async searchFilesRecursive(
       serverId,
       dir,
@@ -1741,6 +1758,59 @@ export const tauriAdapter: BackendAdapter = {
     },
     async diagnoseSftp(serverId): Promise<SftpDiagnostics> {
       return invokeJson<SftpDiagnostics>("files_diagnose_sftp", { serverId });
+    },
+    async scanDirectoryTree(
+      serverId,
+      basePath,
+      maxDepth?,
+      maxFiles?,
+    ): Promise<SyncFileItem[]> {
+      return safeInvoke<SyncFileItem[]>("files_scan_directory_tree", {
+        serverId: serverId ?? null,
+        basePath,
+        maxDepth: maxDepth ?? null,
+        maxFiles: maxFiles ?? null,
+      });
+    },
+    async startExternalEdit(
+      serverId: string,
+      remotePath: string,
+      editorCmd?: string,
+    ): Promise<ExternalEditSession> {
+      return safeInvoke<ExternalEditSession>("files_start_external_edit", {
+        serverId,
+        remotePath,
+        editorCmd: editorCmd ?? null,
+      });
+    },
+    async stopExternalEdit(sessionId: string): Promise<boolean> {
+      return safeInvoke<boolean>("files_stop_external_edit", {
+        sessionId,
+      });
+    },
+    async listActiveExternalEdits(): Promise<ExternalEditSession[]> {
+      return safeInvoke<ExternalEditSession[]>(
+        "files_list_active_external_edits",
+      );
+    },
+    onExternalFileSynced(
+      callback: (data: ExternalSyncEventPayload) => void,
+    ): () => void {
+      let unlisten: UnlistenFn | undefined;
+      let disposed = false;
+      listen<ExternalSyncEventPayload>("files:external-file-synced", (event) => {
+        callback(event.payload);
+      }).then((fn) => {
+        if (disposed) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      });
+      return () => {
+        disposed = true;
+        unlisten?.();
+      };
     },
   },
 
@@ -2113,11 +2183,22 @@ export const tauriAdapter: BackendAdapter = {
     async list(): Promise<FavoriteCommand[]> {
       return safeInvoke<FavoriteCommand[]>("fav_cmds_list");
     },
-    async add(cmd, desc): Promise<OperationResult> {
-      return safeInvoke<OperationResult>("fav_cmds_add", { cmd, desc });
+    async add(cmd, desc, autoExecute, pinnedToBar, color): Promise<OperationResult> {
+      const payload: Record<string, unknown> = { cmd, desc };
+      if (autoExecute !== undefined) payload.autoExecute = autoExecute;
+      if (pinnedToBar !== undefined) payload.pinnedToBar = pinnedToBar;
+      if (color !== undefined) payload.color = color;
+      return safeInvoke<OperationResult>("fav_cmds_add", payload);
     },
-    async update(id, cmd, desc): Promise<OperationResult> {
-      return safeInvoke<OperationResult>("fav_cmds_update", { id, cmd, desc });
+    async update(id, cmd, desc, autoExecute, pinnedToBar, color): Promise<OperationResult> {
+      const payload: Record<string, unknown> = { id, cmd, desc };
+      if (autoExecute !== undefined) payload.autoExecute = autoExecute;
+      if (pinnedToBar !== undefined) payload.pinnedToBar = pinnedToBar;
+      if (color !== undefined) payload.color = color;
+      return safeInvoke<OperationResult>("fav_cmds_update", payload);
+    },
+    async setAll(cmds: FavoriteCommand[]): Promise<OperationResult> {
+      return safeInvoke<OperationResult>("fav_cmds_set_all", { cmds });
     },
     async delete(id): Promise<OperationResult> {
       return safeInvoke<OperationResult>("fav_cmds_delete", { id });
@@ -2238,6 +2319,26 @@ export const tauriAdapter: BackendAdapter = {
         height: height ?? null,
         fullscreen: fullscreen ?? null,
         colorDepth: colorDepth ?? null,
+      });
+    },
+  },
+
+  // ==================== VNC 内嵌远程桌面 ====================
+  vnc: {
+    async startSession(config) {
+      return safeInvoke("vnc_start_session", {
+        serverId: config.serverId,
+        vncPort: config.vncPort ?? null,
+      });
+    },
+    async stopSession(sessionId): Promise<OperationResult> {
+      return safeInvoke<OperationResult>("vnc_stop_session", { sessionId });
+    },
+    async testConnection(config): Promise<OperationResult> {
+      return safeInvoke<OperationResult>("vnc_test_connection", {
+        host: config.host,
+        port: config.port ?? null,
+        timeout: config.timeout ?? null,
       });
     },
   },

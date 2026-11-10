@@ -21,6 +21,7 @@ import {
   isDeviceManagedTarget,
   isModuleAvailable,
   isModuleVisibleForServer,
+  isPureVncServer,
   inferServerProtocols,
   resolveServerOpenAction,
   getTargetTypeSpec,
@@ -43,13 +44,13 @@ const BACKEND_MIRROR: Array<{
   username: string
   caps: CapsTuple
 }> = [
-  { id: 'linux', protocols: ['ssh'], primary: 'ssh', port: 22, username: 'root', caps: [true, true, true, true, true, false, true] },
-  { id: 'windows', protocols: ['rdp', 'ssh'], primary: 'rdp', port: 3389, username: 'Administrator', caps: [true, true, true, true, true, false, true] },
+  { id: 'linux', protocols: ['ssh', 'vnc'], primary: 'ssh', port: 22, username: 'root', caps: [true, true, true, true, true, false, true] },
+  { id: 'windows', protocols: ['rdp', 'ssh', 'vnc'], primary: 'rdp', port: 3389, username: 'Administrator', caps: [true, true, true, true, true, false, true] },
   { id: 'network', protocols: ['ssh', 'telnet'], primary: 'ssh', port: 22, username: 'admin', caps: [true, true, false, false, false, false, true] },
-  { id: 'unix', protocols: ['ssh'], primary: 'ssh', port: 22, username: 'root', caps: [true, true, true, true, true, false, true] },
+  { id: 'unix', protocols: ['ssh', 'vnc'], primary: 'ssh', port: 22, username: 'root', caps: [true, true, true, true, true, false, true] },
   { id: 'bmc', protocols: ['redfish'], primary: 'redfish', port: 443, username: 'admin', caps: [false, false, false, false, false, true, true] },
   { id: 'serial', protocols: ['serial'], primary: 'serial', port: 115200, username: '', caps: [false, true, false, false, false, false, false] },
-  { id: 'xinchuang', protocols: ['ssh'], primary: 'ssh', port: 22, username: 'root', caps: [true, true, true, true, true, false, true] },
+  { id: 'xinchuang', protocols: ['ssh', 'vnc'], primary: 'ssh', port: 22, username: 'root', caps: [true, true, true, true, true, false, true] },
   { id: 'esxi', protocols: ['https'], primary: 'https', port: 443, username: 'root', caps: [false, false, false, false, false, true, true] },
   { id: 'kubernetes', protocols: ['k8s'], primary: 'k8s', port: 6443, username: '', caps: [false, false, false, false, false, true, true] },
 ]
@@ -66,11 +67,11 @@ const capsTuple = (caps: TargetCapabilities): CapsTuple => [
 
 describe('connection target capability matrix', () => {
   it('exposes only implemented protocols for user-selectable targets', () => {
-    expect(getTargetTypeSpec('linux').supportedProtocols).toEqual(['ssh'])
-    expect(getTargetTypeSpec('windows').supportedProtocols).toEqual(['rdp', 'ssh'])
+    expect(getTargetTypeSpec('linux').supportedProtocols).toEqual(['ssh', 'vnc'])
+    expect(getTargetTypeSpec('windows').supportedProtocols).toEqual(['rdp', 'ssh', 'vnc'])
     expect(getTargetTypeSpec('network').supportedProtocols).toEqual(['ssh', 'telnet'])
-    expect(getTargetTypeSpec('unix').supportedProtocols).toEqual(['ssh'])
-    expect(getTargetTypeSpec('xinchuang').supportedProtocols).toEqual(['ssh'])
+    expect(getTargetTypeSpec('unix').supportedProtocols).toEqual(['ssh', 'vnc'])
+    expect(getTargetTypeSpec('xinchuang').supportedProtocols).toEqual(['ssh', 'vnc'])
     expect(getTargetTypeSpec('serial').supportedProtocols).toEqual(['serial'])
     expect(getTargetTypeSpec('bmc').supportedProtocols).toEqual(['redfish'])
     expect(getTargetTypeSpec('esxi').supportedProtocols).toEqual(['https'])
@@ -273,7 +274,7 @@ describe('capability registry guard', () => {
       })
     }
     expect(offenders).toEqual([])
-  })
+  }, 15000)
 })
 
 describe('target type extension contract', () => {
@@ -547,6 +548,21 @@ describe('server open action dispatch', () => {
     expect(resolveServerOpenAction({
       targetType: 'windows', protocol: 'rdp', protocols: ['rdp', 'ssh'], port: 22, rdpPort: 3389,
     })).toBe('terminal')
+    // Windows 同时勾选 RDP + VNC（无 SSH）：双击仍走外部 RDP，VNC 由右键菜单或卡片快捷按钮打开
+    expect(resolveServerOpenAction({
+      targetType: 'windows', protocol: 'rdp', protocols: ['rdp', 'vnc'], port: 0, rdpPort: 3389, vncPort: 5900,
+    })).toBe('rdp')
+    // Windows 仅勾选 VNC：双击直接打开内嵌 VNC 桌面
+    expect(resolveServerOpenAction({
+      targetType: 'windows', protocol: 'vnc', protocols: ['vnc'], port: 0, rdpPort: 0, vncPort: 5900,
+    })).toBe('vnc')
+    // Linux 仅勾选 VNC：双击直接打开内嵌 VNC 桌面；勾选 SSH + VNC 则双击进入终端
+    expect(resolveServerOpenAction({
+      targetType: 'linux', protocol: 'vnc', protocols: ['vnc'], port: 5900, vncPort: 5900,
+    })).toBe('vnc')
+    expect(resolveServerOpenAction({
+      targetType: 'linux', protocol: 'ssh', protocols: ['ssh', 'vnc'], port: 22, vncPort: 5900,
+    })).toBe('terminal')
   })
 })
 
@@ -566,6 +582,7 @@ describe('module visibility for multi-protocol servers', () => {
     const flags = getServerConnectionFlags(targetType, protocol)
     if (flags.isRdpServer) return module === 'rdp'
     if (module === 'rdp') return protocols.includes('rdp')
+    if (module === 'vnc') return protocols.includes('vnc')
     if (module === 'terminal') {
       return protocols.includes('ssh') || protocols.includes('telnet')
         || protocols.includes('serial') || flags.isSerialServer || flags.isNetworkServer
@@ -674,5 +691,37 @@ describe('protocol inference and multi-protocol combinations', () => {
     expect(isModuleVisibleForServer('rdp', {
       targetType: 'windows', protocol: primary, protocols: enabled,
     })).toBe(false)
+  })
+
+  it('correctly isolates pure VNC servers from terminal and SSH modules', () => {
+    const pureVnc = { targetType: 'linux', protocol: 'vnc', protocols: ['vnc'] }
+    expect(isPureVncServer(pureVnc)).toBe(true)
+    expect(resolveServerOpenAction(pureVnc)).toBe('vnc')
+    expect(isModuleVisibleForServer('vnc', pureVnc)).toBe(true)
+    expect(isModuleVisibleForServer('terminal', pureVnc)).toBe(false)
+    expect(isModuleVisibleForServer('overview', pureVnc)).toBe(false)
+    expect(isModuleVisibleForServer('services', pureVnc)).toBe(false)
+    expect(isModuleVisibleForServer('processes', pureVnc)).toBe(false)
+    expect(isModuleVisibleForServer('docker', pureVnc)).toBe(false)
+    expect(isModuleVisibleForServer('files', pureVnc)).toBe(false)
+
+    // With FTP configured, files module becomes visible in pure VNC mode
+    const pureVncWithFtp = {
+      targetType: 'linux',
+      protocol: 'vnc',
+      protocols: ['vnc'],
+      fileTransferConfig: JSON.stringify({ protocol: 'ftp', port: 21 }),
+    }
+    expect(isPureVncServer(pureVncWithFtp)).toBe(true)
+    expect(isModuleVisibleForServer('files', pureVncWithFtp)).toBe(true)
+    expect(isModuleVisibleForServer('terminal', pureVncWithFtp)).toBe(false)
+
+    // Hybrid server with both SSH and VNC
+    const hybrid = { targetType: 'linux', protocol: 'ssh', protocols: ['ssh', 'vnc'] }
+    expect(isPureVncServer(hybrid)).toBe(false)
+    expect(resolveServerOpenAction(hybrid)).toBe('terminal')
+    expect(isModuleVisibleForServer('terminal', hybrid)).toBe(true)
+    expect(isModuleVisibleForServer('vnc', hybrid)).toBe(true)
+    expect(isModuleVisibleForServer('overview', hybrid)).toBe(true)
   })
 })

@@ -1,7 +1,7 @@
 import { memo } from 'react'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { Star, Copy, Check } from 'lucide-react'
+import { Star, Copy, Check, Monitor } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { OsIcon } from '@/components/dashboard/os-icon'
 import type { ServerCardSkinProps } from './types'
@@ -21,10 +21,12 @@ export const DefaultServerCard = memo(function DefaultServerCard({
   const {
     t,
     copied,
+    hasVnc,
     handleCopyIp,
     handleToggleFavorite,
     handleClick,
     handleDoubleClick,
+    handleOpenVnc,
   } = useServerCardActions({ server, onSelect })
 
   return (
@@ -97,6 +99,18 @@ export const DefaultServerCard = memo(function DefaultServerCard({
             >
               {copied ? <Check className="h-3 w-3 text-success" /> : <Copy className="h-3 w-3" />}
             </button>
+            {hasVnc && (
+              <button
+                type="button"
+                onClick={handleOpenVnc}
+                onDoubleClick={(e) => e.stopPropagation()}
+                className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 text-[10px] font-medium transition-all active:scale-95 flex-shrink-0 cursor-pointer"
+                title={t('dash_open_vnc') || '打开 VNC 桌面'}
+              >
+                <Monitor className="h-2.5 w-2.5" />
+                <span>VNC</span>
+              </button>
+            )}
           </div>
         </div>
       </div>

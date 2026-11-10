@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo, useDeferredValue } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { getServerConnectionFlags } from '@/services/connection-targets'
+import { getServerConnectionFlags, hasFtpFileTransfer, getServerFileTransferProtocol } from '@/services/connection-targets'
 import { useMarqueeSelection } from '@/hooks/use-marquee-selection'
 import { MarqueeRect } from '@/components/ui/marquee-rect'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -222,6 +222,9 @@ export function FilesModule({
   const isWindows = serverFlags.isWindowsServer
   const isTelnet = serverFlags.isTelnetServer
   const isNetwork = serverFlags.isNetworkServer
+  const isFtpBackend = hasFtpFileTransfer(server)
+  const effectiveConnected = isConnected || isFtpBackend
+  const ftProtocolName = getServerFileTransferProtocol(server).toUpperCase()
   const [currentPath, setCurrentPath] = useState('')
   const [files, setFiles] = useState<FileEntry[]>([])
   const [selectedFiles, setSelectedFiles] = useState<string[]>([])
@@ -645,7 +648,9 @@ export function FilesModule({
   // 第二次 effect 能正常重新初始化（否则第一次 init 被 cancelled、第二次被 ref 拦截，
   // 导致 currentPath 永不设置、右侧文件列表不刷新）
   useEffect(() => {
-    if (!isConnected || isTelnet || isNetwork) return
+    if (!effectiveConnected || isTelnet || isNetwork) return
+    // 惰性加载：非 SFTP 协议（独立 FTP/FTPS）只有当用户真正展开/激活文件面板时才建立连接与加载，避免打扰纯终端会话
+    if (isFtpBackend && !isActive) return
     if (filesInitializedRef.current) return
     filesInitializedRef.current = true
     // 新会话重置终端目录跟随标记：重连后允许重新跟随新 shell 的目录
@@ -743,7 +748,7 @@ export function FilesModule({
       // 2. 依赖变化（isConnected 断开→重连）：重置 ref 允许重连后重新加载文件列表
       filesInitializedRef.current = false
     }
-  }, [isConnected, serverId, loadNodeChildren, isTelnet, isNetwork, t])
+  }, [effectiveConnected, isFtpBackend, isActive, serverId, loadNodeChildren, isTelnet, isNetwork, t])
 
   // 终端目录跟随（与成熟产品一致）：OSC 7 / 标题 / cd 拦截触发即时推送跟随，
   // 800ms 轮询作为兜底（覆盖无 OSC 7 的 shell、漏报等场景）。
@@ -1744,8 +1749,9 @@ export function FilesModule({
   }
 
   // 格式化错误信息为友好的中文弹框内容（过滤网络连接/超时类错误，此类状态由工作区状态机/重连条承载，避免弹出侵入式全屏模态框）
-  const shouldShowDialog = error && !isSftpConnectionError(error)
-  const formattedError = shouldShowDialog ? formatSftpError(error) : null
+  // 非激活状态（例如在终端敲命令、文件面板收起在后台时）静默记录错误，绝不弹出侵入式全屏模态框打断用户
+  const shouldShowDialog = Boolean(error && isActive && !isSftpConnectionError(error))
+  const formattedError = shouldShowDialog && error ? formatSftpError(error) : null
 
   if (isTelnet || isNetwork) {
     return (
@@ -1846,7 +1852,7 @@ export function FilesModule({
             setCtxMenu({ x: e.clientX, y: e.clientY, file: null })
           }}
         >
-          {!isConnected && files.length === 0 && !loading ? (
+          {!effectiveConnected && files.length === 0 && !loading ? (
             <div className="flex flex-col items-center justify-center py-20 text-muted-foreground select-none">
               <FolderOpen className="h-12 w-12 mb-3 opacity-20" />
               <p className="text-sm font-medium">{t('ws_not_connected') || '未连接服务器'}</p>

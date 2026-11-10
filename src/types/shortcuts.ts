@@ -116,6 +116,13 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
     scope: 'terminal',
     defaultKey: 'Mod+0',
   },
+  {
+    id: 'terminal.quickCommand',
+    titleKey: 'shortcut_terminal_quick_command',
+    descKey: 'shortcut_terminal_quick_command_desc',
+    scope: 'global',
+    defaultKey: 'Alt+C',
+  },
 
   // ── SFTP 文件管理 ──
   {

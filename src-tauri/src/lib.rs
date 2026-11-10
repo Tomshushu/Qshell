@@ -14,11 +14,13 @@ pub mod ssh;
 mod connection;
 mod metrics;
 mod files;
+pub mod ftp;
 mod parsers;
 mod commands;
 mod state;
 mod targets;
 mod rdp;
+mod vnc;
 mod telnet;
 mod session;
 mod https_device;
@@ -337,6 +339,7 @@ pub fn run() {
             commands::logs::record_audit_log,
             commands::logs::audit_logs_count,
             // 文件管理
+            commands::files::files_test_ftp_connection,
             commands::files::files_list,
             commands::files::files_list_drives,
             commands::files::files_read,
@@ -363,13 +366,18 @@ pub fn run() {
             commands::files::files_cleanup_tmp_file,
             commands::files::files_set_rate_limit,
             commands::files::files_set_exclusion_config,
+            commands::files::files_set_symlink_policy,
             commands::files::files_search_recursive,
             commands::files::files_diagnose_sftp,
             commands::files::files_get_system_roots,
             commands::files::files_list_local_directory,
+            commands::files::files_scan_directory_tree,
             commands::files::files_extract_archive,
             commands::files::files_install_extraction_tool,
             commands::files::files_get_local_upload_stats,
+            commands::files::files_start_external_edit,
+            commands::files::files_stop_external_edit,
+            commands::files::files_list_active_external_edits,
             // 系统打开器（绕开 shell 插件 open 的 URL scope 限制）
             commands::open::open_path,
             commands::files::files_get_quick_access,
@@ -434,6 +442,7 @@ pub fn run() {
             commands::fav_cmds::fav_cmds_list,
             commands::fav_cmds::fav_cmds_add,
             commands::fav_cmds::fav_cmds_update,
+            commands::fav_cmds::fav_cmds_set_all,
             commands::fav_cmds::fav_cmds_delete,
             commands::fav_cmds::fav_cmds_restore,
             // 书签（仅保留云同步所需的导出/还原；增删改 UI 已移除）
@@ -504,6 +513,10 @@ pub fn run() {
             commands::mcp_client::mcp_client_test_connection,
             commands::mcp_client::mcp_client_list_active_tools,
             commands::mcp_client::mcp_client_call_tool,
+            // VNC 内嵌远程桌面桥接与连接检测
+            commands::vnc::vnc_start_session,
+            commands::vnc::vnc_stop_session,
+            commands::vnc::vnc_test_connection,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

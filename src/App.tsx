@@ -23,6 +23,7 @@ import { AlertCircle, Copy, ShieldCheck } from 'lucide-react'
 import { useEffect, useCallback, useState } from 'react'
 import { StabilityTestPanel } from '@/components/dev/stability-test-panel'
 import { CommandPalette } from '@/components/command-palette'
+import { QuickCommandPaletteModal } from '@/components/terminal/quick-command-palette-modal'
 import { useAppIdleLock } from '@/hooks/use-app-idle-lock'
 import { AppLockOverlay } from '@/components/layout/app-lock-overlay'
 import { AppLockSetupDialog } from '@/components/layout/app-lock-setup-dialog'
@@ -633,6 +634,9 @@ function AppContent() {
 
       {/* 全局命令面板（⌘K / Ctrl+K 打开） */}
       <CommandPalette />
+
+      {/* 快捷命令中心弹框（Alt+C 或底栏快捷命令按钮打开） */}
+      <QuickCommandPaletteModal />
 
       {/* 退出应用二次确认弹窗（存在活跃传输时拦截） */}
       <ConfirmDialog

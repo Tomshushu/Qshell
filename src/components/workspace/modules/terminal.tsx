@@ -29,6 +29,14 @@ import {
 } from "./serial-sequence-dialog";
 import { SerialIapDialog } from "./serial-iap-dialog";
 import {
+  createSendExpectState,
+  processSendExpectChunk,
+  cleanupSendExpectState,
+  ProgrammableScriptController,
+  type SendExpectExecutionState,
+  type LogonScriptContext,
+} from "@/lib/send-expect-matcher";
+import {
   type SerialChecksumType,
   appendChecksumToHex,
 } from "@/lib/serial-checksum";
@@ -39,6 +47,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import type { SessionLoggingConfig } from "@/types";
 import { sshService } from "@/services/ssh-service";
 import { backend } from "@/services/api";
 import { useAppStore } from "@/store";
@@ -697,6 +706,18 @@ export function TerminalModule({
     (s) => s.terminalRecordingMaxSizeMb,
   );
   const terminalEncoding = useAppStore((s) => s.terminalEncoding);
+  const terminalShowTimestamps = useAppStore((s) => s.terminalShowTimestamps);
+  const terminalShowTimestampsRef = useLatestRef(terminalShowTimestamps);
+  const terminalAutoLogSession = useAppStore((s) => s.terminalAutoLogSession);
+  const terminalAutoLogSessionRef = useLatestRef(terminalAutoLogSession);
+  const terminalSessionLogFormat = useAppStore((s) => s.terminalSessionLogFormat);
+  const terminalSessionLogFormatRef = useLatestRef(terminalSessionLogFormat);
+
+  // 每个终端的时间戳显示开关覆盖 Map（默认回退到全局设置）
+  const [showTimestampsMap, setShowTimestampsMap] = useState<Map<string, boolean>>(new Map());
+  const showTimestampsMapRef = useLatestRef(showTimestampsMap);
+  const terminalLineStartMapRef = useRef<Map<string, boolean>>(new Map());
+  const sendExpectStatesRef = useRef<Map<string, SendExpectExecutionState>>(new Map());
 
   // 编码变更只影响文本通道；ZMODEM 仍由独立的二进制通道处理。
   useEffect(() => {
@@ -3110,6 +3131,56 @@ export function TerminalModule({
             outputData = tsParts.join("");
           }
         }
+      } else {
+        // 非串口终端（SSH / Telnet / 本地终端等）：
+        // 若当前会话开启了实时时间戳显示，且未处于全屏 alternate 缓冲区（如 vim/htop/less，避免破坏全屏 UI 定位）
+        const isTimestampActive = showTimestampsMapRef.current.get(termId) ?? terminalShowTimestampsRef.current;
+        if (isTimestampActive && inst?.term?.buffer?.active?.type !== "alternate") {
+          const isStart = terminalLineStartMapRef.current.get(termId) ?? true;
+          const now = new Date();
+          const h = String(now.getHours()).padStart(2, "0");
+          const m = String(now.getMinutes()).padStart(2, "0");
+          const s = String(now.getSeconds()).padStart(2, "0");
+          const ms = String(now.getMilliseconds()).padStart(3, "0");
+          const ts = `\x1b[90m[${h}:${m}:${s}.${ms}]\x1b[0m `;
+
+          const tsParts: string[] = [];
+          let atStart = isStart;
+          for (let i = 0; i < outputData.length; i++) {
+            const ch = outputData[i];
+            if (atStart && ch !== "\r" && ch !== "\n") {
+              tsParts.push(ts);
+              atStart = false;
+            }
+            tsParts.push(ch);
+            if (ch === "\n") {
+              atStart = true;
+            }
+          }
+          terminalLineStartMapRef.current.set(termId, atStart);
+          outputData = tsParts.join("");
+        }
+      }
+
+      // Send-Expect 登录与交互脚本流式匹配
+      const seState = sendExpectStatesRef.current.get(termId);
+      if (seState) {
+        processSendExpectChunk(seState, data, (rule, steps) => {
+          (async () => {
+            const xinst = xtermInstances.current.get(termId);
+            if (!xinst?.sessionId) return;
+            for (const step of steps) {
+              if (step.type === "pause") {
+                await new Promise((resolve) => setTimeout(resolve, step.ms));
+              } else if (step.type === "send") {
+                const payload = rule.sendEnter ? step.text + "\r" : step.text;
+                await sshService.writeToShell(xinst.sessionId, payload);
+              }
+            }
+          })().catch((err) => {
+            console.error("[Send-Expect Execution Error]:", err);
+          });
+        });
       }
 
       if (
@@ -3193,6 +3264,238 @@ export function TerminalModule({
     [appendRecordingData, writeTerminalOutput],
   );
 
+  const startRecording = useCallback(
+    async (
+      termId: string,
+      options?: {
+        directory?: string;
+        fileNamePattern?: string;
+        silent?: boolean;
+      },
+    ) => {
+      const next = new Set(recordingTermIdsRef.current);
+      if (next.has(termId)) return;
+
+      let directory = options?.directory || terminalRecordingDirectory;
+      if (!directory) {
+        if (options?.silent) return; // 静默启动不弹出目录选择
+        const selected = await openDialog({
+          directory: true,
+          multiple: false,
+          title: t("recording_select_directory"),
+        });
+        if (typeof selected !== "string" || !selected) return;
+        directory = selected;
+        setTerminalRecordingDirectory(selected);
+      }
+
+      const now = new Date();
+      const safeName = (server?.name || "terminal").replace(
+        /[<>:"/\\|?*\p{Cc}]/gu,
+        "_",
+      );
+      const safeHost = (server?.host || "localhost").replace(
+        /[<>:"/\\|?*\p{Cc}]/gu,
+        "_",
+      );
+      const safeUser = (server?.username || "user").replace(
+        /[<>:"/\\|?*\p{Cc}]/gu,
+        "_",
+      );
+      const yyyy = String(now.getFullYear());
+      const MM = String(now.getMonth() + 1).padStart(2, "0");
+      const dd = String(now.getDate()).padStart(2, "0");
+      const hh = String(now.getHours()).padStart(2, "0");
+      const mm = String(now.getMinutes()).padStart(2, "0");
+      const ss = String(now.getSeconds()).padStart(2, "0");
+
+      let baseName = `${safeName}-${now.toISOString().replace(/[:.]/g, "-")}-${termId.slice(-8)}`;
+      if (options?.fileNamePattern?.trim()) {
+        const expanded = options.fileNamePattern
+          .replace(/%n/g, safeName)
+          .replace(/%h/g, safeHost)
+          .replace(/%u/g, safeUser)
+          .replace(/%p/g, String(server?.port || 22))
+          .replace(/%d/g, `${yyyy}${MM}${dd}`)
+          .replace(/%t/g, `${hh}${mm}${ss}`)
+          .replace(/%s/g, termId.slice(-8))
+          .replace(/[<>:"/\\|?*\p{Cc}]/gu, "_")
+          .replace(/\.log$|\.txt$/i, "");
+        if (expanded) baseName = expanded;
+      }
+
+      const filePath = await join(directory, `${baseName}-part-001.log.txt`);
+      const sessionPath = await join(directory, `${baseName}.session.jsonl`);
+      const startedAt = Date.now();
+      const recordingSessionId = crypto.randomUUID();
+
+      try {
+        await writeTextFile(filePath, "", { create: true });
+        await writeTextFile(
+          sessionPath,
+          serializeSessionEvent(startedAt, "session_start", {
+            sessionId: recordingSessionId,
+            terminalId: termId,
+            shellSessionId:
+              terminalsRef.current.get(termId)?.sessionId ?? null,
+            serverId,
+            serverName: server?.name || "terminal",
+            host: server?.host,
+            port: server?.port,
+            username: server?.username,
+            encoding: terminalEncoding,
+            firstPart: `${baseName}-part-001.log.txt`,
+          }),
+          { create: true },
+        );
+      } catch (error) {
+        if (!options?.silent) {
+          toastRef.current.error(
+            t("recording_create_failed", {
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          );
+        }
+        return;
+      }
+
+      next.add(termId);
+      recordingFilePathsRef.current.set(termId, filePath);
+      recordingLastPathRef.current.set(termId, filePath);
+      recordingFileStatesRef.current.set(termId, {
+        directory,
+        baseName,
+        path: filePath,
+        bytes: 0,
+        part: 1,
+        maxBytes: terminalRecordingMaxSizeMb * 1024 * 1024,
+        sessionPath,
+        startedAt,
+        sessionId: recordingSessionId,
+      });
+      recordingWriteErrorNotifiedRef.current.delete(termId);
+      recordingPendingCharsRef.current.set(termId, 0);
+      recordingWriteChainsRef.current.set(termId, Promise.resolve());
+      if (!options?.silent) {
+        toastRef.current.success(t("recording_started"));
+      }
+      recordingTermIdsRef.current = next;
+      setRecordingTermIds(next);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      appendSessionEvent,
+      server?.name,
+      server?.host,
+      server?.port,
+      server?.username,
+      serverId,
+      t,
+      terminalEncoding,
+      terminalRecordingDirectory,
+      terminalRecordingMaxSizeMb,
+      setTerminalRecordingDirectory,
+    ],
+  );
+
+  const checkAndStartAutoSessionLogging = useCallback(
+    async (termId: string) => {
+      if (recordingTermIdsRef.current.has(termId)) return;
+      let shouldLog = terminalAutoLogSessionRef.current;
+      let customDir: string | undefined;
+      let customPattern: string | undefined;
+
+      if (server?.sessionLoggingConfig) {
+        try {
+          const cfg = JSON.parse(server.sessionLoggingConfig) as SessionLoggingConfig;
+          if (cfg.enabled) {
+            shouldLog = true;
+            customDir = cfg.directory;
+            customPattern = cfg.fileNamePattern;
+          } else {
+            shouldLog = false;
+          }
+        } catch {
+          // ignore parse error
+        }
+      }
+
+      if (shouldLog) {
+        void startRecording(termId, {
+          directory: customDir,
+          fileNamePattern: customPattern,
+          silent: true,
+        });
+      }
+    },
+    [server?.sessionLoggingConfig, startRecording, terminalAutoLogSessionRef],
+  );
+
+  const initSendExpect = useCallback(
+    (termId: string, cleanups: Array<() => void>) => {
+      const globalLogonConfig = useAppStore.getState().globalLogonScriptsConfig;
+      const logonConfigStr = server?.logonScriptsConfig;
+      if (!logonConfigStr && (!globalLogonConfig || !globalLogonConfig.enabled)) return;
+
+      const context: LogonScriptContext = {
+        username: server?.username || "",
+        host: server?.host || "",
+        port: server?.port || 22,
+        serverName: server?.name || "",
+      };
+
+      const seState = createSendExpectState(
+        logonConfigStr,
+        context,
+        (rule, action) => {
+          if (action === "disconnect") {
+            toastRef.current.error(`[登录脚本超时断开] 期待 "${rule.expect}" 超时`);
+            const xinst = xtermInstances.current.get(termId);
+            if (xinst?.sessionId) {
+              void sshService.closeShell(xinst.sessionId);
+            }
+          } else if (action === "warn") {
+            toastRef.current.warning(`[登录脚本超时警告] 期待 "${rule.expect}" 超时`);
+          }
+        },
+        globalLogonConfig,
+      );
+
+      if (seState) {
+        sendExpectStatesRef.current.set(termId, seState);
+        cleanups.push(() => {
+          cleanupSendExpectState(seState);
+          sendExpectStatesRef.current.delete(termId);
+        });
+
+        if (seState.config.mode === "script" && seState.config.customScript) {
+          const controller = new ProgrammableScriptController(
+            async (text: string) => {
+              const xinst = xtermInstances.current.get(termId);
+              if (xinst?.sessionId) {
+                await sshService.writeToShell(xinst.sessionId, text);
+              }
+            },
+            context,
+            {
+              toast: (msg: string, variant?: "info" | "success" | "warning" | "error") => {
+                if (variant === "error") toastRef.current.error(msg);
+                else if (variant === "warning") toastRef.current.warning(msg);
+                else if (variant === "success") toastRef.current.success(msg);
+                else toastRef.current.info(msg);
+              },
+            },
+          );
+          seState.scriptRunner = controller;
+          controller.runScript(seState.config.customScript).catch((err: unknown) => {
+            console.error("[Programmable Logon Script Error]:", err);
+          });
+        }
+      }
+    },
+    [server?.logonScriptsConfig, server?.username, server?.host, server?.port, server?.name],
+  );
+
   const toggleRecording = useCallback(
     async (termId: string) => {
       const next = new Set(recordingTermIdsRef.current);
@@ -3240,89 +3543,12 @@ export function TerminalModule({
           toastRef.current.success(message);
         }
       } else {
-        let directory = terminalRecordingDirectory;
-        if (!directory) {
-          const selected = await openDialog({
-            directory: true,
-            multiple: false,
-            title: t("recording_select_directory"),
-          });
-          if (typeof selected !== "string" || !selected) return;
-          directory = selected;
-          setTerminalRecordingDirectory(selected);
-        }
-        const safeName = (server?.name || "terminal").replace(
-          /[<>:"/\\|?*\p{Cc}]/gu,
-          "_",
-        );
-        const baseName = `${safeName}-${new Date().toISOString().replace(/[:.]/g, "-")}-${termId.slice(-8)}`;
-        const filePath = await join(directory, `${baseName}-part-001.log.txt`);
-        const sessionPath = await join(directory, `${baseName}.session.jsonl`);
-        const startedAt = Date.now();
-        const recordingSessionId = crypto.randomUUID();
-        try {
-          await writeTextFile(filePath, "", { create: true });
-          await writeTextFile(
-            sessionPath,
-            serializeSessionEvent(startedAt, "session_start", {
-              sessionId: recordingSessionId,
-              terminalId: termId,
-              shellSessionId:
-                terminalsRef.current.get(termId)?.sessionId ?? null,
-              serverId,
-              serverName: server?.name || "terminal",
-              host: server?.host,
-              port: server?.port,
-              username: server?.username,
-              encoding: terminalEncoding,
-              firstPart: `${baseName}-part-001.log.txt`,
-            }),
-            { create: true },
-          );
-        } catch (error) {
-          toastRef.current.error(
-            t("recording_create_failed", {
-              error: error instanceof Error ? error.message : String(error),
-            }),
-          );
-          return;
-        }
-        next.add(termId);
-        recordingFilePathsRef.current.set(termId, filePath);
-        recordingLastPathRef.current.set(termId, filePath);
-        recordingFileStatesRef.current.set(termId, {
-          directory,
-          baseName,
-          path: filePath,
-          bytes: 0,
-          part: 1,
-          maxBytes: terminalRecordingMaxSizeMb * 1024 * 1024,
-          sessionPath,
-          startedAt,
-          sessionId: recordingSessionId,
-        });
-        recordingWriteErrorNotifiedRef.current.delete(termId);
-        recordingPendingCharsRef.current.set(termId, 0);
-        recordingWriteChainsRef.current.set(termId, Promise.resolve());
-        toastRef.current.success(t("recording_started"));
+        await startRecording(termId);
       }
       recordingTermIdsRef.current = next;
       setRecordingTermIds(next);
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [
-      appendRecordingData,
-      appendSessionEvent,
-      server?.name,
-      server?.host,
-      server?.port,
-      server?.username,
-      serverId,
-      setTerminalRecordingDirectory,
-      terminalRecordingDirectory,
-      terminalRecordingMaxSizeMb,
-      terminalEncoding,
-    ],
+    [startRecording, appendSessionEvent, t],
   );
 
   // 创建新终端
@@ -4155,6 +4381,8 @@ export function TerminalModule({
           lastActivityTimesRef.current.set(sessionId, Date.now());
         }
         onShellReady?.();
+        void checkAndStartAutoSessionLogging(termId);
+        initSendExpect(termId, cleanups);
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         // 失败时逆序释放已收集的清理函数，防止订阅泄漏（B1/B2）
@@ -4830,6 +5058,17 @@ export function TerminalModule({
             event.preventDefault();
             event.stopPropagation();
             handleTriggerAppLock();
+            return false;
+          }
+
+          // 快捷命令中心（支持自定义快捷键，默认 Alt+C）
+          if (
+            shortcutStore.matchesAction(event, "terminal.quickCommand") ||
+            (event.altKey && (event.key === "c" || event.key === "C" || event.code === "KeyC"))
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            window.dispatchEvent(new CustomEvent("qshell:toggle-quick-commands"));
             return false;
           }
 
@@ -5856,6 +6095,8 @@ export function TerminalModule({
         }
 
         onShellReady?.();
+        void checkAndStartAutoSessionLogging(termId);
+        initSendExpect(termId, cleanups);
 
         // 保存 sessionId 到 xtermInstances，供复制粘贴事件使用
         const xinst = xtermInstances.current.get(termId);
@@ -5987,6 +6228,8 @@ export function TerminalModule({
           lastActivityTimesRef.current.set(sessionId, Date.now());
         }
         onShellReady?.();
+        void checkAndStartAutoSessionLogging(termId);
+        initSendExpect(termId, cleanups);
         term.focus(); // 连接成功且数据就绪，立即上焦点可输入
 
         // 监听 Shell 关闭
@@ -6556,6 +6799,118 @@ export function TerminalModule({
     toastRef.current?.success(t("recording_dir_saved"));
   }, [setTerminalRecordingDirectory]);
 
+  // 导出终端纯文本审计日志（完全剔除 ANSI 控制字符）
+  const handleExportPlainLog = useCallback(async () => {
+    const termId = activeTermId;
+    setCtxMenu(null);
+    if (!termId) return;
+    const inst = xtermInstances.current.get(termId);
+    if (!inst?.term) return;
+
+    const buffer = inst.term.buffer.active;
+    const lines: string[] = [];
+    for (let i = 0; i < buffer.length; i++) {
+      const line = buffer.getLine(i);
+      if (line) {
+        lines.push(line.translateToString(true));
+      }
+    }
+    while (lines.length > 0 && lines[lines.length - 1] === "") {
+      lines.pop();
+    }
+    if (lines.length === 0) {
+      toastRef.current.info(t("term_export_empty"));
+      return;
+    }
+    const content = lines.join("\r\n");
+    const safeName = (server?.name || "terminal").replace(/[<>:"/\\|?*\p{Cc}]/gu, "_");
+    const dateStr = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const defaultPath = `${safeName}_audit_${dateStr}.log`;
+
+    try {
+      const filePath = await saveDialog({
+        title: t("term_export_plain_log"),
+        defaultPath,
+        filters: [
+          { name: "Log Files (*.log, *.txt)", extensions: ["log", "txt"] },
+          { name: "All Files (*.*)", extensions: ["*"] },
+        ],
+      });
+      if (!filePath) return;
+      await writeTextFile(filePath, content, { create: true });
+      toastRef.current.success(t("term_export_saved", { path: filePath }));
+    } catch (err) {
+      toastRef.current.error(t("term_export_failed", {
+        error: err instanceof Error ? err.message : String(err),
+      }));
+    }
+  }, [activeTermId, server?.name, t]);
+
+  // 导出带时间戳终端日志
+  const handleExportTimestampedLog = useCallback(async () => {
+    const termId = activeTermId;
+    setCtxMenu(null);
+    if (!termId) return;
+    const inst = xtermInstances.current.get(termId);
+    if (!inst?.term) return;
+
+    const buffer = inst.term.buffer.active;
+    const lines: string[] = [];
+    const now = new Date();
+    const datePrefix = `[${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")} `;
+    for (let i = 0; i < buffer.length; i++) {
+      const line = buffer.getLine(i);
+      if (line) {
+        const rawLine = line.translateToString(true);
+        if (rawLine && !/^\[\d{2}:\d{2}:\d{2}/.test(rawLine)) {
+          lines.push(`${datePrefix}${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}] ${rawLine}`);
+        } else {
+          lines.push(rawLine);
+        }
+      }
+    }
+    while (lines.length > 0 && lines[lines.length - 1] === "") {
+      lines.pop();
+    }
+    if (lines.length === 0) {
+      toastRef.current.info(t("term_export_empty"));
+      return;
+    }
+    const content = lines.join("\r\n");
+    const safeName = (server?.name || "terminal").replace(/[<>:"/\\|?*\p{Cc}]/gu, "_");
+    const dateStr = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    const defaultPath = `${safeName}_timestamped_${dateStr}.log`;
+
+    try {
+      const filePath = await saveDialog({
+        title: t("term_export_timestamped_log"),
+        defaultPath,
+        filters: [
+          { name: "Log Files (*.log, *.txt)", extensions: ["log", "txt"] },
+          { name: "All Files (*.*)", extensions: ["*"] },
+        ],
+      });
+      if (!filePath) return;
+      await writeTextFile(filePath, content, { create: true });
+      toastRef.current.success(t("term_export_saved", { path: filePath }));
+    } catch (err) {
+      toastRef.current.error(t("term_export_failed", {
+        error: err instanceof Error ? err.message : String(err),
+      }));
+    }
+  }, [activeTermId, server?.name, t]);
+
+  // 切换当前终端的时间戳注入模式
+  const handleToggleShowTimestamps = useCallback(() => {
+    if (!activeTermId) return;
+    setShowTimestampsMap((prev) => {
+      const next = new Map(prev);
+      const current = next.get(activeTermId) ?? terminalShowTimestampsRef.current;
+      next.set(activeTermId, !current);
+      return next;
+    });
+  }, [activeTermId, terminalShowTimestampsRef]);
+
   // 右键菜单打开时，L/O/N 触发清屏（仿 Xshell 菜单助记符）。
   // 用捕获阶段拦截：防止按键被 xterm 抢走并误发到 shell。
   useEffect(() => {
@@ -6999,6 +7354,9 @@ export function TerminalModule({
       discardedShellOutputThroughRef.current.clear();
       serialPausedOutputRef.current.clear();
       serialLineStartMapRef.current.clear();
+      terminalLineStartMapRef.current.clear();
+      sendExpectStatesRef.current.forEach((st) => cleanupSendExpectState(st));
+      sendExpectStatesRef.current.clear();
       pausedShellsRef.current.clear();
       sigintActiveUntilRef.current.clear();
       sigintDroppedCharsRef.current.clear();
@@ -7144,7 +7502,12 @@ export function TerminalModule({
     };
 
     const handleInsertCommand = (e: Event) => {
-      const customEvent = e as CustomEvent<{ command?: string; execute?: boolean }>;
+      const customEvent = e as CustomEvent<{
+        command?: string;
+        execute?: boolean;
+        source?: string;
+        bypassAiGuard?: boolean;
+      }>;
       if (!isActiveRef.current || !isVisibleRef.current) return;
       const cmd = customEvent.detail?.command;
       if (!cmd) return;
@@ -7183,16 +7546,23 @@ export function TerminalModule({
       }
 
       if (targetSessionId) {
-        // 统一裁决点：所有「在终端运行 / 右键执行」事件都经过这里。
-        // 只读问答与询问确认模式下，一键执行降级为「仅填入」，由用户回车完成显式确认，
-        // 避免任何派发入口绕过 AI 执行模式。
+        // 快捷命令由用户显式配置并手动触发，不受 AI 助手只读问答/确认策略拦截；
+        // 只有未声明为快捷命令/用户显式命令的请求（如来自 AI 助手的生成卡片），才受 AI 模式裁决。
+        const isUserExplicit =
+          customEvent.detail?.source === "quick-command" ||
+          customEvent.detail?.source === "user" ||
+          customEvent.detail?.bypassAiGuard === true;
+
         const aiMode = useAIStore.getState().getEffectiveExecutionMode();
         const wantsExecute = customEvent.detail.execute === true;
-        const shouldExecute = shouldAutoRunTerminalCommand(aiMode, wantsExecute);
+        const shouldExecute = isUserExplicit
+          ? wantsExecute
+          : shouldAutoRunTerminalCommand(aiMode, wantsExecute);
+
         writePasteText(cmd, targetSessionId, {
           execute: shouldExecute,
         });
-        if (wantsExecute && !shouldExecute) {
+        if (!isUserExplicit && wantsExecute && !shouldExecute) {
           toastRef.current?.info(
             aiMode === "disabled"
               ? "当前为只读问答模式，命令已填入终端但不会自动执行"
@@ -8347,6 +8717,7 @@ export function TerminalModule({
     active?.term.clear();
     serialPausedOutputRef.current.delete(activeTermId);
     serialLineStartMapRef.current.delete(activeTermId);
+    terminalLineStartMapRef.current.delete(activeTermId);
     setPendingOutputCounts((previous) => {
       const next = new Map(previous);
       next.delete(activeTermId);
@@ -9290,6 +9661,10 @@ export function TerminalModule({
         onClearScreen={handleClearScreen}
         onClearScrollback={handleClearScrollback}
         onClearAll={handleClearAll}
+        onExportPlainLog={handleExportPlainLog}
+        onExportTimestampedLog={handleExportTimestampedLog}
+        showTimestamps={activeTermId ? (showTimestampsMap.get(activeTermId) ?? terminalShowTimestamps) : terminalShowTimestamps}
+        onToggleShowTimestamps={handleToggleShowTimestamps}
         onToggleRecording={handleToggleRecordingMenu}
         onPauseRecording={handlePauseRecordingMenu}
         onResumeRecording={handleResumeRecordingMenu}

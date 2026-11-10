@@ -273,7 +273,7 @@ pub struct TargetSpec {
 pub const TARGET_SPECS: &[TargetSpec] = &[
     TargetSpec {
         target: TargetType::Linux,
-        protocols: &[ConnectionProtocol::Ssh],
+        protocols: &[ConnectionProtocol::Ssh, ConnectionProtocol::Vnc],
         primary_protocol: ConnectionProtocol::Ssh,
         default_port: 22,
         default_username: "root",
@@ -281,7 +281,7 @@ pub const TARGET_SPECS: &[TargetSpec] = &[
     },
     TargetSpec {
         target: TargetType::Windows,
-        protocols: &[ConnectionProtocol::Rdp, ConnectionProtocol::Ssh],
+        protocols: &[ConnectionProtocol::Rdp, ConnectionProtocol::Ssh, ConnectionProtocol::Vnc],
         primary_protocol: ConnectionProtocol::Rdp,
         default_port: 3389,
         default_username: "Administrator",
@@ -297,7 +297,7 @@ pub const TARGET_SPECS: &[TargetSpec] = &[
     },
     TargetSpec {
         target: TargetType::Unix,
-        protocols: &[ConnectionProtocol::Ssh],
+        protocols: &[ConnectionProtocol::Ssh, ConnectionProtocol::Vnc],
         primary_protocol: ConnectionProtocol::Ssh,
         default_port: 22,
         default_username: "root",
@@ -321,7 +321,7 @@ pub const TARGET_SPECS: &[TargetSpec] = &[
     },
     TargetSpec {
         target: TargetType::Xinchuang,
-        protocols: &[ConnectionProtocol::Ssh],
+        protocols: &[ConnectionProtocol::Ssh, ConnectionProtocol::Vnc],
         primary_protocol: ConnectionProtocol::Ssh,
         default_port: 22,
         default_username: "root",
@@ -505,7 +505,7 @@ pub const PROTOCOL_AUTH: &[(ConnectionProtocol, &[&str])] = &[
     (ConnectionProtocol::Rdp, &["password"]),
     (ConnectionProtocol::Winrm, &["password", "credentialConfig"]),
     (ConnectionProtocol::Telnet, &["password"]),
-    (ConnectionProtocol::Vnc, &["password"]),
+    (ConnectionProtocol::Vnc, &["password", "privateKey", "sshAgent", "certificate"]),
     (ConnectionProtocol::Serial, &["password"]),
     (ConnectionProtocol::Redfish, &["password"]),
     (ConnectionProtocol::Https, &["password", "credentialConfig"]),
@@ -675,13 +675,13 @@ mod tests {
     /// caps 顺序：ssh_backed, terminal, metrics, files, probe, tls_cert_override, requires_host。
     /// 两侧同时断言（含能力位），任何一侧新增/修改设备类型都必须同步另一侧。
     const FRONTEND_MIRROR: &[(&str, &[&str], &str, i32, &str, [bool; 7])] = &[
-        ("linux", &["ssh"], "ssh", 22, "root", [true, true, true, true, true, false, true]),
-        ("windows", &["rdp", "ssh"], "rdp", 3389, "Administrator", [true, true, true, true, true, false, true]),
+        ("linux", &["ssh", "vnc"], "ssh", 22, "root", [true, true, true, true, true, false, true]),
+        ("windows", &["rdp", "ssh", "vnc"], "rdp", 3389, "Administrator", [true, true, true, true, true, false, true]),
         ("network", &["ssh", "telnet"], "ssh", 22, "admin", [true, true, false, false, false, false, true]),
-        ("unix", &["ssh"], "ssh", 22, "root", [true, true, true, true, true, false, true]),
+        ("unix", &["ssh", "vnc"], "ssh", 22, "root", [true, true, true, true, true, false, true]),
         ("bmc", &["redfish"], "redfish", 443, "admin", [false, false, false, false, false, true, true]),
         ("serial", &["serial"], "serial", 115200, "", [false, true, false, false, false, false, false]),
-        ("xinchuang", &["ssh"], "ssh", 22, "root", [true, true, true, true, true, false, true]),
+        ("xinchuang", &["ssh", "vnc"], "ssh", 22, "root", [true, true, true, true, true, false, true]),
         ("esxi", &["https"], "https", 443, "root", [false, false, false, false, false, true, true]),
         ("kubernetes", &["k8s"], "k8s", 6443, "", [false, false, false, false, false, true, true]),
     ];
@@ -701,7 +701,8 @@ mod tests {
         assert!(validate_target_protocol("network", "telnet").is_ok());
         assert!(validate_target_protocol("bmc", "redfish").is_ok());
         assert!(validate_target_protocol("linux", "rdp").is_err());
-        assert!(validate_target_protocol("linux", "vnc").is_err());
+        assert!(validate_target_protocol("linux", "vnc").is_ok());
+        assert!(validate_target_protocol("windows", "vnc").is_ok());
         assert!(validate_target_protocol("serial", "ssh").is_err());
     }
 
@@ -777,7 +778,8 @@ mod tests {
         assert!(validate_target_protocol("", "").is_ok());
         // 但非法组合与未实现协议仍然拒绝
         assert!(validate_target_protocol("linux", "rdp").is_err());
-        assert!(validate_target_protocol("linux", "vnc").is_err());
+        assert!(validate_target_protocol("linux", "vnc").is_ok());
+        assert!(validate_target_protocol("windows", "vnc").is_ok());
         // 读取历史数据仍兼容
         assert_eq!(TargetType::from_str_lossy("k8s"), TargetType::Linux);
         assert_eq!(
@@ -815,14 +817,14 @@ mod tests {
         assert!(implemented.contains(&ConnectionProtocol::Redfish));
         assert!(implemented.contains(&ConnectionProtocol::Telnet));
         assert!(!implemented.contains(&ConnectionProtocol::Winrm));
-        assert!(!implemented.contains(&ConnectionProtocol::Vnc));
+        assert!(implemented.contains(&ConnectionProtocol::Vnc));
     }
 
     #[test]
     fn migration_override_is_derived_from_capability_table() {
         assert_eq!(migration_protocol_override("windows", "winrm"), Some("rdp"));
         assert_eq!(migration_protocol_override("windows", "ssh"), None);
-        assert_eq!(migration_protocol_override("linux", "vnc"), Some("ssh"));
+        assert_eq!(migration_protocol_override("linux", "vnc"), None);
         assert_eq!(migration_protocol_override("network", "telnet"), None);
         assert_eq!(migration_protocol_override("network", "rdp"), Some("ssh"));
         assert_eq!(migration_protocol_override("bmc", "ssh"), Some("redfish"));
@@ -903,7 +905,7 @@ mod tests {
         assert_eq!(result, r#"["rdp"]"#);
         let result = normalize_protocols(
             Some(r#"["ssh"]"#),
-            TargetType::Linux,
+            TargetType::Network,
             ConnectionProtocol::Vnc,
         );
         assert_eq!(result, r#"["ssh"]"#);

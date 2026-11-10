@@ -341,6 +341,7 @@ export interface SftpActionsDropdownProps {
   onToggleSyncBrowsing?: () => void;
   compareActive?: boolean;
   onToggleCompareActive?: () => void;
+  onOpenSyncWizard?: () => void;
 }
 
 export function SftpActionsDropdown({
@@ -364,6 +365,7 @@ export function SftpActionsDropdown({
   onToggleSyncBrowsing,
   compareActive,
   onToggleCompareActive,
+  onOpenSyncWizard,
 }: SftpActionsDropdownProps) {
   return (
     <DropdownMenu>
@@ -522,6 +524,18 @@ export function SftpActionsDropdown({
                   <span>{t("sftp_compare_directories") || "Compare Directories"}</span>
                 </div>
                 {compareActive && <Check className="h-3.5 w-3.5 text-primary" />}
+              </DropdownMenuItem>
+            )}
+            {onOpenSyncWizard && (
+              <DropdownMenuItem
+                onClick={onOpenSyncWizard}
+                title={t("sftp_directory_sync_wizard") || "目录同步向导"}
+                className="flex items-center justify-between text-xs cursor-pointer"
+              >
+                <div className="flex items-center gap-2">
+                  <RefreshCw className="h-3.5 w-3.5 text-primary" />
+                  <span>{t("sftp_directory_sync_wizard") || "目录同步向导..."}</span>
+                </div>
               </DropdownMenuItem>
             )}
           </>

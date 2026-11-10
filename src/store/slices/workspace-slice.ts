@@ -47,7 +47,7 @@ export const createWorkspaceSlice: StateCreator<
   sftpPendingOpenServerIds: [],
   openSftpWithServers: (serverIds: string[]) => {
     set({ sftpPendingOpenServerIds: serverIds });
-    get().openTab("sftp", "SFTP 传输", "files");
+    get().openTab("sftp", "SFTP / FTP", "files");
   },
   clearSftpPendingOpenServers: () => {
     set({ sftpPendingOpenServerIds: [] });
@@ -67,6 +67,9 @@ export const createWorkspaceSlice: StateCreator<
     // 物理串口通常由操作系统独占；同一串口连接重复双击时复用已有工作台，
     // 避免第二个标签打开同一 COM/TTY 后只得到“端口被占用”。
     const targetServer = get().servers.find((server) => server.id === serverId);
+    if (module === "terminal" && targetServer?.protocol === "vnc") {
+      module = "vnc";
+    }
     const targetFlags = getServerConnectionFlags(targetServer?.targetType, targetServer?.protocol);
     const isSerialTerminal = module === "terminal" && targetFlags.isSerialServer;
     const targetSerialPort = isSerialTerminal

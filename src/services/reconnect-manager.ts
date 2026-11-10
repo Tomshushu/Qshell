@@ -21,7 +21,7 @@ import { useSyncExternalStore } from 'react'
 import { sshService } from './ssh-service'
 import { ConnectionState, SshErrorKind, shouldRetry } from './ssh-connection-state'
 import { useAppStore } from '@/store'
-import { getServerConnectionFlags } from '@/services/connection-targets'
+import { getServerConnectionFlags, isPureVncServer } from '@/services/connection-targets'
 
 export const MAX_RECONNECT_ATTEMPTS = 3
 export const RETRY_DELAYS_SEC = [2, 4, 8]
@@ -139,8 +139,8 @@ class ReconnectManager {
             ? serverId.slice(5)
             : serverId
         const server = store.servers.find((s) => s.id === baseServerId)
-        // 形态位只判断串口；protocol === 'rdp' 保留原精确判断，避免把 winrm/vnc 一并排除
-        if (getServerConnectionFlags(server?.targetType, server?.protocol).isSerialServer || server?.protocol === 'rdp') {
+        // 形态位只判断串口；protocol === 'rdp' / 'vnc' / 纯 VNC 排除在 SSH 重连之外
+        if (getServerConnectionFlags(server?.targetType, server?.protocol).isSerialServer || server?.protocol === 'rdp' || server?.protocol === 'vnc' || isPureVncServer(server)) {
           return
         }
         const isManual = store.manualDisconnect[serverId] ?? false

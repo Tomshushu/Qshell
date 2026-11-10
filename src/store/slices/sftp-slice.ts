@@ -209,6 +209,13 @@ export const createSftpSlice: StateCreator<AppState, [], [], SftpSlice> = (
       });
   },
   sftpRespectGitignore: false,
+  sftpSymlinkPolicy: 'skip',
+  setSftpSymlinkPolicy: (policy) => {
+    set({ sftpSymlinkPolicy: policy });
+    sshService.setSymlinkPolicy(policy).catch((err) => {
+      console.error('Failed to sync symlink policy to backend:', err);
+    });
+  },
   setSftpRespectGitignore: (respect) => {
     set({ sftpRespectGitignore: respect });
     const { sftpExclusionEnabled, sftpExclusionPatterns } = get();

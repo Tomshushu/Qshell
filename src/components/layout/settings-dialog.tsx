@@ -79,6 +79,7 @@ import {
   Cloud,
   CheckCircle2,
   AlertCircle,
+  Zap,
 } from "lucide-react";
 import { useUpdaterStore } from "@/store/updater-store";
 import { useAppVersion } from "@/utils/version";
@@ -87,6 +88,7 @@ import { KnownHostsPanel } from "./known-hosts-panel";
 import { SyncSettingsPanel } from "./sync-settings-panel";
 import { ShortcutSettingsPanel } from "./shortcut-settings-panel";
 import { AISettingsPanel } from "./ai-settings-panel";
+import { LogonScriptsTab } from "@/components/server/logon-scripts-tab";
 
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -1062,6 +1064,12 @@ function SettingsPanel({
     setTerminalRecordingDirectory,
     terminalRecordingMaxSizeMb,
     setTerminalRecordingMaxSizeMb,
+    terminalShowTimestamps,
+    setTerminalShowTimestamps,
+    terminalAutoLogSession,
+    setTerminalAutoLogSession,
+    terminalSessionLogFormat,
+    setTerminalSessionLogFormat,
     terminalEncoding,
     setTerminalEncoding,
     sftpTransferConcurrency,
@@ -1089,6 +1097,8 @@ function SettingsPanel({
     appLockPasswordHash,
     appLockIdleMinutes,
     setAppLockIdleMinutes,
+    globalLogonScriptsConfig,
+    setGlobalLogonScriptsConfig,
   } = useAppStore();
 
   const { t, language, setLanguage } = useTranslation();
@@ -1913,6 +1923,73 @@ function SettingsPanel({
                       <span className="text-xs text-muted-foreground">MB</span>
                     </div>
                   </div>
+                  {/* 默认显示每行时间戳 */}
+                  <div className="flex items-center justify-between gap-3 pt-2.5 border-t border-border/40">
+                    <SettingLabelWithHint
+                      label={t("term_show_timestamps_title")}
+                      desc={t("term_show_timestamps_desc")}
+                    />
+                    <Switch
+                      checked={terminalShowTimestamps}
+                      onCheckedChange={setTerminalShowTimestamps}
+                    />
+                  </div>
+                  {/* 自动记录会话日志 */}
+                  <div className="flex items-center justify-between gap-3 pt-2.5">
+                    <SettingLabelWithHint
+                      label={t("term_auto_log_session_title")}
+                      desc={t("term_auto_log_session_desc")}
+                    />
+                    <Switch
+                      checked={terminalAutoLogSession}
+                      onCheckedChange={setTerminalAutoLogSession}
+                    />
+                  </div>
+                  {/* 自动日志落盘格式 */}
+                  <div className="flex items-center justify-between gap-3 pt-2.5">
+                    <SettingLabelWithHint
+                      label={t("term_session_log_format_title")}
+                      desc={t("term_session_log_format_desc")}
+                    />
+                    <div className="flex items-center gap-1 bg-muted/40 border border-border/60 rounded-md p-0.5">
+                      <button
+                        type="button"
+                        onClick={() => setTerminalSessionLogFormat("plain")}
+                        className={cn(
+                          "px-2 py-1 rounded text-xs transition-colors cursor-pointer",
+                          terminalSessionLogFormat === "plain"
+                            ? "bg-primary text-primary-foreground font-medium shadow-xs"
+                            : "text-muted-foreground hover:text-foreground"
+                        )}
+                      >
+                        {t("term_log_format_plain")}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTerminalSessionLogFormat("timestamped")}
+                        className={cn(
+                          "px-2 py-1 rounded text-xs transition-colors cursor-pointer",
+                          terminalSessionLogFormat === "timestamped"
+                            ? "bg-primary text-primary-foreground font-medium shadow-xs"
+                            : "text-muted-foreground hover:text-foreground"
+                        )}
+                      >
+                        {t("term_log_format_timestamped")}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTerminalSessionLogFormat("raw")}
+                        className={cn(
+                          "px-2 py-1 rounded text-xs transition-colors cursor-pointer",
+                          terminalSessionLogFormat === "raw"
+                            ? "bg-primary text-primary-foreground font-medium shadow-xs"
+                            : "text-muted-foreground hover:text-foreground"
+                        )}
+                      >
+                        {t("term_log_format_raw")}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -2185,6 +2262,29 @@ function SettingsPanel({
                     onCheckedChange={setTerminalHighlightEnabled}
                   />
                 </div>
+              </CardContent>
+            </Card>
+
+            {/* 全局默认登录脚本 (Global Default Logon Scripts) 卡片 */}
+            <Card className="border/50 bg-background shadow-sm rounded-lg overflow-hidden">
+              <CardContent className="p-6 flex flex-col gap-4 text-xs">
+                <div className="flex items-center justify-between">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-sm font-bold text-foreground flex items-center gap-2">
+                      <Zap className="h-4 w-4 text-amber-500 fill-amber-500/20" />
+                      {t("global_logon_scripts_title")}
+                    </span>
+                    <span className="text-[11px] text-muted-foreground">
+                      {t("global_logon_scripts_desc")}
+                    </span>
+                  </div>
+                </div>
+                <LogonScriptsTab
+                  config={globalLogonScriptsConfig || { enabled: false, rules: [] }}
+                  onChange={setGlobalLogonScriptsConfig}
+                  tr={(zh, en) => (language === "en" ? en : zh)}
+                  isGlobalSettings={true}
+                />
               </CardContent>
             </Card>
           </div>

@@ -64,6 +64,11 @@ fn default_rdp_port() -> i32 {
     3389
 }
 
+/// serde 默认值：VNC 端口，缺省时回退为 5900。
+fn default_vnc_port() -> i32 {
+    5900
+}
+
 /// serde 默认值：BMC Redfish HTTPS 端口，缺省时回退为 443。
 fn default_bmc_port() -> i32 {
     443
@@ -130,6 +135,12 @@ pub struct Server {
     /// RDP 端口，默认 3389
     #[serde(default = "default_rdp_port")]
     pub rdp_port: i32,
+    /// VNC 端口，默认 5900
+    #[serde(default = "default_vnc_port")]
+    pub vnc_port: i32,
+    /// VNC 独立密码（加密存储；为 None 时回退复用主密码）
+    #[serde(default)]
+    pub vnc_password: Option<String>,
     /// BMC Redfish HTTPS 端口，默认 443
     #[serde(default = "default_bmc_port")]
     pub bmc_port: i32,
@@ -161,10 +172,16 @@ pub struct Server {
     pub keys_config: Option<String>,
     #[serde(default)]
     pub serial_config: Option<String>,
+    /// 文件传输配置（JSON 字符串，加密存储）：支持 SFTP（默认复用 SSH）/ FTP / FTPS。
+    #[serde(default)]
+    pub file_transfer_config: Option<String>,
     /// 设备专属凭据配置（JSON 字符串，加密存储）：token / kubeconfig / VNC 密码等。
     /// Phase 0 预留给未来的 HTTPS / 容器 / 外部启动器设备；现有设备不使用。
     #[serde(default)]
     pub credentials_config: Option<String>,
+    /// 登录自动化与交互式会话脚本配置（Send-Expect，JSON 字符串，加密存储）
+    #[serde(default)]
+    pub logon_scripts_config: Option<String>,
     /// 所属服务器分组 ID（指向 server_groups 表 id），NULL 表示未分组
     #[serde(default)]
     pub group_id: Option<String>,
@@ -218,6 +235,10 @@ pub struct ServerInput {
     #[serde(deserialize_with = "deserialize_tags", default)]
     pub protocols: Option<String>,
     pub rdp_port: Option<i32>,
+    #[serde(default)]
+    pub vnc_port: Option<i32>,
+    #[serde(default)]
+    pub vnc_password: Option<String>,
     pub bmc_port: Option<i32>,
     #[serde(default)]
     pub bmc_allow_invalid_certs: Option<bool>,
@@ -243,10 +264,15 @@ pub struct ServerInput {
     pub keys_config: Option<String>,
     #[serde(default)]
     pub serial_config: Option<String>,
+    /// 文件传输配置（JSON 字符串，加密存储）：支持 SFTP（默认复用 SSH）/ FTP / FTPS。
+    #[serde(default)]
+    pub file_transfer_config: Option<String>,
     /// 设备专属凭据配置（JSON 字符串，加密存储）：token / kubeconfig / VNC 密码等。
     /// Phase 0 预留给未来的 HTTPS / 容器 / 外部启动器设备；现有设备不使用。
     #[serde(default)]
     pub credentials_config: Option<String>,
+    #[serde(default)]
+    pub logon_scripts_config: Option<String>,
     /// 所属分组 ID（None 表示未分组）
     #[serde(default)]
     pub group_id: Option<String>,
@@ -285,6 +311,10 @@ pub struct ServerUpdate {
     #[serde(deserialize_with = "deserialize_tags", default)]
     pub protocols: Option<String>,
     pub rdp_port: Option<i32>,
+    #[serde(default)]
+    pub vnc_port: Option<i32>,
+    #[serde(default)]
+    pub vnc_password: Option<String>,
     pub bmc_port: Option<i32>,
     #[serde(default)]
     pub bmc_allow_invalid_certs: Option<bool>,
@@ -312,10 +342,15 @@ pub struct ServerUpdate {
     /// 串口配置（JSON 字符串；None 表示不修改）
     #[serde(default)]
     pub serial_config: Option<String>,
+    /// 文件传输配置（JSON 字符串，加密存储）：支持 SFTP（默认复用 SSH）/ FTP / FTPS。
+    #[serde(default)]
+    pub file_transfer_config: Option<String>,
     /// 设备专属凭据配置（JSON 字符串，加密存储）：token / kubeconfig / VNC 密码等。
     /// Phase 0 预留给未来的 HTTPS / 容器 / 外部启动器设备；现有设备不使用。
     #[serde(default)]
     pub credentials_config: Option<String>,
+    #[serde(default)]
+    pub logon_scripts_config: Option<String>,
     /// 所属分组 ID（None 表示不修改，空字符串表示移出到根目录）
     #[serde(default)]
     pub group_id: Option<String>,
@@ -439,6 +474,8 @@ fn create_tables(conn: &Connection) -> SqliteResult<()> {
             protocol TEXT DEFAULT 'ssh',
             protocols TEXT DEFAULT '[\"ssh\"]',
             rdp_port INTEGER DEFAULT 3389,
+            vnc_port INTEGER DEFAULT 5900,
+            vnc_password TEXT,
             bmc_port INTEGER DEFAULT 443,
             bmc_allow_invalid_certs INTEGER DEFAULT 0,
             proxy_ids TEXT DEFAULT '[]',
@@ -447,7 +484,9 @@ fn create_tables(conn: &Connection) -> SqliteResult<()> {
             tunnels_config TEXT,
             keys_config TEXT,
             serial_config TEXT,
+            file_transfer_config TEXT,
             credentials_config TEXT,
+            logon_scripts_config TEXT,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             deleted_at INTEGER
@@ -755,6 +794,8 @@ fn migrate_servers_table(conn: &Connection) {
     let _ = conn.execute("ALTER TABLE servers ADD COLUMN protocol TEXT DEFAULT 'ssh'", []);
     let _ = conn.execute("ALTER TABLE servers ADD COLUMN protocols TEXT DEFAULT '[\"ssh\"]'", []);
     let _ = conn.execute("ALTER TABLE servers ADD COLUMN rdp_port INTEGER DEFAULT 3389", []);
+    let _ = conn.execute("ALTER TABLE servers ADD COLUMN vnc_port INTEGER DEFAULT 5900", []);
+    let _ = conn.execute("ALTER TABLE servers ADD COLUMN vnc_password TEXT", []);
     let _ = conn.execute("ALTER TABLE servers ADD COLUMN bmc_port INTEGER DEFAULT 443", []);
     let _ = conn.execute("ALTER TABLE servers ADD COLUMN bmc_allow_invalid_certs INTEGER DEFAULT 0", []);
     // SSH Agent / OpenSSH 证书认证（对齐 Termius/MobaXterm/SecureCRT）
@@ -773,8 +814,10 @@ fn migrate_servers_table(conn: &Connection) {
     let _ = conn.execute("ALTER TABLE servers ADD COLUMN tunnels_config TEXT", []);
     let _ = conn.execute("ALTER TABLE servers ADD COLUMN keys_config TEXT", []);
     let _ = conn.execute("ALTER TABLE servers ADD COLUMN serial_config TEXT", []);
+    let _ = conn.execute("ALTER TABLE servers ADD COLUMN file_transfer_config TEXT", []);
     // Phase 0：设备专属凭据配置（JSON，加密存储），供未来 HTTPS / 容器 / 外部启动器设备使用
     let _ = conn.execute("ALTER TABLE servers ADD COLUMN credentials_config TEXT", []);
+    let _ = conn.execute("ALTER TABLE servers ADD COLUMN logon_scripts_config TEXT", []);
     // 回收站：软删除时间戳（NULL=正常，非 NULL=待删除）
     let _ = conn.execute("ALTER TABLE servers ADD COLUMN deleted_at INTEGER", []);
 
@@ -943,6 +986,10 @@ fn row_to_server(row: &rusqlite::Row<'_>) -> SqliteResult<Server> {
             .unwrap_or_else(|| "[\"ssh\"]".to_string()),
         rdp_port: row.get::<_, Option<i32>>("rdp_port")?
             .unwrap_or(3389),
+        vnc_port: row.get::<_, Option<i32>>("vnc_port")?
+            .unwrap_or(5900),
+        vnc_password: row.get::<_, Option<String>>("vnc_password").ok().flatten()
+            .filter(|s| !s.is_empty()),
         bmc_port: row.get::<_, Option<i32>>("bmc_port")?
             .unwrap_or(443),
         bmc_allow_invalid_certs: row.get::<_, Option<i32>>("bmc_allow_invalid_certs")?
@@ -970,6 +1017,12 @@ fn row_to_server(row: &rusqlite::Row<'_>) -> SqliteResult<Server> {
         ),
         serial_config: row.get::<_, Option<String>>("serial_config").ok().flatten()
             .filter(|s| !s.is_empty()),
+        file_transfer_config: decrypt_sensitive_text(
+            row.get::<_, Option<String>>("file_transfer_config").ok().flatten(),
+        ),
+        logon_scripts_config: decrypt_sensitive_text(
+            row.get::<_, Option<String>>("logon_scripts_config").ok().flatten(),
+        ),
         group_id: row.get::<_, Option<String>>("group_id").ok().flatten()
             .filter(|s| !s.is_empty()),
         created_at: row.get("created_at")?,
@@ -982,6 +1035,9 @@ fn row_to_server(row: &rusqlite::Row<'_>) -> SqliteResult<Server> {
 fn mask_server_passwords(mut server: Server) -> Server {
     if server.password.is_some() {
         server.password = Some(PASSWORD_PLACEHOLDER.to_string());
+    }
+    if server.vnc_password.is_some() {
+        server.vnc_password = Some(PASSWORD_PLACEHOLDER.to_string());
     }
     if server.private_key_passphrase.is_some() {
         server.private_key_passphrase = Some(PASSWORD_PLACEHOLDER.to_string());
@@ -1004,6 +1060,23 @@ fn mask_server_passwords(mut server: Server) -> Server {
             }
             if changed {
                 server.keys_config = serde_json::to_string(&entries).ok();
+            }
+        }
+    }
+    // file_transfer_config 里的独立 FTP 密码脱敏为空字符串并标记 hasPassword=true，
+    // 保留其余非敏感配置字段供前端判断当前服务器的文件传输协议（sftp/ftp/ftps）。
+    if let Some(ref raw) = server.file_transfer_config {
+        if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(raw) {
+            if let Some(obj) = val.as_object_mut() {
+                let has_pwd = obj
+                    .get("password")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| !s.is_empty());
+                if has_pwd {
+                    obj.insert("hasPassword".to_string(), serde_json::Value::Bool(true));
+                    obj.insert("password".to_string(), serde_json::Value::String(String::new()));
+                    server.file_transfer_config = serde_json::to_string(&val).ok();
+                }
             }
         }
     }
@@ -1123,6 +1196,11 @@ pub fn servers_list_for_sync() -> Result<String, String> {
                     s.password = crypto::decrypt_password(enc, mk).ok();
                 }
             }
+            if let Some(ref enc) = s.vnc_password {
+                if !enc.is_empty() && enc != PASSWORD_PLACEHOLDER {
+                    s.vnc_password = crypto::decrypt_password(enc, mk).ok();
+                }
+            }
             if let Some(ref enc) = s.private_key_passphrase {
                 if !enc.is_empty() && enc != PASSWORD_PLACEHOLDER {
                     s.private_key_passphrase = crypto::decrypt_password(enc, mk).ok();
@@ -1169,6 +1247,15 @@ pub fn servers_add(server: String) -> Result<String, String> {
         Some(p) if !p.is_empty() && p != PASSWORD_PLACEHOLDER => Some(
             crypto::encrypt_password(p, master_key())
                 .map_err(|e| format!("Password encryption failed: {}", e))?
+        ),
+        _ => None,
+    };
+
+    // Encrypt vnc_password if provided (skip placeholder)
+    let encrypted_vnc_password = match &input.vnc_password {
+        Some(p) if !p.is_empty() && p != PASSWORD_PLACEHOLDER => Some(
+            crypto::encrypt_password(p, master_key())
+                .map_err(|e| format!("VNC password encryption failed: {}", e))?
         ),
         _ => None,
     };
@@ -1221,6 +1308,7 @@ pub fn servers_add(server: String) -> Result<String, String> {
         parsed_protocol,
     );
     let rdp_port = input.rdp_port.unwrap_or(3389);
+    let vnc_port = input.vnc_port.unwrap_or(5900);
     let bmc_port = if target_type.eq_ignore_ascii_case("bmc") {
         input.bmc_port.unwrap_or(if port == 22 { 443 } else { port })
     } else {
@@ -1263,8 +1351,16 @@ pub fn servers_add(server: String) -> Result<String, String> {
         None => None,
     };
     let serial_config = input.serial_config.filter(|s| !s.trim().is_empty());
+    let file_transfer_config_enc = match input.file_transfer_config.filter(|s| !s.trim().is_empty()) {
+        Some(s) => Some(encrypt_sensitive_text(s.trim())?),
+        None => None,
+    };
     // 设备专属凭据（token / kubeconfig / VNC 密码等）与密钥配置一样加密入库
     let credentials_config_enc = match input.credentials_config.filter(|s| !s.trim().is_empty()) {
+        Some(s) => Some(encrypt_sensitive_text(s.trim())?),
+        None => None,
+    };
+    let logon_scripts_config_enc = match input.logon_scripts_config.filter(|s| !s.trim().is_empty()) {
         Some(s) => Some(encrypt_sensitive_text(s.trim())?),
         None => None,
     };
@@ -1277,8 +1373,8 @@ pub fn servers_add(server: String) -> Result<String, String> {
         .unwrap_or_else(|| HOST_GROUP_ID.to_string());
 
     conn.execute(
-        "INSERT INTO servers (id, name, host, port, username, auth_type, password, private_key_path, private_key_passphrase, agent_identity, certificate_path, ssh_key_id, tags, notes, connection_timeout, favorite, status, last_accessed_at, os_type, os_info, last_disconnected_at, last_error, target_type, protocol, protocols, rdp_port, bmc_port, bmc_allow_invalid_certs, proxy_ids, default_proxy_id, tunnel_ids, proxy_config, tunnels_config, keys_config, serial_config, group_id, created_at, updated_at, credentials_config)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39)",
+        "INSERT INTO servers (id, name, host, port, username, auth_type, password, private_key_path, private_key_passphrase, agent_identity, certificate_path, ssh_key_id, tags, notes, connection_timeout, favorite, status, last_accessed_at, os_type, os_info, last_disconnected_at, last_error, target_type, protocol, protocols, rdp_port, vnc_port, vnc_password, bmc_port, bmc_allow_invalid_certs, proxy_ids, default_proxy_id, tunnel_ids, proxy_config, tunnels_config, keys_config, serial_config, group_id, created_at, updated_at, credentials_config, file_transfer_config, logon_scripts_config)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43)",
         params![
             id,
             input.name,
@@ -1306,6 +1402,8 @@ pub fn servers_add(server: String) -> Result<String, String> {
             protocol,
             protocols,
             rdp_port,
+            vnc_port,
+            encrypted_vnc_password,
             bmc_port,
             if bmc_allow_invalid_certs { 1 } else { 0 },
             proxy_ids,
@@ -1319,6 +1417,8 @@ pub fn servers_add(server: String) -> Result<String, String> {
             now,
             now,
             credentials_config_enc,
+            file_transfer_config_enc,
+            logon_scripts_config_enc,
         ],
     )
     .map_err(|e| format!("Failed to insert server: {}", e))?;
@@ -1548,6 +1648,24 @@ pub fn servers_update(id: String, updates: String) -> Result<(), String> {
         set_clauses.push("rdp_port = ?".to_string());
         param_values.push(Box::new(rdp_port));
     }
+    if let Some(vnc_port) = update.vnc_port {
+        set_clauses.push("vnc_port = ?".to_string());
+        param_values.push(Box::new(vnc_port));
+    }
+    if let Some(ref vnc_password) = update.vnc_password {
+        if vnc_password != PASSWORD_PLACEHOLDER {
+            let value: Option<String> = if vnc_password.is_empty() {
+                None
+            } else {
+                Some(
+                    crypto::encrypt_password(vnc_password, master_key())
+                        .map_err(|e| format!("VNC password encryption failed: {}", e))?,
+                )
+            };
+            set_clauses.push("vnc_password = ?".to_string());
+            param_values.push(Box::new(value));
+        }
+    }
     if let Some(bmc_port) = update.bmc_port {
         set_clauses.push("bmc_port = ?".to_string());
         param_values.push(Box::new(bmc_port));
@@ -1626,6 +1744,47 @@ pub fn servers_update(id: String, updates: String) -> Result<(), String> {
         set_clauses.push("serial_config = ?".to_string());
         param_values.push(Box::new(value));
     }
+    // 文件传输配置（JSON，加密存储；编辑时若新提交的 password 为空则保留库中已保存的 FTP 密码）
+    if let Some(ref file_transfer_config) = update.file_transfer_config {
+        let value: Option<String> = if file_transfer_config.trim().is_empty() {
+            None
+        } else {
+            let mut merged_json = file_transfer_config.trim().to_string();
+            if let Ok(mut incoming_val) = serde_json::from_str::<serde_json::Value>(&merged_json) {
+                if let Some(incoming_obj) = incoming_val.as_object_mut() {
+                    let incoming_pwd_empty = incoming_obj
+                        .get("password")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.is_empty() || s == PASSWORD_PLACEHOLDER)
+                        .unwrap_or(true);
+                    if incoming_pwd_empty {
+                        let existing_enc: Option<String> = conn
+                            .query_row(
+                                "SELECT file_transfer_config FROM servers WHERE id = ?1",
+                                params![&id],
+                                |row| row.get(0),
+                            )
+                            .ok()
+                            .flatten();
+                        if let Some(existing_plain) = decrypt_sensitive_text(existing_enc) {
+                            if let Ok(existing_val) = serde_json::from_str::<serde_json::Value>(&existing_plain) {
+                                if let Some(old_pwd) = existing_val.get("password").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                                    incoming_obj.insert("password".to_string(), serde_json::Value::String(old_pwd.to_string()));
+                                }
+                            }
+                        }
+                    }
+                    incoming_obj.remove("hasPassword");
+                    if let Ok(serialized) = serde_json::to_string(&incoming_val) {
+                        merged_json = serialized;
+                    }
+                }
+            }
+            Some(encrypt_sensitive_text(&merged_json)?)
+        };
+        set_clauses.push("file_transfer_config = ?".to_string());
+        param_values.push(Box::new(value));
+    }
     // 设备专属凭据配置（JSON，加密存储；空字符串表示清除）
     if let Some(ref credentials_config) = update.credentials_config {
         let value: Option<String> = if credentials_config.trim().is_empty() {
@@ -1634,6 +1793,16 @@ pub fn servers_update(id: String, updates: String) -> Result<(), String> {
             Some(encrypt_sensitive_text(credentials_config.trim())?)
         };
         set_clauses.push("credentials_config = ?".to_string());
+        param_values.push(Box::new(value));
+    }
+    // 登录自动化与交互式会话脚本配置（Send-Expect，JSON，加密存储）
+    if let Some(ref logon_scripts_config) = update.logon_scripts_config {
+        let value: Option<String> = if logon_scripts_config.trim().is_empty() {
+            None
+        } else {
+            Some(encrypt_sensitive_text(logon_scripts_config.trim())?)
+        };
+        set_clauses.push("logon_scripts_config = ?".to_string());
         param_values.push(Box::new(value));
     }
     // 所属分组 ID（空字符串表示挂到「主机」根分组）
@@ -3678,12 +3847,13 @@ mod known_host_tests {
         assert_eq!(protocols_of(&id), r#"["rdp","ssh"]"#, "OS 探测不得改写");
 
         // 只有显式提交 protocols 时才按能力表规范化 / 去重 / 过滤未实现协议
+        // 注意：vnc 现已在 Windows / Linux 目标上正式支持并实现，因此 ["ssh", "ssh", "vnc"] 经去重与规范化后应为 ["ssh", "vnc"]
         servers_update(
             id.clone(),
             serde_json::json!({ "protocols": ["ssh", "ssh", "vnc"] }).to_string(),
         )
         .expect("explicit protocols update");
-        assert_eq!(protocols_of(&id), r#"["ssh"]"#, "显式提交才规范化");
+        assert_eq!(protocols_of(&id), r#"["ssh","vnc"]"#, "显式提交才规范化去重");
     }
 }
 

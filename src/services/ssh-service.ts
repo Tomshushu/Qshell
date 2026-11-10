@@ -56,6 +56,7 @@ import type {
   FileUploadResult,
   FileStatInfo,
   FileEntry,
+  FtpTestConfigInput,
   ServiceResourceRawMap,
   DockerImage,
   DockerNetwork,
@@ -190,8 +191,17 @@ const tabSessions = new Map<string, Set<string>>();
 /** tabId → 当前可见/活动终端的 sessionId。广播只允许写入这个会话。 */
 const tabActiveSessions = new Map<string, string>();
 
-function notifyDataMutated(_source: string) {
-  // 仅在应用启动时按需比对同步，日常操作不触发自动同步
+const dataMutationListeners = new Set<(source: string) => void>();
+
+function notifyDataMutated(source: string) {
+  // 仅在应用启动时按需比对同步，日常操作不触发自动同步；通知内存订阅者
+  dataMutationListeners.forEach((fn) => {
+    try {
+      fn(source);
+    } catch {
+      // ignore
+    }
+  });
 }
 
 export const sshService = {
@@ -200,6 +210,16 @@ export const sshService = {
    */
   isAvailable(): boolean {
     return isDesktopAvailable;
+  },
+
+  /**
+   * 订阅本地数据变更通知
+   */
+  onDataMutated(fn: (source: string) => void): () => void {
+    dataMutationListeners.add(fn);
+    return () => {
+      dataMutationListeners.delete(fn);
+    };
   },
 
   // ==================== 服务器管理 ====================
@@ -1375,6 +1395,11 @@ export const sshService = {
     return backend.files.getLocalUploadStats(paths);
   },
 
+  async testFtpConnection(config: FtpTestConfigInput): Promise<OperationResult> {
+    if (!backend) throw new Error(NOT_AVAILABLE);
+    return backend.files.testFtpConnection(config);
+  },
+
   /**
    * 服务器到服务器传输（两侧都是远程 SFTP，后端直接走 SFTP 对拷，不落本地磁盘）
    */
@@ -1616,8 +1641,13 @@ export const sshService = {
     patterns: string[],
     respectGitignore: boolean,
   ): Promise<void> {
-    if (!backend) return;
+    if (!backend?.files) return;
     return backend.files.setExclusionConfig(enabled, patterns, respectGitignore);
+  },
+
+  async setSymlinkPolicy(policy: "skip" | "follow"): Promise<void> {
+    if (!backend?.files) return;
+    return backend.files.setSymlinkPolicy(policy);
   },
 
   /**
@@ -2070,15 +2100,19 @@ export const sshService = {
   },
 
   // ==================== 收藏指令 ====================
-  async listFavCmds(): Promise<
-    { id: string; cmd: string; desc: string; createdAt: number }[]
-  > {
+  async listFavCmds(): Promise<import("./api/types").FavoriteCommand[]> {
     if (!backend) return [];
     return backend.favCmds.list();
   },
-  async addFavCmd(cmd: string, desc: string): Promise<OperationResult> {
+  async addFavCmd(
+    cmd: string,
+    desc: string,
+    autoExecute?: boolean,
+    pinnedToBar?: boolean,
+    color?: string
+  ): Promise<OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    const res = await backend.favCmds.add(cmd, desc);
+    const res = await backend.favCmds.add(cmd, desc, autoExecute, pinnedToBar, color);
     if (res.success) notifyDataMutated('addFavCmd');
     return res;
   },
@@ -2086,10 +2120,19 @@ export const sshService = {
     id: string,
     cmd: string,
     desc: string,
+    autoExecute?: boolean,
+    pinnedToBar?: boolean,
+    color?: string
   ): Promise<OperationResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    const res = await backend.favCmds.update(id, cmd, desc);
+    const res = await backend.favCmds.update(id, cmd, desc, autoExecute, pinnedToBar, color);
     if (res.success) notifyDataMutated('updateFavCmd');
+    return res;
+  },
+  async setAllFavCmds(cmds: import("./api/types").FavoriteCommand[]): Promise<OperationResult> {
+    if (!backend?.favCmds.setAll) return { success: false, error: NOT_AVAILABLE };
+    const res = await backend.favCmds.setAll(cmds);
+    if (res.success) notifyDataMutated('setAllFavCmds');
     return res;
   },
   async deleteFavCmd(id: string): Promise<OperationResult> {

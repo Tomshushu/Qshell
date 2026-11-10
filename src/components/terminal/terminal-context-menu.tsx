@@ -7,10 +7,15 @@ import {
   Trash2,
   ChevronRight,
   FileText,
+  FileDown,
+  Clock,
+  Check,
   Lock,
   Sparkles,
   Layers,
+  Zap,
 } from "lucide-react";
+import { useAppStore } from "@/store";
 import { cn } from "@/lib/utils";
 import { clampMenuToViewport } from "@/lib/menu-position";
 import { useTranslation } from "@/i18n";
@@ -29,6 +34,10 @@ export interface TerminalContextMenuProps {
   onClearScrollback: () => void;
   onClearAll: () => void;
   onLockSession?: () => void;
+  onExportPlainLog?: () => void;
+  onExportTimestampedLog?: () => void;
+  showTimestamps?: boolean;
+  onToggleShowTimestamps?: () => void;
   onToggleRecording: () => void;
   onPauseRecording: () => void;
   onResumeRecording: () => void;
@@ -57,6 +66,10 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
   onClearScrollback,
   onClearAll,
   onLockSession,
+  onExportPlainLog,
+  onExportTimestampedLog,
+  showTimestamps,
+  onToggleShowTimestamps,
   onToggleRecording,
   onPauseRecording,
   onResumeRecording,
@@ -349,6 +362,29 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
         <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
       )}
 
+      {/* 快捷命令中心 */}
+      <button
+        type="button"
+        className={cn(
+          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+          isLightTerminal
+            ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+            : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+        )}
+        onClick={() => {
+          window.dispatchEvent(new CustomEvent("qshell:toggle-quick-commands"));
+          onClose();
+        }}
+      >
+        <Zap className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+        <span className="truncate tracking-tight font-sans text-[11.5px]">{t("quick_cmd_bar") || "快捷命令"}</span>
+        <span className={cn("ml-auto text-[10px] font-mono tracking-tight", isLightTerminal ? "text-slate-400" : "text-slate-400/70")}>
+          Alt+C
+        </span>
+      </button>
+
+      <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
+
       {/* 日志：悬停展开子菜单 */}
       <div className="relative group">
         <button
@@ -374,6 +410,70 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
               : "bg-[#13141f]/98 text-slate-100 border border-white/15 shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)] backdrop-blur-2xl",
           )}
         >
+          {/* 导出纯文本审计日志 */}
+          {onExportPlainLog && (
+            <button
+              type="button"
+              className={cn(
+                "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+                isLightTerminal
+                  ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                  : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+              )}
+              onClick={onExportPlainLog}
+            >
+              <FileDown className="h-3.5 w-3.5 text-blue-400 shrink-0" />
+              <span className="truncate tracking-tight font-sans text-[11.5px]">
+                {t("term_export_plain_log")}
+              </span>
+            </button>
+          )}
+
+          {/* 导出带时间戳日志 */}
+          {onExportTimestampedLog && (
+            <button
+              type="button"
+              className={cn(
+                "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+                isLightTerminal
+                  ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                  : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+              )}
+              onClick={onExportTimestampedLog}
+            >
+              <Clock className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+              <span className="truncate tracking-tight font-sans text-[11.5px]">
+                {t("term_export_timestamped_log")}
+              </span>
+            </button>
+          )}
+
+          {/* 实时时间戳开关 */}
+          {onToggleShowTimestamps && (
+            <button
+              type="button"
+              className={cn(
+                "group flex items-center justify-between px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+                isLightTerminal
+                  ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                  : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+              )}
+              onClick={onToggleShowTimestamps}
+            >
+              <div className="flex items-center gap-2">
+                <Clock className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                <span className="truncate tracking-tight font-sans text-[11.5px]">
+                  {t("term_toggle_timestamps")}
+                </span>
+              </div>
+              {showTimestamps && (
+                <Check className="h-3.5 w-3.5 text-emerald-500 ml-auto shrink-0" />
+              )}
+            </button>
+          )}
+
+          <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
+
           <button
             type="button"
             className={cn(

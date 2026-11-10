@@ -191,4 +191,23 @@ export const createTerminalSlice: StateCreator<
         Math.min(2048, Math.floor(size) || 200),
       ),
     }),
+  // 常驻快捷命令栏（默认收起，统一由最下方状态栏快捷命令按钮及 Alt+C 居中半透明弹框接管）
+  terminalQuickCommandBarVisible: false,
+  setTerminalQuickCommandBarVisible: (visible) =>
+    set({ terminalQuickCommandBarVisible: visible }),
+  terminalQuickCommandBarCollapsed: false,
+  setTerminalQuickCommandBarCollapsed: (collapsed) =>
+    set({ terminalQuickCommandBarCollapsed: collapsed }),
+  globalLogonScriptsConfig: {
+    enabled: false,
+    rules: [],
+  },
+  setGlobalLogonScriptsConfig: (config) =>
+    set({ globalLogonScriptsConfig: config }),
+  terminalShowTimestamps: false,
+  setTerminalShowTimestamps: (show) => set({ terminalShowTimestamps: show }),
+  terminalAutoLogSession: false,
+  setTerminalAutoLogSession: (auto) => set({ terminalAutoLogSession: auto }),
+  terminalSessionLogFormat: 'plain',
+  setTerminalSessionLogFormat: (format) => set({ terminalSessionLogFormat: format }),
 });

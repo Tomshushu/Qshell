@@ -68,6 +68,12 @@ export const useAppStore = create<AppState>()(
         terminalRecordingDirectory: state.terminalRecordingDirectory,
         terminalEncoding: state.terminalEncoding,
         terminalRecordingMaxSizeMb: state.terminalRecordingMaxSizeMb,
+        terminalQuickCommandBarVisible: state.terminalQuickCommandBarVisible,
+        terminalQuickCommandBarCollapsed: state.terminalQuickCommandBarCollapsed,
+        globalLogonScriptsConfig: state.globalLogonScriptsConfig,
+        terminalShowTimestamps: state.terminalShowTimestamps,
+        terminalAutoLogSession: state.terminalAutoLogSession,
+        terminalSessionLogFormat: state.terminalSessionLogFormat,
         sftpDefaultViewMode: state.sftpDefaultViewMode,
         sftpLocalViewMode: state.sftpLocalViewMode,
         sftpRemoteViewMode: state.sftpRemoteViewMode,
@@ -87,6 +93,7 @@ export const useAppStore = create<AppState>()(
         sftpExclusionEnabled: state.sftpExclusionEnabled,
         sftpExclusionPatterns: state.sftpExclusionPatterns,
         sftpRespectGitignore: state.sftpRespectGitignore,
+        sftpSymlinkPolicy: state.sftpSymlinkPolicy,
         sidebarWidth: state.sidebarWidth,
         language: state.language,
         // Application Lock 持久化（冷启动永不锁定，仅在运行时根据空闲或手动锁定生效）
@@ -257,6 +264,9 @@ export const useAppStore = create<AppState>()(
           }
           if (!Array.isArray(state.sftpExclusionPatterns)) {
             state.sftpExclusionPatterns = [...DEFAULT_SFTP_EXCLUSIONS];
+          }
+          if (state.sftpSymlinkPolicy !== "follow" && state.sftpSymlinkPolicy !== "skip") {
+            state.sftpSymlinkPolicy = "skip";
           }
           // 重新激活或启动时，同步传输排除规则给后端
           sshService

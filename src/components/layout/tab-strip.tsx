@@ -835,8 +835,12 @@ export function TabStrip({ tabs, className }: TabStripProps) {
       if (!server) return;
       // Phase 1-B：与卡片双击、仪表盘共用同一套分派规则
       const action = resolveServerOpenAction(server);
-      if (action === "terminal" || action === "bmc") {
-        openTab(server.id, server.name, action === "bmc" ? "bmc" : "terminal");
+      if (action === "terminal" || action === "bmc" || action === "vnc") {
+        openTab(
+          server.id,
+          server.name,
+          action === "bmc" ? "bmc" : action === "vnc" ? "vnc" : "terminal",
+        );
       } else if (action === "rdp") {
         void (async () => {
           try {
@@ -1068,6 +1072,7 @@ export function TabStrip({ tabs, className }: TabStripProps) {
                 const isWsBmc = wsFlags.isDeviceManagedServer;
                 const isWsRdp = wsFlags.isRdpServer;
                 const isWsSerial = wsFlags.isSerialServer;
+                const isWsVnc = wsFlags.isVncServer || activeWsTab?.module === "vnc";
                 const isWsOnline = isWsConnected || isWsBmc || isWsRdp;
                 const wsStatusTitle = isWsBmc
                   ? (wsFlags.isBmcServer ? (t("bmc_ready") || "BMC 就绪") : t(deviceStatusKeys(wsServer?.targetType).readyKey))

@@ -81,6 +81,8 @@ import {
   WifiOff,
   FileSpreadsheet,
   Braces,
+  ExternalLink,
+  Code,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { formatSftpError, isSftpConnectionError } from '@/lib/sftp-error'
@@ -94,7 +96,7 @@ import { reconnectManager, useReconnectState } from '@/services/reconnect-manage
 import { useAppStore } from '@/store'
 import { useFileExplorerPreferences } from '@/hooks/use-file-explorer-preferences'
 import { useTranslation } from '@/i18n'
-import type { LocalFileEntry, FileEntry, TransferProgressData, SftpDiagnostics } from '@/services/api/types'
+import type { LocalFileEntry, FileEntry, TransferProgressData, SftpDiagnostics, ExternalEditSession } from '@/services/api/types'
 import { getPathUtils } from '@/targets'
 import {
   getParentPath,
@@ -169,6 +171,7 @@ import {
   runWithConcurrency,
 } from '@/components/sftp/sftp-utils'
 import { SftpDeleteDialog } from '@/components/sftp/sftp-delete-dialog'
+import { DirectorySyncWizardDialog } from '@/components/sftp/directory-sync-wizard-dialog'
 import { SftpPermissionsDialog } from '@/components/sftp/sftp-permissions-dialog'
 import { SftpConflictDialog } from '@/components/sftp/sftp-conflict-dialog'
 import { SftpExtractionProgressDialog } from '@/components/sftp/sftp-extraction-progress-dialog'
@@ -177,6 +180,7 @@ import { SftpOverwriteDialog } from '@/components/sftp/sftp-overwrite-dialog'
 import { SftpDiagnosticsDialog } from '@/components/sftp/sftp-diagnostics-dialog'
 import { InlineRenameInput } from '@/components/sftp/inline-rename-input'
 import { FilePropertiesTooltip } from '@/components/sftp/file-properties-tooltip'
+import { hasFtpFileTransfer, getServerFileTransferProtocol } from '@/services/connection-targets'
 import {
   GroupFilterChip,
   useServerFilterList,
@@ -361,6 +365,87 @@ export function SftpPanel() {
   const isLeftRemote = leftSideType === 'remote' && !!leftServerId
   const [connectingLeftServerId, setConnectingLeftServerId] = useState<string>("")
   const [compareActive, setCompareActive] = useState<boolean>(false)
+  const [showSyncWizard, setShowSyncWizard] = useState<boolean>(false)
+  const [activeExternalSessions, setActiveExternalSessions] = useState<ExternalEditSession[]>([])
+
+  // 初始加载与订阅外部编辑自动同步
+  useEffect(() => {
+    if (!backend?.files?.listActiveExternalEdits) return
+    backend.files.listActiveExternalEdits().then((list) => {
+      if (Array.isArray(list)) setActiveExternalSessions(list)
+    }).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    let unlistenSync: (() => void) | undefined
+    let unlistenFail: (() => void) | undefined
+    let disposed = false
+
+    if (backend?.files?.onExternalFileSynced) {
+      unlistenSync = backend.files.onExternalFileSynced((payload) => {
+        toast.success(`✨ 文件 ${payload.fileName} 已自动同步保存至服务器`)
+        if (selectedServerIdRef.current === payload.serverId) {
+          loadRemoteDirectoryRef.current(payload.serverId, remotePathRef.current)
+        }
+        if (leftServerIdRef.current === payload.serverId) {
+          loadLocalDirectoryRef.current(localPathRef.current)
+        }
+      })
+    }
+
+    import("@tauri-apps/api/event").then(({ listen }) => {
+      if (disposed) return
+      listen<{ fileName: string; error: string }>("files:external-file-sync-failed", (ev) => {
+        if (disposed) return
+        toast.error(`❌ 文件 ${ev.payload.fileName} 自动同步失败: ${ev.payload.error}`)
+      }).then((un) => {
+        if (disposed) {
+          un()
+        } else {
+          unlistenFail = un
+        }
+      })
+    })
+
+    return () => {
+      disposed = true
+      unlistenSync?.()
+      unlistenFail?.()
+    }
+  }, [])
+
+  const handleStartExternalEdit = async (
+    serverId: string,
+    filePath: string,
+    editorCmd?: string
+  ) => {
+    if (!backend?.files?.startExternalEdit) return
+    try {
+      toast.info('正在启动外部程序...')
+      const session = await backend.files.startExternalEdit(serverId, filePath, editorCmd)
+      setActiveExternalSessions((prev) => [
+        ...prev.filter((s) => s.sessionId !== session.sessionId),
+        session,
+      ])
+      toast.success(
+        `已在外部编辑器打开 ${session.fileName}，正在监听保存并自动回传`
+      )
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      toast.error(`启动外部编辑失败: ${msg}`)
+    }
+  }
+
+  const handleStopExternalEdit = async (sessionId: string) => {
+    if (!backend?.files?.stopExternalEdit) return
+    try {
+      await backend.files.stopExternalEdit(sessionId)
+      setActiveExternalSessions((prev) => prev.filter((s) => s.sessionId !== sessionId))
+      toast.info('已停止监听')
+    } catch (err) {
+      console.error('Stop external edit failed', err)
+    }
+  }
   // 同步浏览配对根：开启同步时锁定两侧当前路径，作为后续相对路径计算的基准
   // 对齐 WinSCP 机制 —— 配对根固定，避免不同步跳转导致基准漂移
   const syncPairRootRef = useRef<{ local: string; remote: string } | null>(null)
@@ -1933,9 +2018,14 @@ export function SftpPanel() {
     setConnectingLeftServerId(sftpConnId)
     setLocalError(null)
     try {
-      const connectRes = await sshService.connect(sftpConnId)
-      if (!connectRes.success) {
-        throw new Error(connectRes.error || "Connection failed")
+      const baseIdForCheck = toBaseServerId(serverId)
+      const srvForCheck = servers.find(s => s.id === baseIdForCheck)
+      const isFtp = hasFtpFileTransfer(srvForCheck)
+      if (!isFtp) {
+        const connectRes = await sshService.connect(sftpConnId)
+        if (!connectRes.success) {
+          throw new Error(connectRes.error || "Connection failed")
+        }
       }
 
       let homeDir = "/"
@@ -1991,9 +2081,13 @@ export function SftpPanel() {
     setConnectingServerId(sftpConnId)
     setRemoteError(null)
     try {
-      const connectRes = await sshService.connect(sftpConnId)
-      if (!connectRes.success) {
-        throw new Error(connectRes.error || 'Connection failed')
+      const srvBeforeConnect = servers.find(s => s.id === baseId)
+      const isFtp = hasFtpFileTransfer(srvBeforeConnect)
+      if (!isFtp) {
+        const connectRes = await sshService.connect(sftpConnId)
+        if (!connectRes.success) {
+          throw new Error(connectRes.error || 'Connection failed')
+        }
       }
 
       // 按目标类型获取路径工具（Linux/Windows 完全隔离）
@@ -2073,9 +2167,13 @@ export function SftpPanel() {
     setRemoteError(null)
 
     try {
-      const connectRes = await sshService.connect(targetServerId)
-      if (!connectRes.success) {
-        throw new Error(connectRes.error || tRef.current('sftp_reconnect_failed'))
+      const srvBeforeReconn = servers.find(s => s.id === toBaseServerId(targetServerId))
+      const isFtp = hasFtpFileTransfer(srvBeforeReconn)
+      if (!isFtp) {
+        const connectRes = await sshService.connect(targetServerId)
+        if (!connectRes.success) {
+          throw new Error(connectRes.error || tRef.current('sftp_reconnect_failed'))
+        }
       }
 
       // Windows 盘符更新
@@ -2277,9 +2375,13 @@ export function SftpPanel() {
         const baseSid = toBaseServerId(sid)
         void (async () => {
           try {
-            const connectRes = await sshService.connect(sid)
-            if (!connectRes.success) {
-              throw new Error(connectRes.error || 'Connection failed')
+            const srvBatch = servers.find(s => s.id === baseSid)
+            const isFtp = hasFtpFileTransfer(srvBatch)
+            if (!isFtp) {
+              const connectRes = await sshService.connect(sid)
+              if (!connectRes.success) {
+                throw new Error(connectRes.error || 'Connection failed')
+              }
             }
 
             const srv = servers.find(s => s.id === baseSid)
@@ -6060,6 +6162,7 @@ export function SftpPanel() {
                 transferIcon={<ArrowRight className="mr-2 h-3.5 w-3.5 text-muted-foreground" />}
                 loading={localLoading}
                 t={t}
+                onOpenSyncWizard={() => setShowSyncWizard(true)}
               />
               <Button
                 variant="ghost"
@@ -6093,6 +6196,20 @@ export function SftpPanel() {
                 </div>
               ) : (
                 <div className="flex-1 flex flex-col overflow-hidden">
+                                    {compareActive && (
+                    <div className="flex items-center justify-between px-3 py-1 bg-primary/10 border-b border-primary/20 text-xs text-primary shrink-0">
+                      <span className="flex items-center gap-1.5 font-medium">
+                        <ArrowLeftRight className="w-3.5 h-3.5" />
+                        <span>{t('sftp_compare_directories') || '对比目录'}: 已标色差异</span>
+                      </span>
+                      <button
+                        onClick={() => setShowSyncWizard(true)}
+                        className="underline hover:text-primary/80 font-medium flex items-center gap-1 cursor-pointer"
+                      >
+                        <span>{t('sftp_directory_sync_wizard') || '启动目录同步向导'} →</span>
+                      </button>
+                    </div>
+                  )}
                   {/* 本地列表表头（仅列表模式展示） */}
                   {leftViewMode === 'list' && (
                     <div
@@ -6449,6 +6566,32 @@ export function SftpPanel() {
                                     <Eye className="mr-2 h-4 w-4 text-muted-foreground" />
                                     <span>{t('sftp_viewer_preview')}</span>
                                   </ContextMenuItem>
+                                )}
+                                {!isMulti && !localContextMenuFile?.isDirectory && isLeftRemote && leftServerId && (
+                                  <ContextMenuSub>
+                                    <ContextMenuSubTrigger>
+                                      <ExternalLink className="mr-2 h-4 w-4 text-primary" />
+                                      <span>外部程序打开</span>
+                                    </ContextMenuSubTrigger>
+                                    <ContextMenuSubContent className="w-56">
+                                      <ContextMenuItem onClick={() => {
+                                        if (localContextMenuFile) {
+                                          void handleStartExternalEdit(leftServerId, localContextMenuFile.path, 'default')
+                                        }
+                                      }}>
+                                        <ExternalLink className="mr-2 h-4 w-4 text-muted-foreground" />
+                                        <span>系统默认关联程序</span>
+                                      </ContextMenuItem>
+                                      <ContextMenuItem onClick={() => {
+                                        if (localContextMenuFile) {
+                                          void handleStartExternalEdit(leftServerId, localContextMenuFile.path, 'code')
+                                        }
+                                      }}>
+                                        <Code className="mr-2 h-4 w-4 text-blue-500" />
+                                        <span>Visual Studio Code</span>
+                                      </ContextMenuItem>
+                                    </ContextMenuSubContent>
+                                  </ContextMenuSub>
                                 )}
                                 <ContextMenuItem
                                   disabled={!selectedServerId}
@@ -7312,6 +7455,7 @@ export function SftpPanel() {
                     onToggleSyncBrowsing={toggleSyncBrowsing}
                     compareActive={compareActive}
                     onToggleCompareActive={() => setCompareActive(!compareActive)}
+                    onOpenSyncWizard={() => setShowSyncWizard(true)}
                     t={t}
                   />
                   <Button
@@ -7451,6 +7595,20 @@ export function SftpPanel() {
                   </div>
                 ) : (
                   <div className={cn("flex-1 flex flex-col overflow-hidden", isRemoteDisconnected && "opacity-85")}>
+                                      {compareActive && (
+                    <div className="flex items-center justify-between px-3 py-1 bg-primary/10 border-b border-primary/20 text-xs text-primary shrink-0">
+                      <span className="flex items-center gap-1.5 font-medium">
+                        <ArrowLeftRight className="w-3.5 h-3.5" />
+                        <span>{t('sftp_compare_directories') || '对比目录'}: 已标色差异</span>
+                      </span>
+                      <button
+                        onClick={() => setShowSyncWizard(true)}
+                        className="underline hover:text-primary/80 font-medium flex items-center gap-1 cursor-pointer"
+                      >
+                        <span>{t('sftp_directory_sync_wizard') || '启动目录同步向导'} →</span>
+                      </button>
+                    </div>
+                  )}
                     {/* 表头（仅列表模式展示） */}
                     {rightViewMode === 'list' && (
                       <div
@@ -7780,6 +7938,32 @@ export function SftpPanel() {
                                     <span>{t('sftp_viewer_preview')}</span>
                                   </ContextMenuItem>
                                 )}
+                                {!isMulti && !remoteContextMenuFile?.isDirectory && selectedServerId && (
+                                  <ContextMenuSub>
+                                    <ContextMenuSubTrigger>
+                                      <ExternalLink className="mr-2 h-4 w-4 text-primary" />
+                                      <span>外部程序打开</span>
+                                    </ContextMenuSubTrigger>
+                                    <ContextMenuSubContent className="w-56">
+                                      <ContextMenuItem onClick={() => {
+                                        if (remoteContextMenuFile) {
+                                          void handleStartExternalEdit(selectedServerId, remoteContextMenuFile.path, 'default')
+                                        }
+                                      }}>
+                                        <ExternalLink className="mr-2 h-4 w-4 text-muted-foreground" />
+                                        <span>系统默认关联程序</span>
+                                      </ContextMenuItem>
+                                      <ContextMenuItem onClick={() => {
+                                        if (remoteContextMenuFile) {
+                                          void handleStartExternalEdit(selectedServerId, remoteContextMenuFile.path, 'code')
+                                        }
+                                      }}>
+                                        <Code className="mr-2 h-4 w-4 text-blue-500" />
+                                        <span>Visual Studio Code</span>
+                                      </ContextMenuItem>
+                                    </ContextMenuSubContent>
+                                  </ContextMenuSub>
+                                )}
                                 <ContextMenuItem onClick={() => {
                                   if (!remoteContextMenuFile) return
                                   // 若右键项属于多选集合，则下载所有选中；否则只下载该项
@@ -7962,6 +8146,29 @@ export function SftpPanel() {
       </div>
 
       {/* 3. 远程与本地辅助模态对话框 */}
+      <DirectorySyncWizardDialog
+        open={showSyncWizard}
+        onOpenChange={setShowSyncWizard}
+        leftSideType={leftSideType}
+        leftServerId={leftServerId}
+        leftServerName={leftSideType === 'local' ? t('sftp_local_storage') : serverNameOf(leftServerId)}
+        leftPath={localPath}
+        rightServerId={selectedServerId}
+        rightServerName={serverNameOf(selectedServerId)}
+        rightPath={remotePath}
+        onSyncComplete={() => {
+          if (leftSideType === 'local') {
+            loadLocalDirectory(localPath, undefined, undefined, { isRefresh: true })
+          } else if (leftServerId) {
+            loadRemoteDirectory(leftServerId, localPath)
+          }
+          if (selectedServerId) {
+            loadRemoteDirectory(selectedServerId, remotePath)
+          }
+        }}
+        t={t}
+      />
+
       {/* A. 删除确认与删除进度共用同一个弹框，避免确认后再次弹窗或尺寸跳变 */}
       <SftpDeleteDialog
         open={!!deleteTarget}
@@ -8739,6 +8946,45 @@ export function SftpPanel() {
                   <Braces className="h-3.5 w-3.5 mr-1 text-primary" />
                   <span>格式化</span>
                 </Button>
+              )}
+              {viewer.serverId && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2 text-xs gap-1 cursor-pointer"
+                      title="外部程序打开"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5 text-primary" />
+                      <span>外部程序打开</span>
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-48">
+                    <DropdownMenuItem
+                      onClick={() => {
+                        if (viewer.serverId && viewer.path) {
+                          void handleStartExternalEdit(viewer.serverId, viewer.path, 'default')
+                        }
+                      }}
+                      className="cursor-pointer text-xs"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5 mr-2 text-muted-foreground" />
+                      <span>系统默认关联程序</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        if (viewer.serverId && viewer.path) {
+                          void handleStartExternalEdit(viewer.serverId, viewer.path, 'code')
+                        }
+                      }}
+                      className="cursor-pointer text-xs"
+                    >
+                      <Code className="h-3.5 w-3.5 mr-2 text-blue-500" />
+                      <span>Visual Studio Code</span>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               )}
               {isEditable && viewer.mode === 'preview' && !viewer.loading && !viewer.error && (
                 <Button

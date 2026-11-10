@@ -1035,19 +1035,41 @@ export function StatusBarMetricsPill({
         <span className={cn('absolute inline-flex h-full w-full rounded-full opacity-75', statusDotClass)} />
         <span className={cn('relative inline-flex rounded-full h-1.5 w-1.5', statusDotClass.split(' ')[0])} />
       </span>
-      <span className={getTextColor(summary.cpu)}>
-        CPU {summary.cpu.toFixed(0)}%
+      {/* CPU */}
+      <span className="inline-flex items-center gap-1 shrink-0">
+        <span className="text-[9px] font-sans font-medium text-muted-foreground/70">CPU</span>
+        <span className={cn('inline-block w-[28px] text-right font-mono font-semibold tabular-nums', getTextColor(summary.cpu))}>
+          {summary.cpu.toFixed(0)}%
+        </span>
       </span>
-      <span className="text-muted-foreground/40">|</span>
-      <span className={getTextColor(summary.ram)}>
-        RAM {summary.ram}%
+
+      <div className="h-2.5 w-px bg-border/60 shrink-0" />
+
+      {/* RAM */}
+      <span className="inline-flex items-center gap-1 shrink-0">
+        <span className="text-[9px] font-sans font-medium text-muted-foreground/70">RAM</span>
+        <span className={cn('inline-block w-[28px] text-right font-mono font-semibold tabular-nums', getTextColor(summary.ram))}>
+          {summary.ram}%
+        </span>
       </span>
+
+      {/* 网络速率 */}
       {hasNetwork && (
         <>
-          <span className="text-muted-foreground/40">|</span>
-          <span className="hidden sm:inline-flex items-center gap-1 text-[9.5px]">
-            <span className="text-emerald-500">↓{formatNetRate(summary.rxKbps)}</span>
-            <span className="text-orange-500">↑{formatNetRate(summary.txKbps)}</span>
+          <div className="h-2.5 w-px bg-border/60 shrink-0" />
+          <span className="hidden sm:inline-flex items-center gap-2 text-[9.5px] shrink-0">
+            <span className="inline-flex items-center gap-0.5 text-emerald-500 font-mono">
+              <span className="text-[10px] leading-none">↓</span>
+              <span className="inline-block w-[44px] text-right tabular-nums truncate">
+                {formatNetRate(summary.rxKbps)}
+              </span>
+            </span>
+            <span className="inline-flex items-center gap-0.5 text-orange-500 font-mono">
+              <span className="text-[10px] leading-none">↑</span>
+              <span className="inline-block w-[44px] text-right tabular-nums truncate">
+                {formatNetRate(summary.txKbps)}
+              </span>
+            </span>
           </span>
         </>
       )}

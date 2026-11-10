@@ -79,6 +79,13 @@ export function useKeyboardShortcuts() {
         }
         return
       }
+
+      // 快捷命令中心（默认 Alt+C）
+      if (matchesAction(e, 'terminal.quickCommand')) {
+        e.preventDefault()
+        window.dispatchEvent(new CustomEvent('qshell:toggle-quick-commands'))
+        return
+      }
     }
 
     window.addEventListener('keydown', handleKeyDown)
