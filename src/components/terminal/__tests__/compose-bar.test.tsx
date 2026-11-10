@@ -85,6 +85,7 @@ describe("ComposeBar Component (终端命令撰写与多机分发系统)", () =>
       tabs: [
         {
           id: "tab-1",
+          workspaceId: "ws-1",
           serverId: "srv-1",
           serverName: "Server Alpha",
           module: "terminal",
@@ -92,12 +93,26 @@ describe("ComposeBar Component (终端命令撰写与多机分发系统)", () =>
         },
         {
           id: "tab-2",
+          workspaceId: "ws-1",
           serverId: "srv-2",
           serverName: "Server Beta",
           module: "terminal",
           title: "Tab 2",
         },
       ] as any,
+      workspaces: {
+        "ws-1": {
+          id: "ws-1",
+          layout: {
+            type: "split",
+            id: "s1",
+            children: [
+              { type: "group", groupId: "g1" },
+              { type: "group", groupId: "g2" },
+            ],
+          },
+        },
+      } as any,
       servers: [
         {
           id: "srv-1",
@@ -193,6 +208,29 @@ describe("ComposeBar Component (终端命令撰写与多机分发系统)", () =>
     });
     expect(focusMock).toHaveBeenCalled();
     expect(useAppStore.getState().terminalComposeHistory).toContain("uname -a");
+  });
+
+  it("broadcasts command to all split terminals when target is 'split'", async () => {
+    useAppStore.setState({ terminalComposeTarget: "split" });
+    render(
+      <ComposeBar
+        activeTermId="t1"
+        activeSessionId="sess-1"
+        tabId="tab-1"
+      />
+    );
+
+    const input = screen.getByPlaceholderText(
+      "在此输入要发送到终端的命令... (Enter 发送，Shift+Enter 换行，Esc 退出)"
+    );
+
+    fireEvent.change(input, { target: { value: "uptime" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(sshService.writeToShell).toHaveBeenCalledWith("session-tab-1", "uptime\r");
+      expect(sshService.writeToShell).toHaveBeenCalledWith("session-tab-2", "uptime\r");
+    });
   });
 
   it("broadcasts command to all connected tabs when target is 'all'", async () => {

@@ -386,28 +386,26 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
         </span>
       </button>
 
-      {/* 命令撰写与分发栏（分屏模式下不支持撰写） */}
-      {!isSplitPane && (
-        <button
-          type="button"
-          className={cn(
-            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
-            isLightTerminal
-              ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
-              : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
-          )}
-          onClick={() => {
-            window.dispatchEvent(new CustomEvent("qshell:toggle-compose-bar"));
-            onClose();
-          }}
-        >
-          <PenSquare className="h-3.5 w-3.5 text-sky-400 shrink-0" />
-          <span className="truncate tracking-tight font-sans text-[11.5px]">{t("compose_bar_title") || "撰写栏"}</span>
-          <span className={cn("ml-auto text-[10px] font-mono tracking-tight", isLightTerminal ? "text-slate-400" : "text-slate-400/70")}>
-            Ctrl+Shift+U
-          </span>
-        </button>
-      )}
+      {/* 命令撰写与分发栏 */}
+      <button
+        type="button"
+        className={cn(
+          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+          isLightTerminal
+            ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+            : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+        )}
+        onClick={() => {
+          window.dispatchEvent(new CustomEvent("qshell:toggle-compose-bar"));
+          onClose();
+        }}
+      >
+        <PenSquare className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+        <span className="truncate tracking-tight font-sans text-[11.5px]">{t("compose_bar_title") || "撰写栏"}</span>
+        <span className={cn("ml-auto text-[10px] font-mono tracking-tight", isLightTerminal ? "text-slate-400" : "text-slate-400/70")}>
+          Ctrl+Shift+U
+        </span>
+      </button>
 
       <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
 

@@ -161,7 +161,6 @@ import {
   normalizeShellCommandText,
   formatTerminalPasteData,
   TerminalConnectionOverlay,
-  ComposeBar,
 } from "@/components/terminal";
 import { friendlyError } from "@/lib/error-messages";
 import { EditServerDialog } from "@/components/server/edit-server-dialog";
@@ -5081,11 +5080,10 @@ export function TerminalModule({
             return false;
           }
 
-          // 命令撰写栏与分发窗口（支持自定义快捷键，默认 Ctrl+Shift+U / Mod+Shift+U，分屏模式下不支持）
+          // 命令撰写栏与分发窗口（支持自定义快捷键，默认 Ctrl+Shift+U / Mod+Shift+U）
           if (
-            !isSplitPane &&
-            (shortcutStore.matchesAction(event, "terminal.composeBar") ||
-              ((event.ctrlKey || event.metaKey) && event.shiftKey && (event.key === "u" || event.key === "U" || event.code === "KeyU")))
+            shortcutStore.matchesAction(event, "terminal.composeBar") ||
+            ((event.ctrlKey || event.metaKey) && event.shiftKey && (event.key === "u" || event.key === "U" || event.code === "KeyU"))
           ) {
             event.preventDefault();
             event.stopPropagation();
@@ -7604,45 +7602,14 @@ export function TerminalModule({
       }
     };
 
-    const handleToggleComposeBar = () => {
-      if (!isActiveRef.current || !isVisibleRef.current || isSplitPane) return;
-      const isVisible = useAppStore.getState().terminalComposeBarVisible;
-      const activeEl = document.activeElement;
-      const isInsideComposeBar = Boolean(
-        activeEl?.closest?.(".terminal-compose-bar, [data-terminal-compose-bar]")
-      );
-
-      // 核心焦点切换机制：
-      // 1. 如果撰写栏已处于打开状态，但焦点在终端（或其它地方）：
-      // 用户再次按下快捷键（Ctrl+Shift+U）或点击底栏时，将输入光标无缝切回聚焦撰写栏，而不是关闭！
-      if (isVisible && !isInsideComposeBar) {
-        window.dispatchEvent(new CustomEvent("qshell:focus-compose-bar"));
-        return;
-      }
-
-      // 2. 如果撰写栏未打开，打开并自动聚焦
-      if (!isVisible) {
-        useAppStore.getState().setTerminalComposeBarVisible(true);
-        setTimeout(() => {
-          window.dispatchEvent(new CustomEvent("qshell:focus-compose-bar"));
-        }, 30);
-      } else {
-        // 3. 如果焦点已在撰写栏内部，则按快捷键关闭并归还焦点给终端
-        useAppStore.getState().setTerminalComposeBarVisible(false);
-        focusActiveTerm(true);
-      }
-    };
-
     window.addEventListener("insert-terminal-command", handleInsertCommand);
     window.addEventListener("focus-active-terminal", handleFocusTrigger);
     window.addEventListener("focus", handleFocusTrigger);
-    window.addEventListener("qshell:toggle-compose-bar", handleToggleComposeBar);
 
     return () => {
       window.removeEventListener("insert-terminal-command", handleInsertCommand);
       window.removeEventListener("focus-active-terminal", handleFocusTrigger);
       window.removeEventListener("focus", handleFocusTrigger);
-      window.removeEventListener("qshell:toggle-compose-bar", handleToggleComposeBar);
     };
   }, [focusActiveTerm, writePasteText]);
 
@@ -9645,16 +9612,6 @@ export function TerminalModule({
         )}
       </div>
 
-      {/* 终端命令撰写栏与多机分发窗口（对标 Xshell 8 撰写/撰写窗口，分屏模式下不支持） */}
-      {!isSplitPane && (
-        <ComposeBar
-          activeTermId={activeTermId}
-          activeSessionId={activeTermId ? terminals.get(activeTermId)?.sessionId : undefined}
-          tabId={tabId}
-          onFocusTerminal={focusActiveTerm}
-          isDarkTerminal={activeTheme?.type !== "light"}
-        />
-      )}
 
       <SerialQuickSendEditor
         open={Boolean((serverFlags.isSerialServer) && serialQuickSendOpen)}

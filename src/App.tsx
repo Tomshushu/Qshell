@@ -24,6 +24,7 @@ import { useEffect, useCallback, useState } from 'react'
 import { StabilityTestPanel } from '@/components/dev/stability-test-panel'
 import { CommandPalette } from '@/components/command-palette'
 import { QuickCommandPaletteModal } from '@/components/terminal/quick-command-palette-modal'
+import { ComposeBar } from '@/components/terminal'
 import { useAppIdleLock } from '@/hooks/use-app-idle-lock'
 import { AppLockOverlay } from '@/components/layout/app-lock-overlay'
 import { AppLockSetupDialog } from '@/components/layout/app-lock-setup-dialog'
@@ -623,6 +624,9 @@ function AppContent() {
               <SplitLayoutView />
             </div>
           </div>
+
+          {/* 解耦的终端命令撰写栏与多机分发窗口（对标 Xshell 8 撰写栏，支持单终端/全分屏/多会话广播） */}
+          <ComposeBar />
 
           {/* Status bar */}
           <StatusBar />

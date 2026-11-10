@@ -45,6 +45,7 @@ import { playSound, SoundType } from "@/lib/sound";
 import { useToast } from "@/components/ui/toast";
 import { QuickCommandDialog } from "./quick-command-dialog";
 import type { FavoriteCommand } from "@/services/api/types";
+import { collectGroupIds } from "@/utils/split-layout";
 
 interface TargetInfo {
   tabId: string;
@@ -53,11 +54,12 @@ interface TargetInfo {
   host: string;
 }
 
-interface ComposeBarProps {
-  activeTermId: string | null;
+export interface ComposeBarProps {
+  className?: string;
+  onFocusTerminal?: () => void;
+  activeTermId?: string | null;
   activeSessionId?: string | null;
   tabId?: string | null;
-  onFocusTerminal?: () => void;
   isDarkTerminal?: boolean;
 }
 
@@ -65,12 +67,13 @@ const MIN_COMPOSE_HEIGHT = 100;
 const MAX_COMPOSE_HEIGHT = 500;
 
 export function ComposeBar({
+  className,
   activeTermId,
   activeSessionId,
   tabId,
   onFocusTerminal,
   isDarkTerminal = true,
-}: ComposeBarProps) {
+}: ComposeBarProps = {}) {
   const { t } = useTranslation();
   const { toast } = useToast();
 
@@ -112,13 +115,16 @@ export function ComposeBar({
   // History popover / dropdown state
   const [historyOpen, setHistoryOpen] = useState(false);
 
-  // Resize dragging state
   const [isResizing, setIsResizing] = useState(false);
   const resizeStartY = useRef(0);
   const resizeStartHeight = useRef(height);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const tabs = useAppStore((s) => s.tabs);
+  const activeTabId = useAppStore((s) => s.activeTabId);
+  const workspaces = useAppStore((s) => s.workspaces);
 
   // Focus input helper across microtask, RAF, and timeouts
   const focusInput = useCallback(() => {
@@ -135,6 +141,15 @@ export function ComposeBar({
     setTimeout(doFocus, 80);
   }, [expanded]);
 
+  // Return focus to active terminal (calls custom onFocusTerminal or global event)
+  const returnFocus = useCallback(() => {
+    if (onFocusTerminal) {
+      onFocusTerminal();
+    } else {
+      window.dispatchEvent(new CustomEvent("focus-active-terminal"));
+    }
+  }, [onFocusTerminal]);
+
   // Listen for focus-compose-bar custom event to restore focus from terminal
   useEffect(() => {
     const handleFocusEvent = () => {
@@ -145,6 +160,38 @@ export function ComposeBar({
       window.removeEventListener("qshell:focus-compose-bar", handleFocusEvent);
     };
   }, [focusInput]);
+
+  // Global toggle listener: self-contained toggle & focus management
+  useEffect(() => {
+    const handleToggle = () => {
+      const isVisible = useAppStore.getState().terminalComposeBarVisible;
+      const activeEl = document.activeElement;
+      const isInside = Boolean(
+        activeEl?.closest?.(".terminal-compose-bar, [data-terminal-compose-bar]")
+      );
+
+      // 如果已打开但焦点不在撰写框内，将光标切回聚焦撰写框
+      if (isVisible && !isInside) {
+        focusInput();
+        return;
+      }
+
+      // 如果未打开，则打开并聚焦
+      if (!isVisible) {
+        setVisible(true);
+        focusInput();
+      } else {
+        // 如果已打开且焦点在撰写框内，则关闭并归还终端焦点
+        setVisible(false);
+        returnFocus();
+      }
+    };
+
+    window.addEventListener("qshell:toggle-compose-bar", handleToggle);
+    return () => {
+      window.removeEventListener("qshell:toggle-compose-bar", handleToggle);
+    };
+  }, [focusInput, setVisible, returnFocus]);
 
   // Focus input when visible toggles to true
   useEffect(() => {
@@ -192,26 +239,60 @@ export function ComposeBar({
     setText(next);
   }, [redoStack, text]);
 
+  // Check if current workspace has split screen (more than 1 group/pane)
+  const isSplitWorkspace = useMemo(() => {
+    const effectiveTabId = tabId || activeTabId;
+    const curTab = tabs.find((t) => t.id === effectiveTabId);
+    if (!curTab?.workspaceId) return false;
+    const ws = workspaces[curTab.workspaceId];
+    if (!ws) return false;
+    return collectGroupIds(ws.layout).length > 1;
+  }, [tabId, activeTabId, tabs, workspaces]);
+
   // Compute resolved target sessions
   const getResolvedTargets = useCallback((): TargetInfo[] => {
-    const { tabs, servers } = useAppStore.getState();
-    const currentTab = tabs.find((t) => t.id === tabId);
+    const { tabs, servers, activeTabId } = useAppStore.getState();
+    const effectiveTabId = tabId || activeTabId;
+    const currentTab = tabs.find((t) => t.id === effectiveTabId);
     const currentServer = currentTab ? servers.find((s) => s.id === currentTab.serverId) : undefined;
     const serverName = currentServer?.name || currentTab?.serverName || "Local";
     const host = currentServer?.host || "127.0.0.1";
 
     if (target === "active") {
-      if (activeSessionId) {
+      const effSessionId = activeSessionId || (currentTab ? sshService.getTabActiveSessionId(currentTab.id) : undefined);
+      if (effSessionId && sshService.isSessionAlive(effSessionId)) {
         return [
           {
-            tabId: tabId || "",
-            sessionId: activeSessionId,
+            tabId: effectiveTabId || "",
+            sessionId: effSessionId,
             serverName,
             host,
           },
         ];
       }
       return [];
+    }
+
+    if (target === "split") {
+      const results: TargetInfo[] = [];
+      const currentWsId = currentTab?.workspaceId;
+      // 找出当前工作区（当前分屏窗体）下的所有终端会话
+      const splitTabs = tabs.filter(
+        (t) => (!currentWsId || t.workspaceId === currentWsId) && t.module === "terminal"
+      );
+      for (const t of splitTabs) {
+        const sid = sshService.getTabActiveSessionId(t.id);
+        if (sid && sshService.isSessionAlive(sid)) {
+          const sv = servers.find((s) => s.id === t.serverId);
+          results.push({
+            tabId: t.id,
+            sessionId: sid,
+            serverName: sv?.name || t.serverName || "Terminal",
+            host: sv?.host || "—",
+          });
+        }
+      }
+      return results;
     }
 
     if (target === "all") {
@@ -293,9 +374,9 @@ export function ComposeBar({
       if (!expanded) {
         setText("");
       }
-      onFocusTerminal?.();
+      returnFocus();
     },
-    [formatCommand, addHistory, lineByLine, bracketedPaste, expanded, onFocusTerminal]
+    [formatCommand, addHistory, lineByLine, bracketedPaste, expanded, returnFocus]
   );
 
   // Trigger dispatch with pre-flight risk checks
@@ -359,7 +440,7 @@ export function ComposeBar({
     } else if (e.key === "Escape") {
       e.preventDefault();
       setVisible(false);
-      onFocusTerminal?.();
+      returnFocus();
     }
   };
 
@@ -377,7 +458,7 @@ export function ComposeBar({
     } else if (e.key === "Escape") {
       e.preventDefault();
       setVisible(false);
-      onFocusTerminal?.();
+      returnFocus();
     }
   };
 
@@ -424,7 +505,13 @@ export function ComposeBar({
     setSaveFavOpen(true);
   };
 
+  const hasActiveTab = Boolean(activeTabId && tabs.length > 0);
+  const currentTab = tabs.find((t) => t.id === (tabId || activeTabId));
+  const isTerminalSession = currentTab?.module === "terminal" && currentTab?.serverId !== "sftp";
+
   if (!visible) return null;
+  // 全局解耦挂载时（未指定 tabId 绑定），仅在当前处于终端会话时渲染
+  if (!tabId && (!hasActiveTab || !isTerminalSession)) return null;
 
   const isBroadcast = target !== "active" && resolvedTargets.length > 1;
 
@@ -436,7 +523,8 @@ export function ComposeBar({
           isBroadcast
             ? "border-amber-500/50 bg-amber-500/[0.04] dark:bg-amber-950/20"
             : "border-border/60 bg-background/95 dark:bg-zinc-900/90",
-          "backdrop-blur-md shadow-md"
+          "backdrop-blur-md shadow-md",
+          className
         )}
         data-terminal-compose-bar="true"
         onClick={handleContainerClick}
@@ -479,13 +567,17 @@ export function ComposeBar({
                       title={`分发目标: ${
                         target === "active"
                           ? t("compose_target_active")
+                          : target === "split"
+                          ? t("compose_target_split")
                           : t("compose_target_all")
                       }`}
                     >
                       {target === "active" ? (
                         <TerminalIcon className="h-3.5 w-3.5" />
+                      ) : target === "split" ? (
+                        <Layers className="h-3.5 w-3.5 text-amber-500" />
                       ) : (
-                        <Globe className="h-3.5 w-3.5" />
+                        <Globe className="h-3.5 w-3.5 text-rose-500" />
                       )}
                     </button>
                   </DropdownMenuTrigger>
@@ -503,6 +595,18 @@ export function ComposeBar({
                       </div>
                       {target === "active" && <Check className="h-3.5 w-3.5 text-primary" />}
                     </DropdownMenuItem>
+                    {isSplitWorkspace && (
+                      <DropdownMenuItem
+                        onClick={() => setTarget("split")}
+                        className="justify-between cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Layers className="h-3.5 w-3.5 text-amber-500" />
+                          <span>{t("compose_target_split")}</span>
+                        </div>
+                        {target === "split" && <Check className="h-3.5 w-3.5 text-primary" />}
+                      </DropdownMenuItem>
+                    )}
                     <DropdownMenuItem
                       onClick={() => setTarget("all")}
                       className="justify-between cursor-pointer"
@@ -637,6 +741,8 @@ export function ComposeBar({
                     <span>
                       {target === "active"
                         ? "当前会话"
+                        : target === "split"
+                        ? `当前分屏 (${resolvedTargets.length}台)`
                         : `全部会话 (${resolvedTargets.length}台)`}
                     </span>
                   </span>
@@ -756,12 +862,16 @@ export function ComposeBar({
                 >
                   {target === "active" ? (
                     <TerminalIcon className="h-3 w-3 text-primary" />
+                  ) : target === "split" ? (
+                    <Layers className="h-3 w-3 text-amber-500" />
                   ) : (
                     <Globe className="h-3 w-3 text-rose-500" />
                   )}
                   <span className="hidden sm:inline-block max-w-[90px] truncate">
                     {target === "active"
                       ? "当前会话"
+                      : target === "split"
+                      ? `分屏(${resolvedTargets.length})`
                       : `全会话(${resolvedTargets.length})`}
                   </span>
                   <ChevronDown className="h-3 w-3 opacity-60" />
@@ -781,6 +891,18 @@ export function ComposeBar({
                   </div>
                   {target === "active" && <Check className="h-3.5 w-3.5 text-primary" />}
                 </DropdownMenuItem>
+                {isSplitWorkspace && (
+                  <DropdownMenuItem
+                    onClick={() => setTarget("split")}
+                    className="justify-between cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Layers className="h-3.5 w-3.5 text-amber-500" />
+                      <span>{t("compose_target_split")}</span>
+                    </div>
+                    {target === "split" && <Check className="h-3.5 w-3.5 text-primary" />}
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuItem
                   onClick={() => setTarget("all")}
                   className="justify-between cursor-pointer"
@@ -887,7 +1009,7 @@ export function ComposeBar({
                 type="button"
                 onClick={() => {
                   setVisible(false);
-                  onFocusTerminal?.();
+                  returnFocus();
                 }}
                 className="h-6 w-6 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors cursor-pointer"
                 title="关闭撰写栏 (Esc)"
