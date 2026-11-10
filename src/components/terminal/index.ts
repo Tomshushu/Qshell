@@ -10,3 +10,4 @@ export * from "./terminal-hint-panel";
 export * from "./serial-quick-send-editor";
 export * from "./terminal-selection-toolbar";
 export * from "./terminal-connection-overlay";
+export * from "./compose-bar";

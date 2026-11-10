@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '@/store'
-import { Wifi, WifiOff, Server, Copy, Check, Monitor, Zap } from 'lucide-react'
+import { Wifi, WifiOff, Server, Copy, Check, Monitor, Zap, PenSquare } from 'lucide-react'
 import { useTranslation } from '@/i18n'
 import { sshService } from '@/services/ssh-service'
 import { collectGroupIds } from '@/utils/split-layout'
@@ -268,6 +268,22 @@ export function StatusBar() {
             <span>{t('quick_cmd_bar') || '快捷命令'}</span>
             <kbd className="hidden sm:inline-block text-[9px] font-mono text-muted-foreground/70 px-1 py-0.2 rounded bg-background/50 border border-border/40">
               Alt+C
+            </kbd>
+          </button>
+        )}
+
+        {/* 命令撰写与多机分发底栏触发按钮 */}
+        {isConnected && !isSftpTab && (
+          <button
+            type="button"
+            onClick={() => window.dispatchEvent(new CustomEvent('qshell:toggle-compose-bar'))}
+            className="flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-medium rounded border border-border/50 bg-muted/30 hover:bg-muted/80 text-foreground/80 hover:text-foreground transition-all duration-150 cursor-pointer shadow-2xs active:scale-95 flex-shrink-0"
+            title={`${t('compose_bar_title') || '撰写'} (Ctrl+Shift+U)`}
+          >
+            <PenSquare className="h-3 w-3 text-sky-500" />
+            <span>{t('compose_bar_title') || '撰写'}</span>
+            <kbd className="hidden sm:inline-block text-[9px] font-mono text-muted-foreground/70 px-1 py-0.2 rounded bg-background/50 border border-border/40">
+              Ctrl+Shift+U
             </kbd>
           </button>
         )}

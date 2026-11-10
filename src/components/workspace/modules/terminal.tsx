@@ -161,6 +161,7 @@ import {
   normalizeShellCommandText,
   formatTerminalPasteData,
   TerminalConnectionOverlay,
+  ComposeBar,
 } from "@/components/terminal";
 import { friendlyError } from "@/lib/error-messages";
 import { EditServerDialog } from "@/components/server/edit-server-dialog";
@@ -5072,6 +5073,18 @@ export function TerminalModule({
             return false;
           }
 
+          // 命令撰写栏与分发窗口（支持自定义快捷键，默认 Ctrl+Shift+U / Mod+Shift+U，分屏模式下不支持）
+          if (
+            !isSplitPane &&
+            (shortcutStore.matchesAction(event, "terminal.composeBar") ||
+              ((event.ctrlKey || event.metaKey) && event.shiftKey && (event.key === "u" || event.key === "U" || event.code === "KeyU")))
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            window.dispatchEvent(new CustomEvent("qshell:toggle-compose-bar"));
+            return false;
+          }
+
           // 全局/标签页快捷键动态透传白名单（SkipShell 机制）：
           // 若命中了任一用户自定义的全局动作（如命令面板、新标签、关标签、切标签等），
           // 返回 false 阻止 xterm.js 捕获/消费，让原生 DOM 事件自由冒泡到 window 的全局快捷键监听器
@@ -7583,14 +7596,21 @@ export function TerminalModule({
       }
     };
 
+    const handleToggleComposeBar = () => {
+      if (!isActiveRef.current || !isVisibleRef.current || isSplitPane) return;
+      useAppStore.getState().setTerminalComposeBarVisible((v) => !v);
+    };
+
     window.addEventListener("insert-terminal-command", handleInsertCommand);
     window.addEventListener("focus-active-terminal", handleFocusTrigger);
     window.addEventListener("focus", handleFocusTrigger);
+    window.addEventListener("qshell:toggle-compose-bar", handleToggleComposeBar);
 
     return () => {
       window.removeEventListener("insert-terminal-command", handleInsertCommand);
       window.removeEventListener("focus-active-terminal", handleFocusTrigger);
       window.removeEventListener("focus", handleFocusTrigger);
+      window.removeEventListener("qshell:toggle-compose-bar", handleToggleComposeBar);
     };
   }, [focusActiveTerm, writePasteText]);
 
@@ -9589,6 +9609,17 @@ export function TerminalModule({
         )}
       </div>
 
+      {/* 终端命令撰写栏与多机分发窗口（对标 Xshell 8 撰写/撰写窗口，分屏模式下不支持） */}
+      {!isSplitPane && (
+        <ComposeBar
+          activeTermId={activeTermId}
+          activeSessionId={activeTermId ? terminals.get(activeTermId)?.sessionId : undefined}
+          tabId={tabId}
+          onFocusTerminal={focusActiveTerm}
+          isDarkTerminal={activeTheme?.type !== "light"}
+        />
+      )}
+
       <SerialQuickSendEditor
         open={Boolean((serverFlags.isSerialServer) && serialQuickSendOpen)}
         onClose={() => setSerialQuickSendOpen(false)}
@@ -9675,6 +9706,7 @@ export function TerminalModule({
         recordingTermIds={recordingTermIds}
         recordingPausedIds={recordingPausedIds}
         isOpening={isOpening}
+        isSplitPane={isSplitPane}
         onLockSession={handleTriggerAppLock}
         onAIDiagnosis={enableAiGlobal ? handleAIDiagnosisFromContext : undefined}
         onAIDiagnoseRecent={enableAiGlobal ? handleAIDiagnoseRecentOutput : undefined}

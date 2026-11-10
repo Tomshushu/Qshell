@@ -86,6 +86,13 @@ export function useKeyboardShortcuts() {
         window.dispatchEvent(new CustomEvent('qshell:toggle-quick-commands'))
         return
       }
+
+      // 命令撰写栏与分发窗口（默认 Mod+Shift+U）
+      if (matchesAction(e, 'terminal.composeBar')) {
+        e.preventDefault()
+        window.dispatchEvent(new CustomEvent('qshell:toggle-compose-bar'))
+        return
+      }
     }
 
     window.addEventListener('keydown', handleKeyDown)

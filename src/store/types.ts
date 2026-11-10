@@ -184,6 +184,9 @@ export interface ServerSlice {
   setRefreshInterval: (seconds: number) => void;
 }
 
+export type ComposeTarget = 'active' | 'all';
+export type ComposeSendMode = 'enter' | 'ctrl_enter';
+
 export interface TerminalSlice {
   // Terminal Font Size
   terminalFontSize: number;
@@ -292,6 +295,31 @@ export interface TerminalSlice {
   /** 全局会话日志默认落盘格式 */
   terminalSessionLogFormat: SessionLogFormat;
   setTerminalSessionLogFormat: (format: SessionLogFormat) => void;
+  /** 终端命令撰写栏/窗口是否可见（默认 false） */
+  terminalComposeBarVisible: boolean;
+  setTerminalComposeBarVisible: (visible: boolean | ((prev: boolean) => boolean)) => void;
+  /** 撰写栏是否展开为多行脚本编辑窗口（默认 false） */
+  terminalComposeBarExpanded: boolean;
+  setTerminalComposeBarExpanded: (expanded: boolean | ((prev: boolean) => boolean)) => void;
+  /** 撰写窗口多行展开时的高度（px），默认 160 */
+  terminalComposeBarHeight: number;
+  setTerminalComposeBarHeight: (height: number) => void;
+  /** 撰写分发目标：'active' 当前会话 | 'all' 全部已连接会话 */
+  terminalComposeTarget: ComposeTarget;
+  setTerminalComposeTarget: (target: ComposeTarget) => void;
+  /** 撰写发送键模式：'enter' Enter 发送 | 'ctrl_enter' Ctrl+Enter 发送 */
+  terminalComposeSendMode: ComposeSendMode;
+  setTerminalComposeSendMode: (mode: ComposeSendMode) => void;
+  /** 撰写是否逐行延时发送（带 15ms 节流） */
+  terminalComposeLineByLine: boolean;
+  setTerminalComposeLineByLine: (enabled: boolean) => void;
+  /** 撰写是否自动转义反斜杠（\n, \t） */
+  terminalComposeConvertEscapes: boolean;
+  setTerminalComposeConvertEscapes: (enabled: boolean) => void;
+  /** 撰写历史记录列表（最近 50 条） */
+  terminalComposeHistory: string[];
+  addTerminalComposeHistory: (text: string) => void;
+  clearTerminalComposeHistory: () => void;
 }
 
 export interface SftpSlice {

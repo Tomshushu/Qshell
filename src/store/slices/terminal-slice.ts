@@ -210,4 +210,45 @@ export const createTerminalSlice: StateCreator<
   setTerminalAutoLogSession: (auto) => set({ terminalAutoLogSession: auto }),
   terminalSessionLogFormat: 'plain',
   setTerminalSessionLogFormat: (format) => set({ terminalSessionLogFormat: format }),
+  // 命令撰写栏与撰写窗口 (Compose Bar & Compose Window)
+  terminalComposeBarVisible: false,
+  setTerminalComposeBarVisible: (visible) =>
+    set((state) => ({
+      terminalComposeBarVisible:
+        typeof visible === "function"
+          ? visible(state.terminalComposeBarVisible)
+          : visible,
+    })),
+  terminalComposeBarExpanded: false,
+  setTerminalComposeBarExpanded: (expanded) =>
+    set((state) => ({
+      terminalComposeBarExpanded:
+        typeof expanded === "function"
+          ? expanded(state.terminalComposeBarExpanded)
+          : expanded,
+    })),
+  terminalComposeBarHeight: 160,
+  setTerminalComposeBarHeight: (height) =>
+    set({
+      terminalComposeBarHeight: Math.max(90, Math.min(600, Math.floor(height) || 160)),
+    }),
+  terminalComposeTarget: "active",
+  setTerminalComposeTarget: (target) => set({ terminalComposeTarget: target }),
+  terminalComposeSendMode: "enter",
+  setTerminalComposeSendMode: (mode) => set({ terminalComposeSendMode: mode }),
+  terminalComposeLineByLine: false,
+  setTerminalComposeLineByLine: (enabled) => set({ terminalComposeLineByLine: enabled }),
+  terminalComposeConvertEscapes: true,
+  setTerminalComposeConvertEscapes: (enabled) => set({ terminalComposeConvertEscapes: enabled }),
+  terminalComposeHistory: [],
+  addTerminalComposeHistory: (text) =>
+    set((state) => {
+      const trimmed = text.trim();
+      if (!trimmed) return state;
+      const filtered = state.terminalComposeHistory.filter((item) => item !== trimmed);
+      return {
+        terminalComposeHistory: [trimmed, ...filtered].slice(0, 50),
+      };
+    }),
+  clearTerminalComposeHistory: () => set({ terminalComposeHistory: [] }),
 });

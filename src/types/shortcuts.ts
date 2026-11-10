@@ -123,6 +123,13 @@ export const SHORTCUT_DEFINITIONS: ShortcutDefinition[] = [
     scope: 'global',
     defaultKey: 'Alt+C',
   },
+  {
+    id: 'terminal.composeBar',
+    titleKey: 'shortcut_terminal_compose_bar',
+    descKey: 'shortcut_terminal_compose_bar_desc',
+    scope: 'global',
+    defaultKey: 'Mod+Shift+U',
+  },
 
   // ── SFTP 文件管理 ──
   {
