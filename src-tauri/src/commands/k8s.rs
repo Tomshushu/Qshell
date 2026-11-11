@@ -115,6 +115,15 @@ async fn fetch(ctx: &K8sCtx, path: &str) -> Result<String, String> {
     Ok(body)
 }
 
+/// 校验响应确为 K8s `/version` JSON，避免反向代理欢迎页 / 登录页被判为连通。
+fn k8s_version_from(body: &str) -> Option<String> {
+    let value = serde_json::from_str::<serde_json::Value>(body).ok()?;
+    value
+        .get("gitVersion")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+}
+
 fn parse_version(body: &str, out: &mut K8sOverview) {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
         return;
@@ -193,18 +202,14 @@ pub async fn k8s_test_connect_with_config(
         allow_invalid_certs: config.tls_allow_invalid_certs.unwrap_or(false),
     };
     Ok(match fetch(&ctx, "/version").await {
-        Ok(body) => {
-            let version = serde_json::from_str::<serde_json::Value>(&body)
-                .ok()
-                .and_then(|value| {
-                    value
-                        .get("gitVersion")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string)
-                })
-                .unwrap_or_else(|| "未知版本".to_string());
-            OperationResult::ok_with_message(format!("K8s API 连接成功（{}）", version))
-        }
+        Ok(body) => match k8s_version_from(&body) {
+            Some(version) => {
+                OperationResult::ok_with_message(format!("K8s API 连接成功（{}）", version))
+            }
+            None => OperationResult::fail(
+                "K8s API 响应不是有效的 /version JSON，请检查端点是否为 K8s API Server",
+            ),
+        },
         Err(error) => OperationResult::fail(error),
     })
 }
@@ -240,6 +245,14 @@ pub async fn k8s_get_overview(server_id: String) -> Result<K8sOverview, String> 
         Ok(body) => body,
         Err(error) => return Ok(K8sOverview::fail(error)),
     };
+    let version = match k8s_version_from(&version_body) {
+        Some(v) => v,
+        None => {
+            return Ok(K8sOverview::fail(
+                "K8s API 响应不是有效的 /version JSON，请检查端点是否为 K8s API Server",
+            ))
+        }
+    };
     let mut overview = K8sOverview {
         success: true,
         error: None,
@@ -251,6 +264,7 @@ pub async fn k8s_get_overview(server_id: String) -> Result<K8sOverview, String> 
         api_url: Some(base),
     };
     parse_version(&version_body, &mut overview);
+    overview.git_version = Some(version);
     if let Ok(body) = fetch(&ctx, "/api/v1/nodes").await {
         parse_nodes(&body, &mut overview);
     }

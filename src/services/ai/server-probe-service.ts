@@ -654,18 +654,26 @@ export async function executeSafeProbe(
       (async () => {
         try {
           const timeoutMs = 4500
-          const timeoutPromise = new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('采集超时')), timeoutMs),
-          )
+          let timeoutId: ReturnType<typeof setTimeout> | undefined
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error('采集超时')), timeoutMs)
+          })
 
-          const [metricsResult, cmdResult] = await Promise.allSettled([
-            backend?.metrics?.collect
-              ? Promise.race([backend.metrics.collect(activeConnId), timeoutPromise])
-              : Promise.reject(new Error('无 metrics 采集器')),
-            backend?.ssh?.execute
-              ? Promise.race([backend.ssh.execute(activeConnId, cmd), timeoutPromise])
-              : Promise.reject(new Error('无 ssh 执行器')),
-          ])
+          let metricsResult: PromiseSettledResult<unknown>
+          let cmdResult: PromiseSettledResult<unknown>
+          try {
+            ;[metricsResult, cmdResult] = await Promise.allSettled([
+              backend?.metrics?.collect
+                ? Promise.race([backend.metrics.collect(activeConnId), timeoutPromise])
+                : Promise.reject(new Error('无 metrics 采集器')),
+              backend?.ssh?.execute
+                ? Promise.race([backend.ssh.execute(activeConnId, cmd), timeoutPromise])
+                : Promise.reject(new Error('无 ssh 执行器')),
+            ])
+          } finally {
+            // race 已 settle 后必须清掉定时器，否则每次采集都留下一个 4.5s 悬挂回调
+            if (timeoutId) clearTimeout(timeoutId)
+          }
 
           let structuredSummary = ''
           let rawOutput = ''

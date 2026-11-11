@@ -76,8 +76,15 @@ impl ActiveSession {
 
 /// 外部插件连接失败后的熔断冷却期（避免异常插件在每次 AI 对话时重复阻塞）
 const RECONNECT_COOLDOWN: Duration = Duration::from_secs(30);
-/// list_active_tools 热路径上对单个外部插件自愈重连的最大等待时间
-const AUTO_HEAL_TIMEOUT: Duration = Duration::from_secs(5);
+/// list_active_tools 热路径上对单个外部插件自愈重连的最大等待时间。
+/// 必须大于 stdio 的 INITIALIZE_TIMEOUT(60s) 与 HANDSHAKE_TIMEOUT(25s)，
+/// 否则刚拉起的插件会被自愈超时丢弃并进入冷却，永久无法恢复。
+const AUTO_HEAL_TIMEOUT: Duration = Duration::from_secs(70);
+/// 整个工具列表刷新（含所有自愈重连）的总预算，防止多个故障插件串行叠加
+const LIST_TOOLS_TOTAL_TIMEOUT: Duration = Duration::from_secs(75);
+/// call_tool 路径上的重连超时：同样必须覆盖 stdio 的 60s 初始化，
+/// 否则刚拉起的插件会被再次丢弃并反复 spawn 子进程。
+const CALL_TOOL_RECONNECT_TIMEOUT: Duration = Duration::from_secs(70);
 static SAVE_SEQ: AtomicU64 = AtomicU64::new(1);
 
 pub struct McpClientManager {
@@ -708,49 +715,53 @@ impl McpClientManager {
 
         // 外部 Stdio / HTTP 插件必须持有存活会话；会话缺失或进程已退出时重建一次，
         // 避免仅凭磁盘缓存把已失效插件的工具注入给模型。
-        // 高可用保护：对处于 RECONNECT_COOLDOWN (30s) 冷却期内的故障插件直接短路跳过，
-        // 并限制单次自愈重连上限为 AUTO_HEAL_TIMEOUT (5s)，杜绝外部故障插件拖慢 AI 对话与内置 SSH 排障。
-        for (id, transport) in &enabled {
-            if transport == "ssh_native" {
-                continue;
-            }
-            let alive = {
-                let sessions = self.sessions.lock().await;
-                match sessions.get(id) {
-                    Some(sess) => sess.is_alive().await,
-                    None => false,
-                }
-            };
-            if !alive {
-                let in_cooldown = {
-                    let failed_map = self.last_failed_at.lock().await;
-                    failed_map
-                        .get(id)
-                        .map(|t| t.elapsed() < RECONNECT_COOLDOWN)
-                        .unwrap_or(false)
-                };
-                if in_cooldown {
+        // 冷却期内的故障插件直接短路跳过；单插件自愈上限 AUTO_HEAL_TIMEOUT (70s)，
+        // 整个列表再加 LIST_TOOLS_TOTAL_TIMEOUT (75s) 总预算，避免 N 个故障插件
+        // 串行叠加把每次 AI 对话阻塞 N×70s。
+        let _ = tokio::time::timeout(LIST_TOOLS_TOTAL_TIMEOUT, async {
+            for (id, transport) in &enabled {
+                if transport == "ssh_native" {
                     continue;
                 }
-                match tokio::time::timeout(AUTO_HEAL_TIMEOUT, self.start_plugin(id)).await {
-                    Ok(Ok(_)) => {}
-                    Ok(Err(err)) => {
-                        tracing::warn!("[MCP Client] 刷新插件 {} 会话失败: {}", id, err);
+                let alive = {
+                    let sessions = self.sessions.lock().await;
+                    match sessions.get(id) {
+                        Some(sess) => sess.is_alive().await,
+                        None => false,
                     }
-                    Err(_) => {
-                        self.last_failed_at
-                            .lock()
-                            .await
-                            .insert(id.clone(), Instant::now());
-                        tracing::warn!(
-                            "[MCP Client] 刷新插件 {} 会话超时 ({}s)，已进入冷却保护",
-                            id,
-                            AUTO_HEAL_TIMEOUT.as_secs()
-                        );
+                };
+                if !alive {
+                    let in_cooldown = {
+                        let failed_map = self.last_failed_at.lock().await;
+                        failed_map
+                            .get(id)
+                            .map(|t| t.elapsed() < RECONNECT_COOLDOWN)
+                            .unwrap_or(false)
+                    };
+                    if in_cooldown {
+                        continue;
+                    }
+                    match tokio::time::timeout(AUTO_HEAL_TIMEOUT, self.start_plugin(id)).await {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(err)) => {
+                            tracing::warn!("[MCP Client] 刷新插件 {} 会话失败: {}", id, err);
+                        }
+                        Err(_) => {
+                            self.last_failed_at
+                                .lock()
+                                .await
+                                .insert(id.clone(), Instant::now());
+                            tracing::warn!(
+                                "[MCP Client] 刷新插件 {} 会话超时 ({}s)，已进入冷却保护",
+                                id,
+                                AUTO_HEAL_TIMEOUT.as_secs()
+                            );
+                        }
                     }
                 }
             }
-        }
+        })
+        .await;
 
         let list = self.plugins.read().await;
         let sessions = self.sessions.lock().await;
@@ -838,7 +849,23 @@ impl McpClientManager {
         }
 
         if session.is_none() {
-            self.start_plugin(plugin_id).await?;
+            // 冷却期内不重复拉起子进程，避免故障插件每次工具调用都 spawn 一次
+            let in_cooldown = {
+                let failed_map = self.last_failed_at.lock().await;
+                failed_map
+                    .get(plugin_id)
+                    .map(|t| t.elapsed() < RECONNECT_COOLDOWN)
+                    .unwrap_or(false)
+            };
+            if in_cooldown {
+                return Err(format!("插件「{}」处于重连冷却期，请稍后重试", plugin_name));
+            }
+            // 超时必须覆盖 stdio 初始化（60s），否则刚拉起的插件会被再次丢弃
+            tokio::time::timeout(CALL_TOOL_RECONNECT_TIMEOUT, self.start_plugin(plugin_id))
+                .await
+                .map_err(|_| {
+                    format!("插件「{}」重连超时，已跳过本次工具调用", plugin_name)
+                })??;
             let sessions = self.sessions.lock().await;
             session = sessions.get(plugin_id).cloned();
         }
@@ -852,8 +879,20 @@ impl McpClientManager {
         let (is_error, text) = match call_result {
             Ok(res) => res,
             Err(first_err) => {
+                // 先写冷却：若重连也失败/超时，后续调用会被冷却短路，
+                // 不会每次都重新 spawn 子进程。
+                self.last_failed_at
+                    .lock()
+                    .await
+                    .insert(plugin_id.to_string(), Instant::now());
                 self.stop_plugin(plugin_id).await;
-                self.start_plugin(plugin_id).await?;
+                tokio::time::timeout(CALL_TOOL_RECONNECT_TIMEOUT, self.start_plugin(plugin_id))
+                    .await
+                    .map_err(|_| {
+                        format!("插件「{}」重连超时: {}", plugin_name, first_err)
+                    })??;
+                // 重连成功后立即解除冷却，避免误挡后续正常调用
+                self.last_failed_at.lock().await.remove(plugin_id);
                 let fresh_session = {
                     let sessions = self.sessions.lock().await;
                     sessions.get(plugin_id).cloned()

@@ -756,10 +756,12 @@ pub async fn ssh_connect(
         return Ok(OperationResult::fail("BMC Redfish 会话请从带外管理模块启动"));
     }
     // Phase 2-B-4：HTTPS 设备不能落入通用 SSH 分派（否则会用 443 端口尝试 SSH 握手）。
-    if protocol == "https" {
+    // 大小写不敏感：历史脏数据可能存为 "HTTPS" / "K8s"，
+    // 严格比较会绕过守卫并用 443 / 6443 端口尝试 SSH 握手。
+    if protocol.eq_ignore_ascii_case("https") {
         return Ok(OperationResult::fail("ESXi / vCenter 会话请从设备管理模块启动"));
     }
-    if protocol == "k8s" {
+    if protocol.eq_ignore_ascii_case("k8s") {
         return Ok(OperationResult::fail("Kubernetes 集群请从集群管理模块启动"));
     }
     if protocol == "telnet" {

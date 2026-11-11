@@ -260,10 +260,13 @@ impl StdioMcpSession {
             if let Some(pid) = child.id() {
                 use std::os::windows::process::CommandExt;
                 const CREATE_NO_WINDOW: u32 = 0x08000000;
+                // 必须等待 taskkill 完成：否则孙进程可能残留并持有 stdout 写端，
+                // 使 reader 任务永久挂起。
                 let _ = std::process::Command::new("taskkill")
                     .args(["/F", "/T", "/PID", &pid.to_string()])
                     .creation_flags(CREATE_NO_WINDOW)
-                    .spawn();
+                    .spawn()
+                    .and_then(|mut c| c.wait());
             }
             let _ = child.start_kill();
         }

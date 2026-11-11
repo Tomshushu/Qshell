@@ -3845,6 +3845,13 @@ export function TerminalModule({
         const sessionCleanup = () => {
           if (sessionCleanupDone) return;
           sessionCleanupDone = true;
+          // 会话结束时移除该终端的时间戳偏好，避免 Map 随开过的会话数无界增长
+          setShowTimestampsMap((prev) => {
+            if (!prev.has(termId)) return prev;
+            const next = new Map(prev);
+            next.delete(termId);
+            return next;
+          });
           // 断连/关闭：使所有 in-flight 的路径/动态补全请求失效（resolve 后会被版本号丢弃）；
           // 若该会话属于当前活跃终端，同时清掉补全面板状态，避免旧补全列表残留到新会话。
           pathFetchIdRef.current += 1;
@@ -6051,6 +6058,13 @@ export function TerminalModule({
         const sessionCleanup = () => {
           if (sessionCleanupDone) return;
           sessionCleanupDone = true;
+          // 会话结束时移除该终端的时间戳偏好，避免 Map 随开过的会话数无界增长
+          setShowTimestampsMap((prev) => {
+            if (!prev.has(termId)) return prev;
+            const next = new Map(prev);
+            next.delete(termId);
+            return next;
+          });
           // 断连/关闭：使所有 in-flight 的路径/动态补全请求失效（resolve 后会被版本号丢弃）；
           // 若该会话属于当前活跃终端，同时清掉补全面板状态，避免旧补全列表残留到新会话。
           pathFetchIdRef.current += 1;

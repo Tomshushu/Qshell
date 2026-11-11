@@ -135,7 +135,7 @@ export const SFTP_READ_FILE_SCHEMA: McpToolDefinition = {
 }
 
 /**
- * Qshell 作为 MCP Server 对外暴露的「静态内置工具」清单。
+ * Qshell 内置工具策略的「静态工具」清单（供 AI Agent 与策略引擎共用）。
  *
  * 注意：这不是 AI Agent 运行时的完整工具集。插件中心动态发现的 MCP 插件工具
  * （mcp__<plugin>__<tool>）由 buildMcpTools() 在运行时合并进来，

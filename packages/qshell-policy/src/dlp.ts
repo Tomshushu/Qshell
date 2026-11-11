@@ -2,7 +2,7 @@
  * packages/qshell-policy/src/dlp.ts
  *
  * Qshell 本地端侧数据防泄漏 (DLP) 与隐私脱敏清洗引擎
- * 采用高性能纯本地正则过滤，零网络开销，确保机密凭据、密码与私钥绝不发送至外部大模型或外部 MCP 客户端
+ * 采用高性能纯本地正则过滤，零网络开销，确保机密凭据、密码与私钥在进入外部大模型 / 第三方 MCP 插件之前被脱敏
  */
 
 import type { DlpSanitizeOptions } from './types'

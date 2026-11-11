@@ -919,7 +919,7 @@ function CommandExecutionCard({
               onClick={() => {
                 window.dispatchEvent(
                   new CustomEvent('insert-terminal-command', {
-                    detail: { command: card.command, execute: true },
+                    detail: { command: card.command, execute: true, source: "user" },
                   }),
                 )
               }}
@@ -1993,7 +1993,7 @@ export function FloatingAIAssistant() {
     }
     window.dispatchEvent(
       new CustomEvent('insert-terminal-command', {
-        detail: { command: cmd, execute: true },
+        detail: { command: cmd, execute: true, source: "user" },
       }),
     )
     window.dispatchEvent(new CustomEvent('focus-active-terminal'))

@@ -34,6 +34,15 @@ pub fn client(timeout_secs: u64, allow_invalid_certs: bool) -> Result<Arc<reqwes
     if let Some(existing) = cache.get(&key) {
         return Ok(Arc::clone(existing));
     }
+    // timeout_secs 来自每台服务器的配置（用户可控），不能让不同取值无限
+    // 累积独立连接池；超过上限时淘汰一个已有条目（HashMap 无序，
+    // 不保证是「最早」插入的那一项，但能确保总数有界）。
+    const MAX_CACHED_CLIENTS: usize = 16;
+    if cache.len() >= MAX_CACHED_CLIENTS {
+        if let Some(oldest) = cache.keys().next().copied() {
+            cache.remove(&oldest);
+        }
+    }
     let created = Arc::new(build_client(timeout_secs, allow_invalid_certs)?);
     cache.insert(key, Arc::clone(&created));
     Ok(created)

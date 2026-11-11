@@ -1729,7 +1729,48 @@ pub fn servers_update(id: String, updates: String) -> Result<(), String> {
         let value: Option<String> = if keys_config.trim().is_empty() {
             None
         } else {
-            Some(encrypt_sensitive_text(keys_config.trim())?)
+            // 表单回显时每个 entry 的 passphrase 会被 mask 成空串。保存时若仍为空，
+            // 必须回填库中同一个位置的旧密码，否则内联私钥认证会永久失效。
+            let mut merged_json = keys_config.trim().to_string();
+            if let Ok(mut incoming) = serde_json::from_str::<Vec<serde_json::Value>>(&merged_json) {
+                let existing_enc: Option<String> = conn
+                    .query_row(
+                        "SELECT keys_config FROM servers WHERE id = ?1",
+                        params![&id],
+                        |row| row.get(0),
+                    )
+                    .ok()
+                    .flatten();
+                if let Some(existing_plain) = decrypt_sensitive_text(existing_enc) {
+                    if let Ok(existing) = serde_json::from_str::<Vec<serde_json::Value>>(&existing_plain) {
+                        for (idx, entry) in incoming.iter_mut().enumerate() {
+                            let needs_restore = entry
+                                .get("passphrase")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.is_empty() || s == PASSWORD_PLACEHOLDER)
+                                .unwrap_or(true);
+                            if !needs_restore {
+                                continue;
+                            }
+                            let old_pwd = existing
+                                .get(idx)
+                                .and_then(|e| e.get("passphrase"))
+                                .and_then(|v| v.as_str())
+                                .filter(|s| !s.is_empty() && *s != PASSWORD_PLACEHOLDER);
+                            if let (Some(obj), Some(old)) = (entry.as_object_mut(), old_pwd) {
+                                obj.insert(
+                                    "passphrase".to_string(),
+                                    serde_json::Value::String(old.to_string()),
+                                );
+                            }
+                        }
+                    }
+                }
+                if let Ok(serialized) = serde_json::to_string(&incoming) {
+                    merged_json = serialized;
+                }
+            }
+            Some(encrypt_sensitive_text(&merged_json)?)
         };
         set_clauses.push("keys_config = ?".to_string());
         param_values.push(Box::new(value));
@@ -1752,12 +1793,17 @@ pub fn servers_update(id: String, updates: String) -> Result<(), String> {
             let mut merged_json = file_transfer_config.trim().to_string();
             if let Ok(mut incoming_val) = serde_json::from_str::<serde_json::Value>(&merged_json) {
                 if let Some(incoming_obj) = incoming_val.as_object_mut() {
-                    let incoming_pwd_empty = incoming_obj
-                        .get("password")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.is_empty() || s == PASSWORD_PLACEHOLDER)
-                        .unwrap_or(true);
-                    if incoming_pwd_empty {
+                    // 读出口径会把已保存密码掩码成 ""，因此「缺字段 / 空串 /
+                    // 占位符」都必须回填旧密码：否则任何原样回传该 JSON 的调用方
+                    // 都会静默清空 FTP 密码。只有显式传入非字符串值才视为真清空。
+                    let should_restore = match incoming_obj.get("password") {
+                        None => true,
+                        Some(serde_json::Value::String(s)) => {
+                            s.is_empty() || s == PASSWORD_PLACEHOLDER
+                        }
+                        Some(_) => false,
+                    };
+                    if should_restore {
                         let existing_enc: Option<String> = conn
                             .query_row(
                                 "SELECT file_transfer_config FROM servers WHERE id = ?1",

@@ -1478,6 +1478,7 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
         detail: {
           command: "watch -n 1 'ps aux | head -n 5'",
           execute: true,
+          source: "user",
         },
       }),
     )
@@ -1886,7 +1887,7 @@ describe('FloatingAIAssistant Component & Store Flow', () => {
     fireEvent.click(runBtn)
 
     expect(dispatchedEvents).toEqual([
-      { command: 'sudo apt install -y curl', execute: true },
+      { command: 'sudo apt install -y curl', execute: true, source: 'user' },
     ])
 
     window.getSelection = originalGetSelection

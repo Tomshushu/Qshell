@@ -159,6 +159,9 @@ async fn fetch(ctx: &EsxiCtx, path: &str) -> Result<String, String> {
             ),
         });
     }
+    if body.trim().is_empty() {
+        return Err(format!("ESXi 端点响应为空：{}", path));
+    }
     Ok(body)
 }
 
@@ -208,6 +211,19 @@ pub async fn esxi_test_connect_with_config(
         allow_invalid_certs: config.tls_allow_invalid_certs.unwrap_or(false),
     };
     Ok(match probe(&ctx).await {
+        // 概览面板允许「2xx 但无结构化字段」（兼容老版本 vSphere），
+        // 但测试连接必须确认拿到可识别的 vSphere 响应，避免登录页/代理页被误报成功。
+        Ok(overview)
+            if overview.product_name.is_none()
+                && overview.api_version.is_none()
+                && overview.host_name.is_none()
+                && overview.version.is_none()
+                && overview.host_count.is_none() =>
+        {
+            OperationResult::fail(
+                "ESXi 端点返回的不是可识别的 vSphere 响应，请检查主机地址与端口",
+            )
+        }
         Ok(_) => OperationResult::ok_with_message("ESXi HTTPS 连接和认证成功"),
         Err(error) => OperationResult::fail(error),
     })
