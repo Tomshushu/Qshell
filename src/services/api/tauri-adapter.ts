@@ -2334,6 +2334,12 @@ export const tauriAdapter: BackendAdapter = {
     async stopSession(sessionId): Promise<OperationResult> {
       return safeInvoke<OperationResult>("vnc_stop_session", { sessionId });
     },
+    async solveAuthChallenge(config): Promise<number[]> {
+      return safeInvoke<number[]>("vnc_solve_auth_challenge", {
+        sessionId: config.sessionId,
+        challenge: config.challenge,
+      });
+    },
     async testConnection(config): Promise<OperationResult> {
       return safeInvoke<OperationResult>("vnc_test_connection", {
         host: config.host,

@@ -95,6 +95,14 @@ pub async fn vnc_start_session(
         .or_else(|| server.get("connection_timeout").and_then(|t| t.as_u64()))
         .unwrap_or(15);
 
+    // VeNCrypt/TLS 默认严格校验证书；仅用户显式允许自签证书时放宽（兼容新旧字段键）
+    let allow_invalid_certs = server
+        .get("tlsAllowInvalidCerts")
+        .and_then(|v| v.as_bool())
+        .or_else(|| server.get("bmcAllowInvalidCerts").and_then(|v| v.as_bool()))
+        .or_else(|| server.get("bmc_allow_invalid_certs").and_then(|v| v.as_bool()))
+        .unwrap_or(false);
+
     // 智能获取该服务器当前活跃的 SSH 连接（优先按 workspace 作用域 server_id，其次按 base_id）
     // 若命中活跃连接，start_bridge 将无缝启用 SSH Direct-TCPIP 隧道打洞；否则平滑回退为 TCP 直连
     let ssh_conn = crate::ssh::manager::SshManager::global()
@@ -102,7 +110,17 @@ pub async fn vnc_start_session(
         .or_else(|_| crate::ssh::manager::SshManager::global().get_connection(&base_id))
         .ok();
 
-    match vnc::start_bridge(Some(app), host, final_port, password, timeout_secs, ssh_conn).await {
+    match vnc::start_bridge(
+        Some(app),
+        host,
+        final_port,
+        password,
+        timeout_secs,
+        ssh_conn,
+        allow_invalid_certs,
+    )
+    .await
+    {
         Ok(session) => Ok(VncStartResponse {
             success: true,
             error: None,
@@ -141,4 +159,13 @@ pub async fn vnc_test_connection(
         Ok(msg) => Ok(OperationResult::ok_with_message(msg)),
         Err(err) => Ok(OperationResult::fail(err)),
     }
+}
+
+/// 基于后端安全区密码代算 VNC Auth 挑战应答（零明文密码跨 IPC 暴露）
+#[tauri::command]
+pub async fn vnc_solve_auth_challenge(
+    session_id: String,
+    challenge: Vec<u8>,
+) -> Result<Vec<u8>, String> {
+    vnc::solve_auth_challenge(&session_id, &challenge)
 }

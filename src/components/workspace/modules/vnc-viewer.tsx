@@ -198,6 +198,10 @@ export function VncViewerModule({
     }
   }, [])
 
+  // 自动重连必须调用最新版本的 startVncSession（端口 / 画质可随时修改），
+  // 否则延迟重连的闭包会固化首次渲染时的旧参数。
+  const startVncSessionRef = useRef<((isAutoRetry?: boolean) => Promise<void>) | null>(null)
+
   const scheduleAutoReconnect = useCallback(() => {
     if (reconnectTimerRef.current || isUserDisconnectRef.current) return
     setReconnectAttempt((prev) => {
@@ -224,7 +228,7 @@ export function VncViewerModule({
 
       reconnectTimerRef.current = setTimeout(() => {
         reconnectTimerRef.current = null
-        void startVncSession(true)
+        void startVncSessionRef.current?.(true)
       }, delaySeconds * 1000)
 
       return nextAttempt
@@ -268,12 +272,37 @@ export function VncViewerModule({
         return
       }
 
-      const { sessionId, wsUrl, password, isTunneled: sessionTunneled, isTls: sessionTls } = res.session
+      const {
+        sessionId,
+        wsUrl,
+        hasPassword,
+        isTunneled: sessionTunneled,
+        isTls: sessionTls,
+      } = res.session
       sessionIdRef.current = sessionId
       setIsTunneled(Boolean(sessionTunneled))
       setIsTls(Boolean(sessionTls))
 
-      const client = new RfbClient(canvasRef.current, password || '', {
+      // 仅在后端安全区真正持有预置密码时才挂载代算回调；
+      // 若后端无密码，直接让 RfbClient 触发原生的 password_required 交互式输入，
+      // 避免无效代算请求与重试抖动。
+      const onAuthChallenge = hasPassword
+        ? async (challenge: Uint8Array) => {
+            const resp = await backend.vnc.solveAuthChallenge({
+              sessionId,
+              challenge: Array.from(challenge),
+            })
+            // 后端桥接严格要求 16 字节应答；长度异常时明确报错，
+            // 避免空数组被发送后认证静默失败。
+            if (!Array.isArray(resp) || resp.length !== 16) {
+              throw new Error('VNC 认证代算返回了无效的应答长度')
+            }
+            return new Uint8Array(resp)
+          }
+        : undefined
+
+      const client = new RfbClient(canvasRef.current, '', {
+        onAuthChallenge,
         onStatusChange: (nextStatus, msg) => {
           setStatus(nextStatus)
           if (msg) setErrorMsg(msg)
@@ -283,7 +312,8 @@ export function VncViewerModule({
             cancelAutoReconnect()
           } else if (nextStatus === 'disconnected' || nextStatus === 'error') {
             if (!isUserDisconnectRef.current && hasAutoStartedRef.current) {
-              const isAuthFail = msg && /password|too many security failures|authentication/i.test(msg)
+              // 认证类错误（含后端中文提示）不应进入自动重连循环
+              const isAuthFail = msg && /password|too many security failures|authentication|PASSWORD_REQUIRED|密码|凭据|认证/i.test(msg)
               if (!isAuthFail) {
                 scheduleAutoReconnect()
               }
@@ -316,6 +346,9 @@ export function VncViewerModule({
       isStartingRef.current = false
     }
   }, [serverId, vncPort, viewOnly, qualityPreset, cleanupSession, cancelAutoReconnect, scheduleAutoReconnect])
+
+  // 每次渲染同步最新引用，供延迟重连使用
+  startVncSessionRef.current = startVncSession
 
   const handleDisconnect = useCallback(async () => {
     isUserDisconnectRef.current = true

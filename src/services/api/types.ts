@@ -1803,12 +1803,19 @@ export interface BackendAdapter {
         wsUrl: string;
         host: string;
         port: number;
-        password?: string;
+        /** 后端固定返回 null：VNC 密码只驻留 Rust 内存，绝不跨 IPC 下发 */
+        password?: null;
+        /** 后端安全区是否预置了此会话的密码（若为 true 则前端走异步代算，若为 false 则提示用户输入） */
+        hasPassword?: boolean;
         isTunneled?: boolean;
         isTls?: boolean;
       };
     }>;
     stopSession: (sessionId: string) => Promise<OperationResult>;
+    solveAuthChallenge: (config: {
+      sessionId: string;
+      challenge: number[];
+    }) => Promise<number[]>;
     testConnection: (config: {
       host: string;
       port?: number;

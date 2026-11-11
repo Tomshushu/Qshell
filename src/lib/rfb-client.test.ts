@@ -319,6 +319,150 @@ describe('rfb-client handshake state machine and error handling', () => {
     expect(latestStatus).toBe('connected') // 状态保持或转关闭
   })
 
+  it('delegates VncAuth challenge computation via onAuthChallenge without client password', async () => {
+    const canvas = {
+      getContext: () => ({
+        createImageData: () => ({ data: new Uint8Array(4) }),
+        putImageData: () => {},
+        fillRect: () => {},
+      }),
+      width: 0,
+      height: 0,
+      style: { cursor: '' },
+    } as unknown as HTMLCanvasElement
+
+    let latestStatus = ''
+    let challengeReceivedByDelegate: Uint8Array | null = null
+
+    const { RfbClient, vncDesEncryptChallenge } = await import('./rfb-client')
+    const client = new RfbClient(canvas, '', {
+      onStatusChange: (status) => {
+        latestStatus = status
+      },
+      onAuthChallenge: async (challenge) => {
+        challengeReceivedByDelegate = challenge
+        // 模拟 Rust 后端安全代算：使用隔离区密码计算
+        return vncDesEncryptChallenge(challenge, 'backend_secret')
+      },
+    })
+
+    class MockWebSocket {
+      public readyState = 1
+      public onopen: (() => void) | null = null
+      public onmessage: ((e: { data: ArrayBuffer | Uint8Array }) => void) | null = null
+      public onerror: ((e: unknown) => void) | null = null
+      public onclose: (() => void) | null = null
+      public sent: Uint8Array[] = []
+      public binaryType = 'arraybuffer'
+
+      public send(data: ArrayBuffer | Uint8Array) {
+        const u8 = data instanceof Uint8Array ? data : new Uint8Array(data)
+        this.sent.push(u8)
+      }
+      public close() {
+        this.readyState = 3
+        this.onclose?.()
+      }
+    }
+
+    const mockWs = new MockWebSocket()
+    function MockWebSocketCtor() {
+      return mockWs
+    }
+    MockWebSocketCtor.OPEN = 1
+    // @ts-expect-error Mock
+    globalThis.WebSocket = MockWebSocketCtor
+
+    client.connect('ws://127.0.0.1:9999/vnc')
+    mockWs.onopen?.()
+
+    // 1. 服务端下发 RFB 3.8 版本头
+    await mockWs.onmessage?.({ data: new TextEncoder().encode('RFB 003.008\n').buffer })
+    expect(new TextDecoder().decode(mockWs.sent[0])).toBe('RFB 003.008\n')
+
+    // 2. 服务端下发安全类型列表：仅支持 VNC Auth (2)
+    await mockWs.onmessage?.({ data: new Uint8Array([1, 2]).buffer })
+    expect(mockWs.sent[1]).toEqual(new Uint8Array([2]))
+
+    // 3. 服务端下发 16 字节随机挑战
+    const rawChallenge = new Uint8Array(16).fill(0x77)
+    await mockWs.onmessage?.({ data: rawChallenge.buffer })
+
+    // 等待异步委托代算完成
+    await new Promise((r) => setTimeout(r, 20))
+
+    // 校验：挑战已成功委托给 onAuthChallenge 且前端发出了代算密文
+    expect(challengeReceivedByDelegate).toEqual(rawChallenge)
+    expect(mockWs.sent.length).toBeGreaterThanOrEqual(3)
+    const expectedResp = vncDesEncryptChallenge(rawChallenge, 'backend_secret')
+    expect(mockWs.sent[2]).toEqual(expectedResp)
+
+    // 4. 服务端下发 SecurityResult (0 = OK)
+    await mockWs.onmessage?.({ data: new Uint8Array([0, 0, 0, 0]).buffer })
+    // 5. 校验客户端发出 ClientInit (1)
+    expect(mockWs.sent[3]).toEqual(new Uint8Array([1]))
+
+    client.disconnect()
+  })
+
+  it('triggers password_required when no password and no onAuthChallenge callback provided', async () => {
+    const canvas = {
+      getContext: () => ({
+        createImageData: () => ({ data: new Uint8Array(4) }),
+        putImageData: () => {},
+        fillRect: () => {},
+      }),
+      width: 0,
+      height: 0,
+      style: { cursor: '' },
+    } as unknown as HTMLCanvasElement
+
+    let latestStatus = ''
+    const { RfbClient } = await import('./rfb-client')
+    const client = new RfbClient(canvas, '', {
+      onStatusChange: (status) => {
+        latestStatus = status
+      },
+    })
+
+    class MockWebSocket {
+      public readyState = 1
+      public onopen: (() => void) | null = null
+      public onmessage: ((e: { data: ArrayBuffer | Uint8Array }) => void) | null = null
+      public onerror: ((e: unknown) => void) | null = null
+      public onclose: (() => void) | null = null
+      public sent: Uint8Array[] = []
+      public binaryType = 'arraybuffer'
+
+      public send(data: ArrayBuffer | Uint8Array) {
+        const u8 = data instanceof Uint8Array ? data : new Uint8Array(data)
+        this.sent.push(u8)
+      }
+      public close() {
+        this.readyState = 3
+        this.onclose?.()
+      }
+    }
+
+    const mockWs = new MockWebSocket()
+    function MockWebSocketCtor() {
+      return mockWs
+    }
+    MockWebSocketCtor.OPEN = 1
+    // @ts-expect-error Mock
+    globalThis.WebSocket = MockWebSocketCtor
+
+    client.connect('ws://127.0.0.1:9999/vnc')
+    mockWs.onopen?.()
+
+    await mockWs.onmessage?.({ data: new TextEncoder().encode('RFB 003.008\n').buffer })
+    await mockWs.onmessage?.({ data: new Uint8Array([1, 2]).buffer })
+    await mockWs.onmessage?.({ data: new Uint8Array(16).fill(0x55).buffer })
+
+    expect(latestStatus).toBe('password_required')
+    client.disconnect()
+  })
+
   it('negotiates VeNCrypt 0.2 Plain subtype handshake successfully', async () => {
     const canvas = {
       getContext: () => ({
@@ -442,6 +586,59 @@ describe('rfb-client handshake state machine and error handling', () => {
     expect(key2Down[1]).toBe(1) // down = 1
     const key2Sym = (key2Down[4] << 24) | (key2Down[5] << 16) | (key2Down[6] << 8) | key2Down[7]
     expect(key2Sym).toBe(0xff0d) // Return
+
+    client.disconnect()
+  })
+
+  it('safely catches malformed frame and resets rx buffer without crashing', async () => {
+    const canvas = {
+      getContext: () => ({
+        createImageData: () => ({ data: new Uint8Array(4) }),
+        putImageData: () => {},
+        fillRect: () => {},
+      }),
+      width: 0,
+      height: 0,
+      style: { cursor: '' },
+    } as unknown as HTMLCanvasElement
+
+    let errorReason = ''
+    let latestStatus = ''
+    const { RfbClient } = await import('./rfb-client')
+    const client = new RfbClient(canvas, 'password', {
+      onStatusChange: (status, reason) => {
+        latestStatus = status
+        if (reason) errorReason = reason
+      },
+    })
+
+    class MockWs {
+      public readyState = 1
+      public onopen: (() => void) | null = null
+      public onmessage: ((ev: { data: ArrayBuffer }) => void) | null = null
+      public closeCalled = false
+      send() {}
+      close() {
+        this.closeCalled = true
+      }
+    }
+
+    const mockWs = new MockWs()
+    // @ts-expect-error Mock WebSocket
+    globalThis.WebSocket = function () {
+      return mockWs
+    }
+
+    client.connect('ws://127.0.0.1:9999/vnc')
+    mockWs.onopen?.()
+
+    // 发送非法的协议版本帧（不是以 'RFB ' 开头）
+    const malformedBanner = new TextEncoder().encode('BOGUS 003.008\n')
+    mockWs.onmessage?.({ data: malformedBanner.buffer })
+
+    expect(latestStatus).toBe('error')
+    expect(errorReason).toContain('无效的 RFB 握手头')
+    expect(mockWs.closeCalled).toBe(true)
 
     client.disconnect()
   })

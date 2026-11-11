@@ -78,6 +78,9 @@ pub fn run() {
             // 文件名格式: ssh_cert_<pid>_<nanos>.tmp
             cleanup_stale_tmp_cert_files();
 
+            // 清理上次进程异常退出遗留的外部编辑器临时文件与 watcher 残留
+            crate::commands::files::stop_all_external_edits();
+
             // 初始化数据库
             let app_data_dir = app.path().app_data_dir()
                 .expect("failed to get app_data_dir");
@@ -517,6 +520,7 @@ pub fn run() {
             commands::vnc::vnc_start_session,
             commands::vnc::vnc_stop_session,
             commands::vnc::vnc_test_connection,
+            commands::vnc::vnc_solve_auth_challenge,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -524,6 +528,8 @@ pub fn run() {
             // 应用退出时优雅断开所有 SSH 连接，发送 SSH DISCONNECT 消息
             // 避免服务器端 sshd 会话残留和临时文件泄漏
             if let tauri::RunEvent::ExitRequested { .. } = event {
+                // 退出前停止所有外部编辑器 watcher 并回收临时目录
+                crate::commands::files::stop_all_external_edits();
                 let rt = tauri::async_runtime::handle();
                 rt.block_on(async {
                     ssh::manager::SshManager::global().disconnect_all().await;

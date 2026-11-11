@@ -161,6 +161,12 @@ export class RfbWebGlRenderer implements RfbRenderer {
     gl.attachShader(program, vs)
     gl.attachShader(program, fs)
     gl.linkProgram(program)
+    // 链接后着色器对象已由 program 持有引用，标记删除以免反复重连累积 GPU 对象。
+    // 测试环境的 WebGL mock 可能未实现该接口，做防御性判断。
+    if (typeof gl.deleteShader === 'function') {
+      gl.deleteShader(vs)
+      gl.deleteShader(fs)
+    }
 
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
       const err = gl.getProgramInfoLog(program)

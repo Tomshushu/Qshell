@@ -186,9 +186,12 @@ function desEncryptBlock(block8: Uint8Array, subkeys: number[][]): Uint8Array {
  * 使用 VNC 密码加密 16 字节服务端随机挑战
  */
 export function vncDesEncryptChallenge(challenge16: Uint8Array, password: string): Uint8Array {
+  // 与后端 des.rs 保持一致：按 UTF-8 字节取前 8 字节。
+  // 不能用 charCodeAt（UTF-16 低字节），否则非 ASCII 密码两端结果不同。
+  const pwdBytes = new TextEncoder().encode(password)
   const keyBytes = new Uint8Array(8)
   for (let i = 0; i < 8; i++) {
-    const code = i < password.length ? password.charCodeAt(i) & 0xff : 0
+    const code = i < pwdBytes.length ? pwdBytes[i] : 0
     // VNC 协议特有约定：每个密码字节的 8 个 bit 必须反转位序作为 DES 密钥
     keyBytes[i] = reverseByteBits(code)
   }
@@ -290,6 +293,11 @@ export interface RfbClientCallbacks {
   onClipboard?: (text: string) => void
   onBell?: () => void
   onStats?: (stats: VncSessionStats) => void
+  /**
+   * 密码安全委托：接收服务端 16 字节随机挑战，异步委托后端安全区（Rust）计算 DES 响应
+   * 使得明文密码 100% 留存后端本地内存，零明文凭据跨 IPC 暴露给前端
+   */
+  onAuthChallenge?: (challenge: Uint8Array) => Promise<Uint8Array>
 }
 
 type HandshakePhase =
@@ -333,6 +341,12 @@ export class RfbClient {
   private tightDecoder = new TightDecoder()
   private lastRequestedSize: { w: number; h: number } | null = null
   private qualityPreset: VncQualityPreset = 'balanced'
+  private isProcessing = false
+  // 仅在「异步委托期间确实有新数据到达」时才重新驱动解码循环，
+  // 避免半包残包被无限排入微任务导致事件循环饿死。
+  private needsReprocess = false
+  // 每次 connect/disconnect 递增，用于丢弃过期连接上的异步代算结果
+  private connectionGeneration = 0
 
   // 实时性能与网络统计 (FPS / Ping / 吞吐带宽)
   private statsInterval: ReturnType<typeof setInterval> | null = null
@@ -342,6 +356,8 @@ export class RfbClient {
   private lastLatencyMs = 0
   private pingSentTime = 0
   private isAwaitingPingResponse = false
+  // VeNCrypt Plain 需要明文密码凭据；无密码时挂起，等 submitPassword 补发
+  private awaitingPlainPassword = false
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -365,6 +381,8 @@ export class RfbClient {
 
   public connect(wsUrl: string): void {
     this.disconnect()
+    this.connectionGeneration += 1
+    this.needsReprocess = false
     this.hasExplicitError = false
     this.callbacks.onStatusChange?.('connecting')
 
@@ -376,17 +394,21 @@ export class RfbClient {
       this.callbacks.onStatusChange?.('handshaking')
     }
 
-    ws.onmessage = (ev: MessageEvent) => {
-      if (ev.data instanceof ArrayBuffer) {
-        this.appendBytes(new Uint8Array(ev.data))
-        this.processBuffer()
-      } else if (ArrayBuffer.isView(ev.data)) {
-        const v = ev.data as ArrayBufferView
-        this.appendBytes(new Uint8Array(v.buffer, v.byteOffset, v.byteLength))
-        this.processBuffer()
-      } else if (ev.data && typeof (ev.data as { byteLength?: number }).byteLength === 'number') {
-        this.appendBytes(new Uint8Array(ev.data as ArrayBuffer))
-        this.processBuffer()
+    ws.onmessage = async (ev: MessageEvent) => {
+      try {
+        if (ev.data instanceof ArrayBuffer) {
+          this.appendBytes(new Uint8Array(ev.data))
+          await this.processBuffer()
+        } else if (ArrayBuffer.isView(ev.data)) {
+          const v = ev.data as ArrayBufferView
+          this.appendBytes(new Uint8Array(v.buffer, v.byteOffset, v.byteLength))
+          await this.processBuffer()
+        } else if (ev.data && typeof (ev.data as { byteLength?: number }).byteLength === 'number') {
+          this.appendBytes(new Uint8Array(ev.data as ArrayBuffer))
+          await this.processBuffer()
+        }
+      } catch (err) {
+        this.handleDecodeError(err)
       }
     }
 
@@ -403,11 +425,28 @@ export class RfbClient {
     }
   }
 
+  /** 首次解码与延迟重排共用同一条错误上报/断开路径 */
+  private handleDecodeError(err: unknown): void {
+    // 解码异常若冒泡，状态机会停在当前矩形，后续数据持续堆积且不再触发重连。
+    this.hasExplicitError = true
+    this.callbacks.onStatusChange?.(
+      'error',
+      `VNC 画面解码失败，连接已断开: ${err instanceof Error ? err.message : String(err)}`
+    )
+    this.disconnect()
+  }
+
   public getStatus(): string {
     return this.phase
   }
 
   public disconnect(): void {
+    this.connectionGeneration += 1
+    this.needsReprocess = false
+    this.awaitingPlainPassword = false
+    // 断开发生在异步代算 await 期间时，旧循环尚未走 finally；
+    // 复位标志，避免同一实例被复用时所有 onmessage 被 isProcessing 短路。
+    this.isProcessing = false
     if (this.ws) {
       this.ws.onopen = null
       this.ws.onmessage = null
@@ -479,9 +518,29 @@ export class RfbClient {
 
   public submitPassword(password: string): void {
     this.password = password
-    if (this.phase === 'vnc_challenge' && this.rxBuf.length >= 16) {
-      this.processBuffer()
+    if (this.awaitingPlainPassword) {
+      this.awaitingPlainPassword = false
+      this.sendVeNCryptPlainCredentials()
+      this.phase = 'security_result'
+      void this.processBuffer().catch((err) => this.handleDecodeError(err))
+      return
     }
+    if (this.phase === 'vnc_challenge' && this.rxBuf.length >= 16) {
+      void this.processBuffer().catch((err) => this.handleDecodeError(err))
+    }
+  }
+
+  /** VeNCrypt Plain 的用户名/密码凭据（无用户名，仅密码） */
+  private sendVeNCryptPlainCredentials(): void {
+    const userBytes = new TextEncoder().encode('')
+    const pwdBytes = new TextEncoder().encode(this.password || '')
+    const cred = new Uint8Array(8 + userBytes.length + pwdBytes.length)
+    const dv = new DataView(cred.buffer)
+    dv.setUint32(0, userBytes.length)
+    dv.setUint32(4, pwdBytes.length)
+    cred.set(userBytes, 8)
+    cred.set(pwdBytes, 8 + userBytes.length)
+    this.sendRaw(cred)
   }
 
   public sendPointerEvent(x: number, y: number, buttonMask: number): void {
@@ -638,6 +697,14 @@ export class RfbClient {
 
   private appendBytes(chunk: Uint8Array): void {
     this.bytesThisSec += chunk.length
+    // 解码卡住时不能无限堆积：超限直接断开并清空缓冲
+    const MAX_RX_BUFFER_BYTES = 32 * 1024 * 1024
+    if (this.rxBuf.length + chunk.length > MAX_RX_BUFFER_BYTES) {
+      this.hasExplicitError = true
+      this.callbacks.onStatusChange?.('error', 'VNC 接收缓冲超出安全上限，连接已断开')
+      this.disconnect()
+      return
+    }
     if (this.rxBuf.length === 0) {
       this.rxBuf = chunk
       return
@@ -683,8 +750,20 @@ export class RfbClient {
     }
   }
 
-  private processBuffer(): void {
-    while (this.rxBuf.length > 0) {
+  private async processBuffer(): Promise<void> {
+    // 正在等待用户输入 VeNCrypt Plain 密码时不解析任何新帧，
+    // 否则额外数据会被当成子类型列表重复解析并重复弹窗。
+    if (this.awaitingPlainPassword) return
+    if (this.isProcessing) {
+      // 已有循环在运行（通常正等待异步 DES 代算）：只标记有新数据到达，
+      // 由 finally 在委托结束后统一重排一次，避免半包被反复排入微任务。
+      this.needsReprocess = true
+      return
+    }
+    this.isProcessing = true
+    this.needsReprocess = false
+    try {
+      while (this.rxBuf.length > 0) {
       if (this.phase === 'version') {
         if (this.rxBuf.length < 12) return
         const banner = new TextDecoder().decode(this.consume(12))
@@ -800,34 +879,83 @@ export class RfbClient {
         if (subtypes.includes(256)) {
           // 协商选定 VeNCrypt Plain (256 = 0x0100)
           this.sendRaw(new Uint8Array([0, 0, 1, 0]))
-          // 构造用户名与密码凭证载荷（无用户名，仅密码）
-          const userBytes = new TextEncoder().encode('')
-          const pwdBytes = new TextEncoder().encode(this.password || '')
-          const cred = new Uint8Array(8 + userBytes.length + pwdBytes.length)
-          const dv = new DataView(cred.buffer)
-          dv.setUint32(0, userBytes.length)
-          dv.setUint32(4, pwdBytes.length)
-          cred.set(userBytes, 8)
-          cred.set(pwdBytes, 8 + userBytes.length)
-          this.sendRaw(cred)
+          if (!this.password) {
+            // 不能拿空密码构造凭据：弹密码框，由 submitPassword 补发。
+            // 正常情况下后端桥接会把 VeNCrypt 转成 VNC Auth，这里只是兜底。
+            this.awaitingPlainPassword = true
+            this.callbacks.onStatusChange?.('password_required')
+            return
+          }
+          this.sendVeNCryptPlainCredentials()
           this.phase = 'security_result'
         } else {
-          // 其余 TLS 子类型（TLSVnc, TLSNone, X509Vnc）在 Qshell 后端驱动下已自动转接为原生 TLS
-          this.callbacks.onStatusChange?.('authenticating', 'VeNCrypt TLS 握手就绪')
+          // 后端桥接器正常情况下会把 TLS 子类型转接为 Plain(256)。若没有 256，
+          // 不能让 phase 停在 vencrypt_subtypes：后续数据会被反复当作子类型列表解析，
+          // 状态机卡死且 rxBuf 持续堆积。明确报错断开，交由上层重连。
+          this.hasExplicitError = true
+          this.callbacks.onStatusChange?.(
+            'error',
+            'VNC 服务端未提供支持的 VeNCrypt 子类型（需要 Plain 256），连接已断开'
+          )
+          this.disconnect()
+          return
         }
         continue
       }
 
       if (this.phase === 'vnc_challenge') {
         if (this.rxBuf.length < 16) return
-        if (!this.password) {
+
+        // 用户在密码弹窗里输入过密码时优先本地 DES 应答：此时后端
+        // SESSION_PASSWORDS 里并没有该凭据，继续代算只会再次失败。
+        if (this.password) {
+          const challenge = this.consume(16)
+          this.sendRaw(vncDesEncryptChallenge(challenge, this.password))
+          this.phase = 'security_result'
+          continue
+        }
+
+        if (!this.callbacks.onAuthChallenge) {
           this.callbacks.onStatusChange?.('password_required')
           return
         }
+
         const challenge = this.consume(16)
-        const response = vncDesEncryptChallenge(challenge, this.password)
-        this.sendRaw(response)
-        this.phase = 'security_result'
+        const generation = this.connectionGeneration
+        try {
+          const response = await this.callbacks.onAuthChallenge(challenge)
+          // await 期间可能已断开或重连，丢弃过期结果
+          if (
+            generation !== this.connectionGeneration ||
+            !this.ws ||
+            this.ws.readyState !== WebSocket.OPEN ||
+            this.phase !== 'vnc_challenge'
+          ) {
+            return
+          }
+          if (response.length !== 16) {
+            throw new Error('VNC 认证代算返回了无效的应答长度')
+          }
+          this.sendRaw(response)
+          this.phase = 'security_result'
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          if (msg.includes('PASSWORD_REQUIRED')) {
+            // 后端无已保存凭据：把挑战码放回缓冲，等待 submitPassword 重新驱动
+            const merged = new Uint8Array(challenge.length + this.rxBuf.length)
+            merged.set(challenge, 0)
+            merged.set(this.rxBuf, challenge.length)
+            this.rxBuf = merged
+            // 密码框等待期间到达的帧不能再触发 finally 重排，否则会重复代算/弹窗
+            this.needsReprocess = false
+            this.callbacks.onStatusChange?.('password_required')
+            return
+          }
+          this.hasExplicitError = true
+          this.callbacks.onStatusChange?.('error', `VNC 认证代算失败: ${msg}`)
+          this.disconnect()
+          return
+        }
         continue
       }
 
@@ -853,6 +981,10 @@ export class RfbClient {
       if (this.phase === 'security_reason') {
         if (this.rxBuf.length < 4) return
         const len = this.readU32BE(0)
+        const MAX_REASON_LEN = 64 * 1024
+        if (len > MAX_REASON_LEN) {
+          throw new Error('VNC 拒绝原因长度超出安全上限')
+        }
         if (this.rxBuf.length < 4 + len) return
         const reasonBytes = this.consume(4 + len).subarray(4)
         const reason = new TextDecoder().decode(reasonBytes)
@@ -871,6 +1003,17 @@ export class RfbClient {
         const width = this.readU16BE(0)
         const height = this.readU16BE(2)
         const nameLen = this.readU32BE(20)
+        const MAX_FB_SIZE = 8192
+        const MAX_NAME_LEN = 64 * 1024
+        const MAX_FB_BYTES = 64 * 1024 * 1024
+        if (
+          width === 0 || height === 0 ||
+          width > MAX_FB_SIZE || height > MAX_FB_SIZE ||
+          nameLen > MAX_NAME_LEN ||
+          width * height * 4 > MAX_FB_BYTES
+        ) {
+          throw new Error('VNC 桌面尺寸或名称长度超出安全上限')
+        }
         if (this.rxBuf.length < 24 + nameLen) return
         const initMsg = this.consume(24 + nameLen)
         this.fbWidth = width
@@ -899,7 +1042,22 @@ export class RfbClient {
         }
       }
     }
+  } finally {
+    this.isProcessing = false
+    // 只在「异步委托期间确实有新数据到达」时重排一次；半包残包不能被
+    // 无限排入微任务，否则事件循环会被饿死。
+    const needMore =
+      this.needsReprocess &&
+      this.rxBuf.length > 0 &&
+      Boolean(this.ws && this.ws.readyState === WebSocket.OPEN)
+    this.needsReprocess = false
+    if (needMore) {
+      queueMicrotask(() => {
+        void this.processBuffer().catch((err) => this.handleDecodeError(err))
+      })
+    }
   }
+}
 
   private processConnectedMessages(): boolean {
     if (this.pendingRects > 0 || this.currentRect !== null) {
@@ -941,6 +1099,10 @@ export class RfbClient {
         // ServerCutText: [3, pad*3, length(u32), text...]
         if (this.rxBuf.length < 8) return false
         const len = this.readU32BE(4)
+        const MAX_SERVER_CUT_TEXT_LEN = 1024 * 1024
+        if (len > MAX_SERVER_CUT_TEXT_LEN) {
+          throw new Error('VNC ServerCutText 长度超出安全上限')
+        }
         if (this.rxBuf.length < 8 + len) return false
         const textBytes = this.consume(8 + len).subarray(8)
         this.callbacks.onClipboard?.(new TextDecoder().decode(textBytes))
@@ -967,6 +1129,15 @@ export class RfbClient {
         const w = this.readU16BE(4)
         const h = this.readU16BE(6)
         const encoding = this.readI32BE(8)
+        // DesktopSize / ExtendedDesktopSize / Cursor 伪编码的 w/h 表示新尺寸或光标尺寸，
+        // 不受当前帧缓冲边界约束；其余矩形越界会让 frameBuffer.set 抛异常并卡死解码。
+        const isPseudoSize = encoding === -223 || encoding === -308 || encoding === -239
+        if (!isPseudoSize && (x + w > this.fbWidth || y + h > this.fbHeight)) {
+          throw new Error(`VNC 矩形超出帧缓冲范围: (${x},${y},${w},${h}) / ${this.fbWidth}x${this.fbHeight}`)
+        }
+        if ((encoding === -223 || encoding === -308) && (w > 8192 || h > 8192)) {
+          throw new Error('VNC 桌面尺寸变更超出安全上限')
+        }
         this.consume(12)
         this.currentRect = { x, y, w, h, encoding }
       }
@@ -1258,12 +1429,21 @@ export class RfbClient {
       this.consume(totalNeed)
 
       if (typeof Image !== 'undefined') {
+        let objectUrl: string | null = null
         try {
           const blob = new Blob([jpegData as unknown as BlobPart], { type: 'image/jpeg' })
-          const url = URL.createObjectURL(blob)
+          objectUrl = URL.createObjectURL(blob)
+          const url = objectUrl
           const img = new Image()
-          img.onload = () => {
+          let revoked = false
+          const revoke = () => {
+            if (revoked) return
+            revoked = true
             URL.revokeObjectURL(url)
+            objectUrl = null
+          }
+          img.onload = () => {
+            revoke()
             const tempCanvas = document.createElement('canvas')
             tempCanvas.width = w
             tempCanvas.height = h
@@ -1275,9 +1455,14 @@ export class RfbClient {
               this.renderer.flush()
             }
           }
+          // JPEG 损坏 / 解码失败 / 提前断线时也必须释放 object URL，
+          // 否则每帧的 Blob 会一直被浏览器持有到页面卸载。
+          img.onerror = () => {
+            revoke()
+          }
           img.src = url
         } catch {
-          // ignore
+          if (objectUrl) URL.revokeObjectURL(objectUrl)
         }
       }
       return true

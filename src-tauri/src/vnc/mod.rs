@@ -26,9 +26,18 @@ use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
 use tokio_rustls::TlsConnector;
 
+pub mod des;
+
 lazy_static::lazy_static! {
     /// 活跃的本地 WebSocket 桥接会话表：session_id -> 停止信号发送端
     static ref ACTIVE_BRIDGES: Mutex<HashMap<String, watch::Sender<bool>>> = Mutex::new(HashMap::new());
+    /// 活跃会话内部存储的 VNC 认证密码（仅驻留 Rust 内存，绝不通过 IPC 下发给前端）
+    static ref SESSION_PASSWORDS: Mutex<HashMap<String, String>> = Mutex::new(HashMap::new());
+    /// 每个会话的 DES 代算预算 (剩余次数, 创建时间)：
+    /// 防止前端把 vnc_solve_auth_challenge 当作任意明文的加密 oracle。
+    /// 正常 VNC Auth 握手只调用一次，留一次重试余量，且仅在认证窗口内有效。
+    static ref PENDING_AUTH: Mutex<HashMap<String, (u8, std::time::Instant)>> =
+        Mutex::new(HashMap::new());
 }
 
 /// 标准 RFB 安全认证类型代码
@@ -54,6 +63,8 @@ pub struct VncSessionInfo {
     pub host: String,
     pub port: u16,
     pub password: Option<String>,
+    #[serde(default)]
+    pub has_password: bool,
     #[serde(default)]
     pub is_tunneled: bool,
     #[serde(default)]
@@ -110,15 +121,27 @@ impl ServerCertVerifier for NoCertificateVerification {
     }
 }
 
-/// 构建基于 rustls + ring 的原生高性能 TLS 连接器
-fn build_vnc_tls_connector() -> Result<TlsConnector, String> {
+/// 构建基于 rustls + ring 的原生高性能 TLS 连接器。
+/// 默认严格校验证书链；只有用户显式允许自签证书时才放宽，避免中间人截获
+/// VNC 密码挑战与完整桌面数据。
+fn build_vnc_tls_connector(allow_invalid_certs: bool) -> Result<TlsConnector, String> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let config = ClientConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
-        .map_err(|e| format!("TLS 协议版本初始化失败: {}", e))?
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(NoCertificateVerification))
-        .with_no_client_auth();
+    let config = if allow_invalid_certs {
+        ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .map_err(|e| format!("TLS 协议版本初始化失败: {}", e))?
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(NoCertificateVerification))
+            .with_no_client_auth()
+    } else {
+        let mut root_store = rustls::RootCertStore::empty();
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .map_err(|e| format!("TLS 协议版本初始化失败: {}", e))?
+            .with_root_certificates(root_store)
+            .with_no_client_auth()
+    };
     Ok(TlsConnector::from(Arc::new(config)))
 }
 
@@ -317,6 +340,26 @@ pub async fn test_connection(host: &str, port: u16, timeout_secs: u64) -> Result
 /// 1. 支持双通道智能穿透：优先使用 SSH Direct-TCPIP 打洞，失败或未配置时回退至 TCP 直连；
 /// 2. 原生支持 VeNCrypt 0.2 + TLS 握手：当远端为 Proxmox VE、TigerVNC TLS 模式等企业级 VNC 时，
 ///    在后端自动完成 TLS 证书隧道握手，并将全双工数据在 TLS 隧道内高吞吐中继。
+/// 握手阶段的受保护读取：同时受超时与停止信号约束。
+/// 远端在握手中沉默、或用户在握手期间关闭 VNC 标签时，必须让任务退出并释放
+/// TCP / SSH 连接，否则 spawn 任务与 `Arc<SshConnection>` 会永久残留。
+macro_rules! handshake_read {
+    ($stream:expr, $buf:expr, $timeout:expr, $stop:expr, $sid:expr) => {{
+        let read_fut = tokio::time::timeout($timeout, $stream.read_exact($buf));
+        let outcome = tokio::select! {
+            res = read_fut => res,
+            _ = $stop.changed() => {
+                cleanup_session($sid);
+                return;
+            }
+        };
+        if !matches!(outcome, Ok(Ok(_))) {
+            cleanup_session($sid);
+            return;
+        }
+    }};
+}
+
 pub async fn start_bridge(
     app_handle: Option<tauri::AppHandle>,
     host: String,
@@ -324,6 +367,7 @@ pub async fn start_bridge(
     password: Option<String>,
     timeout_secs: u64,
     ssh_conn: Option<Arc<crate::ssh::connection::SshConnection>>,
+    allow_invalid_certs: bool,
 ) -> Result<VncSessionInfo, String> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -340,22 +384,37 @@ pub async fn start_bridge(
     if let Ok(mut map) = ACTIVE_BRIDGES.lock() {
         map.insert(session_id.clone(), stop_tx);
     }
+    if let Some(ref pwd) = password {
+        if let Ok(mut map) = SESSION_PASSWORDS.lock() {
+            map.insert(session_id.clone(), pwd.clone());
+        }
+        if let Ok(mut pending) = PENDING_AUTH.lock() {
+            pending.insert(session_id.clone(), (2, std::time::Instant::now()));
+        }
+    }
 
     let target_addr = format_host_port(&host, port);
     let host_tunnel = host.clone();
     let host_tls = host.clone();
     let pwd_tls = password.clone();
     let session_host = host;
-    let session_pwd = password;
+    let has_pwd = password.is_some();
     let session_id_cleanup = session_id.clone();
     let connect_timeout = Duration::from_secs(timeout_secs.clamp(5, 60));
     let has_ssh = ssh_conn.is_some();
 
+    struct SessionGuard(String);
+    impl Drop for SessionGuard {
+        fn drop(&mut self) {
+            cleanup_session(&self.0);
+        }
+    }
+
     tokio::spawn(async move {
+        let _guard = SessionGuard(session_id_cleanup.clone());
         let accept_res = tokio::select! {
             res = tokio::time::timeout(Duration::from_secs(30), listener.accept()) => res,
             _ = stop_rx.changed() => {
-                cleanup_session(&session_id_cleanup);
                 return;
             }
         };
@@ -363,7 +422,6 @@ pub async fn start_bridge(
         let (mut ws_stream, _) = match accept_res {
             Ok(Ok(pair)) => pair,
             _ => {
-                cleanup_session(&session_id_cleanup);
                 return;
             }
         };
@@ -371,7 +429,6 @@ pub async fn start_bridge(
 
         // 1. 完成 HTTP -> WebSocket 升级握手并校验一次性 token
         if perform_ws_handshake(&mut ws_stream, &token).await.is_err() {
-            cleanup_session(&session_id_cleanup);
             return;
         }
 
@@ -501,19 +558,22 @@ pub async fn start_bridge(
 
         // 7. 读取远端下发支持的安全认证类型清单
         let mut sec_hdr = [0u8; 1];
-        if remote.read_exact(&mut sec_hdr).await.is_err() {
-            cleanup_session(&session_id_cleanup);
-            return;
-        }
+        handshake_read!(remote, &mut sec_hdr, connect_timeout, stop_rx, &session_id_cleanup);
         let num_sec = sec_hdr[0] as usize;
 
         if num_sec == 0 {
             // 远端下发认证拒绝原因（如 Too many security failures）
             let mut reason_len_buf = [0u8; 4];
-            let _ = remote.read_exact(&mut reason_len_buf).await;
+            handshake_read!(remote, &mut reason_len_buf, connect_timeout, stop_rx, &session_id_cleanup);
             let reason_len = u32::from_be_bytes(reason_len_buf) as usize;
+            // 长度完全由远端 4 字节决定，必须限长，否则可申请至 4GB 造成 OOM
+            const MAX_REASON_LEN: usize = 64 * 1024;
+            if reason_len > MAX_REASON_LEN {
+                cleanup_session(&session_id_cleanup);
+                return;
+            }
             let mut reason_bytes = vec![0u8; reason_len];
-            let _ = remote.read_exact(&mut reason_bytes).await;
+            handshake_read!(remote, &mut reason_bytes, connect_timeout, stop_rx, &session_id_cleanup);
 
             let mut err_msg = Vec::with_capacity(5 + reason_len);
             err_msg.push(0);
@@ -526,10 +586,7 @@ pub async fn start_bridge(
         }
 
         let mut sec_types = vec![0u8; num_sec];
-        if remote.read_exact(&mut sec_types).await.is_err() {
-            cleanup_session(&session_id_cleanup);
-            return;
-        }
+        handshake_read!(remote, &mut sec_types, connect_timeout, stop_rx, &session_id_cleanup);
 
         // 8. 安全协议分流：
         // 若服务端提供 VeNCrypt (19)，自动协商并升级为 TLS 1.3/1.2 证书加密通道
@@ -546,10 +603,7 @@ pub async fn start_bridge(
 
             // 8.2 读取服务端支持的 VeNCrypt 版本 (2 字节: major, minor)
             let mut ver = [0u8; 2];
-            if remote.read_exact(&mut ver).await.is_err() {
-                cleanup_session(&session_id_cleanup);
-                return;
-            }
+            handshake_read!(remote, &mut ver, connect_timeout, stop_rx, &session_id_cleanup);
 
             // 8.3 回复客户端协商版本 [0, 2] (VeNCrypt 0.2 标准)
             if remote.write_all(&[0, 2]).await.is_err() {
@@ -559,7 +613,8 @@ pub async fn start_bridge(
 
             // 8.4 读取服务端版本确认 (1 字节状态码，0 代表成功)
             let mut status = [0u8; 1];
-            if remote.read_exact(&mut status).await.is_err() || status[0] != 0 {
+            handshake_read!(remote, &mut status, connect_timeout, stop_rx, &session_id_cleanup);
+            if status[0] != 0 {
                 eprintln!("[VNC] 服务端拒绝了 VeNCrypt 0.2 版本协商");
                 cleanup_session(&session_id_cleanup);
                 return;
@@ -567,16 +622,10 @@ pub async fn start_bridge(
 
             // 8.5 读取子类型清单 (1 字节数量 + 数量 * 4 字节)
             let mut sub_count_buf = [0u8; 1];
-            if remote.read_exact(&mut sub_count_buf).await.is_err() {
-                cleanup_session(&session_id_cleanup);
-                return;
-            }
+            handshake_read!(remote, &mut sub_count_buf, connect_timeout, stop_rx, &session_id_cleanup);
             let sub_count = sub_count_buf[0] as usize;
             let mut sub_buf = vec![0u8; sub_count * 4];
-            if remote.read_exact(&mut sub_buf).await.is_err() {
-                cleanup_session(&session_id_cleanup);
-                return;
-            }
+            handshake_read!(remote, &mut sub_buf, connect_timeout, stop_rx, &session_id_cleanup);
             let mut subtypes = Vec::new();
             for chunk in sub_buf.chunks_exact(4) {
                 subtypes.push(u32::from_be_bytes(chunk.try_into().unwrap()));
@@ -624,7 +673,7 @@ pub async fn start_bridge(
             }
 
             // 8.9 启动原生 TLS 隧道握手 (tokio-rustls)
-            let tls_connector = match build_vnc_tls_connector() {
+            let tls_connector = match build_vnc_tls_connector(allow_invalid_certs) {
                 Ok(c) => c,
                 Err(e) => {
                     eprintln!("[VNC] 初始化 TLS 连接器失败: {}", e);
@@ -678,10 +727,7 @@ pub async fn start_bridge(
             if chosen == VENCRYPT_SUBTYPE_TLS_NONE || chosen == VENCRYPT_SUBTYPE_X509_NONE {
                 // TLSNone: 服务端在 TLS 内部下发 SecurityResult (4 字节: 0)
                 let mut sec_res = [0u8; 4];
-                if tls_stream.read_exact(&mut sec_res).await.is_err() {
-                    cleanup_session(&session_id_cleanup);
-                    return;
-                }
+                handshake_read!(tls_stream, &mut sec_res, connect_timeout, stop_rx, &session_id_cleanup);
 
                 // 向前端呈现免密类型 [1, 1]
                 if write_ws_binary_frame(&mut ws_write, &[1, SECURITY_TYPE_NONE])
@@ -704,10 +750,7 @@ pub async fn start_bridge(
             } else if chosen == VENCRYPT_SUBTYPE_TLS_VNC || chosen == VENCRYPT_SUBTYPE_X509_VNC {
                 // TLSVnc: 服务端在 TLS 内部下发 16 字节 DES 随机挑战码
                 let mut challenge = [0u8; 16];
-                if tls_stream.read_exact(&mut challenge).await.is_err() {
-                    cleanup_session(&session_id_cleanup);
-                    return;
-                }
+                handshake_read!(tls_stream, &mut challenge, connect_timeout, stop_rx, &session_id_cleanup);
 
                 // 向前端呈现 VncAuth 类型 [1, 2]
                 if write_ws_binary_frame(&mut ws_write, &[1, SECURITY_TYPE_VNC_AUTH])
@@ -742,10 +785,7 @@ pub async fn start_bridge(
                 }
                 // 读取服务端的 SecurityResult (4 字节)
                 let mut sec_res = [0u8; 4];
-                if tls_stream.read_exact(&mut sec_res).await.is_err() {
-                    cleanup_session(&session_id_cleanup);
-                    return;
-                }
+                handshake_read!(tls_stream, &mut sec_res, connect_timeout, stop_rx, &session_id_cleanup);
                 // 将 SecurityResult 转发给前端
                 if write_ws_binary_frame(&mut ws_write, &sec_res)
                     .await
@@ -800,7 +840,8 @@ pub async fn start_bridge(
         ws_url,
         host: session_host,
         port,
-        password: session_pwd,
+        password: None, // 密码 100% 驻留后端，向前端呈现为 None，消除明文凭据跨 IPC 暴露
+        has_password: has_pwd,
         is_tunneled: has_ssh,
         is_tls: false,
     })
@@ -865,38 +906,144 @@ fn cleanup_session(session_id: &str) {
             let _ = sender.send(true);
         }
     }
+    if let Ok(mut passwords) = SESSION_PASSWORDS.lock() {
+        passwords.remove(session_id);
+    }
+    if let Ok(mut pending) = PENDING_AUTH.lock() {
+        pending.remove(session_id);
+    }
 }
 
-/// 解析 HTTP 升级请求头，校验一次性 token，并返回标准 RFC 6455 101 Switching Protocols 响应
-async fn perform_ws_handshake(stream: &mut TcpStream, expected_token: &str) -> Result<(), ()> {
-    let mut buf = [0u8; 4096];
-    let n = match tokio::time::timeout(Duration::from_secs(10), stream.read(&mut buf)).await {
-        Ok(Ok(n)) if n > 0 => n,
-        _ => return Err(()),
+/// 基于后端安全区密码计算 VNC Auth 挑战应答（RFC 6143 §7.2.2 DES 加密代算）
+pub fn solve_auth_challenge(session_id: &str, challenge: &[u8]) -> Result<Vec<u8>, String> {
+    if challenge.len() != 16 {
+        return Err(format!("Invalid challenge length: expected 16 bytes, got {}", challenge.len()));
+    }
+
+    // 必须先判断「会话是否存有密码」：无密码会话在 PENDING_AUTH 里没有预算条目，
+    // 若先检查预算会返回「次数用尽」而掩盖 PASSWORD_REQUIRED，导致前端密码框
+    // 永远弹不出来、VNC 彻底无法认证。
+    let password = {
+        let map = SESSION_PASSWORDS.lock().map_err(|e| format!("Lock error: {}", e))?;
+        map.get(session_id).cloned().ok_or_else(|| {
+            // 前端据此弹出密码输入框，而不是当成普通认证失败触发无限重连
+            "PASSWORD_REQUIRED: 当前 VNC 会话未找到已配置的密码凭据".to_string()
+        })?
     };
 
-    let request_str = String::from_utf8_lossy(&buf[..n]);
+    // 一次性代算预算：该 IPC 只能服务于本次握手的 DES 应答，
+    // 不能被前端当作「用会话密码加密任意明文」的 oracle 反复调用。
+    // 窗口放宽到 180s，避免 SSH 隧道 + VeNCrypt/TLS 协商累计耗时误挡正常握手。
+    {
+        let mut pending = PENDING_AUTH
+            .lock()
+            .map_err(|e| format!("Lock error: {}", e))?;
+        let allowed = match pending.get_mut(session_id) {
+            Some((remaining, created))
+                if *remaining > 0 && created.elapsed() < Duration::from_secs(180) =>
+            {
+                *remaining -= 1;
+                true
+            }
+            _ => false,
+        };
+        if !allowed {
+            return Err("VNC 认证代算次数已用尽或已超出认证窗口".to_string());
+        }
+    }
 
-    let first_line = request_str.lines().next().unwrap_or("");
-    if !first_line.contains(expected_token) {
+    let resp = des::vnc_des_encrypt_challenge(challenge, &password);
+    Ok(resp.to_vec())
+}
+
+/// 常量时间比较，避免 token 逐字节短路比较带来的时序侧信道
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// 解析 HTTP 升级请求头，严格校验一次性 token，返回 RFC 6455 101 响应。
+/// 加固点：循环读到完整头部（总量 + 总超时上限）、严格请求行 method/path、
+/// token 常量时间比较、Host 必须为本地回环地址（防 DNS rebinding）。
+/// ws_url 格式与前端连接流程保持不变。
+async fn perform_ws_handshake(stream: &mut TcpStream, expected_token: &str) -> Result<(), ()> {
+    const MAX_HEADER_BYTES: usize = 16 * 1024;
+    let mut buf: Vec<u8> = Vec::with_capacity(512);
+    let mut chunk = [0u8; 1024];
+
+    let read_result = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let n = stream.read(&mut chunk).await.map_err(|_| ())?;
+            if n == 0 {
+                return Err(());
+            }
+            buf.extend_from_slice(&chunk[..n]);
+            if buf.len() > MAX_HEADER_BYTES {
+                return Err(());
+            }
+            if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                return Ok::<(), ()>(());
+            }
+        }
+    })
+    .await;
+    if !matches!(read_result, Ok(Ok(()))) {
+        return Err(());
+    }
+
+    let request_str = String::from_utf8_lossy(&buf);
+    let mut lines = request_str.split("\r\n");
+
+    // 严格请求行：GET /vnc?token=<uuid> HTTP/1.1
+    let request_line = lines.next().unwrap_or("");
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or("");
+    let target = parts.next().unwrap_or("");
+    let version = parts.next().unwrap_or("");
+    if method != "GET" || !version.starts_with("HTTP/1.") || parts.next().is_some() {
+        return Err(());
+    }
+    let (path, query) = target.split_once('?').ok_or(())?;
+    if path != "/vnc" {
+        return Err(());
+    }
+    let presented_token = query
+        .split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .find(|(k, _)| *k == "token")
+        .map(|(_, v)| v)
+        .ok_or(())?;
+    if !constant_time_eq(presented_token.as_bytes(), expected_token.as_bytes()) {
         return Err(());
     }
 
     let mut ws_key: Option<String> = None;
-    for line in request_str.lines() {
+    let mut host_is_loopback = false;
+    for line in lines {
+        if line.is_empty() {
+            break;
+        }
         let lower = line.to_ascii_lowercase();
         if lower.starts_with("sec-websocket-key:") {
-            if let Some(idx) = line.find(':') {
-                ws_key = Some(line[idx + 1..].trim().to_string());
-                break;
-            }
+            ws_key = line.split_once(':').map(|(_, v)| v.trim().to_string());
+        } else if lower.starts_with("host:") {
+            // 去掉可选的 ":port"，只接受本地回环地址
+            let host = line.split_once(':').map(|(_, v)| v.trim()).unwrap_or("");
+            let host_part = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host);
+            host_is_loopback = matches!(host_part, "127.0.0.1" | "localhost" | "::1");
         }
     }
 
-    let key = match ws_key {
-        Some(k) if !k.is_empty() => k,
-        _ => return Err(()),
-    };
+    let key = ws_key.filter(|k| !k.is_empty()).ok_or(())?;
+    if !host_is_loopback {
+        return Err(());
+    }
 
     let accept = compute_websocket_accept(&key);
     let response = format!(
@@ -1033,7 +1180,7 @@ mod tests {
 
     #[test]
     fn tls_connector_builds_without_error() {
-        let connector = build_vnc_tls_connector();
-        assert!(connector.is_ok());
+        assert!(build_vnc_tls_connector(false).is_ok());
+        assert!(build_vnc_tls_connector(true).is_ok());
     }
 }
