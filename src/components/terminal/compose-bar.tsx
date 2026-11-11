@@ -465,12 +465,13 @@ export function ComposeBar({
         }
       }
 
-      if (!expanded) {
-        setText("");
-      }
+      setText("");
+      setHistoryIndex(-1);
+      setUndoStack([]);
+      setRedoStack([]);
       returnFocus();
     },
-    [formatCommand, addHistory, lineByLine, bracketedPaste, expanded, returnFocus]
+    [formatCommand, addHistory, lineByLine, bracketedPaste, returnFocus]
   );
 
   // Trigger dispatch with pre-flight risk checks

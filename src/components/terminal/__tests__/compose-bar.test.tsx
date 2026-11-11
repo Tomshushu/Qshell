@@ -207,6 +207,7 @@ describe("ComposeBar Component (终端命令撰写与多机分发系统)", () =>
 
     await waitFor(() => {
       expect(sshService.writeToShell).toHaveBeenCalledWith("sess-1", "uname -a\r");
+      expect((input as HTMLInputElement).value).toBe("");
     });
     expect(focusMock).toHaveBeenCalled();
     expect(useAppStore.getState().terminalComposeHistory).toContain("uname -a");
@@ -333,6 +334,7 @@ describe("ComposeBar Component (终端命令撰写与多机分发系统)", () =>
     await waitFor(() => {
       expect(sshService.writeToShell).toHaveBeenCalledWith("sess-1", "echo 1\r");
       expect(sshService.writeToShell).toHaveBeenCalledWith("sess-1", "echo 2\r");
+      expect((textarea as HTMLTextAreaElement).value).toBe("");
     });
   });
 
