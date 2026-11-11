@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useAppStore } from "@/store";
 import type { WorkspaceModule } from "@/types";
 import { useTranslation } from "@/i18n";
+import { collectGroupIds } from "@/utils/split-layout";
 import { deviceModuleLabelKey, getServerConnectionFlags, isModuleVisibleForServer, isPureVncServer } from "@/services/connection-targets";
 import {
   Terminal,
@@ -164,11 +165,27 @@ export function ModuleTabs({
   const server = useAppStore((s) => s.servers.find((sv) => sv.id === serverId));
   const broadcastTabIds = useAppStore((s) => s.broadcastTabIds);
   const tabs = useAppStore((s) => s.tabs);
+  const layout = useAppStore((s) => s.layout);
+  const workspaces = useAppStore((s) => s.workspaces);
   const toggleBroadcastTab = useAppStore((s) => s.toggleBroadcastTab);
   const broadcastAllTabs = useAppStore((s) => s.broadcastAllTabs);
   const broadcastToSplit = useAppStore((s) => s.broadcastToSplit);
   const clearBroadcast = useAppStore((s) => s.clearBroadcast);
   const isBroadcasting = broadcastTabIds.includes(tabId);
+
+  const isSplitWorkspace = useMemo(() => {
+    if (collectGroupIds(layout).length > 1) return true;
+    const curTab = tabs.find((t) => t.id === tabId);
+    if (!curTab?.workspaceId) return false;
+    const ws = workspaces[curTab.workspaceId];
+    if (!ws) return false;
+    return collectGroupIds(ws.layout).length > 1;
+  }, [tabId, tabs, workspaces, layout]);
+
+  const totalTerminalTabs = useMemo(
+    () => tabs.filter((t) => t.module === "terminal").length,
+    [tabs],
+  );
   // 按 serverId 去重：同一服务器开了多个广播 tab 时，避免 hover 提示里同名重复列出、
   // 计数虚高（与危险命令确认框的去重逻辑一致）。
   const seenServers = new Map<string, string>(); // serverId -> serverName
@@ -441,24 +458,35 @@ export function ModuleTabs({
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-48 p-1">
-                <DropdownMenuItem
-                  onClick={() => broadcastToSplit(tabId)}
-                  className="text-xs cursor-pointer"
-                >
-                  {t("broadcast_select_split")}
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={broadcastAllTabs}
-                  className="text-xs cursor-pointer"
-                >
-                  {t("broadcast_select_all")}
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={clearBroadcast}
-                  className="text-xs cursor-pointer"
-                >
-                  {t("broadcast_clear_all")}
-                </DropdownMenuItem>
+                {isSplitWorkspace && (
+                  <DropdownMenuItem
+                    onClick={() => broadcastToSplit(tabId)}
+                    className="text-xs cursor-pointer"
+                  >
+                    {t("broadcast_select_split")}
+                  </DropdownMenuItem>
+                )}
+                {totalTerminalTabs > 1 && (
+                  <DropdownMenuItem
+                    onClick={broadcastAllTabs}
+                    className="text-xs cursor-pointer"
+                  >
+                    {t("broadcast_select_all")}
+                  </DropdownMenuItem>
+                )}
+                {broadcastTabIds.length > 0 && (
+                  <DropdownMenuItem
+                    onClick={clearBroadcast}
+                    className="text-xs cursor-pointer"
+                  >
+                    {t("broadcast_clear_all")}
+                  </DropdownMenuItem>
+                )}
+                {!isSplitWorkspace && totalTerminalTabs <= 1 && broadcastTabIds.length === 0 && (
+                  <div className="px-2 py-1.5 text-xs text-muted-foreground/70">
+                    {t("broadcast_no_targets")}
+                  </div>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
           </div>

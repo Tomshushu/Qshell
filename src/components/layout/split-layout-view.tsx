@@ -509,6 +509,11 @@ function TabGroupView({ groupId }: { groupId: string }) {
   );
   const isWorkspaceSplit = workspaceGids.size > 1;
 
+  const totalTerminalTabs = useMemo(
+    () => allTabs.filter((t) => t.module === "terminal").length,
+    [allTabs],
+  );
+
   const tabs = useMemo(
     () => allTabs.filter((t) => t.groupId === groupId),
     [allTabs, groupId],
@@ -796,24 +801,35 @@ function TabGroupView({ groupId }: { groupId: string }) {
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-48 p-1">
-                  <DropdownMenuItem
-                    onClick={() => broadcastToSplit(activeTab.id)}
-                    className="text-xs cursor-pointer"
-                  >
-                    {t("broadcast_select_split")}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={broadcastAllTabs}
-                    className="text-xs cursor-pointer"
-                  >
-                    {t("broadcast_select_all")}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={clearBroadcast}
-                    className="text-xs cursor-pointer"
-                  >
-                    {t("broadcast_clear_all")}
-                  </DropdownMenuItem>
+                  {isWorkspaceSplit && (
+                    <DropdownMenuItem
+                      onClick={() => broadcastToSplit(activeTab.id)}
+                      className="text-xs cursor-pointer"
+                    >
+                      {t("broadcast_select_split")}
+                    </DropdownMenuItem>
+                  )}
+                  {totalTerminalTabs > 1 && (
+                    <DropdownMenuItem
+                      onClick={broadcastAllTabs}
+                      className="text-xs cursor-pointer"
+                    >
+                      {t("broadcast_select_all")}
+                    </DropdownMenuItem>
+                  )}
+                  {broadcastTabIds.length > 0 && (
+                    <DropdownMenuItem
+                      onClick={clearBroadcast}
+                      className="text-xs cursor-pointer"
+                    >
+                      {t("broadcast_clear_all")}
+                    </DropdownMenuItem>
+                  )}
+                  {!isWorkspaceSplit && totalTerminalTabs <= 1 && broadcastTabIds.length === 0 && (
+                    <div className="px-2 py-1.5 text-xs text-muted-foreground/70">
+                      {t("broadcast_no_targets")}
+                    </div>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>

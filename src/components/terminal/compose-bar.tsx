@@ -126,6 +126,7 @@ export function ComposeBar({
   const tabs = useAppStore((s) => s.tabs);
   const activeTabId = useAppStore((s) => s.activeTabId);
   const workspaces = useAppStore((s) => s.workspaces);
+  const layout = useAppStore((s) => s.layout);
 
   // Focus input helper across microtask, RAF, and timeouts
   const focusInput = useCallback(() => {
@@ -242,13 +243,50 @@ export function ComposeBar({
 
   // Check if current workspace has split screen (more than 1 group/pane)
   const isSplitWorkspace = useMemo(() => {
+    if (collectGroupIds(layout).length > 1) return true;
     const effectiveTabId = tabId || activeTabId;
     const curTab = tabs.find((t) => t.id === effectiveTabId);
     if (!curTab?.workspaceId) return false;
     const ws = workspaces[curTab.workspaceId];
     if (!ws) return false;
     return collectGroupIds(ws.layout).length > 1;
-  }, [tabId, activeTabId, tabs, workspaces]);
+  }, [tabId, activeTabId, tabs, workspaces, layout]);
+
+  // 当前分屏工作区内的有效终端数
+  const splitTerminalCount = useMemo(() => {
+    if (!isSplitWorkspace) return 1;
+    const effectiveTabId = tabId || activeTabId;
+    const curTab = tabs.find((t) => t.id === effectiveTabId);
+    const wsId = curTab?.workspaceId;
+    if (wsId && workspaces[wsId]?.layout) {
+      const gids = collectGroupIds(workspaces[wsId].layout);
+      const wsTabs = tabs.filter((t) => t.workspaceId === wsId && t.module === "terminal");
+      return Math.max(gids.length, wsTabs.length);
+    }
+    const globalGids = collectGroupIds(layout);
+    const allTerminalTabs = tabs.filter((t) => t.module === "terminal");
+    return Math.max(globalGids.length, allTerminalTabs.length);
+  }, [isSplitWorkspace, tabId, activeTabId, tabs, workspaces, layout]);
+
+  // 是否可广播到分屏（必须在分屏模式且分屏终端数 >= 2）
+  const canBroadcastToSplit = isSplitWorkspace && splitTerminalCount > 1;
+
+  // 全局全部终端会话数
+  const totalTerminalSessionsCount = useMemo(() => {
+    return tabs.filter((t) => t.module === "terminal").length;
+  }, [tabs]);
+
+  // 是否可广播到全部会话（全局终端数 >= 2）
+  const canBroadcastToAll = totalTerminalSessionsCount > 1;
+
+  // 目标状态自愈：当分屏解除或终端减少时，自动将不可用的广播模式退回 active
+  useEffect(() => {
+    if (target === "split" && !canBroadcastToSplit) {
+      setTarget("active");
+    } else if (target === "all" && !canBroadcastToAll) {
+      setTarget("active");
+    }
+  }, [target, canBroadcastToSplit, canBroadcastToAll, setTarget]);
 
   // Compute resolved target sessions
   const getResolvedTargets = useCallback((): TargetInfo[] => {
@@ -643,7 +681,7 @@ export function ComposeBar({
                       </div>
                       {target === "active" && <Check className="h-3.5 w-3.5 text-primary" />}
                     </DropdownMenuItem>
-                    {isSplitWorkspace && (
+                    {canBroadcastToSplit && (
                       <DropdownMenuItem
                         onClick={() => setTarget("split")}
                         className="justify-between cursor-pointer"
@@ -655,16 +693,18 @@ export function ComposeBar({
                         {target === "split" && <Check className="h-3.5 w-3.5 text-primary" />}
                       </DropdownMenuItem>
                     )}
-                    <DropdownMenuItem
-                      onClick={() => setTarget("all")}
-                      className="justify-between cursor-pointer"
-                    >
-                      <div className="flex items-center gap-2">
-                        <Globe className="h-3.5 w-3.5 text-rose-500" />
-                        <span>{t("compose_target_all")}</span>
-                      </div>
-                      {target === "all" && <Check className="h-3.5 w-3.5 text-primary" />}
-                    </DropdownMenuItem>
+                    {canBroadcastToAll && (
+                      <DropdownMenuItem
+                        onClick={() => setTarget("all")}
+                        className="justify-between cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Globe className="h-3.5 w-3.5 text-rose-500" />
+                          <span>{t("compose_target_all")}</span>
+                        </div>
+                        {target === "all" && <Check className="h-3.5 w-3.5 text-primary" />}
+                      </DropdownMenuItem>
+                    )}
                   </DropdownMenuContent>
                 </DropdownMenu>
 
@@ -777,7 +817,7 @@ export function ComposeBar({
               <div className="flex items-center justify-between pt-1 border-t border-border/30 px-1 text-[11px]">
                 <div className="flex items-center gap-3 text-muted-foreground">
                   {/* 对标 Xshell 的底部一键多机/分屏广播勾选框 */}
-                  {isSplitWorkspace ? (
+                  {canBroadcastToSplit ? (
                     <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-foreground/80 hover:text-foreground select-none">
                       <input
                         type="checkbox"
@@ -787,7 +827,7 @@ export function ComposeBar({
                       />
                       <span>发送文本到当前分屏全部会话</span>
                     </label>
-                  ) : (
+                  ) : canBroadcastToAll ? (
                     <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-foreground/80 hover:text-foreground select-none">
                       <input
                         type="checkbox"
@@ -797,7 +837,7 @@ export function ComposeBar({
                       />
                       <span>广播到全部已连接会话</span>
                     </label>
-                  )}
+                  ) : null}
 
                   {/* 目标提示胶囊 */}
                   <span
@@ -962,7 +1002,7 @@ export function ComposeBar({
                   </div>
                   {target === "active" && <Check className="h-3.5 w-3.5 text-primary" />}
                 </DropdownMenuItem>
-                {isSplitWorkspace && (
+                {canBroadcastToSplit && (
                   <DropdownMenuItem
                     onClick={() => setTarget("split")}
                     className="justify-between cursor-pointer"
@@ -974,16 +1014,18 @@ export function ComposeBar({
                     {target === "split" && <Check className="h-3.5 w-3.5 text-primary" />}
                   </DropdownMenuItem>
                 )}
-                <DropdownMenuItem
-                  onClick={() => setTarget("all")}
-                  className="justify-between cursor-pointer"
-                >
-                  <div className="flex items-center gap-2">
-                    <Globe className="h-3.5 w-3.5 text-rose-500" />
-                    <span>{t("compose_target_all")}</span>
-                  </div>
-                  {target === "all" && <Check className="h-3.5 w-3.5 text-primary" />}
-                </DropdownMenuItem>
+                {canBroadcastToAll && (
+                  <DropdownMenuItem
+                    onClick={() => setTarget("all")}
+                    className="justify-between cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Globe className="h-3.5 w-3.5 text-rose-500" />
+                      <span>{t("compose_target_all")}</span>
+                    </div>
+                    {target === "all" && <Check className="h-3.5 w-3.5 text-primary" />}
+                  </DropdownMenuItem>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
 

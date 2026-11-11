@@ -388,4 +388,44 @@ describe("ComposeBar Component (终端命令撰写与多机分发系统)", () =>
       expect(document.activeElement).toBe(input);
     });
   });
+
+  it("does not show split broadcast option when not in split mode, and auto-resets target", async () => {
+    // Only 1 single tab, no split workspace
+    useAppStore.setState({
+      tabs: [
+        {
+          id: "tab-solo",
+          serverId: "srv-1",
+          module: "terminal",
+          title: "Solo Tab",
+        },
+      ] as any,
+      workspaces: {},
+      layout: { type: "group", groupId: "g-solo" },
+      terminalComposeTarget: "split", // Previously selected split
+    });
+
+    render(
+      <ComposeBar
+        activeTermId="t1"
+        activeSessionId="sess-1"
+        tabId="tab-solo"
+      />
+    );
+
+    // Target should auto-reset from 'split' to 'active' because there is no split screen
+    await waitFor(() => {
+      expect(useAppStore.getState().terminalComposeTarget).toBe("active");
+    });
+
+    // Open target dropdown via keyboard
+    const targetTrigger = screen.getByTitle("切换分发目标");
+    fireEvent.keyDown(targetTrigger, { key: "ArrowDown" });
+
+    // Should NOT have split or all broadcast options
+    expect(screen.queryByText("发送到当前分屏所有终端")).toBeNull();
+    expect(screen.queryByText("发送到全部已连接会话 (多机广播)")).toBeNull();
+    // Only active session
+    expect(screen.getByText("仅发送到当前会话")).toBeTruthy();
+  });
 });
