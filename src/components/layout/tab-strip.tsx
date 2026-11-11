@@ -44,7 +44,7 @@ import { GroupFilterChip, UNGROUPED_FILTER } from "@/components/ui/group-tree-pi
 import { Button } from "@/components/ui/button";
 
 // 预设颜色选项
-const TAB_COLORS = [
+export const TAB_COLORS = [
   { nameKey: "color_default", value: undefined },
   { nameKey: "color_red", value: "#ef4444" },
   { nameKey: "color_orange", value: "#f97316" },

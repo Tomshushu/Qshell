@@ -32,13 +32,18 @@ import {
   Copy,
   Check,
   ChevronDown,
+  Palette,
 } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu";
+import { PRESET_TAB_COLORS } from "@/utils/tab-colors";
 import { playSound, SoundType } from "@/lib/sound";
 import { useTranslation } from "@/i18n";
 
@@ -487,7 +492,9 @@ function TabGroupView({ groupId }: { groupId: string }) {
   const toggleBroadcastTab = useAppStore((s) => s.toggleBroadcastTab);
   const broadcastAllTabs = useAppStore((s) => s.broadcastAllTabs);
   const broadcastToSplit = useAppStore((s) => s.broadcastToSplit);
+  const broadcastToColor = useAppStore((s) => s.broadcastToColor);
   const clearBroadcast = useAppStore((s) => s.clearBroadcast);
+  const workspaces = useAppStore((s) => s.workspaces);
   const terminalThemeId = useAppStore((s) => s.terminalThemeId);
   const customTerminalThemes = useAppStore((s) => s.customTerminalThemes);
   const terminalThemeOverrides = useAppStore((s) => s.terminalThemeOverrides);
@@ -513,6 +520,19 @@ function TabGroupView({ groupId }: { groupId: string }) {
     () => allTabs.filter((t) => t.module === "terminal").length,
     [allTabs],
   );
+
+  const terminalColorCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const t of allTabs) {
+      if (t.module !== "terminal") continue;
+      const c = t.color || (t.workspaceId ? workspaces[t.workspaceId]?.color : undefined);
+      if (c) {
+        const lower = c.toLowerCase();
+        counts[lower] = (counts[lower] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [allTabs, workspaces]);
 
   const tabs = useMemo(
     () => allTabs.filter((t) => t.groupId === groupId),
@@ -809,6 +829,37 @@ function TabGroupView({ groupId }: { groupId: string }) {
                       {t("broadcast_select_split")}
                     </DropdownMenuItem>
                   )}
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger className="text-xs cursor-pointer gap-2">
+                      <Palette className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span>{t("broadcast_select_color")}</span>
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent className="w-44 p-1">
+                      {PRESET_TAB_COLORS.map((c) => {
+                        const count = terminalColorCounts[c.value.toLowerCase()] || 0;
+                        return (
+                          <DropdownMenuItem
+                            key={c.value}
+                            onClick={() => broadcastToColor(c.value)}
+                            className="justify-between cursor-pointer text-xs"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span
+                                className="h-3 w-3 rounded-full shrink-0 border border-white/20"
+                                style={{ backgroundColor: c.value }}
+                              />
+                              <span>{t(c.nameKey)}</span>
+                            </div>
+                            {count > 0 && (
+                              <span className="text-[10px] text-muted-foreground font-mono">
+                                {count}台
+                              </span>
+                            )}
+                          </DropdownMenuItem>
+                        );
+                      })}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
                   {totalTerminalTabs > 1 && (
                     <DropdownMenuItem
                       onClick={broadcastAllTabs}

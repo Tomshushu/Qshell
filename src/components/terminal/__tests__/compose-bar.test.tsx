@@ -26,7 +26,9 @@ vi.mock("@/i18n", () => ({
         compose_bar_placeholder_multi: "在此编写或粘贴多行 Shell 脚本... (按下方按钮或快捷键批量发送)",
         compose_target_active: "仅发送到当前会话",
         compose_target_split: "发送到当前可见窗口",
+        compose_target_color: "发送到标签颜色",
         compose_target_all: "发送到全部已连接会话",
+        color_red: "红色",
         compose_send_enter: "使用 Enter 发送",
         compose_send_ctrl_enter: "使用 Ctrl+Enter 发送",
         compose_line_by_line: "逐行延时发送 (20ms 节流)",
@@ -427,5 +429,57 @@ describe("ComposeBar Component (终端命令撰写与多机分发系统)", () =>
     expect(screen.queryByText("发送到全部已连接会话")).toBeNull();
     // Only active session
     expect(screen.getByText("仅发送到当前会话")).toBeTruthy();
+  });
+
+  it("broadcasts command to terminals matching color target", async () => {
+    useAppStore.setState({
+      tabs: [
+        {
+          id: "tab-red-1",
+          serverId: "srv-1",
+          module: "terminal",
+          title: "Red Tab 1",
+          color: "#ef4444",
+        },
+        {
+          id: "tab-red-2",
+          serverId: "srv-2",
+          module: "terminal",
+          title: "Red Tab 2",
+          color: "#ef4444",
+        },
+        {
+          id: "tab-blue-1",
+          serverId: "srv-1",
+          module: "terminal",
+          title: "Blue Tab 1",
+          color: "#3b82f6",
+        },
+      ] as any,
+      terminalComposeTarget: "color:#ef4444",
+    });
+
+    render(
+      <ComposeBar
+        activeTermId="t1"
+        activeSessionId="sess-1"
+        tabId="tab-red-1"
+      />
+    );
+
+    const input = screen.getByPlaceholderText(
+      "在此输入要发送到终端的命令... (Enter 发送，Shift+Enter 换行，Esc 退出)"
+    );
+
+    fireEvent.change(input, { target: { value: "echo hello-red" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      // Both red tabs should receive the command
+      expect(sshService.writeToShell).toHaveBeenCalledWith("session-tab-red-1", "echo hello-red\r");
+      expect(sshService.writeToShell).toHaveBeenCalledWith("session-tab-red-2", "echo hello-red\r");
+      // Blue tab should NOT receive it
+      expect(sshService.writeToShell).not.toHaveBeenCalledWith("session-tab-blue-1", "echo hello-red\r");
+    });
   });
 });

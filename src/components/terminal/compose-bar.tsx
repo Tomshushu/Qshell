@@ -18,6 +18,7 @@ import {
   Globe,
   Trash2,
   PenSquare,
+  Palette,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,7 +28,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   DropdownMenuLabel,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu";
+import { PRESET_TAB_COLORS } from "@/utils/tab-colors";
 import {
   Dialog,
   DialogContent,
@@ -279,14 +284,41 @@ export function ComposeBar({
   // 是否可广播到全部会话（全局终端数 >= 2）
   const canBroadcastToAll = totalTerminalSessionsCount > 1;
 
+  // 统计每个标签颜色的终端数量
+  const terminalColorCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const t of tabs) {
+      if (t.module !== "terminal") continue;
+      const c = t.color || (t.workspaceId ? workspaces[t.workspaceId]?.color : undefined);
+      if (c) {
+        const lower = c.toLowerCase();
+        counts[lower] = (counts[lower] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [tabs, workspaces]);
+
+  const activeTargetColor = target.startsWith("color:") ? target.replace("color:", "") : null;
+  const activeColorInfo = useMemo(() => {
+    if (!activeTargetColor) return null;
+    return PRESET_TAB_COLORS.find(
+      (c) => c.value.toLowerCase() === activeTargetColor.toLowerCase()
+    );
+  }, [activeTargetColor]);
+
   // 目标状态自愈：当分屏解除或终端减少时，自动将不可用的广播模式退回 active
   useEffect(() => {
     if (target === "split" && !canBroadcastToSplit) {
       setTarget("active");
     } else if (target === "all" && !canBroadcastToAll) {
       setTarget("active");
+    } else if (target.startsWith("color:")) {
+      const col = target.replace("color:", "").toLowerCase();
+      if (!terminalColorCounts[col]) {
+        setTarget("active");
+      }
     }
-  }, [target, canBroadcastToSplit, canBroadcastToAll, setTarget]);
+  }, [target, canBroadcastToSplit, canBroadcastToAll, terminalColorCounts, setTarget]);
 
   // Compute resolved target sessions
   const getResolvedTargets = useCallback((): TargetInfo[] => {
@@ -347,6 +379,29 @@ export function ComposeBar({
             serverName: sv?.name || t.serverName || "Terminal",
             host: sv?.host || "—",
           });
+        }
+      }
+      return results;
+    }
+
+    if (target.startsWith("color:")) {
+      const targetColor = target.replace("color:", "").toLowerCase();
+      const results: TargetInfo[] = [];
+      const { workspaces } = useAppStore.getState();
+      for (const t of tabs) {
+        if (t.module !== "terminal") continue;
+        const effColor = t.color || (t.workspaceId ? workspaces[t.workspaceId]?.color : undefined);
+        if (effColor?.toLowerCase() === targetColor) {
+          const sid = sshService.getTabActiveSessionId(t.id);
+          if (sid && sshService.isSessionAlive(sid)) {
+            const sv = servers.find((s) => s.id === t.serverId);
+            results.push({
+              tabId: t.id,
+              sessionId: sid,
+              serverName: sv?.name || t.serverName || "Terminal",
+              host: sv?.host || "—",
+            });
+          }
         }
       }
       return results;
@@ -593,6 +648,8 @@ export function ComposeBar({
                   ? "撰写: 仅将文本发送到当前会话"
                   : target === "split"
                   ? `撰写: 发送到当前可见窗口 (${resolvedTargets.length}台)`
+                  : target.startsWith("color:")
+                  ? `撰写: 发送到${activeColorInfo ? t(activeColorInfo.nameKey) : ""}标签 (${resolvedTargets.length}台)`
                   : `撰写: 发送到全部已连接会话 (${resolvedTargets.length}台)`}
               </span>
             </div>
@@ -655,6 +712,8 @@ export function ComposeBar({
                           ? t("compose_target_active")
                           : target === "split"
                           ? t("compose_target_split")
+                          : target.startsWith("color:")
+                          ? `${activeColorInfo ? t(activeColorInfo.nameKey) : ""}标签`
                           : t("compose_target_all")
                       }`}
                     >
@@ -662,6 +721,11 @@ export function ComposeBar({
                         <TerminalIcon className="h-3.5 w-3.5" />
                       ) : target === "split" ? (
                         <Layers className="h-3.5 w-3.5 text-amber-500" />
+                      ) : target.startsWith("color:") ? (
+                        <span
+                          className="h-3 w-3 rounded-full shrink-0 border border-white/20"
+                          style={{ backgroundColor: activeTargetColor || undefined }}
+                        />
                       ) : (
                         <Globe className="h-3.5 w-3.5 text-rose-500" />
                       )}
@@ -693,6 +757,41 @@ export function ComposeBar({
                         {target === "split" && <Check className="h-3.5 w-3.5 text-primary" />}
                       </DropdownMenuItem>
                     )}
+                    <DropdownMenuSub>
+                      <DropdownMenuSubTrigger className="justify-between cursor-pointer text-xs">
+                        <div className="flex items-center gap-2">
+                          <Palette className="h-3.5 w-3.5 text-indigo-500" />
+                          <span>{t("compose_target_color")}</span>
+                        </div>
+                      </DropdownMenuSubTrigger>
+                      <DropdownMenuSubContent className="w-48 p-1">
+                        {PRESET_TAB_COLORS.map((c) => {
+                          const count = terminalColorCounts[c.value.toLowerCase()] || 0;
+                          const isSelected = target.toLowerCase() === `color:${c.value}`.toLowerCase();
+                          return (
+                            <DropdownMenuItem
+                              key={c.value}
+                              onClick={() => setTarget(`color:${c.value}`)}
+                              className="justify-between cursor-pointer text-xs"
+                            >
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className="h-3 w-3 rounded-full shrink-0 border border-white/20"
+                                  style={{ backgroundColor: c.value }}
+                                />
+                                <span>{t(c.nameKey)}</span>
+                                {count > 0 && (
+                                  <span className="text-[10px] text-muted-foreground font-mono">
+                                    ({count}台)
+                                  </span>
+                                )}
+                              </div>
+                              {isSelected && <Check className="h-3.5 w-3.5 text-primary" />}
+                            </DropdownMenuItem>
+                          );
+                        })}
+                      </DropdownMenuSubContent>
+                    </DropdownMenuSub>
                     {canBroadcastToAll && (
                       <DropdownMenuItem
                         onClick={() => setTarget("all")}
@@ -849,11 +948,19 @@ export function ComposeBar({
                     )}
                   >
                     {isBroadcast && <AlertTriangle className="h-3 w-3 shrink-0" />}
+                    {target.startsWith("color:") && activeTargetColor && (
+                      <span
+                        className="h-2 w-2 rounded-full shrink-0 border border-white/20"
+                        style={{ backgroundColor: activeTargetColor }}
+                      />
+                    )}
                     <span>
                       {target === "active"
                         ? "当前会话"
                         : target === "split"
                         ? `当前可见窗口 (${resolvedTargets.length}台)`
+                        : target.startsWith("color:")
+                        ? `${activeColorInfo ? t(activeColorInfo.nameKey) : "颜色"}标签 (${resolvedTargets.length}台)`
                         : `全部会话 (${resolvedTargets.length}台)`}
                     </span>
                   </span>
@@ -975,6 +1082,11 @@ export function ComposeBar({
                     <TerminalIcon className="h-3 w-3 text-primary" />
                   ) : target === "split" ? (
                     <Layers className="h-3 w-3 text-amber-500" />
+                  ) : target.startsWith("color:") ? (
+                    <span
+                      className="h-2.5 w-2.5 rounded-full shrink-0 border border-white/20"
+                      style={{ backgroundColor: activeTargetColor || undefined }}
+                    />
                   ) : (
                     <Globe className="h-3 w-3 text-rose-500" />
                   )}
@@ -983,6 +1095,8 @@ export function ComposeBar({
                       ? "当前会话"
                       : target === "split"
                       ? `可见窗口(${resolvedTargets.length})`
+                      : target.startsWith("color:")
+                      ? `${activeColorInfo ? t(activeColorInfo.nameKey) : "颜色"}(${resolvedTargets.length})`
                       : `全会话(${resolvedTargets.length})`}
                   </span>
                   <ChevronDown className="h-3 w-3 opacity-60" />
@@ -1014,6 +1128,41 @@ export function ComposeBar({
                     {target === "split" && <Check className="h-3.5 w-3.5 text-primary" />}
                   </DropdownMenuItem>
                 )}
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger className="justify-between cursor-pointer text-xs">
+                    <div className="flex items-center gap-2">
+                      <Palette className="h-3.5 w-3.5 text-indigo-500" />
+                      <span>{t("compose_target_color")}</span>
+                    </div>
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent className="w-48 p-1">
+                    {PRESET_TAB_COLORS.map((c) => {
+                      const count = terminalColorCounts[c.value.toLowerCase()] || 0;
+                      const isSelected = target.toLowerCase() === `color:${c.value}`.toLowerCase();
+                      return (
+                        <DropdownMenuItem
+                          key={c.value}
+                          onClick={() => setTarget(`color:${c.value}`)}
+                          className="justify-between cursor-pointer text-xs"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span
+                              className="h-3 w-3 rounded-full shrink-0 border border-white/20"
+                              style={{ backgroundColor: c.value }}
+                            />
+                            <span>{t(c.nameKey)}</span>
+                            {count > 0 && (
+                              <span className="text-[10px] text-muted-foreground font-mono">
+                                ({count}台)
+                              </span>
+                            )}
+                          </div>
+                          {isSelected && <Check className="h-3.5 w-3.5 text-primary" />}
+                        </DropdownMenuItem>
+                      );
+                    })}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
                 {canBroadcastToAll && (
                   <DropdownMenuItem
                     onClick={() => setTarget("all")}

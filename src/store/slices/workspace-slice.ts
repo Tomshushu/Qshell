@@ -798,6 +798,24 @@ export const createWorkspaceSlice: StateCreator<
     set({ broadcastTabIds: ids });
   },
 
+  // 一键广播到指定标签颜色的全部终端（terminal 模块，排除串口 / RDP 目标）
+  broadcastToColor: (color) => {
+    const { tabs, servers, workspaces } = get();
+    const colorLower = color.toLowerCase();
+    const ids = tabs
+      .filter((t) => {
+        if (t.module !== "terminal") return false;
+        const sv = servers.find((s) => s.id === t.serverId);
+        const flags = getServerConnectionFlags(sv?.targetType, sv?.protocol);
+        if (!sv || flags.isSerialServer || sv.protocol === "rdp") return false;
+        const effColor = t.color || (t.workspaceId ? workspaces[t.workspaceId]?.color : undefined);
+        return effColor?.toLowerCase() === colorLower;
+      })
+      .map((t) => t.id);
+    playSound(SoundType.Toggle);
+    set({ broadcastTabIds: ids });
+  },
+
   // 关闭全部广播
   clearBroadcast: () => {
     playSound(SoundType.Toggle);

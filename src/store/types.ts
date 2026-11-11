@@ -184,7 +184,7 @@ export interface ServerSlice {
   setRefreshInterval: (seconds: number) => void;
 }
 
-export type ComposeTarget = 'active' | 'split' | 'all';
+export type ComposeTarget = 'active' | 'split' | 'all' | `color:${string}`;
 export type ComposeSendMode = 'enter' | 'ctrl_enter';
 
 export interface TerminalSlice {
@@ -452,6 +452,8 @@ export interface WorkspaceSlice {
   broadcastAllTabs: () => void;
   /** 一键广播到指定 tab 所在工作台的全部终端（即当前所有分屏；terminal 模块、非串口、非 RDP） */
   broadcastToSplit: (tabId: string) => void;
+  /** 一键开启指定标签颜色的全部终端广播（terminal 模块、非串口、非 RDP） */
+  broadcastToColor: (color: string) => void;
   /** 关闭全部广播 */
   clearBroadcast: () => void;
   /** 从 URL 参数恢复窗口状态（拖拽创建新窗口时使用） */
