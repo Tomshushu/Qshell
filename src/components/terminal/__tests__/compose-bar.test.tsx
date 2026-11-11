@@ -520,9 +520,8 @@ describe("ComposeBar Component (终端命令撰写与多机分发系统)", () =>
 
     expect(useAppStore.getState().terminalComposeHistory).toEqual(["git status", "htop"]);
 
-    // Fill "git status" into input
-    const fillButtons = screen.getAllByText("填入");
-    fireEvent.click(fillButtons[0]);
+    // Fill "git status" into input (clicking the item row or Enter badge)
+    fireEvent.click(screen.getByText("git status"));
 
     const input = screen.getByPlaceholderText(
       "在此输入要发送到终端的命令... (Enter 发送，Shift+Enter 换行，Esc 退出)"

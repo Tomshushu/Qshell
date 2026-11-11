@@ -1,14 +1,11 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useRef, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
-  DialogHeader,
   DialogTitle,
   DialogDescription,
-  DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useAppStore } from "@/store";
 import { useTranslation } from "@/i18n";
@@ -18,11 +15,11 @@ import {
   Trash2,
   Copy,
   CornerDownLeft,
-  Search,
   X,
   FileCode,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 
 interface ComposeHistoryDialogProps {
   open: boolean;
@@ -42,7 +39,20 @@ export function ComposeHistoryDialog({
   const clearHistory = useAppStore((state) => state.clearTerminalComposeHistory);
 
   const [searchQuery, setSearchQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Focus search input when dialog opens
+  useEffect(() => {
+    if (open) {
+      setActiveIndex(0);
+      setSearchQuery("");
+      setTimeout(() => {
+        searchInputRef.current?.focus();
+      }, 50);
+    }
+  }, [open]);
 
   // Filter history based on search query
   const filteredHistory = useMemo(() => {
@@ -55,7 +65,7 @@ export function ComposeHistoryDialog({
     e.stopPropagation();
     try {
       await navigator.clipboard.writeText(cmd);
-      toast.success(t("compose_history_copied"));
+      toast.success(t("compose_history_copied") || "已复制到剪贴板");
     } catch {
       toast.error("复制失败");
     }
@@ -73,107 +83,111 @@ export function ComposeHistoryDialog({
     toast.success(t("compose_history_cleared") || "已清空所有历史撰写记录");
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (filteredHistory.length === 0) return;
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIndex((prev) => (prev + 1) % filteredHistory.length);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIndex((prev) => (prev - 1 + filteredHistory.length) % filteredHistory.length);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const current = filteredHistory[activeIndex];
+      if (current) {
+        onSelect(current);
+        onOpenChange(false);
+      }
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      onOpenChange(false);
+    }
+  };
+
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent
           showCloseButton={false}
-          className="max-w-2xl w-[92vw] sm:max-w-2xl max-h-[85vh] flex flex-col p-6 gap-4"
+          className="max-w-2xl w-[92vw] sm:max-w-2xl p-0 gap-0 overflow-hidden rounded-2xl border border-border/70 bg-background/95 dark:bg-zinc-900/95 backdrop-blur-2xl shadow-2xl flex flex-col"
         >
-          {/* Header with integrated Actions and Close Button */}
-          <DialogHeader className="flex flex-row items-center justify-between pb-3 border-b border-border/40 space-y-0">
-            <div className="flex items-center gap-3">
-              <div className="h-9 w-9 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shadow-xs shrink-0">
-                <Clock className="h-4.5 w-4.5" />
-              </div>
-              <div className="flex items-center gap-2">
-                <DialogTitle className="text-base font-semibold text-foreground tracking-tight">
-                  {t("compose_history_title")}
-                </DialogTitle>
-                <Badge
-                  variant="secondary"
-                  className="text-[11px] font-mono px-2 py-0.5 h-5 rounded-full font-normal bg-muted text-muted-foreground border border-border/40"
-                >
-                  共 {history.length} 条
-                </Badge>
-              </div>
-              <DialogDescription className="sr-only">
-                {t("compose_history_title")}
-              </DialogDescription>
+          <DialogTitle className="sr-only">
+            {t("compose_history_title")}
+          </DialogTitle>
+          <DialogDescription className="sr-only">
+            搜索与管理历史撰写命令
+          </DialogDescription>
+
+          {/* 顶栏：Raycast 风格一体化搜索栏 */}
+          <div className="flex items-center gap-3 px-4 py-3 border-b border-border/40 bg-muted/15 shrink-0">
+            <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-amber-500/10 text-amber-500 shrink-0">
+              <Clock className="h-4 w-4" />
             </div>
 
-            {/* Right-aligned Header Controls: Clear All + Close Button */}
-            <div className="flex items-center gap-1.5 shrink-0">
+            {/* 沉浸式搜索输入 */}
+            <input
+              ref={searchInputRef}
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setActiveIndex(0);
+              }}
+              onKeyDown={handleKeyDown}
+              placeholder={
+                t("compose_history_search_placeholder") ||
+                "搜索历史撰写... (↑↓ 选择，Enter 填入)"
+              }
+              className="flex-1 bg-transparent text-sm placeholder:text-muted-foreground/50 text-foreground outline-none border-none ring-0 focus:outline-none"
+            />
+
+            <div className="flex items-center gap-2 shrink-0">
               {history.length > 0 && (
                 <Button
-                  variant="ghost"
                   size="sm"
+                  variant="outline"
                   onClick={() => setClearConfirmOpen(true)}
-                  className="h-8 px-2.5 text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10 gap-1.5 transition-colors cursor-pointer rounded-lg"
-                  title={t("compose_history_clear")}
+                  className="h-7 px-2.5 text-xs gap-1.5 rounded-lg border-border/60 hover:bg-destructive/10 hover:text-destructive hover:border-destructive/30 transition-all cursor-pointer shadow-2xs font-normal text-muted-foreground"
+                  title="全部删除"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
-                  <span>{t("compose_history_clear")}</span>
+                  <span>全部删除</span>
                 </Button>
               )}
 
-              {history.length > 0 && <div className="h-4 w-px bg-border/60 mx-1" />}
-
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => onOpenChange(false)}
-                className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-muted/80 rounded-lg cursor-pointer"
-                title="关闭"
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-          </DialogHeader>
-
-          {/* Search Box */}
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-            <Input
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={t("compose_history_search_placeholder")}
-              className="pl-9 pr-8 h-9 text-xs bg-muted/30 border-border/60 hover:bg-muted/50 focus-visible:bg-background focus-visible:ring-1 focus-visible:ring-primary/40 rounded-lg transition-colors"
-            />
-            {searchQuery && (
               <button
                 type="button"
-                onClick={() => setSearchQuery("")}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5 rounded cursor-pointer"
-                title="清除搜索"
+                onClick={() => onOpenChange(false)}
+                className="p-1.5 rounded-lg text-muted-foreground/60 hover:text-foreground hover:bg-muted/50 transition-colors cursor-pointer"
+                title="关闭 (Esc)"
               >
-                <X className="h-3.5 w-3.5" />
+                <X className="h-4 w-4" />
               </button>
-            )}
+            </div>
           </div>
 
-          {/* History List */}
-          <div className="flex-1 overflow-y-auto max-h-[48vh] pr-1.5 space-y-2.5">
+          {/* 列表展示区 */}
+          <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1 scrollbar-thin max-h-[420px]">
             {filteredHistory.length === 0 ? (
-              <div className="py-14 flex flex-col items-center justify-center text-center space-y-3 text-muted-foreground">
-                <div className="h-12 w-12 rounded-2xl bg-muted/40 border border-border/40 flex items-center justify-center text-muted-foreground/40">
-                  <Clock className="h-6 w-6 stroke-[1.5]" />
+              <div className="flex flex-col items-center justify-center py-12 text-center text-muted-foreground">
+                <div className="p-3 rounded-xl bg-muted/30 mb-3 border border-border/30">
+                  <Clock className="h-5 w-5 opacity-40" />
                 </div>
-                <div>
-                  <p className="text-xs font-medium text-foreground/80">
-                    {searchQuery ? "未找到匹配的历史撰写记录" : t("compose_history_empty")}
-                  </p>
-                  <p className="text-[11px] text-muted-foreground/70 mt-1">
-                    {searchQuery
-                      ? "尝试输入其他关键字进行查找"
-                      : "在撰写栏发送命令后将自动沉淀记录到此列表中"}
-                  </p>
-                </div>
+                <p className="text-sm font-medium text-foreground/75">
+                  {searchQuery ? "未找到匹配的历史撰写" : t("compose_history_empty")}
+                </p>
+                <p className="text-xs text-muted-foreground/70 mt-1 max-w-xs">
+                  {searchQuery
+                    ? "可以尝试更换搜索关键词查找命令"
+                    : "在下方撰写栏发送命令后将自动保存在此"}
+                </p>
               </div>
             ) : (
               filteredHistory.map((item, idx) => {
+                const isSelected = idx === activeIndex;
                 const lines = item.split(/\r?\n/);
                 const isMultiLine = lines.length > 1;
+                const firstLine = lines[0] || "";
 
                 return (
                   <div
@@ -182,85 +196,76 @@ export function ComposeHistoryDialog({
                       onSelect(item);
                       onOpenChange(false);
                     }}
-                    className="group relative flex flex-col p-3 rounded-lg border border-border/60 bg-card hover:bg-accent/30 hover:border-primary/40 transition-all cursor-pointer shadow-2xs"
+                    onMouseEnter={() => setActiveIndex(idx)}
+                    className={cn(
+                      "group relative flex items-center justify-between gap-3 px-3 py-2 rounded-xl cursor-pointer select-none transition-colors",
+                      isSelected
+                        ? "bg-black/[0.08] dark:bg-white/[0.12] shadow-2xs text-foreground"
+                        : "hover:bg-black/[0.035] dark:hover:bg-white/[0.05] text-foreground/90"
+                    )}
                   >
-                    {/* Top Meta info & Actions */}
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-1.5">
-                        <FileCode className="h-3.5 w-3.5 text-muted-foreground group-hover:text-primary transition-colors" />
-                        <span className="font-mono text-[11px] font-semibold text-muted-foreground bg-muted/60 px-1.5 py-0.5 rounded border border-border/40">
-                          #{filteredHistory.length - idx}
-                        </span>
-                        {isMultiLine && (
-                          <Badge
-                            variant="outline"
-                            className="text-[10px] px-1.5 py-0 h-4 font-normal text-muted-foreground border-border/60 bg-background/50"
-                          >
-                            {lines.length} 行
-                          </Badge>
-                        )}
-                      </div>
+                    {/* 左侧：彩色原点、命令内容、多行标识 */}
+                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                      <span className="h-2 w-2 rounded-full shrink-0 ring-2 ring-primary/20 bg-primary/80" />
 
-                      {/* Action buttons on card */}
-                      <div className="flex items-center gap-1 opacity-90 group-hover:opacity-100 transition-opacity">
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          className="h-6 px-2.5 text-[11px] font-medium text-primary hover:bg-primary hover:text-primary-foreground gap-1 transition-colors cursor-pointer shadow-2xs"
-                          onClick={() => {
-                            onSelect(item);
-                            onOpenChange(false);
-                          }}
-                          title={t("compose_history_apply")}
+                      {/* 命令内容 */}
+                      <span className="font-mono text-sm font-medium text-foreground truncate max-w-[360px] sm:max-w-[460px]">
+                        {firstLine}
+                      </span>
+
+                      {/* 多行行数胶囊 */}
+                      {isMultiLine && (
+                        <Badge
+                          variant="outline"
+                          className="text-[10px] px-1.5 py-0 h-4 font-normal text-muted-foreground border-border/40 bg-muted/40 shrink-0"
                         >
-                          <CornerDownLeft className="h-3 w-3" />
-                          <span>填入</span>
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-6 w-6 text-muted-foreground hover:text-foreground cursor-pointer"
+                          {lines.length} 行
+                        </Badge>
+                      )}
+                    </div>
+
+                    {/* 右侧：回车填入胶囊 & 操作小工具栏 */}
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {/* Enter 填入胶囊 */}
+                      <span
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] font-mono border bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20"
+                        title="填入"
+                      >
+                        <CornerDownLeft className="h-3 w-3" />
+                        <span className="text-[10px]">Enter 填入</span>
+                      </span>
+
+                      {/* 操作按钮群 */}
+                      <div
+                        className={cn(
+                          "flex items-center gap-0.5 transition-opacity duration-150",
+                          isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                        )}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted cursor-pointer transition-colors"
                           onClick={(e) => handleCopy(item, e)}
                           title="复制指令"
                         >
                           <Copy className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-6 w-6 text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer"
+                        </button>
+                        <button
+                          type="button"
+                          className="p-1 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/15 cursor-pointer transition-colors"
                           onClick={(e) => handleDeleteItem(item, e)}
-                          title={t("compose_history_delete_item")}
+                          title="删除此条"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
+                        </button>
                       </div>
-                    </div>
-
-                    {/* Command Content */}
-                    <div className="mt-2 p-2.5 rounded-md bg-muted/40 group-hover:bg-muted/60 border border-border/40 font-mono text-xs text-foreground/90 whitespace-pre-wrap break-all max-h-36 overflow-y-auto select-text leading-relaxed transition-colors">
-                      {item}
                     </div>
                   </div>
                 );
               })
             )}
           </div>
-
-          {/* Footer with Hint and Close Button */}
-          <DialogFooter className="pt-3 border-t border-border/40 flex flex-row items-center justify-between sm:justify-between text-[11px] text-muted-foreground">
-            <span className="text-muted-foreground/70">
-              💡 提示：点击条目或「填入」直接写入终端，按 <kbd className="px-1 py-0.5 bg-muted rounded border border-border/60 text-[10px] font-mono text-foreground">Esc</kbd> 退出
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 text-xs px-3"
-              onClick={() => onOpenChange(false)}
-            >
-              关闭
-            </Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
 
