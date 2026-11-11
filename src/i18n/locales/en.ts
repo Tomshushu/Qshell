@@ -3555,7 +3555,7 @@ export default {
   broadcast_disabled_hint: "Click to enable broadcast; {targets}",
   broadcast_label: "Broadcast",
   broadcast_more: "More broadcast actions",
-  broadcast_select_split: "Broadcast to all panes",
+  broadcast_select_split: "Broadcast to visible windows",
   broadcast_select_all: "Broadcast to all tabs",
   broadcast_clear_all: "Clear all",
   broadcast_split_enabled:
@@ -4484,7 +4484,7 @@ export default {
   compose_bar_placeholder_single: "Type command to send to terminal... (Enter to send, Shift+Enter for newline, Esc to exit)",
   compose_bar_placeholder_multi: "Write or paste multiline shell script here... (Click Send or press shortcut to broadcast)",
   compose_target_active: "To Active Session",
-  compose_target_split: "To All Split Terminals in Current Window",
+  compose_target_split: "To Visible Windows",
   compose_target_all: "To All Connected Sessions (Broadcast)",
   compose_target_badge_broadcast: "Broadcast: {count} terminals",
   compose_send_enter: "Send with Enter Key",

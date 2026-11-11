@@ -592,7 +592,7 @@ export function ComposeBar({
                 {target === "active"
                   ? "撰写: 仅将文本发送到当前会话"
                   : target === "split"
-                  ? `撰写: 发送到当前分屏所有终端 (${resolvedTargets.length}台)`
+                  ? `撰写: 发送到当前可见窗口 (${resolvedTargets.length}台)`
                   : `撰写: 发送到全部已连接会话 (${resolvedTargets.length}台)`}
               </span>
             </div>
@@ -825,7 +825,7 @@ export function ComposeBar({
                         onChange={(e) => setTarget(e.target.checked ? "split" : "active")}
                         className="h-3.5 w-3.5 rounded border-border text-primary focus:ring-0 cursor-pointer"
                       />
-                      <span>发送文本到当前分屏全部会话</span>
+                      <span>发送文本到当前可见窗口</span>
                     </label>
                   ) : canBroadcastToAll ? (
                     <label className="flex items-center gap-1.5 cursor-pointer text-[11px] text-foreground/80 hover:text-foreground select-none">
@@ -853,7 +853,7 @@ export function ComposeBar({
                       {target === "active"
                         ? "当前会话"
                         : target === "split"
-                        ? `当前分屏 (${resolvedTargets.length}台)`
+                        ? `当前可见窗口 (${resolvedTargets.length}台)`
                         : `全部会话 (${resolvedTargets.length}台)`}
                     </span>
                   </span>
@@ -982,7 +982,7 @@ export function ComposeBar({
                     {target === "active"
                       ? "当前会话"
                       : target === "split"
-                      ? `分屏(${resolvedTargets.length})`
+                      ? `可见窗口(${resolvedTargets.length})`
                       : `全会话(${resolvedTargets.length})`}
                   </span>
                   <ChevronDown className="h-3 w-3 opacity-60" />

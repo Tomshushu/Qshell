@@ -304,7 +304,7 @@ export interface TerminalSlice {
   /** 撰写窗口多行展开时的高度（px），默认 160 */
   terminalComposeBarHeight: number;
   setTerminalComposeBarHeight: (height: number) => void;
-  /** 撰写分发目标：'active' 当前会话 | 'split' 当前分屏 | 'all' 全部已连接会话 */
+  /** 撰写分发目标：'active' 当前会话 | 'split' 当前可见窗口 | 'all' 全部已连接会话 */
   terminalComposeTarget: ComposeTarget;
   setTerminalComposeTarget: (target: ComposeTarget) => void;
   /** 撰写发送键模式：'enter' Enter 发送 | 'ctrl_enter' Ctrl+Enter 发送 */

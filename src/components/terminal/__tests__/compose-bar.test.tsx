@@ -25,7 +25,7 @@ vi.mock("@/i18n", () => ({
         compose_bar_placeholder_single: "在此输入要发送到终端的命令... (Enter 发送，Shift+Enter 换行，Esc 退出)",
         compose_bar_placeholder_multi: "在此编写或粘贴多行 Shell 脚本... (按下方按钮或快捷键批量发送)",
         compose_target_active: "仅发送到当前会话",
-        compose_target_split: "发送到当前分屏所有终端",
+        compose_target_split: "发送到当前可见窗口",
         compose_target_all: "发送到全部已连接会话 (多机广播)",
         compose_send_enter: "使用 Enter 发送",
         compose_send_ctrl_enter: "使用 Ctrl+Enter 发送",
@@ -423,7 +423,7 @@ describe("ComposeBar Component (终端命令撰写与多机分发系统)", () =>
     fireEvent.keyDown(targetTrigger, { key: "ArrowDown" });
 
     // Should NOT have split or all broadcast options
-    expect(screen.queryByText("发送到当前分屏所有终端")).toBeNull();
+    expect(screen.queryByText("发送到当前可见窗口")).toBeNull();
     expect(screen.queryByText("发送到全部已连接会话 (多机广播)")).toBeNull();
     // Only active session
     expect(screen.getByText("仅发送到当前会话")).toBeTruthy();
