@@ -6836,11 +6836,37 @@ pub async fn files_start_external_edit(
 ) -> Result<ExternalEditSession, String> {
     use base64::Engine as _;
 
+    // 最大允许外部编辑的远程文件大小：2MB（防止大文件频繁全量同步与冲突检测造成严重性能与内存卡顿）
+    const MAX_EXTERNAL_EDIT_SIZE: u64 = 2 * 1024 * 1024; // 2MB
+
+    // 0. 预检远程文件大小，避免拉取超大文件消耗大量带宽和内存
+    if let Ok(stat_json) = files_stat_info(server_id.clone(), remote_path.clone()).await {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&stat_json) {
+            if let Some(size) = val.get("size").and_then(|s| s.as_u64()) {
+                if size > MAX_EXTERNAL_EDIT_SIZE {
+                    let mb = size as f64 / (1024.0 * 1024.0);
+                    return Err(format!(
+                        "远程文件过大（{:.2} MB），外部编辑器仅支持打开不超过 2 MB 的文件",
+                        mb
+                    ));
+                }
+            }
+        }
+    }
+
     // 1. 读取远程文件内容 (Base64)
     let b64_content = files_read_binary(server_id.clone(), remote_path.clone()).await?;
     let file_bytes = base64::engine::general_purpose::STANDARD
         .decode(b64_content.trim())
         .map_err(|e| format!("Decode remote file content failed: {}", e))?;
+
+    if file_bytes.len() as u64 > MAX_EXTERNAL_EDIT_SIZE {
+        let mb = file_bytes.len() as f64 / (1024.0 * 1024.0);
+        return Err(format!(
+            "远程文件过大（{:.2} MB），外部编辑器仅支持打开不超过 2 MB 的文件",
+            mb
+        ));
+    }
 
     // 2. 提取文件名并准备本地独立隔离临时目录
     let raw_file_name = remote_path

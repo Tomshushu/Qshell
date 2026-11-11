@@ -417,22 +417,29 @@ export function SftpPanel() {
   const handleStartExternalEdit = async (
     serverId: string,
     filePath: string,
-    editorCmd?: string
+    editorCmd?: string,
+    fileSize?: number
   ) => {
     if (!backend?.files?.startExternalEdit) return
+    const MAX_EXTERNAL_EDIT_SIZE = 2 * 1024 * 1024 // 2MB
+    if (typeof fileSize === 'number' && fileSize > MAX_EXTERNAL_EDIT_SIZE) {
+      const sizeMb = (fileSize / (1024 * 1024)).toFixed(2)
+      toastRef.current.warning(`文件过大（${sizeMb} MB），外部编辑器仅支持打开不超过 2 MB 的远程文件`)
+      return
+    }
     try {
-      toast.info('正在启动外部程序...')
+      toastRef.current.info('正在启动外部程序...')
       const session = await backend.files.startExternalEdit(serverId, filePath, editorCmd)
       setActiveExternalSessions((prev) => [
         ...prev.filter((s) => s.sessionId !== session.sessionId),
         session,
       ])
-      toast.success(
+      toastRef.current.success(
         `已在外部编辑器打开 ${session.fileName}，正在监听保存并自动回传`
       )
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
-      toast.error(`启动外部编辑失败: ${msg}`)
+      toastRef.current.error(`启动外部编辑失败: ${msg}`)
     }
   }
 
@@ -6576,7 +6583,7 @@ export function SftpPanel() {
                                     <ContextMenuSubContent className="w-56">
                                       <ContextMenuItem onClick={() => {
                                         if (localContextMenuFile) {
-                                          void handleStartExternalEdit(leftServerId, localContextMenuFile.path, 'default')
+                                          void handleStartExternalEdit(leftServerId, localContextMenuFile.path, 'default', localContextMenuFile.size)
                                         }
                                       }}>
                                         <ExternalLink className="mr-2 h-4 w-4 text-muted-foreground" />
@@ -6584,7 +6591,7 @@ export function SftpPanel() {
                                       </ContextMenuItem>
                                       <ContextMenuItem onClick={() => {
                                         if (localContextMenuFile) {
-                                          void handleStartExternalEdit(leftServerId, localContextMenuFile.path, 'code')
+                                          void handleStartExternalEdit(leftServerId, localContextMenuFile.path, 'code', localContextMenuFile.size)
                                         }
                                       }}>
                                         <Code className="mr-2 h-4 w-4 text-blue-500" />
@@ -7947,7 +7954,7 @@ export function SftpPanel() {
                                     <ContextMenuSubContent className="w-56">
                                       <ContextMenuItem onClick={() => {
                                         if (remoteContextMenuFile) {
-                                          void handleStartExternalEdit(selectedServerId, remoteContextMenuFile.path, 'default')
+                                          void handleStartExternalEdit(selectedServerId, remoteContextMenuFile.path, 'default', remoteContextMenuFile.size)
                                         }
                                       }}>
                                         <ExternalLink className="mr-2 h-4 w-4 text-muted-foreground" />
@@ -7955,7 +7962,7 @@ export function SftpPanel() {
                                       </ContextMenuItem>
                                       <ContextMenuItem onClick={() => {
                                         if (remoteContextMenuFile) {
-                                          void handleStartExternalEdit(selectedServerId, remoteContextMenuFile.path, 'code')
+                                          void handleStartExternalEdit(selectedServerId, remoteContextMenuFile.path, 'code', remoteContextMenuFile.size)
                                         }
                                       }}>
                                         <Code className="mr-2 h-4 w-4 text-blue-500" />
@@ -8964,7 +8971,7 @@ export function SftpPanel() {
                     <DropdownMenuItem
                       onClick={() => {
                         if (viewer.serverId && viewer.path) {
-                          void handleStartExternalEdit(viewer.serverId, viewer.path, 'default')
+                          void handleStartExternalEdit(viewer.serverId, viewer.path, 'default', viewer.fileSize)
                         }
                       }}
                       className="cursor-pointer text-xs"
@@ -8975,7 +8982,7 @@ export function SftpPanel() {
                     <DropdownMenuItem
                       onClick={() => {
                         if (viewer.serverId && viewer.path) {
-                          void handleStartExternalEdit(viewer.serverId, viewer.path, 'code')
+                          void handleStartExternalEdit(viewer.serverId, viewer.path, 'code', viewer.fileSize)
                         }
                       }}
                       className="cursor-pointer text-xs"

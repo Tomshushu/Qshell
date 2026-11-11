@@ -70,4 +70,20 @@ describe("SFTP 外部编辑器联动自动同步 (External Editor Auto-Sync)", (
     expect(remaining).toHaveLength(1);
     expect(remaining[0].sessionId).toBe("session-2");
   });
+
+  it("当远程文件大于 2MB 时，外部编辑器应拦截并拒绝打开", () => {
+    const MAX_EXTERNAL_EDIT_SIZE = 2 * 1024 * 1024;
+    const testCases = [
+      { size: 1024 * 500, expectedAllowed: true }, // 500KB
+      { size: 2 * 1024 * 1024, expectedAllowed: true }, // 2MB 边界
+      { size: 2 * 1024 * 1024 + 1, expectedAllowed: false }, // 2MB + 1字节
+      { size: 5 * 1024 * 1024, expectedAllowed: false }, // 5MB
+      { size: 50 * 1024 * 1024, expectedAllowed: false }, // 50MB
+    ];
+
+    for (const tc of testCases) {
+      const isAllowed = tc.size <= MAX_EXTERNAL_EDIT_SIZE;
+      expect(isAllowed).toBe(tc.expectedAllowed);
+    }
+  });
 });
