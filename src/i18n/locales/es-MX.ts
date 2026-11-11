@@ -117,6 +117,7 @@ export default {
     status_connected_to: 'Conectado a',
     status_disconnected: 'Desconectado',
     status_ready: 'Listo',
+    status_connected_count: '{count} conectados',
     status_ssh_mode: 'Modo SSH',
     db_add_server: 'Agregar servidor',
     db_edit_server: 'Editar servidor',

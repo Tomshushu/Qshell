@@ -117,6 +117,7 @@ export default {
     status_connected_to: 'Connected to',
     status_disconnected: 'Disconnected',
     status_ready: 'Ready',
+    status_connected_count: '{count} 台接続中',
     status_ssh_mode: 'SSH モード',
     db_add_server: 'Add Server',
     db_edit_server: 'Edit Server',

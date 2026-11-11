@@ -117,6 +117,7 @@ export default {
     status_connected_to: 'Tilkoblet til',
     status_disconnected: 'Frakoblet',
     status_ready: 'Klar',
+    status_connected_count: '{count} tilkoblet',
     status_ssh_mode: 'SSH-modus',
     db_add_server: 'Legg til server',
     db_edit_server: 'Rediger server',

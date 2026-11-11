@@ -357,6 +357,7 @@ export default {
   status_connected_to: "Connected to",
   status_disconnected: "Disconnected",
   status_ready: "Ready",
+  status_connected_count: '{count} connected',
   status_ssh_mode: "SSH Mode",
   status_bmc_ready: "BMC Ready",
   status_bmc_mode: "BMC Mode",

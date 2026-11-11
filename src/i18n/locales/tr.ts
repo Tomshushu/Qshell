@@ -117,6 +117,7 @@ export default {
     status_connected_to: 'Bağlanıldı:',
     status_disconnected: 'Bağlantı yok',
     status_ready: 'Hazır',
+    status_connected_count: '{count} bağlı',
     status_ssh_mode: 'SSH Modu',
     db_add_server: 'Sunucu ekle',
     db_edit_server: 'Sunucuyu düzenle',

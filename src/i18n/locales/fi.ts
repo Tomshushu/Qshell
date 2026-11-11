@@ -117,6 +117,7 @@ export default {
     status_connected_to: 'Yhdistetty kohteeseen',
     status_disconnected: 'Ei yhteyttä',
     status_ready: 'Valmis',
+    status_connected_count: '{count} yhdistetty',
     status_ssh_mode: 'SSH-tila',
     db_add_server: 'Lisää palvelin',
     db_edit_server: 'Muokkaa palvelinta',

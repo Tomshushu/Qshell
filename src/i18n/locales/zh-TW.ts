@@ -118,6 +118,7 @@ export default {
     status_connected_to: '已連接至',
     status_disconnected: '未連接',
     status_ready: '就緒',
+    status_connected_count: '{count} 台已連接',
     status_ssh_mode: 'SSH 模式',
     db_add_server: '添加伺服器',
     db_edit_server: '編輯伺服器',

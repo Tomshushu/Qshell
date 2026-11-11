@@ -117,6 +117,7 @@ export default {
     status_connected_to: 'เชื่อมต่อไปยัง',
     status_disconnected: 'ยังไม่ได้เชื่อมต่อ',
     status_ready: 'พร้อม',
+    status_connected_count: 'เชื่อมต่อ {count} รายการ',
     status_ssh_mode: 'โหมด SSH',
     db_add_server: 'เพิ่มเซิร์ฟเวอร์',
     db_edit_server: 'แก้ไขเซิร์ฟเวอร์',

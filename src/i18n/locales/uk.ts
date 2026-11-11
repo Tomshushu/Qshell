@@ -117,6 +117,7 @@ export default {
     status_connected_to: 'Підключено до',
     status_disconnected: 'Не підключено',
     status_ready: 'Готовий',
+    status_connected_count: '{count} підключено',
     status_ssh_mode: 'SSH Режим',
     db_add_server: 'Додати сервер',
     db_edit_server: 'Редагувати сервер',

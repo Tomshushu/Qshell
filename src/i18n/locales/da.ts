@@ -117,6 +117,7 @@ export default {
     status_connected_to: 'Forbundet til',
     status_disconnected: 'Afbrudt',
     status_ready: 'Klar',
+    status_connected_count: '{count} forbundet',
     status_ssh_mode: 'SSH-tilstand',
     db_add_server: 'Tilføj server',
     db_edit_server: 'Rediger server',

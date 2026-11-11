@@ -117,6 +117,7 @@ export default {
     status_connected_to: 'Đã kết nối với',
     status_disconnected: 'Chưa kết nối',
     status_ready: 'Sẵn sàng',
+    status_connected_count: '{count} đã kết nối',
     status_ssh_mode: 'Chế độ SSH',
     db_add_server: 'Thêm máy chủ',
     db_edit_server: 'Chỉnh sửa máy chủ',

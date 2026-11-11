@@ -117,6 +117,7 @@ export default {
     status_connected_to: 'Disambung ke',
     status_disconnected: 'Terputus',
     status_ready: 'Sedia',
+    status_connected_count: '{count} disambungkan',
     status_ssh_mode: 'Mod SSH',
     db_add_server: 'Tambah Pelayan',
     db_edit_server: 'Edit Pelayan',

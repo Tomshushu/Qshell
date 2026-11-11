@@ -117,6 +117,7 @@ export default {
     status_connected_to: 'कनेक्टेड है:',
     status_disconnected: 'डिस्कनेक्टेड',
     status_ready: 'तैयार',
+    status_connected_count: '{count} कनेक्टेड',
     status_ssh_mode: 'SSH मोड',
     db_add_server: 'Add Server',
     db_edit_server: 'Edit Server',

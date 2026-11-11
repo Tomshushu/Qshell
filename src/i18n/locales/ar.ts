@@ -117,6 +117,7 @@ export default {
     status_connected_to: 'متصل بـ',
     status_disconnected: 'غير متصل',
     status_ready: 'جاهز',
+    status_connected_count: '{count} متصل',
     status_ssh_mode: 'وضع SSH',
     db_add_server: 'إضافة خادم',
     db_edit_server: 'تعديل الخادم',

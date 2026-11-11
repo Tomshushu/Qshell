@@ -29,16 +29,15 @@ export function StatusBar() {
   const serverId = activeTab?.serverId
   const server = servers.find((s) => s.id === serverId)
 
-  // 分屏判定：底部状态栏只反映当前活动 tab，分屏下没有代表性（各窗格状态由
-  // 窗格头部体现），反而会误导用户以为只有一个连接，故分屏时不渲染。
+  // 分屏判定：底部状态栏只反映当前活动 tab。分屏下现在仍渲染，但会切换为
+  // 「分屏摘要 / 当前焦点会话」展示，而不是单连接状态，避免误导用户。
   //
-  // 这里同时看「全局 layout」和「活跃 tab 所属 workspace 的 layout」，任一为
+  // 同时看「全局 layout」和「活跃 tab 所属 workspace 的 layout」，任一为
   // 多窗格即判定分屏。原因：focusGroup / setActiveTab 会把 workspace 的 split
   // 树同步到全局 layout，切换窗格时全局 layout 可能短暂落到单叶子，只用全局
-  // layout 会让状态栏闪现一下再消失，内容区高度随之突变 —— 表现为页面抖动。
-  // 补上 workspace 自身 layout 这一路判据即可消除该抖动。
-  // 注意：early return 必须放在本组件所有 hook 之后，否则分屏时 hook 数量
-  // 会减少，触发 "Rendered fewer hooks than expected"。
+  // layout 会让判定抖动。补上 workspace 自身 layout 这一路判据即可消除。
+  // 注意：本组件所有 hook 必须保持无条件执行，不能在分屏时提前 return，
+  // 否则 hook 数量会变化并触发 "Rendered fewer hooks than expected"。
   const isSplitMode = useMemo(() => {
     if (collectGroupIds(layout).length > 1) return true
     const wsId = tabs.find((t) => t.id === activeTabId)?.workspaceId

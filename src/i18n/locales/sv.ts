@@ -117,6 +117,7 @@ export default {
     status_connected_to: 'Ansluten till',
     status_disconnected: 'Frånkopplad',
     status_ready: 'Redo',
+    status_connected_count: '{count} anslutna',
     status_ssh_mode: 'SSH-läge',
     db_add_server: 'Lägg till server',
     db_edit_server: 'Edit Server',

@@ -354,6 +354,7 @@ export default {
   status_connected_to: "已连接至",
   status_disconnected: "未连接",
   status_ready: "就绪",
+  status_connected_count: '{count} 台已连接',
   status_ssh_mode: "SSH 模式",
   status_bmc_ready: "BMC 已就绪",
   status_bmc_mode: "带外管理模式",

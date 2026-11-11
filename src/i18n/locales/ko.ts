@@ -117,6 +117,7 @@ export default {
     status_connected_to: '연결 대상:',
     status_disconnected: '연결 끊김',
     status_ready: '준비 완료',
+    status_connected_count: '{count}개 연결됨',
     status_ssh_mode: 'SSH 모드',
     db_add_server: '서버 추가',
     db_edit_server: '서버 편집',
