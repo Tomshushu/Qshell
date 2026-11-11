@@ -1266,7 +1266,13 @@ fn scan_local_tree_inner(
             count: results.len(),
         });
         if depth > max_depth || results.len() >= max_files {
-            break;
+            // 截断后的结果不完整：若继续返回，目录同步会把「未扫描到的文件」
+            // 误判为「仅存在于另一端」并在镜像删除模式下删除它们。
+            // 因此显式失败，由前端禁止执行同步。
+            return Err(format!(
+                "目录树超过扫描上限（层数 {} / 文件数 {}），结果不完整，已中止扫描；请缩小目录范围或提高上限后重试",
+                max_depth, max_files
+            ));
         }
         let read_dir = match std::fs::read_dir(&dir_path) {
             Ok(rd) => rd,
@@ -1347,7 +1353,13 @@ async fn scan_remote_tree_inner(
             count: results.len(),
         });
         if depth > max_depth || results.len() >= max_files {
-            break;
+            // 截断后的结果不完整：若继续返回，目录同步会把「未扫描到的文件」
+            // 误判为「仅存在于另一端」并在镜像删除模式下删除它们。
+            // 因此显式失败，由前端禁止执行同步。
+            return Err(format!(
+                "目录树超过扫描上限（层数 {} / 文件数 {}），结果不完整，已中止扫描；请缩小目录范围或提高上限后重试",
+                max_depth, max_files
+            ));
         }
 
         let entries = if let Some(ref ftp_cfg) = is_ftp {
@@ -6977,6 +6989,52 @@ pub async fn files_start_external_edit(
                         server_id_clone
                     );
 
+                    // 写回前做冲突检测：只有确认「远端内容与上次同步基线不同」
+                    // 才算冲突。远端读取失败 / 解码失败一律放行原有自动回传路径，
+                    // 否则网络抖动会被误判成冲突，导致本地修改被静默放弃。
+                    let has_conflict = match files_read_binary(
+                        server_id_clone.clone(),
+                        remote_path_clone.clone(),
+                    )
+                    .await
+                    {
+                        Ok(b64) => match base64::engine::general_purpose::STANDARD.decode(b64.trim()) {
+                            Ok(bytes) => bytes != last_synced_bytes,
+                            Err(err) => {
+                                tracing::warn!(
+                                    "External edit: remote content decode failed, keeping write-back: {}",
+                                    err
+                                );
+                                false
+                            }
+                        },
+                        Err(err) => {
+                            tracing::warn!(
+                                "External edit: remote pre-write read failed, keeping write-back: {}",
+                                err
+                            );
+                            false
+                        }
+                    };
+                    if has_conflict {
+                        tracing::warn!(
+                            "External edit conflict for {}: remote changed since last sync, skipping write-back",
+                            file_name_clone
+                        );
+                        let _ = app_clone.emit(
+                            "files:external-file-sync-failed",
+                            serde_json::json!({
+                                "sessionId": session_id_clone.clone(),
+                                "fileName": file_name_clone.clone(),
+                                "error": "远端文件已被其他会话修改，已跳过本次自动保存（请手动处理冲突）"
+                            }),
+                        );
+                        // 记录本次本地状态，避免同一变更被反复告警
+                        last_mtime = current_mtime;
+                        last_len = current_len;
+                        continue;
+                    }
+
                     let b64_payload = format!(
                         "::base64::{}",
                         base64::engine::general_purpose::STANDARD.encode(&new_bytes)
@@ -7163,6 +7221,48 @@ pub async fn files_list_active_external_edits() -> Result<Vec<ExternalEditSessio
         .unwrap_or_else(|e| e.into_inner());
     let sessions = reg.values().map(|v| v.session.clone()).collect();
     Ok(sessions)
+}
+
+/// 进程生命周期边界统一清理：停止全部 watcher 并回收临时目录。
+/// 刻意只在「应用启动 / 退出」调用，不改变面板切换或标签隐藏时的监听行为。
+pub fn stop_all_external_edits() {
+    let active_paths: Vec<String> = {
+        let mut reg = external_edit_registry()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let paths = reg
+            .values_mut()
+            .map(|active| {
+                active.cancel_flag.store(true, Ordering::Relaxed);
+                active.session.local_path.clone()
+            })
+            .collect();
+        reg.clear();
+        paths
+    };
+
+    for path_str in active_paths {
+        let p = std::path::PathBuf::from(path_str);
+        if let Some(parent) = p.parent() {
+            let _ = std::fs::remove_dir_all(parent);
+        }
+    }
+
+    // 清理上次进程异常退出遗留的临时目录。只删除 24 小时未改动的目录，
+    // 避免误删同一台机器上另一个 Qshell 实例正在使用的文件。
+    let root = std::env::temp_dir().join("qshell_external_edits");
+    if let Ok(entries) = std::fs::read_dir(&root) {
+        for entry in entries.flatten() {
+            let is_stale = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .map(|t| t.elapsed().map(|d| d.as_secs() > 86_400).unwrap_or(false))
+                .unwrap_or(false);
+            if is_stale {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
 }
 
 

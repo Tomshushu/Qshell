@@ -110,7 +110,17 @@ pub async fn resolve_ftp_config_for_server(
     }
     let cfg: FileTransferConfig = match serde_json::from_str(raw_cfg) {
         Ok(c) => c,
-        Err(_) => return Ok(None),
+        Err(_) => {
+            // 全仓 18 处调用方都用 `if let Ok(Some(..))` / `.ok().flatten()` 取值，
+            // 返回 Err 会被静默吞掉并回退 SFTP，等于没有修复且改变了函数契约。
+            // 在不改动这 18 处业务分派、保持既有功能逻辑的前提下，只记录可诊断日志。
+            // 刻意不把 serde 错误详情写进日志/返回值，避免配置里的凭据片段外泄。
+            tracing::warn!(
+                "[FTP] server {} 的 file_transfer_config 无法解析，已按 SFTP 处理；请重新保存该服务器的传输设置",
+                server_id
+            );
+            return Ok(None);
+        }
     };
     let proto = cfg.protocol.trim().to_ascii_lowercase();
     if proto != "ftp" && proto != "ftps" {
@@ -488,10 +498,16 @@ impl FtpSession {
     async fn read_response(&mut self) -> Result<(u16, String), String> {
         let mut full_msg = String::new();
         let mut expected_code: Option<u16> = None;
+        // 多行响应的累积总量必须有上限（单行上限只约束单行），
+        // 否则持续输出非终止格式的服务端会让缓冲无界增长。
+        const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 
         loop {
             let raw = self.read_line_raw().await?;
             let line = self.decode_bytes(&raw);
+            if full_msg.len() + line.len() > MAX_RESPONSE_BYTES {
+                return Err("FTP 响应超过安全上限，已中止读取".to_string());
+            }
             full_msg.push_str(&line);
 
             let bytes = line.as_bytes();
@@ -1005,7 +1021,12 @@ pub async fn ftp_list_dir(cfg: ResolvedFtpConfig, dir_path: &str) -> Result<Vec<
     match mlsd_res {
         Ok(mut stream) => {
             let mut buf = Vec::new();
-            let _ = stream.read_to_end(&mut buf).await;
+            // 目录列表数据量完全由远端决定，必须限长，避免超大目录撑爆内存
+            const MAX_DIR_LISTING_BYTES: u64 = 64 * 1024 * 1024;
+            let _ = (&mut stream)
+                .take(MAX_DIR_LISTING_BYTES)
+                .read_to_end(&mut buf)
+                .await;
             let _ = session.finish_data_transfer(stream).await;
             let text = session.decode_bytes(&buf);
             for line in text.lines() {
@@ -1020,7 +1041,12 @@ pub async fn ftp_list_dir(cfg: ResolvedFtpConfig, dir_path: &str) -> Result<Vec<
                 Err(_) => session.open_data_stream("LIST").await?,
             };
             let mut buf = Vec::new();
-            let _ = stream.read_to_end(&mut buf).await;
+            // 目录列表数据量完全由远端决定，必须限长，避免超大目录撑爆内存
+            const MAX_DIR_LISTING_BYTES: u64 = 64 * 1024 * 1024;
+            let _ = (&mut stream)
+                .take(MAX_DIR_LISTING_BYTES)
+                .read_to_end(&mut buf)
+                .await;
             let _ = session.finish_data_transfer(stream).await;
             let text = session.decode_bytes(&buf);
             for line in text.lines() {
@@ -1295,6 +1321,7 @@ pub async fn ftp_download_file(
     loop {
         if let Some(flag) = cancel {
             if flag.load(Ordering::Relaxed) {
+                session.quit().await;
                 return Err("Transfer canceled by user".to_string());
             }
         }
@@ -1382,6 +1409,7 @@ pub async fn ftp_upload_file(
     loop {
         if let Some(flag) = cancel {
             if flag.load(Ordering::Relaxed) {
+                session.quit().await;
                 return Err("Transfer canceled by user".to_string());
             }
         }

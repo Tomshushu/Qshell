@@ -101,7 +101,13 @@ const TABLE_GRID_STYLE = {
  * 规范化相对路径为统一的 POSIX 分隔符并去除首尾斜杠
  */
 function normalizeRelativePath(rel: string): string {
-  return rel.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  const normalized = rel.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  // 相对路径来自远程 ls / 目录扫描结果，不能让路径穿越段参与后续
+  // 递归删除（executeSync 的 delete 带 recursive: true）。
+  const segments = normalized.split("/");
+  if (segments.some((seg) => seg === ".." || seg === ".")) return "";
+  if (/^[a-zA-Z]:/.test(normalized)) return "";
+  return normalized;
 }
 
 /**
@@ -178,6 +184,8 @@ export function DirectorySyncWizardDialog({
     errors: string[];
   } | null>(null);
   const cancelSyncRef = useRef<boolean>(false);
+  // 记录「当前 diffItems 来自哪一次成功扫描」，防止旧差异列表被用到新路径上
+  const scanContextRef = useRef<string>("");
 
   // 镜像删除确认弹窗
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<boolean>(false);
@@ -201,6 +209,16 @@ export function DirectorySyncWizardDialog({
       : leftServerName || "Remote Left"
     : rightServerName || "Remote Server";
   const targetPath = isTargetLeft ? leftPath : rightPath;
+
+  // 扫描上下文：任一端目录/服务器或同步方向变化，旧差异列表即失效
+  const scanKey = [
+    leftSideType,
+    leftServerId ?? "",
+    leftPath,
+    rightServerId ?? "",
+    rightPath,
+    direction,
+  ].join("\u0001");
 
   // 监听 Tauri 后端实时目录树扫描进度事件
   useEffect(() => {
@@ -231,6 +249,8 @@ export function DirectorySyncWizardDialog({
 
   // 执行目录扫描
   const handleScan = useCallback(async () => {
+    // 扫描开始前先作废上一次结果：失败 / 超限 / 未完成时 executeSync 一律阻断
+    scanContextRef.current = "";
     if (!backend?.files?.scanDirectoryTree) {
       setScanError("后端目录扫描接口未就绪");
       return;
@@ -260,6 +280,8 @@ export function DirectorySyncWizardDialog({
 
       setSourceFiles(isTargetLeft ? rightResults : leftResults);
       setTargetFiles(isTargetLeft ? leftResults : rightResults);
+      // 只有完整扫描成功，才允许基于当前上下文执行同步
+      scanContextRef.current = scanKey;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setScanError(msg);
@@ -276,17 +298,40 @@ export function DirectorySyncWizardDialog({
     rightPath,
     isTargetLeft,
     toast,
+    scanKey,
   ]);
 
-  // 当对话框打开时自动扫描一次
-  const scanTriggeredRef = useRef<boolean>(false);
+  // 组件在 SFTP 面板中常驻挂载，必须每次打开都重新扫描、每次关闭都清空结果，
+  // 否则「上一次的差异列表」会被套用到「当前的新路径」上执行删除 / 覆盖。
+  const prevOpenRef = useRef<boolean>(false);
   useEffect(() => {
-    if (open && !scanTriggeredRef.current) {
-      scanTriggeredRef.current = true;
-      cancelSyncRef.current = false;
-      setIsSyncing(false);
+    const wasOpen = prevOpenRef.current;
+    prevOpenRef.current = open;
+
+    if (open && !wasOpen) {
+      scanContextRef.current = "";
+      setSourceFiles([]);
+      setTargetFiles([]);
+      setDiffItems([]);
+      setScanError(null);
+      setScanProgressInfo(null);
       setSyncProgress(null);
+      setIsSyncing(false);
+      setShowDeleteConfirm(false);
+      cancelSyncRef.current = false;
       void handleScan();
+      return;
+    }
+    if (!open && wasOpen) {
+      scanContextRef.current = "";
+      cancelSyncRef.current = true;
+      setSourceFiles([]);
+      setTargetFiles([]);
+      setDiffItems([]);
+      setScanError(null);
+      setSyncProgress(null);
+      setIsSyncing(false);
+      setShowDeleteConfirm(false);
     }
   }, [open, handleScan]);
 
@@ -341,10 +386,15 @@ export function DirectorySyncWizardDialog({
         } else {
           // 比较文件
           const sizeMatch = src.size === tgt.size;
-          const srcTime = src.modifiedTime ? new Date(src.modifiedTime).getTime() : 0;
-          const tgtTime = tgt.modifiedTime ? new Date(tgt.modifiedTime).getTime() : 0;
+          const srcTimeRaw = src.modifiedTime ? new Date(src.modifiedTime).getTime() : NaN;
+          const tgtTimeRaw = tgt.modifiedTime ? new Date(tgt.modifiedTime).getTime() : NaN;
+          const hasBothTimes = Number.isFinite(srcTimeRaw) && Number.isFinite(tgtTimeRaw);
+          const srcTime = hasBothTimes ? srcTimeRaw : 0;
+          const tgtTime = hasBothTimes ? tgtTimeRaw : 0;
+          // 时间戳缺失 / 不可解析时不能判为 identical：否则「同大小不同内容」
+          // 会被跳过导致漏传。保守按时间不匹配处理，由用户确认是否覆盖。
           // SFTP/系统时间戳容差 2000ms
-          const timeMatch = Math.abs(srcTime - tgtTime) <= 2000;
+          const timeMatch = hasBothTimes && Math.abs(srcTime - tgtTime) <= 2000;
 
           if (!sizeMatch) {
             category = "size_mismatch";
@@ -514,6 +564,19 @@ export function DirectorySyncWizardDialog({
   // 真正执行同步任务
   const executeSync = async () => {
     if (!backend?.files) return;
+    // 差异列表必须来自「当前目录 + 当前方向」的这一次完整扫描。
+    // 目录被切换、扫描失败或后端因超限中止时，绝不能拿旧列表执行删除 / 覆盖。
+    if (scanContextRef.current !== scanKey) {
+      toast.error("目录或同步方向已变化，差异列表已失效，请重新扫描后再同步");
+      void handleScan();
+      return;
+    }
+    if (scanError || isScanning) {
+      toast.error(
+        scanError ? `扫描未完成，已禁止同步：${scanError}` : "正在扫描中，请等待扫描完成"
+      );
+      return;
+    }
     const selectedItems = diffItems.filter((it) => it.selected && it.action !== "none");
     if (selectedItems.length === 0) {
       toast.warning("没有选中的待同步项");
