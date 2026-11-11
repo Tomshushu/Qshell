@@ -37,9 +37,14 @@ vi.mock("@/i18n", () => ({
         compose_btn_send: "发送",
         compose_btn_expand: "展开为撰写窗口",
         compose_btn_collapse: "收起为单行撰写栏",
-        compose_history_title: "撰写历史记录",
-        compose_history_empty: "暂无撰写历史",
-        compose_history_clear: "清空历史",
+        compose_history_title: "历史撰写",
+        compose_history_empty: "暂无历史撰写记录",
+        compose_history_clear: "全部删除",
+        compose_history_delete_item: "删除此条",
+        compose_history_clear_confirm: "确定要全部删除所有历史撰写记录吗？此操作无法撤销。",
+        compose_history_apply: "填入输入区",
+        compose_history_copied: "已复制到剪贴板",
+        compose_history_search_placeholder: "搜索历史撰写记录...",
         compose_save_as_fav: "保存为快捷命令",
         compose_danger_title: "高危多机广播二次确认",
         compose_danger_warning: `您即将向 ${params?.count || 1} 台服务器广播执行以下指令：`,
@@ -483,5 +488,75 @@ describe("ComposeBar Component (终端命令撰写与多机分发系统)", () =>
       // Blue tab should NOT receive it
       expect(sshService.writeToShell).not.toHaveBeenCalledWith("session-tab-blue-1", "echo hello-red\r");
     });
+  });
+
+  it("opens history dialog, deletes specific item, and fills command on select", async () => {
+    useAppStore.setState({
+      terminalComposeHistory: ["git status", "docker ps -a", "htop"],
+    });
+
+    render(
+      <ComposeBar
+        activeTermId="t1"
+        activeSessionId="sess-1"
+        tabId="tab-1"
+      />
+    );
+
+    // Click the history button (Clock icon with title "历史撰写")
+    const historyBtn = screen.getByTitle("历史撰写");
+    fireEvent.click(historyBtn);
+
+    // Dialog should be open
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.getByText("git status")).toBeTruthy();
+    expect(screen.getByText("docker ps -a")).toBeTruthy();
+    expect(screen.getByText("htop")).toBeTruthy();
+
+    // Delete a specific history item ("docker ps -a")
+    const deleteButtons = screen.getAllByTitle("删除此条");
+    expect(deleteButtons.length).toBe(3);
+    fireEvent.click(deleteButtons[1]); // Delete second item
+
+    expect(useAppStore.getState().terminalComposeHistory).toEqual(["git status", "htop"]);
+
+    // Fill "git status" into input
+    const fillButtons = screen.getAllByText("填入");
+    fireEvent.click(fillButtons[0]);
+
+    const input = screen.getByPlaceholderText(
+      "在此输入要发送到终端的命令... (Enter 发送，Shift+Enter 换行，Esc 退出)"
+    ) as HTMLInputElement;
+    expect(input.value).toBe("git status");
+  });
+
+  it("clears all history items via confirmation dialog in history modal", async () => {
+    useAppStore.setState({
+      terminalComposeHistory: ["command 1", "command 2"],
+    });
+
+    render(
+      <ComposeBar
+        activeTermId="t1"
+        activeSessionId="sess-1"
+        tabId="tab-1"
+      />
+    );
+
+    fireEvent.click(screen.getByTitle("历史撰写"));
+
+    // Click "全部删除" button in header
+    const clearAllBtn = screen.getByText("全部删除");
+    fireEvent.click(clearAllBtn);
+
+    // Confirm dialog should appear
+    expect(screen.getByText("确定要全部删除所有历史撰写记录吗？此操作无法撤销。")).toBeTruthy();
+
+    // Click confirm in the destructive ConfirmDialog
+    const confirmBtns = screen.getAllByText("全部删除");
+    // The last button is the one inside ConfirmDialog footer
+    fireEvent.click(confirmBtns[confirmBtns.length - 1]);
+
+    expect(useAppStore.getState().terminalComposeHistory).toEqual([]);
   });
 });

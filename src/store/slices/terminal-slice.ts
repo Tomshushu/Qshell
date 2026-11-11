@@ -250,5 +250,12 @@ export const createTerminalSlice: StateCreator<
         terminalComposeHistory: [trimmed, ...filtered].slice(0, 50),
       };
     }),
+  removeTerminalComposeHistory: (indexOrText) =>
+    set((state) => ({
+      terminalComposeHistory:
+        typeof indexOrText === "number"
+          ? state.terminalComposeHistory.filter((_, i) => i !== indexOrText)
+          : state.terminalComposeHistory.filter((item) => item !== indexOrText),
+    })),
   clearTerminalComposeHistory: () => set({ terminalComposeHistory: [] }),
 });

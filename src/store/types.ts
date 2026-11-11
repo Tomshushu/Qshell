@@ -319,6 +319,7 @@ export interface TerminalSlice {
   /** 撰写历史记录列表（最近 50 条） */
   terminalComposeHistory: string[];
   addTerminalComposeHistory: (text: string) => void;
+  removeTerminalComposeHistory: (indexOrText: number | string) => void;
   clearTerminalComposeHistory: () => void;
 }
 

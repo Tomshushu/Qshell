@@ -50,6 +50,7 @@ import { evaluateCommandRisk } from "@/services/ai/risk-evaluator";
 import { playSound, SoundType } from "@/lib/sound";
 import { useToast } from "@/components/ui/toast";
 import { QuickCommandDialog } from "./quick-command-dialog";
+import { ComposeHistoryDialog } from "./compose-history-dialog";
 import type { FavoriteCommand } from "@/services/api/types";
 import { collectGroupIds } from "@/utils/split-layout";
 
@@ -100,7 +101,6 @@ export function ComposeBar({
   const setConvertEscapes = useAppStore((s) => s.setTerminalComposeConvertEscapes);
   const history = useAppStore((s) => s.terminalComposeHistory);
   const addHistory = useAppStore((s) => s.addTerminalComposeHistory);
-  const clearHistory = useAppStore((s) => s.clearTerminalComposeHistory);
 
   // Local text input and undo/redo stacks
   const [text, setText] = useState("");
@@ -118,8 +118,8 @@ export function ComposeBar({
   const [saveFavOpen, setSaveFavOpen] = useState(false);
   const [favToCreate, setFavToCreate] = useState<FavoriteCommand | null>(null);
 
-  // History popover / dropdown state
-  const [historyOpen, setHistoryOpen] = useState(false);
+  // History modal state
+  const [historyModalOpen, setHistoryModalOpen] = useState(false);
 
   const [isResizing, setIsResizing] = useState(false);
   const resizeStartY = useRef(0);
@@ -830,54 +830,15 @@ export function ComposeBar({
                   <RotateCw className="h-3.5 w-3.5" />
                 </button>
 
-                {/* 历史记录下拉 */}
-                <DropdownMenu open={historyOpen} onOpenChange={setHistoryOpen}>
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      type="button"
-                      className="h-6 w-6 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors cursor-pointer"
-                      title={t("compose_history_title")}
-                    >
-                      <Clock className="h-3.5 w-3.5" />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="w-80 max-h-64 overflow-y-auto text-xs">
-                    <div className="flex items-center justify-between px-2 py-1.5 border-b border-border/40">
-                      <span className="text-[11px] font-semibold text-muted-foreground">
-                        {t("compose_history_title")}
-                      </span>
-                      {history.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={clearHistory}
-                          className="flex items-center gap-1 text-[10px] text-destructive hover:underline cursor-pointer"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                          <span>{t("compose_history_clear")}</span>
-                        </button>
-                      )}
-                    </div>
-                    {history.length === 0 ? (
-                      <div className="p-3 text-center text-muted-foreground/60 text-xs">
-                        {t("compose_history_empty")}
-                      </div>
-                    ) : (
-                      history.map((h, i) => (
-                        <DropdownMenuItem
-                          key={i}
-                          onClick={() => {
-                            setText(h);
-                            setHistoryOpen(false);
-                          }}
-                          className="cursor-pointer font-mono text-[11px] truncate py-1.5"
-                          title={h}
-                        >
-                          <span className="truncate">{h}</span>
-                        </DropdownMenuItem>
-                      ))
-                    )}
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                {/* 历史撰写 */}
+                <button
+                  type="button"
+                  onClick={() => setHistoryModalOpen(true)}
+                  className="h-6 w-6 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors cursor-pointer"
+                  title={t("compose_history_title")}
+                >
+                  <Clock className="h-3.5 w-3.5" />
+                </button>
 
                 {/* 存为快捷命令 */}
                 <button
@@ -1194,6 +1155,16 @@ export function ComposeBar({
 
             {/* 右侧操作按钮群 */}
             <div className="flex items-center gap-1 shrink-0">
+              {/* 历史撰写 */}
+              <button
+                type="button"
+                onClick={() => setHistoryModalOpen(true)}
+                className="h-6 w-6 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors cursor-pointer"
+                title={t("compose_history_title")}
+              >
+                <Clock className="h-3.5 w-3.5" />
+              </button>
+
               {/* 展开为多行撰写窗口按钮 */}
               <button
                 type="button"
@@ -1369,6 +1340,21 @@ export function ComposeBar({
           }}
         />
       )}
+      {/* 历史撰写弹窗 */}
+      <ComposeHistoryDialog
+        open={historyModalOpen}
+        onOpenChange={setHistoryModalOpen}
+        onSelect={(selectedCmd) => {
+          setText(selectedCmd);
+          setTimeout(() => {
+            if (expanded) {
+              textareaRef.current?.focus();
+            } else {
+              inputRef.current?.focus();
+            }
+          }, 50);
+        }}
+      />
     </>
   );
 }
