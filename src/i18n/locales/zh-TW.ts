@@ -1946,7 +1946,7 @@ export default {
     compose_bar_placeholder_multi: "在此編寫或貼上多行 Shell 指令碼... (按下方按鈕或快捷鍵批量傳送)",
     compose_target_active: "僅傳送到當前工作階段",
     compose_target_split: "傳送到當前可見視窗",
-    compose_target_all: "傳送到全部已連線工作階段 (多机广播)",
+    compose_target_all: "傳送到全部已連線工作階段",
     compose_target_badge_broadcast: "廣播模式: {count} 台終端",
     compose_send_enter: "使用 Enter 鍵傳送",
     compose_send_ctrl_enter: "使用 Ctrl+Enter 鍵傳送",

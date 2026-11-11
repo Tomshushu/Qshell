@@ -4416,7 +4416,7 @@ export default {
   compose_bar_placeholder_multi: "在此编写或粘贴多行 Shell 脚本... (按下方按钮或快捷键批量发送)",
   compose_target_active: "仅发送到当前会话",
   compose_target_split: "发送到当前可见窗口",
-  compose_target_all: "发送到全部已连接会话 (多机广播)",
+  compose_target_all: "发送到全部已连接会话",
   compose_target_badge_broadcast: "广播模式: {count} 台终端",
   compose_send_enter: "使用 Enter 键发送",
   compose_send_ctrl_enter: "使用 Ctrl+Enter 键发送",
