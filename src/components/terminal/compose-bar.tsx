@@ -53,6 +53,7 @@ import { QuickCommandDialog } from "./quick-command-dialog";
 import { ComposeHistoryDialog } from "./compose-history-dialog";
 import type { FavoriteCommand } from "@/services/api/types";
 import { collectGroupIds } from "@/utils/split-layout";
+import { getServerConnectionFlags } from "@/services/connection-targets";
 
 interface TargetInfo {
   tabId: string;
@@ -124,17 +125,57 @@ export function ComposeBar({
   const [isResizing, setIsResizing] = useState(false);
   const resizeStartY = useRef(0);
   const resizeStartHeight = useRef(height);
+  // 拖动期间只用本地预览高度，松手才写持久化 store，避免每帧序列化 localStorage
+  const [dragHeight, setDragHeight] = useState<number | null>(null);
+  const pendingHeightRef = useRef<number | null>(null);
+  const effectiveHeight = dragHeight ?? height;
 
   const inputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
+  // 瞬态资源：聚焦定时器、拖动监听器、广播发送代号
+  const focusTimersRef = useRef<{
+    raf?: number;
+    timers: ReturnType<typeof setTimeout>[];
+  }>({ timers: [] });
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
+  const dispatchGenRef = useRef(0);
+
   const tabs = useAppStore((s) => s.tabs);
+  const servers = useAppStore((s) => s.servers);
   const activeTabId = useAppStore((s) => s.activeTabId);
   const workspaces = useAppStore((s) => s.workspaces);
   const layout = useAppStore((s) => s.layout);
 
+  // 卸载或关闭撰写栏时统一撤销瞬态资源，避免监听器 / 定时器 / 未完成的广播残留
+  const clearTransient = useCallback(() => {
+    const ft = focusTimersRef.current;
+    if (ft.raf !== undefined) {
+      cancelAnimationFrame(ft.raf);
+      ft.raf = undefined;
+    }
+    ft.timers.forEach((id) => clearTimeout(id));
+    ft.timers = [];
+    resizeCleanupRef.current?.();
+    resizeCleanupRef.current = null;
+    dispatchGenRef.current += 1;
+    setDragHeight(null);
+    setIsResizing(false);
+    pendingHeightRef.current = null;
+  }, []);
+
+  useEffect(() => clearTransient, [clearTransient]);
+
+  useEffect(() => {
+    if (!visible) clearTransient();
+  }, [visible, clearTransient]);
+
   // Focus input helper across microtask, RAF, and timeouts
   const focusInput = useCallback(() => {
+    const ft = focusTimersRef.current;
+    if (ft.raf !== undefined) cancelAnimationFrame(ft.raf);
+    ft.timers.forEach((id) => clearTimeout(id));
+    ft.timers = [];
     const doFocus = () => {
       if (expanded) {
         textareaRef.current?.focus();
@@ -143,9 +184,8 @@ export function ComposeBar({
       }
     };
     doFocus();
-    requestAnimationFrame(doFocus);
-    setTimeout(doFocus, 30);
-    setTimeout(doFocus, 80);
+    ft.raf = requestAnimationFrame(doFocus);
+    ft.timers.push(setTimeout(doFocus, 30), setTimeout(doFocus, 80));
   }, [expanded]);
 
   // Return focus to active terminal (calls custom onFocusTerminal or global event)
@@ -322,12 +362,36 @@ export function ComposeBar({
 
   // Compute resolved target sessions
   const getResolvedTargets = useCallback((): TargetInfo[] => {
-    const { tabs, servers, activeTabId } = useAppStore.getState();
     const effectiveTabId = tabId || activeTabId;
     const currentTab = tabs.find((t) => t.id === effectiveTabId);
     const currentServer = currentTab ? servers.find((s) => s.id === currentTab.serverId) : undefined;
     const serverName = currentServer?.name || currentTab?.serverName || "Local";
     const host = currentServer?.host || "127.0.0.1";
+
+    // 广播目标必须排除串口 / RDP / 设备管理类（BMC、ESXi、K8s）会话：
+    // 它们不是 shell，写入命令会变成字节流或发到非预期设备。
+    // 规则与 workspace-slice 的 broadcastAllTabs / broadcastToSplit / broadcastToColor 一致。
+    const isEligible = (tab: (typeof tabs)[number]): boolean => {
+      if (tab.module !== "terminal") return false;
+      const sv = servers.find((s) => s.id === tab.serverId);
+      if (!sv) return false;
+      const flags = getServerConnectionFlags(sv.targetType, sv.protocol);
+      return (
+        !flags.isSerialServer &&
+        !flags.isDeviceManagedServer &&
+        sv.protocol !== "rdp"
+      );
+    };
+
+    const toTarget = (tab: (typeof tabs)[number], sid: string): TargetInfo => {
+      const sv = servers.find((s) => s.id === tab.serverId);
+      return {
+        tabId: tab.id,
+        sessionId: sid,
+        serverName: sv?.name || tab.serverName || "Terminal",
+        host: sv?.host || "—",
+      };
+    };
 
     if (target === "active") {
       const effSessionId = activeSessionId || (currentTab ? sshService.getTabActiveSessionId(currentTab.id) : undefined);
@@ -347,39 +411,25 @@ export function ComposeBar({
     if (target === "split") {
       const results: TargetInfo[] = [];
       const currentWsId = currentTab?.workspaceId;
-      // 找出当前工作区（当前分屏窗体）下的所有终端会话
-      const splitTabs = tabs.filter(
-        (t) => (!currentWsId || t.workspaceId === currentWsId) && t.module === "terminal"
+      // 与 store 的 broadcastToSplit 一致：无 workspaceId 时只取当前 tab，
+      // 绝不能退化成「全部终端」把广播范围反向扩大。
+      const splitTabs = tabs.filter((tb) =>
+        currentWsId ? tb.workspaceId === currentWsId : tb.id === effectiveTabId
       );
-      for (const t of splitTabs) {
-        const sid = sshService.getTabActiveSessionId(t.id);
-        if (sid && sshService.isSessionAlive(sid)) {
-          const sv = servers.find((s) => s.id === t.serverId);
-          results.push({
-            tabId: t.id,
-            sessionId: sid,
-            serverName: sv?.name || t.serverName || "Terminal",
-            host: sv?.host || "—",
-          });
-        }
+      for (const tb of splitTabs) {
+        if (!isEligible(tb)) continue;
+        const sid = sshService.getTabActiveSessionId(tb.id);
+        if (sid && sshService.isSessionAlive(sid)) results.push(toTarget(tb, sid));
       }
       return results;
     }
 
     if (target === "all") {
       const results: TargetInfo[] = [];
-      for (const t of tabs) {
-        if (t.module !== "terminal") continue;
-        const sid = sshService.getTabActiveSessionId(t.id);
-        if (sid && sshService.isSessionAlive(sid)) {
-          const sv = servers.find((s) => s.id === t.serverId);
-          results.push({
-            tabId: t.id,
-            sessionId: sid,
-            serverName: sv?.name || t.serverName || "Terminal",
-            host: sv?.host || "—",
-          });
-        }
+      for (const tb of tabs) {
+        if (!isEligible(tb)) continue;
+        const sid = sshService.getTabActiveSessionId(tb.id);
+        if (sid && sshService.isSessionAlive(sid)) results.push(toTarget(tb, sid));
       }
       return results;
     }
@@ -387,28 +437,18 @@ export function ComposeBar({
     if (target.startsWith("color:")) {
       const targetColor = target.replace("color:", "").toLowerCase();
       const results: TargetInfo[] = [];
-      const { workspaces } = useAppStore.getState();
-      for (const t of tabs) {
-        if (t.module !== "terminal") continue;
-        const effColor = t.color || (t.workspaceId ? workspaces[t.workspaceId]?.color : undefined);
-        if (effColor?.toLowerCase() === targetColor) {
-          const sid = sshService.getTabActiveSessionId(t.id);
-          if (sid && sshService.isSessionAlive(sid)) {
-            const sv = servers.find((s) => s.id === t.serverId);
-            results.push({
-              tabId: t.id,
-              sessionId: sid,
-              serverName: sv?.name || t.serverName || "Terminal",
-              host: sv?.host || "—",
-            });
-          }
-        }
+      for (const tb of tabs) {
+        if (!isEligible(tb)) continue;
+        const effColor = tb.color || (tb.workspaceId ? workspaces[tb.workspaceId]?.color : undefined);
+        if (effColor?.toLowerCase() !== targetColor) continue;
+        const sid = sshService.getTabActiveSessionId(tb.id);
+        if (sid && sshService.isSessionAlive(sid)) results.push(toTarget(tb, sid));
       }
       return results;
     }
 
     return [];
-  }, [target, activeSessionId, tabId]);
+  }, [target, activeSessionId, tabId, tabs, servers, workspaces, activeTabId]);
 
   const resolvedTargets = useMemo(() => getResolvedTargets(), [getResolvedTargets]);
 
@@ -432,6 +472,10 @@ export function ComposeBar({
     async (cmd: string, targets: TargetInfo[]) => {
       if (!cmd.trim() || targets.length === 0) return;
 
+      // 每次发送取一个代号；关闭撰写栏 / 卸载 / 发起新发送都会让旧代号失效，
+      // 避免「多行脚本 + 多目标」发送途中会话已关闭却继续写入剩余目标。
+      const generation = ++dispatchGenRef.current;
+
       const formatted = formatCommand(cmd);
       addHistory(cmd);
       playSound(SoundType.Click);
@@ -439,11 +483,13 @@ export function ComposeBar({
       const isMultiLine = formatted.includes("\n");
 
       for (const t of targets) {
+        if (generation !== dispatchGenRef.current) return;
         try {
           if (lineByLine && isMultiLine) {
             // 逐行延时发送
             const lines = formatted.split(/\r?\n/);
             for (const line of lines) {
+              if (generation !== dispatchGenRef.current) return;
               await sshService.writeToShell(t.sessionId, line + "\r");
               await new Promise((resolve) => setTimeout(resolve, 20));
             }
@@ -465,6 +511,7 @@ export function ComposeBar({
         }
       }
 
+      if (generation !== dispatchGenRef.current) return;
       setText("");
       setHistoryIndex(-1);
       setUndoStack([]);
@@ -560,29 +607,61 @@ export function ComposeBar({
   // Drag handle for resizing multiline pane
   const handleResizeStart = (e: React.MouseEvent) => {
     e.preventDefault();
+    // 撤销上一次可能残留的拖动监听（重复触发 / 拖动中关闭）
+    resizeCleanupRef.current?.();
+    resizeCleanupRef.current = null;
     setIsResizing(true);
     resizeStartY.current = e.clientY;
-    resizeStartHeight.current = height;
+    resizeStartHeight.current = effectiveHeight;
+    pendingHeightRef.current = null;
 
+    let rafId: number | undefined;
     const onMouseMove = (ev: MouseEvent) => {
       const deltaY = resizeStartY.current - ev.clientY;
       const newHeight = Math.max(
         MIN_COMPOSE_HEIGHT,
         Math.min(MAX_COMPOSE_HEIGHT, resizeStartHeight.current + deltaY)
       );
-      setHeight(newHeight);
+      // 拖动中只更新本地预览并由 RAF 合帧，松手才写持久化 store
+      pendingHeightRef.current = newHeight;
+      if (rafId === undefined) {
+        rafId = requestAnimationFrame(() => {
+          rafId = undefined;
+          if (pendingHeightRef.current !== null) {
+            setDragHeight(pendingHeightRef.current);
+          }
+        });
+      }
     };
 
-    const onMouseUp = () => {
+    function onMouseUp() {
       setIsResizing(false);
+      if (rafId !== undefined) cancelAnimationFrame(rafId);
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
+      resizeCleanupRef.current = null;
+      if (pendingHeightRef.current !== null) {
+        setHeight(pendingHeightRef.current);
+      }
+      pendingHeightRef.current = null;
+      setDragHeight(null);
       // Trigger resize for terminal canvas
       window.dispatchEvent(new Event("resize"));
+    }
+
+    const cleanup = () => {
+      if (rafId !== undefined) cancelAnimationFrame(rafId);
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      resizeCleanupRef.current = null;
+      pendingHeightRef.current = null;
+      setDragHeight(null);
+      setIsResizing(false);
     };
 
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseup", onMouseUp);
+    resizeCleanupRef.current = cleanup;
   };
 
   // Save current text to quick command
@@ -624,7 +703,7 @@ export function ComposeBar({
         data-terminal-compose-bar="true"
         onClick={handleContainerClick}
         style={{
-          height: expanded ? `${height}px` : undefined,
+          height: expanded ? `${effectiveHeight}px` : undefined,
         }}
       >
         {/* Multiline Resize Bar (Top Handle) */}

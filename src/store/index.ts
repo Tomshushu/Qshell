@@ -123,6 +123,14 @@ export const useAppStore = create<AppState>()(
         if (state) {
           state.isAppLocked = false;
         }
+        // 持久化数据可能来自旧版本或被外部改写：校验撰写栏历史形状，
+        // 避免非数组/非字符串项导致历史弹窗与自动补全渲染异常。
+        if (state) {
+          const raw = (state as { terminalComposeHistory?: unknown }).terminalComposeHistory;
+          state.terminalComposeHistory = Array.isArray(raw)
+            ? raw.filter((item): item is string => typeof item === "string").slice(0, 50)
+            : [];
+        }
         // 迁移：自定义字体功能已移除，将不在预设列表中的字体重置为默认预设
         if (state?.terminalFontFamily) {
           const presetValues = FONT_PRESETS.map((f) => f.value);

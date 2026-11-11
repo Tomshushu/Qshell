@@ -558,4 +558,79 @@ describe("ComposeBar Component (终端命令撰写与多机分发系统)", () =>
 
     expect(useAppStore.getState().terminalComposeHistory).toEqual([]);
   });
+
+  it("excludes serial, RDP, and BMC devices when broadcasting to all or split targets", async () => {
+    useAppStore.setState({
+      tabs: [
+        {
+          id: "tab-ssh-1",
+          serverId: "srv-ssh",
+          module: "terminal",
+          title: "SSH Server",
+          workspaceId: "ws-1",
+        },
+        {
+          id: "tab-serial-1",
+          serverId: "srv-serial",
+          module: "terminal",
+          title: "Serial COM3",
+          workspaceId: "ws-1",
+        },
+        {
+          id: "tab-rdp-1",
+          serverId: "srv-rdp",
+          module: "terminal",
+          title: "Windows RDP",
+          workspaceId: "ws-1",
+        },
+      ] as any,
+      servers: [
+        {
+          id: "srv-ssh",
+          name: "SSH Server",
+          host: "10.0.0.1",
+          protocol: "ssh",
+          targetType: "linux",
+        },
+        {
+          id: "srv-serial",
+          name: "Serial COM3",
+          host: "COM3",
+          protocol: "serial",
+          targetType: "serial",
+        },
+        {
+          id: "srv-rdp",
+          name: "Windows RDP",
+          host: "10.0.0.2",
+          protocol: "rdp",
+          targetType: "windows",
+        },
+      ] as any,
+      terminalComposeTarget: "all",
+    });
+
+    render(
+      <ComposeBar
+        activeTermId="t1"
+        activeSessionId="session-tab-ssh-1"
+        tabId="tab-ssh-1"
+      />
+    );
+
+    const input = screen.getByPlaceholderText(
+      "在此输入要发送到终端的命令... (Enter 发送，Shift+Enter 换行，Esc 退出)"
+    );
+
+    fireEvent.change(input, { target: { value: "whoami" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      // Only SSH session should receive the command
+      expect(sshService.writeToShell).toHaveBeenCalledWith("session-tab-ssh-1", "whoami\r");
+      // Serial and RDP sessions must be strictly excluded from shell broadcast
+      expect(sshService.writeToShell).not.toHaveBeenCalledWith("session-tab-serial-1", "whoami\r");
+      expect(sshService.writeToShell).not.toHaveBeenCalledWith("session-tab-rdp-1", "whoami\r");
+    });
+  });
 });

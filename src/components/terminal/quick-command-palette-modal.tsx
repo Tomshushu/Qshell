@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { useTranslation } from "@/i18n";
+import { useShortcutStore } from "@/store/shortcut-store";
 import { cn } from "@/lib/utils";
 import { sshService } from "@/services/ssh-service";
 import type { FavoriteCommand } from "@/services/api/types";
@@ -136,24 +137,34 @@ export function QuickCommandPaletteModal() {
     return unsub;
   }, [loadCommands]);
 
-  // 全局事件监听与快捷键触发 (Alt+C)
+  // 快捷键处理：capture 阶段拦截以阻止冒泡到全局 useKeyboardShortcuts 造成
+  // 重复 toggle；同时尊重用户自定义绑定，并放过输入框内的 AltGr+C 等字符输入。
   useEffect(() => {
     const handleToggle = () => {
       setOpen((prev) => !prev);
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      const isAltC = e.altKey && (e.key === "c" || e.key === "C" || e.code === "KeyC");
-      if (isAltC) {
-        e.preventDefault();
-        e.stopPropagation();
-        setOpen((prev) => !prev);
+      const el = e.target as HTMLElement | null;
+      if (
+        el &&
+        (el.isContentEditable ||
+          el.tagName === "INPUT" ||
+          el.tagName === "TEXTAREA" ||
+          el.tagName === "SELECT")
+      ) {
+        return;
       }
+      if (!useShortcutStore.getState().matchesAction(e, "terminal.quickCommand")) {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      setOpen((prev) => !prev);
     };
 
     window.addEventListener("qshell:toggle-quick-commands", handleToggle);
     window.addEventListener("keydown", handleKeyDown, true);
-
     return () => {
       window.removeEventListener("qshell:toggle-quick-commands", handleToggle);
       window.removeEventListener("keydown", handleKeyDown, true);

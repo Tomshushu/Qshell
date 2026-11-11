@@ -45,13 +45,13 @@ export function ComposeHistoryDialog({
 
   // Focus search input when dialog opens
   useEffect(() => {
-    if (open) {
-      setActiveIndex(0);
-      setSearchQuery("");
-      setTimeout(() => {
-        searchInputRef.current?.focus();
-      }, 50);
-    }
+    if (!open) return;
+    setActiveIndex(0);
+    setSearchQuery("");
+    const timer = setTimeout(() => {
+      searchInputRef.current?.focus();
+    }, 50);
+    return () => clearTimeout(timer);
   }, [open]);
 
   // Filter history based on search query
@@ -60,6 +60,11 @@ export function ComposeHistoryDialog({
     const q = searchQuery.toLowerCase();
     return history.filter((item) => item.toLowerCase().includes(q));
   }, [history, searchQuery]);
+
+  // 删除/清空/搜索过滤后列表变短，夹取选中下标避免越界导致 Enter 无反应
+  useEffect(() => {
+    setActiveIndex((prev) => Math.min(prev, Math.max(0, filteredHistory.length - 1)));
+  }, [filteredHistory.length]);
 
   const handleCopy = async (cmd: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -94,7 +99,7 @@ export function ComposeHistoryDialog({
       setActiveIndex((prev) => (prev - 1 + filteredHistory.length) % filteredHistory.length);
     } else if (e.key === "Enter") {
       e.preventDefault();
-      const current = filteredHistory[activeIndex];
+      const current = filteredHistory[Math.min(activeIndex, filteredHistory.length - 1)];
       if (current) {
         onSelect(current);
         onOpenChange(false);
@@ -110,7 +115,7 @@ export function ComposeHistoryDialog({
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent
           showCloseButton={false}
-          className="max-w-2xl w-[92vw] sm:max-w-2xl p-0 gap-0 overflow-hidden rounded-2xl border border-border/70 bg-background/95 dark:bg-zinc-900/95 backdrop-blur-2xl shadow-2xl flex flex-col"
+          className="w-[640px] max-w-[94vw] h-[480px] max-h-[85vh] p-0 gap-0 overflow-hidden rounded-2xl border border-border/70 dark:border-white/10 bg-background/95 dark:bg-zinc-900/90 backdrop-blur-2xl shadow-[0_20px_60px_-15px_rgba(0,0,0,0.3)] dark:shadow-[0_20px_60px_-15px_rgba(0,0,0,0.8)] flex flex-col"
         >
           <DialogTitle className="sr-only">
             {t("compose_history_title")}
@@ -119,7 +124,7 @@ export function ComposeHistoryDialog({
             搜索与管理历史撰写命令
           </DialogDescription>
 
-          {/* 顶栏：Raycast 风格一体化搜索栏 */}
+          {/* 顶栏：Raycast / Spotlight 极简一体化搜索栏（对标快捷命令中心风格） */}
           <div className="flex items-center gap-3 px-4 py-3 border-b border-border/40 bg-muted/15 shrink-0">
             <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-amber-500/10 text-amber-500 shrink-0">
               <Clock className="h-4 w-4" />
@@ -150,7 +155,7 @@ export function ComposeHistoryDialog({
                   className="h-7 px-2.5 text-xs gap-1.5 rounded-lg border-border/60 hover:bg-destructive/10 hover:text-destructive hover:border-destructive/30 transition-all cursor-pointer shadow-2xs font-normal text-muted-foreground"
                   title="全部删除"
                 >
-                  <Trash2 className="h-3.5 w-3.5" />
+                  <Trash2 className="h-3.5 w-3.5 text-destructive/80" />
                   <span>全部删除</span>
                 </Button>
               )}
@@ -166,15 +171,15 @@ export function ComposeHistoryDialog({
             </div>
           </div>
 
-          {/* 列表展示区 */}
-          <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1 scrollbar-thin max-h-[420px]">
+          {/* 列表展示区（固定舒适高度 + 内部平滑滚动） */}
+          <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1 scrollbar-thin">
             {filteredHistory.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-center text-muted-foreground">
+              <div className="flex flex-col items-center justify-center h-full py-12 text-center text-muted-foreground">
                 <div className="p-3 rounded-xl bg-muted/30 mb-3 border border-border/30">
-                  <Clock className="h-5 w-5 opacity-40" />
+                  <Clock className="h-5 w-5 opacity-40 text-amber-500" />
                 </div>
                 <p className="text-sm font-medium text-foreground/75">
-                  {searchQuery ? "未找到匹配的历史撰写" : t("compose_history_empty")}
+                  {searchQuery ? "未找到匹配的历史撰写" : (t("compose_history_empty") || "暂无历史撰写")}
                 </p>
                 <p className="text-xs text-muted-foreground/70 mt-1 max-w-xs">
                   {searchQuery
@@ -206,7 +211,7 @@ export function ComposeHistoryDialog({
                   >
                     {/* 左侧：彩色原点、命令内容、多行标识 */}
                     <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                      <span className="h-2 w-2 rounded-full shrink-0 ring-2 ring-primary/20 bg-primary/80" />
+                      <span className="h-2 w-2 rounded-full shrink-0 ring-2 ring-amber-500/20 bg-amber-500/80" />
 
                       {/* 命令内容 */}
                       <span className="font-mono text-sm font-medium text-foreground truncate max-w-[360px] sm:max-w-[460px]">
@@ -229,7 +234,7 @@ export function ComposeHistoryDialog({
                       {/* Enter 填入胶囊 */}
                       <span
                         className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] font-mono border bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20"
-                        title="填入"
+                        title="按 Enter 填入"
                       >
                         <CornerDownLeft className="h-3 w-3" />
                         <span className="text-[10px]">Enter 填入</span>

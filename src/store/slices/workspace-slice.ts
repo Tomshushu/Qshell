@@ -765,7 +765,7 @@ export const createWorkspaceSlice: StateCreator<
         const sv = servers.find((s) => s.id === t.serverId);
         const flags = getServerConnectionFlags(sv?.targetType, sv?.protocol);
         // 保留 protocol !== 'rdp' 的原始判断，确保广播范围与重构前一致
-        return sv && !flags.isSerialServer && sv.protocol !== "rdp";
+        return sv && !flags.isSerialServer && !flags.isDeviceManagedServer && sv.protocol !== "rdp";
       })
       .map((t) => t.id);
     playSound(SoundType.Toggle);
@@ -791,7 +791,7 @@ export const createWorkspaceSlice: StateCreator<
         const sv = servers.find((s) => s.id === t.serverId);
         const flags = getServerConnectionFlags(sv?.targetType, sv?.protocol);
         // 保留 protocol !== 'rdp' 的原始判断，确保广播范围与重构前一致
-        return sv && !flags.isSerialServer && sv.protocol !== "rdp";
+        return sv && !flags.isSerialServer && !flags.isDeviceManagedServer && sv.protocol !== "rdp";
       })
       .map((t) => t.id);
     playSound(SoundType.Toggle);
