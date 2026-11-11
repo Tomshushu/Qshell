@@ -77,7 +77,6 @@ export function ComposeHistoryDialog({
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent
           className="max-w-2xl w-[92vw] sm:max-w-2xl max-h-[85vh] flex flex-col p-5 gap-4"
-          aria-describedby="compose-history-description"
         >
           {/* Header */}
           <DialogHeader className="flex flex-row items-center justify-between pb-2 border-b border-border/40 space-y-0">
@@ -85,17 +84,15 @@ export function ComposeHistoryDialog({
               <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center text-primary">
                 <Clock className="h-4 w-4" />
               </div>
-              <div>
-                <DialogTitle className="text-base font-semibold flex items-center gap-2">
-                  <span>{t("compose_history_title")}</span>
-                  <Badge variant="secondary" className="text-[11px] px-1.5 py-0 h-5">
-                    {history.length}
-                  </Badge>
-                </DialogTitle>
-                <DialogDescription id="compose-history-description" className="text-xs text-muted-foreground mt-0.5">
-                  点击任意历史记录可直接填入撰写输入框，支持单独删除和全部清空
-                </DialogDescription>
-              </div>
+              <DialogTitle className="text-base font-semibold flex items-center gap-2">
+                <span>{t("compose_history_title")}</span>
+                <Badge variant="secondary" className="text-[11px] px-1.5 py-0 h-5">
+                  {history.length}
+                </Badge>
+              </DialogTitle>
+              <DialogDescription className="sr-only">
+                {t("compose_history_title")}
+              </DialogDescription>
             </div>
 
             {/* Clear All Button */}
