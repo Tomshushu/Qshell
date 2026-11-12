@@ -244,7 +244,17 @@ export function OverviewModule({
   const lastUpdatedAt = serverMetricsState?.lastUpdatedAt ?? null;
 
   const [loading, setLoading] = useState(false);
-  const [topProcesses, setTopProcesses] = useState<ProcessInfo[]>([]);
+  // 优先复用后台小监控已采集好的进程快照，避免打开大盘时从空列表/零开始等待
+  const [topProcesses, setTopProcesses] = useState<ProcessInfo[]>(
+    () => serverMetricsState?.topProcesses || [],
+  );
+
+  // 当共享 Store 后台推送最新进程快照时，同步更新初始状态
+  useEffect(() => {
+    if (serverMetricsState?.topProcesses?.length && topProcesses.length === 0) {
+      setTopProcesses(serverMetricsState.topProcesses);
+    }
+  }, [serverMetricsState?.topProcesses, topProcesses.length]);
   const [processLoading, setProcessLoading] = useState(false);
   const [processSortKey, setProcessSortKey] = useState<
     "pid" | "cpu" | "memory"
