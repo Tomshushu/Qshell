@@ -339,7 +339,8 @@ function loadSavedMascotMinimized(): boolean {
   } catch {
     /* ignore */
   }
-  return false
+  // 默认小人隐藏停靠在边上（探头态），点击探头或唤起 AI 时展开
+  return true
 }
 
 function saveMascotMinimized(val: boolean): void {

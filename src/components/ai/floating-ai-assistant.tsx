@@ -1699,6 +1699,39 @@ export function FloatingAIAssistant() {
     playSound(SoundType.Open)
   }
 
+  // 若 AI 弹框处于关闭状态、且小人处于展开悬浮态时，若超过 30 秒未打开弹框，自动隐藏到屏幕边缘（探头态）
+  useEffect(() => {
+    if (
+      isFloatingAssistantOpen ||
+      isMascotMinimized ||
+      isMascotDragging ||
+      !enableAiGlobal ||
+      !showFloatingMascot
+    ) {
+      return
+    }
+
+    const timer = setTimeout(() => {
+      const currentY =
+        typeof window !== 'undefined'
+          ? window.innerHeight - mascotOffset.bottom - MASCOT_SIZE / 2
+          : undefined
+      setMascotMinimized(true, typeof currentY === 'number' ? clampMascotPeekY(currentY) : undefined)
+    }, 30_000)
+
+    return () => {
+      clearTimeout(timer)
+    }
+  }, [
+    isFloatingAssistantOpen,
+    isMascotMinimized,
+    isMascotDragging,
+    enableAiGlobal,
+    showFloatingMascot,
+    mascotOffset.bottom,
+    setMascotMinimized,
+  ])
+
   // 计算弹窗当前尺寸 (上下严格限制在主内容区到页脚之间，宽度由用户自由拉伸，不再受 1/3 比例限制)
   const getDialogDimensions = () => {
     if (typeof window === 'undefined') {

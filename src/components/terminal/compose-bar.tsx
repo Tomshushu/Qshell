@@ -210,8 +210,22 @@ export function ComposeBar({
 
   // Global toggle listener: self-contained toggle & focus management
   useEffect(() => {
-    const handleToggle = () => {
+    const handleToggle = (e?: Event) => {
+      const customEvt = e as CustomEvent<{ forceToggle?: boolean }>;
       const isVisible = useAppStore.getState().terminalComposeBarVisible;
+
+      // 显式强制切换（如底栏按钮点击触发），直接切换显隐状态
+      if (customEvt?.detail?.forceToggle) {
+        if (isVisible) {
+          setVisible(false);
+          returnFocus();
+        } else {
+          setVisible(true);
+          focusInput();
+        }
+        return;
+      }
+
       const activeEl = document.activeElement;
       const isInside = Boolean(
         activeEl?.closest?.(".terminal-compose-bar, [data-terminal-compose-bar]")

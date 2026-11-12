@@ -22,7 +22,7 @@ function formatSerialBytes(value: number): string {
 
 export function StatusBar() {
   const { t } = useTranslation()
-  const { activeTabId, tabs, connectedServers, servers, layout, workspaces } =
+  const { activeTabId, tabs, connectedServers, servers, layout, workspaces, terminalComposeBarVisible } =
     useAppStore()
 
   const activeTab = tabs.find((t) => t.id === activeTabId)
@@ -325,11 +325,16 @@ export function StatusBar() {
         {isConnected && !isSftpTab && (
           <button
             type="button"
-            onClick={() => window.dispatchEvent(new CustomEvent('qshell:toggle-compose-bar'))}
-            className="flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-medium rounded border border-border/50 bg-muted/30 hover:bg-muted/80 text-foreground/80 hover:text-foreground transition-all duration-150 cursor-pointer shadow-2xs active:scale-95 flex-shrink-0"
+            onClick={() => window.dispatchEvent(new CustomEvent('qshell:toggle-compose-bar', { detail: { forceToggle: true } }))}
+            className={cn(
+              "flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-medium rounded border transition-all duration-150 cursor-pointer shadow-2xs active:scale-95 flex-shrink-0",
+              terminalComposeBarVisible
+                ? "bg-primary/15 border-primary/40 text-primary font-semibold"
+                : "border-border/50 bg-muted/30 hover:bg-muted/80 text-foreground/80 hover:text-foreground"
+            )}
             title={`${t('compose_bar_title') || '撰写'} (Ctrl+Shift+U)`}
           >
-            <PenSquare className="h-3 w-3 text-sky-500" />
+            <PenSquare className={cn("h-3 w-3", terminalComposeBarVisible ? "text-primary" : "text-sky-500")} />
             <span>{t('compose_bar_title') || '撰写'}</span>
             <kbd className="hidden sm:inline-block text-[9px] font-mono text-muted-foreground/70 px-1 py-0.2 rounded bg-background/50 border border-border/40">
               Ctrl+Shift+U
