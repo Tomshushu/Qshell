@@ -1,4 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { toast } from 'sonner'
+import { save as saveDialog } from '@tauri-apps/plugin-dialog'
+import { writeTextFile } from '@tauri-apps/plugin-fs'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -150,21 +153,51 @@ export function SnapshotModal({ open, onClose, serverName, serverId }: SnapshotM
     try {
       await navigator.clipboard.writeText(JSON.stringify(snapshot, null, 2))
       setCopied(true)
+      toast.success(t('snap_copied') || '快照 JSON 已复制到剪贴板')
       setTimeout(() => setCopied(false), 2000)
     } catch {
-      // fallback: ignore
+      toast.error('复制失败')
     }
   }
 
-  const handleDownload = () => {
+  const handleDownload = async () => {
     if (!snapshot) return
-    const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `snapshot-${serverName}-${new Date().toISOString().slice(0, 10)}.json`
-    a.click()
-    URL.revokeObjectURL(url)
+    const json = JSON.stringify(snapshot, null, 2)
+    const safeName = (serverName || 'server').replace(/[<>:"/\\|?*\p{Cc}]/gu, '_')
+    const dateStr = new Date().toISOString().slice(0, 10)
+    const defaultName = `snapshot-${safeName}-${dateStr}.json`
+
+    try {
+      const filePath = await saveDialog({
+        title: t('snap_save_file') || '保存快照文件',
+        defaultPath: defaultName,
+        filters: [
+          { name: 'JSON (*.json)', extensions: ['json'] },
+          { name: 'All Files (*.*)', extensions: ['*'] },
+        ],
+      })
+      if (!filePath) return
+      await writeTextFile(filePath, json)
+      toast.success(`快照已成功保存至: ${filePath}`)
+    } catch {
+      // 降级回退到浏览器 Blob 下载（并延迟销毁 URL 避免提前回收）
+      try {
+        const blob = new Blob([json], { type: 'application/json' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = defaultName
+        document.body.appendChild(a)
+        a.click()
+        setTimeout(() => {
+          if (document.body.contains(a)) document.body.removeChild(a)
+          URL.revokeObjectURL(url)
+        }, 1000)
+        toast.success(`快照已成功导出: ${defaultName}`)
+      } catch (err) {
+        toast.error(`导出快照失败: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
   }
 
   if (!open) return null
