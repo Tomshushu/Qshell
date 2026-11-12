@@ -10,7 +10,7 @@ import {
 import { cn } from "@/lib/utils";
 import { playSound, SoundType } from "@/lib/sound";
 import { useTextFormatterStore } from "@/store/text-formatter-store";
-import { DEV_TOOLS, guessBestToolId, type ToolItem } from "./tools/tool-registry";
+import { DEV_TOOLS, guessBestToolId } from "./tools/tool-registry";
 
 const DEFAULT_WIDTH = 980;
 const DEFAULT_HEIGHT = 650;
@@ -248,24 +248,6 @@ export function FloatingTextFormatter() {
     );
   }, [searchQuery]);
 
-  // 按分类分组
-  const groupedTools = useMemo(() => {
-    const groups: Array<{ categoryLabel: string; items: ToolItem[] }> = [];
-    const catMap = new Map<string, ToolItem[]>();
-
-    filteredTools.forEach((tool) => {
-      const list = catMap.get(tool.categoryLabel) || [];
-      list.push(tool);
-      catMap.set(tool.categoryLabel, list);
-    });
-
-    catMap.forEach((items, categoryLabel) => {
-      groups.push({ categoryLabel, items });
-    });
-
-    return groups;
-  }, [filteredTools]);
-
   const activeTool = DEV_TOOLS.find((t) => t.id === activeToolId) || DEV_TOOLS[0];
   const ActiveComponent = activeTool.component;
 
@@ -379,46 +361,39 @@ export function FloatingTextFormatter() {
             </div>
           </div>
 
-          {/* 分组工具列表 */}
-          <div className="flex-1 space-y-3 overflow-y-auto p-2">
-            {groupedTools.map((group) => (
-              <div key={group.categoryLabel} className="space-y-0.5">
-                <div className="px-2 py-1 text-[11px] font-semibold text-muted-foreground">
-                  {group.categoryLabel}
-                </div>
-                {group.items.map((tool) => {
-                  const Icon = tool.icon;
-                  const isActive = tool.id === activeToolId;
-                  return (
-                    <button
-                      key={tool.id}
-                      type="button"
-                      onClick={() => {
-                        setActiveToolId(tool.id);
-                        playSound(SoundType.Click);
-                      }}
-                      className={cn(
-                        "group relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors cursor-pointer select-none",
-                        isActive
-                          ? "bg-primary/10 font-medium text-primary"
-                          : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                      )}
-                    >
-                      {isActive && (
-                        <span className="absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-r-full bg-primary" />
-                      )}
-                      <Icon
-                        className={cn(
-                          "h-4 w-4 shrink-0",
-                          isActive ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
-                        )}
-                      />
-                      <span className="truncate">{tool.name}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            ))}
+          {/* 平铺工具列表（无需多余分类，一目了然） */}
+          <div className="flex-1 space-y-1 overflow-y-auto p-2">
+            {filteredTools.map((tool) => {
+              const Icon = tool.icon;
+              const isActive = tool.id === activeToolId;
+              return (
+                <button
+                  key={tool.id}
+                  type="button"
+                  onClick={() => {
+                    setActiveToolId(tool.id);
+                    playSound(SoundType.Click);
+                  }}
+                  className={cn(
+                    "group relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors cursor-pointer select-none",
+                    isActive
+                      ? "bg-primary/10 font-medium text-primary"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
+                >
+                  {isActive && (
+                    <span className="absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-r-full bg-primary" />
+                  )}
+                  <Icon
+                    className={cn(
+                      "h-4 w-4 shrink-0",
+                      isActive ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
+                    )}
+                  />
+                  <span className="truncate">{tool.name}</span>
+                </button>
+              );
+            })}
 
             {filteredTools.length === 0 && (
               <div className="flex flex-col items-center gap-1.5 py-10 text-center">

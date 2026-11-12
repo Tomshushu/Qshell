@@ -303,7 +303,7 @@ export function ModuleTabs({
             }}
             title={t("fmt_dialog_title")}
           >
-            <Braces className="h-3.5 w-3.5 flex-shrink-0 opacity-85 text-sky-400" />
+            <Wrench className="h-3.5 w-3.5 flex-shrink-0 opacity-85 text-sky-400" />
             <span className="truncate max-w-[120px]">{t("fmt_short_label")}</span>
           </button>
         )}
