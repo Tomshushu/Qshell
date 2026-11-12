@@ -18,17 +18,37 @@ export interface ToastItem {
 
 export const ToastContext = createContext<ToastContextValue | null>(null)
 
+let activeToastInstance: ToastContextValue['toast'] | null = null
+
+export function setActiveToast(instance: ToastContextValue['toast'] | null) {
+  activeToastInstance = instance
+}
+
+export const toast = {
+  success: (m: string, d?: number) => {
+    if (activeToastInstance) activeToastInstance.success(m, d)
+    else console.log('[toast.success]', m)
+  },
+  error: (m: string, d?: number) => {
+    if (activeToastInstance) activeToastInstance.error(m, d)
+    else console.error('[toast.error]', m)
+  },
+  info: (m: string, d?: number) => {
+    if (activeToastInstance) activeToastInstance.info(m, d)
+    else console.info('[toast.info]', m)
+  },
+  warning: (m: string, d?: number) => {
+    if (activeToastInstance) activeToastInstance.warning(m, d)
+    else console.warn('[toast.warning]', m)
+  },
+}
+
 export function useToast() {
   const ctx = useContext(ToastContext)
   if (!ctx) {
-    // 兜底：在 provider 外使用时不崩溃，仅 console
+    // 兜底：在 provider 外使用时不崩溃，使用全局实例或 console
     return {
-      toast: {
-        success: (m: string) => console.log('[toast.success]', m),
-        error: (m: string) => console.error('[toast.error]', m),
-        info: (m: string) => console.info('[toast.info]', m),
-        warning: (m: string) => console.warn('[toast.warning]', m),
-      },
+      toast,
     }
   }
   return ctx

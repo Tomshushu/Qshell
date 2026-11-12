@@ -288,6 +288,7 @@ export function VncViewerModule({
       // 避免无效代算请求与重试抖动。
       const onAuthChallenge = hasPassword
         ? async (challenge: Uint8Array) => {
+            if (!backend?.vnc) throw new Error('VNC backend not available')
             const resp = await backend.vnc.solveAuthChallenge({
               sessionId,
               challenge: Array.from(challenge),

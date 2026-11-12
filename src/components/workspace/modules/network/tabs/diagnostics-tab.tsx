@@ -133,9 +133,6 @@ export function DiagnosticsTab({
       setIsRunning(false)
     }
   }
-      setIsRunning(false)
-    }
-  }
 
   const handleRunAdvTool = async () => {
     if (!advTarget.trim()) return

@@ -683,7 +683,7 @@ export async function executeSafeProbe(
           }
 
           if (cmdResult.status === 'fulfilled' && cmdResult.value) {
-            const out = cmdResult.value
+            const out = cmdResult.value as { stdout?: string; stderr?: string }
             if (out.stdout && out.stdout.trim().length > 0) {
               rawOutput = out.stdout.trim()
             } else if (out.stderr && out.stderr.trim().length > 0) {

@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useMemo, useEffect, useRef, useState } from 'react'
 import { CheckCircle2, XCircle, Info, AlertTriangle, X } from 'lucide-react'
 import { playSound, SoundType } from '@/lib/sound'
 import { friendlyError } from '@/lib/error-messages'
-import { ToastContext, type ToastContextValue, type ToastItem } from './toast'
+import { ToastContext, setActiveToast, type ToastContextValue, type ToastItem } from './toast'
 
 type ToastType = 'success' | 'error' | 'info' | 'warning'
 
@@ -65,12 +65,17 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     activeToastsRef.current.set(dedupeKey, { id, timestamp: now, timerId })
   }, [remove])
 
-  const toast: ToastContextValue['toast'] = {
+  const toast: ToastContextValue['toast'] = useMemo(() => ({
     success: (m: string, d?: number) => push('success', m, d ?? 4000),
     error: (m: string, d?: number) => push('error', m, d ?? 6000),
     info: (m: string, d?: number) => push('info', m, d ?? 4000),
     warning: (m: string, d?: number) => push('warning', m, d ?? 5000),
-  }
+  }), [push])
+
+  useEffect(() => {
+    setActiveToast(toast)
+    return () => setActiveToast(null)
+  }, [toast])
 
   return (
     <ToastContext.Provider value={{ toast }}>
