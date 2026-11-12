@@ -34,7 +34,7 @@ export function VerdictCard({ verdict, run, onExport }: VerdictCardProps) {
     setTimeout(() => setCopied(false), 2000)
   }
 
-  const handleExport = async (format: 'html' | 'json') => {
+  const handleExport = async (format: 'html' | 'json' | 'csv') => {
     if (onExport) {
       onExport(format)
       return
@@ -42,9 +42,13 @@ export function VerdictCard({ verdict, run, onExport }: VerdictCardProps) {
     if (run?.id) {
       try {
         const result = await sshService.exportNetworkReport(run.id, format)
-        const blob = new Blob([result.content], {
-          type: format === 'html' ? 'text/html;charset=utf-8' : 'application/json;charset=utf-8'
-        })
+        const mime =
+          format === 'html'
+            ? 'text/html;charset=utf-8'
+            : format === 'json'
+            ? 'application/json;charset=utf-8'
+            : 'text/csv;charset=utf-8'
+        const blob = new Blob([result.content], { type: mime })
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
         a.href = url
