@@ -761,18 +761,7 @@ export function OverviewModule({
   }
 
   const diskItems = useMemo(() => {
-    const commonMountOrder = ["/", "/boot", "/home", "/var", "/data", "/opt"];
-    return (metrics?.disks ?? [])
-      .filter((d) => d.category === "disk")
-      .slice()
-      .sort((a, b) => {
-        const aIndex = commonMountOrder.indexOf(a.mountPoint);
-        const bIndex = commonMountOrder.indexOf(b.mountPoint);
-        const aRank = aIndex === -1 ? commonMountOrder.length : aIndex;
-        const bRank = bIndex === -1 ? commonMountOrder.length : bIndex;
-        if (aRank !== bRank) return aRank - bRank;
-        return a.mountPoint.localeCompare(b.mountPoint);
-      });
+    return metrics?.disks ?? [];
   }, [metrics?.disks]);
 
   const maxDiskUse = useMemo(
@@ -1198,7 +1187,7 @@ export function OverviewModule({
             </CardContent>
           </Card>
 
-          {/* Card 4: 文件系统容量 (与小监控弹框 1:1 完全对齐) */}
+          {/* Card 4: 文件系统容量 (与外部悬浮小弹框完全一致) */}
           <Card className="h-[270px] lg:h-[285px] flex flex-col min-w-0 overflow-hidden border-orange-500/20 bg-gradient-to-br from-orange-500/[0.04] via-card to-card shadow-xs">
             <CardHeader className="flex-row items-center justify-between space-y-0 py-2 px-3 border-b border-border/40 shrink-0">
               <CardTitle className="flex items-center gap-1.5 text-xs">
@@ -1206,19 +1195,18 @@ export function OverviewModule({
                 <span>文件系统容量</span>
               </CardTitle>
               <span className="text-[10px] text-muted-foreground tabular-nums">
-                共 {diskItems.length} 个分区 · 最大 {safeFixed(maxDiskUse, 0)}%
+                共 {diskItems.length} 个挂载分区
               </span>
             </CardHeader>
             <CardContent className="min-h-0 flex-1 flex flex-col p-0 overflow-hidden text-xs">
-              {/* 表头 (与小监控弹框对齐) */}
-              <div className="grid grid-cols-[1fr_56px_92px] bg-muted/40 text-[10px] font-medium text-center border-b border-border/40 py-1 px-2.5 text-muted-foreground font-sans shrink-0">
-                <span className="text-left">挂载路径</span>
-                <span className="text-right">占比</span>
-                <span className="text-right">可用 / 大小</span>
+              {/* 表头 (与外部悬浮小弹框完全一致) */}
+              <div className="grid grid-cols-[1fr_110px] bg-muted/40 text-[10px] font-medium text-center border-b border-border/40 py-1 px-3 text-muted-foreground font-sans shrink-0">
+                <span className="text-left">路径</span>
+                <span className="text-right">可用/大小</span>
               </div>
 
-              {/* 列表区 (与小监控弹框完全对齐：背景轻微进度条填充 + 可用/总量) */}
-              <div className="divide-y divide-border/30 font-mono text-[11px] overflow-y-auto flex-1">
+              {/* 列表区 (与外部悬浮小弹框完全一致：背景轻微进度条填充 + 可用/大小) */}
+              <div className="divide-y divide-border/20 font-mono text-[11px] overflow-y-auto flex-1">
                 {diskItems.length === 0 ? (
                   <div className="py-8 text-center text-muted-foreground/60 text-xs">
                     无磁盘挂载信息
@@ -1227,10 +1215,10 @@ export function OverviewModule({
                   diskItems.map((d) => (
                     <div
                       key={d.mountPoint}
-                      className="relative grid grid-cols-[1fr_56px_92px] items-center px-2.5 py-1.5 hover:bg-muted/30 overflow-hidden"
-                      title={`${d.filesystem} -> ${d.mountPoint}`}
+                      className="relative grid grid-cols-[1fr_110px] items-center px-3 py-1.5 hover:bg-muted/30 text-xs overflow-hidden"
+                      title={`${d.filesystem} -> ${d.mountPoint} | 占用率: ${safeFixed(d.usePercent, 1)}%`}
                     >
-                      {/* 背景占用率微量填充条 (与小监控弹框完全一致) */}
+                      {/* 背景占用率微量填充条 */}
                       <div
                         className={cn(
                           "absolute left-0 top-0 bottom-0 opacity-15 pointer-events-none transition-all duration-300",
@@ -1239,27 +1227,10 @@ export function OverviewModule({
                         style={{ width: `${Math.min(100, Math.max(0, d.usePercent))}%` }}
                       />
 
-                      <div className="relative z-10 flex items-center gap-1.5 min-w-0 pr-1">
-                        <span className="truncate font-sans font-medium text-[11px] text-foreground/90">
-                          {d.mountPoint}
-                        </span>
-                        {d.filesystem && (
-                          <span className="text-[9px] text-muted-foreground/60 truncate font-mono hidden xl:inline">
-                            ({d.filesystem.split("/").pop()})
-                          </span>
-                        )}
-                      </div>
-
-                      <span
-                        className={cn(
-                          "relative z-10 text-right tabular-nums text-[11px]",
-                          getTextColor(d.usePercent),
-                        )}
-                      >
-                        {safeFixed(d.usePercent, 0)}%
+                      <span className="relative z-10 truncate font-sans text-[11px] text-foreground/90" title={`${d.filesystem} -> ${d.mountPoint}`}>
+                        {d.mountPoint}
                       </span>
-
-                      <span className="relative z-10 text-right tabular-nums text-[10.5px] text-muted-foreground">
+                      <span className="relative z-10 text-right tabular-nums text-[10px] text-muted-foreground">
                         {formatDiskSize(d.available)}/{formatDiskSize(d.total)}
                       </span>
                     </div>
