@@ -25,6 +25,8 @@ import {
   Zap,
   Clock3,
   Bell,
+  ArrowUp,
+  ArrowDown,
 } from "lucide-react";
 import {
   AreaChart,
@@ -115,6 +117,57 @@ const safeFixed = (v: number | undefined | null, n: number) =>
 // 安全数值转换：v 非有限数时返回 0，用于堆叠条求和等运算
 const safe = (v?: number) => (Number.isFinite(v as number) ? (v as number) : 0);
 
+/** 格式化网络吞吐速率 (Kbps 转换为 B/s, KB/s, MB/s)，与浮窗 HUD 完全一致 */
+function formatNetRate(kbps: number): string {
+  if (!Number.isFinite(kbps) || kbps <= 0) return '0 B/s';
+  const bytesPerSec = (kbps * 1000) / 8;
+  if (bytesPerSec < 1024) return `${bytesPerSec.toFixed(0)} B/s`;
+  if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(0)} KB/s`;
+  return `${(bytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`;
+}
+
+/** 格式化磁盘大小 (GB 转换为人性化的 M/G，如 364M, 68.8G)，与浮窗 HUD 完全一致 */
+function formatDiskSize(gb: number): string {
+  if (!Number.isFinite(gb) || gb <= 0) return '0M';
+  if (gb < 1) {
+    const mb = gb * 1024;
+    return `${Math.round(mb)}M`;
+  }
+  const formatted = gb % 1 === 0 ? gb.toFixed(0) : gb.toFixed(1);
+  return `${formatted}G`;
+}
+
+/** 格式化进程内存占用，与浮窗 HUD 完全一致 */
+function formatProcMem(p: ProcessInfo): string {
+  const kb = p.rss || 0;
+  if (kb >= 1024 * 1024) return `${(kb / (1024 * 1024)).toFixed(1)}G`;
+  if (kb >= 1024) return `${(kb / 1024).toFixed(1)}M`;
+  if (kb > 0) return `${kb}K`;
+  return `${(p.memory || 0).toFixed(1)}%`;
+}
+
+/** 提取主可执行文件名 (如 /usr/bin/redis-server -> redis-server)，与浮窗 HUD 完全一致 */
+function getShortCommand(cmd: string): string {
+  if (!cmd) return '-';
+  const trimmed = cmd.trim();
+  const first = trimmed.split(/\s+/)[0];
+  return first.split('/').pop() || first;
+}
+
+/** 进度条色彩辅助函数，与浮窗 HUD 完全一致 */
+function getProgressColor(pct: number) {
+  if (pct >= 85) return 'bg-destructive';
+  if (pct >= 70) return 'bg-amber-500';
+  return 'bg-emerald-500';
+}
+
+/** 文字色彩辅助函数，与浮窗 HUD 完全一致 */
+function getTextColor(pct: number) {
+  if (pct >= 85) return 'text-destructive font-semibold';
+  if (pct >= 70) return 'text-amber-500 font-semibold';
+  return 'text-emerald-500 font-semibold';
+}
+
 interface NetHistoryPoint {
   rxKbps: number;
   txKbps: number;
@@ -125,25 +178,30 @@ interface DiskIoHistoryPoint {
   [device: string]: number;
 }
 
+interface IfaceOption {
+  value: string;
+  label: string;
+}
+
 // 网卡选择下拉框 — 用 memo 隔离，避免 metrics 每秒刷新导致重渲染跳动
 const IfaceSelect = memo(function IfaceSelect({
-  names,
+  options,
   value,
   onChange,
 }: {
-  names: string[];
+  options: IfaceOption[];
   value: string;
   onChange: (iface: string) => void;
 }) {
-  if (names.length === 0) return null;
+  if (options.length === 0) return null;
   return (
     <SelectPopover
       value={value}
-      onChange={(v) => onChange(v ?? '')}
-      options={names.map((name) => ({ value: name, label: name }))}
-      className="text-[11px] h-7"
+      onChange={(v) => onChange(v ?? 'all')}
+      options={options}
+      className="text-[11px] h-7 min-w-[130px]"
       panelClassName="w-48"
-      searchable={names.length > 7}
+      searchable={options.length > 7}
     />
   );
 });
@@ -195,12 +253,20 @@ export function OverviewModule({
     "asc" | "desc"
   >("desc");
 
-  // 选中的网卡名称，默认 eth0（后续根据实际列表调整）
-  const [selectedIface, setSelectedIface] = useState<string>("eth0");
+  // 选中的网卡名称，默认恢复历史选择或 'all'（全部总流量），与浮窗 HUD 保持同步
+  const [selectedIface, setSelectedIface] = useState<string>(() => {
+    try {
+      return localStorage.getItem("qshell_floating_hud_iface") || "all";
+    } catch {
+      return "all";
+    }
+  });
 
   // 根据当前选中网卡获取历史序列（共享 Store 独立维护各网卡历史）
   const netHistory = useMemo(() => {
-    return serverMetricsState?.netHistoryByIface?.[selectedIface] ?? [];
+    const byIface = serverMetricsState?.netHistoryByIface;
+    if (!byIface) return [];
+    return byIface[selectedIface] ?? byIface["all"] ?? [];
   }, [serverMetricsState?.netHistoryByIface, selectedIface]);
 
   // 记住已初始化过的网卡名列表，避免每秒数据刷新时重复触发自动切换
@@ -234,6 +300,16 @@ export function OverviewModule({
       return aName.localeCompare(bName);
     });
   }, [metrics?.network]);
+  const ifaceOptions = useMemo<IfaceOption[]>(() => {
+    const list: IfaceOption[] = [
+      { value: "all", label: "全部 (总流量)" },
+    ];
+    ifaceNames.forEach((name) => {
+      list.push({ value: name, label: name });
+    });
+    return list;
+  }, [ifaceNames]);
+
   const sortedNetwork = useMemo(
     () =>
       ifaceNames
@@ -312,10 +388,27 @@ export function OverviewModule({
     [diskIoDevices, diskIoView],
   );
 
-  const selectedNetData = useMemo(
-    () => (metrics?.network ?? []).find((n) => n.interface === selectedIface),
-    [metrics?.network, selectedIface],
-  );
+  const selectedNetData = useMemo(() => {
+    if (selectedIface === "all") {
+      let rxKbps = 0;
+      let txKbps = 0;
+      (metrics?.network ?? []).forEach((n) => {
+        rxKbps += n.rxKbps;
+        txKbps += n.txKbps;
+      });
+      return {
+        interface: "all",
+        rxKbps,
+        txKbps,
+        rxBytes: 0,
+        txBytes: 0,
+        rxErrors: 0,
+        txErrors: 0,
+        dropRate: 0,
+      };
+    }
+    return (metrics?.network ?? []).find((n) => n.interface === selectedIface);
+  }, [metrics?.network, selectedIface]);
 
   // 平均负载标签：Windows 无 loadavg 概念；数据缺失时显示 '-'，不再伪造 0.00
   const loadAvgLabels = useMemo(() => {
@@ -435,9 +528,14 @@ export function OverviewModule({
     }
   }, [serverId, isWindows]);
 
-  // 切换网卡时更新选中项
+  // 切换网卡时更新选中项，同步持久化以便与浮窗 HUD 保持一致
   const handleIfaceChange = useCallback((iface: string) => {
     setSelectedIface(iface);
+    try {
+      localStorage.setItem("qshell_floating_hud_iface", iface);
+    } catch {
+      /* ignore */
+    }
   }, []);
 
   const handleRefreshAll = useCallback(() => {
@@ -476,17 +574,15 @@ export function OverviewModule({
     return () => clearInterval(processTimer);
   }, [refreshProcesses, isActive, autoRefresh, refreshInterval]);
 
-  // 首次获取到网卡列表时，若默认 eth0 不在列表中则自动切换到第一个
+  // 首次获取到网卡列表时，若非 'all' 且不在网卡列表中则自动切换
   // 服务器网卡固定不变，只需初始化一次
   useEffect(() => {
     if (ifaceNames.length > 0 && !ifaceListInitializedRef.current) {
       ifaceListInitializedRef.current = true;
-      if (!ifaceNames.includes(selectedIface)) {
+      if (selectedIface !== "all" && !ifaceNames.includes(selectedIface)) {
         // 延后一帧切换默认网卡，避免在 effect 内同步 setState 触发级联渲染
-        const timer = setTimeout(() => setSelectedIface(ifaceNames[0]), 0);
+        const timer = setTimeout(() => setSelectedIface(ifaceNames[0] || "all"), 0);
         return () => clearTimeout(timer);
-        // E2 修复：切换默认网卡时不再清空历史，保留已有数据，新数据会自然追加
-        // 旧接口的历史点会在 netHistory（限 120 点）滚动出窗口后自动消失
       }
     }
   }, [ifaceNames, selectedIface]);
@@ -688,13 +784,19 @@ export function OverviewModule({
     value: string,
     sub: string,
     tone = "text-foreground",
+    icon?: React.ReactNode,
   ) => (
-    <div className="h-[72px] rounded-md border border-border/60 bg-card px-3 py-2 shadow-sm">
-      <div className="text-[10px] text-muted-foreground">{label}</div>
-      <div className={`mt-0.5 text-base font-semibold tabular-nums ${tone}`}>
-        {value}
+    <div className="h-[72px] rounded-md border border-border/60 bg-card px-3 py-2 shadow-sm flex flex-col justify-between">
+      <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+        <span>{label}</span>
+        {icon && <span className="shrink-0">{icon}</span>}
       </div>
-      <div className="truncate text-[9px] text-muted-foreground">{sub}</div>
+      <div>
+        <div className={`text-base font-semibold tabular-nums ${tone}`}>
+          {value}
+        </div>
+        <div className="truncate text-[9px] text-muted-foreground">{sub}</div>
+      </div>
     </div>
   );
   const handleProcessSort = (key: "pid" | "cpu" | "memory") => {
@@ -761,32 +863,34 @@ export function OverviewModule({
                 "实例状态",
                 metrics ? "UP" : "DOWN",
                 metrics ? "SSH 指标采集正常" : "无法获取指标",
-                metrics ? "text-emerald-500" : "text-red-500",
+                metrics ? "text-emerald-500 font-semibold" : "text-destructive font-semibold",
+                <Activity className="h-3.5 w-3.5 text-emerald-500" />,
               )}
               {metricCard(
                 "CPU 使用率",
                 `${safeFixed(metrics?.cpuUsage, 1)}%`,
                 `负载 ${loadAvgLabels.map((v) => v.value).join(" / ")}`,
-                metrics && metrics.cpuUsage >= 85
-                  ? "text-amber-500"
-                  : "text-blue-500",
+                getTextColor(metrics?.cpuUsage ?? 0),
+                <Cpu className="h-3.5 w-3.5 text-primary" />,
               )}
               {metricCard(
                 "内存使用率",
                 `${safeFixed(memoryUse * 100, 1)}%`,
                 `${formatGB(metrics?.memAvailableBytes ? metrics.memAvailableBytes / 1073741824 : 0)} 可用`,
-                memoryUse >= 0.9 ? "text-red-500" : "text-emerald-500",
+                getTextColor(memoryUse * 100),
+                <MemoryStick className="h-3.5 w-3.5 text-emerald-500" />,
               )}
               {metricCard(
                 "磁盘使用率",
                 `${safeFixed(maxDiskUse, 1)}%`,
                 `${diskItems.length} 个文件系统`,
-                maxDiskUse >= 90 ? "text-red-500" : "text-orange-500",
+                getTextColor(maxDiskUse),
+                <HardDrive className="h-3.5 w-3.5 text-orange-500" />,
               )}
             </div>
             <Card className="flex h-[158px] min-w-0 flex-col overflow-hidden border-border/60 shadow-sm">
               <CardHeader className="pb-2">
-                <CardTitle className="text-xs">系统基础</CardTitle>
+                <CardTitle className="flex items-center gap-1.5 text-xs"><Info className="h-3.5 w-3.5 text-primary" />系统基础</CardTitle>
               </CardHeader>
               <CardContent className="min-h-0 flex-1 overflow-hidden grid grid-cols-2 gap-1.5 text-[11px]">
                 <div className="min-w-0 rounded-md bg-muted/25 px-2.5 py-1.5">
@@ -829,10 +933,49 @@ export function OverviewModule({
           </div>
           <Card className="flex h-[310px] min-w-0 flex-col overflow-hidden border-border/60 shadow-sm">
             <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-xs">进程列表</CardTitle>
-              <span className="text-[10px] text-muted-foreground font-mono">
-                Top {sortedProcesses.length}
-              </span>
+              <CardTitle className="flex items-center gap-1.5 text-xs">
+                <Activity className="h-3.5 w-3.5 text-primary" />
+                进程列表
+              </CardTitle>
+              <div className="flex items-center gap-2">
+                <div className="flex rounded-md bg-muted/60 p-0.5 text-[10px]">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProcessSortKey("memory");
+                      setProcessSortDirection("desc");
+                    }}
+                    className={cn(
+                      "flex items-center gap-1 rounded px-2 py-0.5 transition-colors cursor-pointer select-none",
+                      processSortKey === "memory"
+                        ? "bg-primary text-primary-foreground font-semibold shadow-xs"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    <MemoryStick className="h-3 w-3" />
+                    按内存
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProcessSortKey("cpu");
+                      setProcessSortDirection("desc");
+                    }}
+                    className={cn(
+                      "flex items-center gap-1 rounded px-2 py-0.5 transition-colors cursor-pointer select-none",
+                      processSortKey === "cpu"
+                        ? "bg-primary text-primary-foreground font-semibold shadow-xs"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    <Cpu className="h-3 w-3" />
+                    按 CPU
+                  </button>
+                </div>
+                <span className="text-[10px] text-muted-foreground font-mono">
+                  Top {sortedProcesses.length}
+                </span>
+              </div>
             </CardHeader>
             <CardContent className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
               <table className="w-full table-fixed text-[10px]">
@@ -844,7 +987,7 @@ export function OverviewModule({
                         onClick={() => handleProcessSort("pid")}
                         className={
                           processSortKey === "pid"
-                            ? "text-foreground"
+                            ? "text-foreground font-semibold"
                             : "hover:text-foreground"
                         }
                       >
@@ -857,27 +1000,27 @@ export function OverviewModule({
                         onClick={() => handleProcessSort("cpu")}
                         className={
                           processSortKey === "cpu"
-                            ? "text-foreground"
+                            ? "text-primary font-semibold"
                             : "hover:text-foreground"
                         }
                       >
                         CPU{processSortMark("cpu")}
                       </button>
                     </th>
-                    <th className="w-[68px] py-1.5 text-right font-medium">
+                    <th className="w-[72px] py-1.5 text-right font-medium">
                       <button
                         type="button"
                         onClick={() => handleProcessSort("memory")}
                         className={
                           processSortKey === "memory"
-                            ? "text-foreground"
+                            ? "text-primary font-semibold"
                             : "hover:text-foreground"
                         }
                       >
                         内存{processSortMark("memory")}
                       </button>
                     </th>
-                    <th className="py-1.5 pl-3 font-medium">其他</th>
+                    <th className="py-1.5 pl-3 font-medium">命令</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -885,21 +1028,39 @@ export function OverviewModule({
                     <tr
                       key={process.pid}
                       className="border-b border-border/30 hover:bg-muted/25"
+                      title={`PID ${process.pid} | CPU: ${safeFixed(process.cpu, 1)}% | MEM: ${formatProcMem(process)}\n命令: ${process.command}`}
                     >
                       <td className="py-1.5 tabular-nums text-muted-foreground">
                         {process.pid}
                       </td>
-                      <td className="py-1.5 text-right tabular-nums">
+                      <td
+                        className={cn(
+                          "py-1.5 text-right tabular-nums",
+                          processSortKey === "cpu" && "text-primary font-semibold",
+                        )}
+                      >
                         {safeFixed(process.cpu, 1)}%
                       </td>
-                      <td className="py-1.5 text-right tabular-nums">
-                        {safeFixed(process.memory, 1)}%
+                      <td
+                        className={cn(
+                          "py-1.5 text-right tabular-nums",
+                          processSortKey === "memory" && "text-primary font-semibold",
+                        )}
+                      >
+                        {formatProcMem(process)}
                       </td>
                       <td
-                        className="truncate py-1.5 pl-3"
-                        title={`${process.user} · ${process.command}`}
+                        className="truncate py-1.5 pl-3 font-sans"
+                        title={process.command}
                       >
-                        {process.command}
+                        <span className="font-medium text-foreground/90">
+                          {getShortCommand(process.command)}
+                        </span>
+                        {process.user && (
+                          <span className="text-muted-foreground/60 text-[9px] ml-1.5 font-normal">
+                            ({process.user})
+                          </span>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -926,8 +1087,28 @@ export function OverviewModule({
               </span>
             </CardHeader>
             <CardContent className="min-h-0 flex-1 overflow-hidden">
-              <div className="mb-3 text-3xl font-semibold font-mono tabular-nums tracking-tight-title text-blue-500">
-                {safeFixed(metrics?.cpuUsage, 1)}%
+              <div className="flex items-center justify-between mb-3">
+                <div
+                  className={cn(
+                    "text-3xl font-semibold font-mono tabular-nums tracking-tight-title",
+                    getTextColor(metrics?.cpuUsage ?? 0),
+                  )}
+                >
+                  {safeFixed(metrics?.cpuUsage, 1)}%
+                </div>
+                {cpuInfo.model && (
+                  <div
+                    className="text-right text-[11px] text-muted-foreground truncate max-w-[220px]"
+                    title={cpuInfo.model}
+                  >
+                    <div className="truncate font-medium">{cpuInfo.model}</div>
+                    <div className="text-[10px] text-muted-foreground/75 font-mono">
+                      {cpuInfo.cores > 0 ? `${cpuInfo.cores} 核` : ""}
+                      {cpuInfo.threads > 0 ? ` / ${cpuInfo.threads} 线程` : ""}
+                      {cpuInfo.isVirtual ? " (虚拟机)" : ""}
+                    </div>
+                  </div>
+                )}
               </div>
               <div className="h-[190px] min-h-[190px] min-w-0 w-full rounded-md border border-blue-400/10 bg-background/25 p-1">
                 {cpuChartData.length > 0 ? (
@@ -1028,8 +1209,8 @@ export function OverviewModule({
           <Card className="flex h-[320px] min-w-0 flex-col overflow-hidden border-violet-500/20 bg-gradient-to-br from-violet-500/[0.05] via-card to-card shadow-sm">
             <CardHeader className="pb-2">
               <CardTitle className="flex items-center gap-1.5 text-xs">
-                <Activity className="h-3.5 w-3.5 text-violet-400" />
-                CPU 模式与负载
+                <Zap className="h-3.5 w-3.5 text-violet-400" />
+                CPU 模式与系统负载
               </CardTitle>
             </CardHeader>
             <CardContent className="min-h-0 flex-1 overflow-hidden space-y-3 text-xs">
@@ -1178,8 +1359,8 @@ export function OverviewModule({
           <Card className="flex h-[300px] min-w-0 flex-col overflow-hidden border-violet-500/20 bg-gradient-to-br from-violet-500/[0.05] via-card to-card shadow-sm">
             <CardHeader className="pb-2">
               <CardTitle className="flex items-center gap-1.5 text-xs">
-                <Activity className="h-3.5 w-3.5 text-violet-400" />
-                内存压力
+                <HardDrive className="h-3.5 w-3.5 text-violet-400" />
+                交换分区 (Swap) 与内存压力
               </CardTitle>
             </CardHeader>
             <CardContent className="min-h-0 flex-1 overflow-hidden">
@@ -1245,13 +1426,17 @@ export function OverviewModule({
                 diskItems.map((d) => (
                   <div key={d.mountPoint}>
                     <div className="mb-1 flex justify-between text-xs">
-                      <span className="truncate">{d.mountPoint}</span>
-                      <span className="tabular-nums">
-                        {safeFixed(d.usePercent, 1)}% · {formatGB(d.used)} /{" "}
-                        {formatGB(d.total)}
+                      <span className="truncate font-medium">{d.mountPoint}</span>
+                      <span className="tabular-nums text-muted-foreground text-[11px]">
+                        {safeFixed(d.usePercent, 1)}% · 可用 {formatDiskSize(d.available)} / 共 {formatDiskSize(d.total)}
                       </span>
                     </div>
-                    <Progress value={d.usePercent} className="h-1.5" />
+                    <div className="relative h-2 w-full bg-muted/60 rounded-full overflow-hidden">
+                      <div
+                        className={cn("h-full transition-all duration-300", getProgressColor(d.usePercent))}
+                        style={{ width: `${Math.min(100, Math.max(0, d.usePercent))}%` }}
+                      />
+                    </div>
                   </div>
                 ))
               ) : (
@@ -1415,22 +1600,34 @@ export function OverviewModule({
                 网卡流量
               </CardTitle>
               <IfaceSelect
-                names={ifaceNames}
+                options={ifaceOptions}
                 value={selectedIface}
                 onChange={handleIfaceChange}
               />
             </CardHeader>
             <CardContent className="min-h-0 flex-1 overflow-hidden">
               <div className="grid grid-cols-2 gap-2">
-                <div className="rounded-md border border-emerald-400/15 bg-emerald-500/10 p-3">
-                  <div className="text-[10px] text-muted-foreground">接收</div>
-                  <div className="mt-1 text-lg font-semibold text-emerald-500">
+                <div className="rounded-md border border-emerald-400/20 bg-emerald-500/10 p-2.5">
+                  <div className="flex items-center gap-1 text-[11px] font-medium text-emerald-500">
+                    <ArrowDown className="h-3 w-3" />
+                    <span>接收 (下载)</span>
+                  </div>
+                  <div className="mt-1 text-lg font-semibold font-mono tabular-nums text-emerald-500">
+                    {formatNetRate(selectedNet?.rxKbps ?? 0)}
+                  </div>
+                  <div className="mt-0.5 text-[10px] text-muted-foreground font-mono">
                     {formatKbps(selectedNet?.rxKbps ?? 0)}
                   </div>
                 </div>
-                <div className="rounded-md border border-blue-400/15 bg-blue-500/10 p-3">
-                  <div className="text-[10px] text-muted-foreground">发送</div>
-                  <div className="mt-1 text-lg font-semibold text-blue-500">
+                <div className="rounded-md border border-orange-400/20 bg-orange-500/10 p-2.5">
+                  <div className="flex items-center gap-1 text-[11px] font-medium text-orange-500">
+                    <ArrowUp className="h-3 w-3" />
+                    <span>发送 (上传)</span>
+                  </div>
+                  <div className="mt-1 text-lg font-semibold font-mono tabular-nums text-orange-500">
+                    {formatNetRate(selectedNet?.txKbps ?? 0)}
+                  </div>
+                  <div className="mt-0.5 text-[10px] text-muted-foreground font-mono">
                     {formatKbps(selectedNet?.txKbps ?? 0)}
                   </div>
                 </div>
@@ -1451,12 +1648,12 @@ export function OverviewModule({
                       >
                         <stop
                           offset="0%"
-                          stopColor="#34d399"
+                          stopColor="#10b981"
                           stopOpacity={0.95}
                         />
                         <stop
                           offset="100%"
-                          stopColor="#34d399"
+                          stopColor="#10b981"
                           stopOpacity={0.35}
                         />
                       </linearGradient>
@@ -1469,12 +1666,12 @@ export function OverviewModule({
                       >
                         <stop
                           offset="0%"
-                          stopColor="#60a5fa"
+                          stopColor="#f97316"
                           stopOpacity={0.95}
                         />
                         <stop
                           offset="100%"
-                          stopColor="#60a5fa"
+                          stopColor="#f97316"
                           stopOpacity={0.35}
                         />
                       </linearGradient>
@@ -1509,7 +1706,7 @@ export function OverviewModule({
                         fill: "currentColor",
                         opacity: 0.55,
                       }}
-                      tickFormatter={(value) => formatKbps(Number(value))}
+                      tickFormatter={(value) => formatNetRate(Number(value))}
                     />
                     <RechartsTooltip
                       contentStyle={{
@@ -1519,8 +1716,8 @@ export function OverviewModule({
                         fontSize: 11,
                       }}
                       formatter={(value, name) => [
-                        formatKbps(Number(value)),
-                        name === "rxKbps" ? "接收" : "发送",
+                        `${formatNetRate(Number(value))} (${formatKbps(Number(value))})`,
+                        name === "rxKbps" ? "↓ 接收" : "↑ 发送",
                       ]}
                       labelFormatter={() => "采样"}
                     />
