@@ -760,7 +760,7 @@ export function OverviewModule({
     );
   }
 
-  const diskItems = (() => {
+  const diskItems = useMemo(() => {
     const commonMountOrder = ["/", "/boot", "/home", "/var", "/data", "/opt"];
     return (metrics?.disks ?? [])
       .filter((d) => d.category === "disk")
@@ -773,32 +773,45 @@ export function OverviewModule({
         if (aRank !== bRank) return aRank - bRank;
         return a.mountPoint.localeCompare(b.mountPoint);
       });
-  })();
-  const maxDiskUse = Math.max(...diskItems.map((d) => d.usePercent ?? 0), 0);
-  const memoryUse = metrics?.memPressure ?? 0;
+  }, [metrics?.disks]);
+
+  const maxDiskUse = useMemo(
+    () => Math.max(...diskItems.map((d) => d.usePercent ?? 0), 0),
+    [diskItems],
+  );
+
+  const memoryUse = metrics?.memPressure ?? (metrics?.memoryTotal && metrics.memoryTotal > 0 ? metrics.memoryUsed / metrics.memoryTotal : 0);
+  const memUsedGB = metrics?.memoryUsed ?? 0;
+  const memTotalGB = metrics?.memoryTotal ?? 0;
+  const memAvailableGB = (metrics?.memAvailableBytes ?? 0) / 1073741824;
+
   const swapUse =
     metrics && metrics.swapTotal > 0 ? metrics.swapUsed / metrics.swapTotal : 0;
+  const swapUsedGB = metrics?.swapUsed ?? 0;
+  const swapTotalGB = metrics?.swapTotal ?? 0;
+
   const selectedNet = selectedNetData;
-  const metricCard = (
-    label: string,
-    value: string,
-    sub: string,
-    tone = "text-foreground",
-    icon?: React.ReactNode,
-  ) => (
-    <div className="h-[72px] rounded-md border border-border/60 bg-card px-3 py-2 shadow-sm flex flex-col justify-between">
-      <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-        <span>{label}</span>
-        {icon && <span className="shrink-0">{icon}</span>}
-      </div>
-      <div>
-        <div className={`text-base font-semibold tabular-nums ${tone}`}>
-          {value}
-        </div>
-        <div className="truncate text-[9px] text-muted-foreground">{sub}</div>
-      </div>
-    </div>
-  );
+
+  const memParts = useMemo(() => {
+    const bd = metrics?.memBreakdown;
+    const used = bd?.used ?? memUsedGB;
+    const cache = bd?.cache ?? 0;
+    const buffers = bd?.buffers ?? 0;
+    const free = bd?.free ?? memAvailableGB;
+    const total = memTotalGB > 0 ? memTotalGB : (used + cache + buffers + free) || 1;
+    return {
+      used,
+      cache,
+      buffers,
+      free,
+      total,
+      usedPct: Math.min(100, Math.round((used / total) * 100)),
+      cachePct: Math.min(100, Math.round((cache / total) * 100)),
+      buffersPct: Math.min(100, Math.round((buffers / total) * 100)),
+      freePct: Math.min(100, Math.round((free / total) * 100)),
+    };
+  }, [metrics?.memBreakdown, memUsedGB, memTotalGB, memAvailableGB]);
+
   const handleProcessSort = (key: "pid" | "cpu" | "memory") => {
     if (processSortKey === key) {
       setProcessSortDirection((direction) =>
@@ -809,6 +822,7 @@ export function OverviewModule({
     setProcessSortKey(key);
     setProcessSortDirection("desc");
   };
+
   const processSortMark = (key: "pid" | "cpu" | "memory") =>
     processSortKey === key
       ? processSortDirection === "desc"
@@ -817,125 +831,564 @@ export function OverviewModule({
       : "";
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-transparent">
-      {/* 统一规范工具栏 */}
-      <div className="flex items-center justify-between h-11 px-4 border-b border-border/50 bg-muted/20 shrink-0">
-        <div className="flex items-center gap-2">
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border border-primary/25 bg-primary/10 text-primary text-[11px] font-medium">
+    <div className="flex h-full flex-col overflow-hidden bg-transparent select-none">
+      {/* 1. 顶部紧凑工具与状态栏 */}
+      <div className="flex items-center justify-between h-10 px-3 border-b border-border/50 bg-muted/20 shrink-0 text-xs">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-primary/25 bg-primary/10 text-primary text-[11px] font-medium shrink-0">
             <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-            {metrics?.osName || t("module_overview")}
+            <span className="truncate max-w-[150px]">{metrics?.osName || t("module_overview")}</span>
           </span>
           {(metrics?.uptime ?? 0) > 0 && (
-            <span className="text-[11px] text-muted-foreground/70 font-mono">
-              up {formatUptime(metrics?.uptime ?? 0, t)}
+            <span className="text-[11px] text-muted-foreground/80 font-mono shrink-0 hidden sm:inline">
+              运行 {formatUptime(metrics?.uptime ?? 0, t)}
+            </span>
+          )}
+          {metrics?.kernelVersion && (
+            <span className="text-[10.5px] text-muted-foreground/60 font-mono truncate max-w-[130px] hidden md:inline" title={metrics.kernelVersion}>
+              {metrics.kernelVersion}
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2.5 text-[11px] text-muted-foreground">
-          <span className="flex items-center gap-1 text-muted-foreground/70">
+
+        {/* 顶部中央快捷状态胶囊 (实例、CPU、内存、磁盘，精致紧凑) */}
+        <div className="hidden lg:flex items-center gap-1.5 text-[11px] font-mono">
+          <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-muted/40 border border-border/40">
+            <Activity className="h-3 w-3 text-emerald-500" />
+            <span className="text-muted-foreground text-[10px]">状态:</span>
+            <span className="text-emerald-500 font-semibold">{metrics ? "UP" : "DOWN"}</span>
+          </span>
+          <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-muted/40 border border-border/40">
+            <Cpu className="h-3 w-3 text-blue-500" />
+            <span className="text-muted-foreground text-[10px]">CPU:</span>
+            <span className={cn("font-semibold", getTextColor(metrics?.cpuUsage ?? 0))}>
+              {safeFixed(metrics?.cpuUsage, 0)}%
+            </span>
+          </span>
+          <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-muted/40 border border-border/40">
+            <MemoryStick className="h-3 w-3 text-emerald-500" />
+            <span className="text-muted-foreground text-[10px]">内存:</span>
+            <span className={cn("font-semibold", getTextColor(memoryUse * 100))}>
+              {safeFixed(memoryUse * 100, 0)}%
+            </span>
+          </span>
+          <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-muted/40 border border-border/40">
+            <HardDrive className="h-3 w-3 text-orange-500" />
+            <span className="text-muted-foreground text-[10px]">磁盘:</span>
+            <span className={cn("font-semibold", getTextColor(maxDiskUse))}>
+              {safeFixed(maxDiskUse, 0)}%
+            </span>
+          </span>
+        </div>
+
+        {/* 顶部右侧更新时间与刷新按钮 */}
+        <div className="flex items-center gap-2 text-[11px] text-muted-foreground shrink-0">
+          <span className="hidden sm:flex items-center gap-1 text-muted-foreground/70 font-mono text-[10px]">
             <Clock3 className="h-3 w-3" />
-            {lastUpdatedAt
-              ? `更新于 ${new Date(lastUpdatedAt).toLocaleTimeString()}`
-              : "等待采集"}
+            {lastUpdatedAt ? `更新于 ${new Date(lastUpdatedAt).toLocaleTimeString()}` : "等待采集"}
           </span>
           <Button
             variant="ghost"
             size="sm"
             onClick={handleRefreshAll}
             disabled={loading || processLoading}
-            className="gap-1 h-7 text-xs"
+            className="gap-1 h-6 px-2 text-xs"
           >
-            <RefreshCw
-              className={cn(
-                "h-3.5 w-3.5",
-                (loading || processLoading) && "animate-spin"
-              )}
-            />
-            {t("ov_refresh")}
+            <RefreshCw className={cn("h-3 w-3", (loading || processLoading) && "animate-spin")} />
+            <span className="hidden sm:inline">{t("ov_refresh")}</span>
           </Button>
         </div>
       </div>
-      <div className="flex flex-1 flex-col overflow-auto p-4 space-y-3">
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-          <div className="min-w-0 space-y-2">
-            <div className="grid grid-cols-2 gap-2">
-              {metricCard(
-                "实例状态",
-                metrics ? "UP" : "DOWN",
-                metrics ? "SSH 指标采集正常" : "无法获取指标",
-                metrics ? "text-emerald-500 font-semibold" : "text-destructive font-semibold",
-                <Activity className="h-3.5 w-3.5 text-emerald-500" />,
+
+      {/* 2. 主体：精致小巧 3×2 响应式卡片网格，一页完整呈现 */}
+      <div className="flex-1 min-h-0 overflow-y-auto p-2.5">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+          {/* Card 1: CPU 使用率与趋势 */}
+          <Card className="h-[270px] lg:h-[285px] flex flex-col min-w-0 overflow-hidden border-blue-500/20 bg-gradient-to-br from-blue-500/[0.04] via-card to-card shadow-xs">
+            <CardHeader className="flex-row items-center justify-between space-y-0 py-2 px-3 border-b border-border/40 shrink-0">
+              <CardTitle className="flex items-center gap-1.5 text-xs">
+                <Cpu className="h-3.5 w-3.5 text-blue-400" />
+                <span>CPU 趋势与负载</span>
+              </CardTitle>
+              {cpuInfo.model ? (
+                <span className="text-[10px] text-muted-foreground truncate max-w-[150px] font-mono" title={cpuInfo.model}>
+                  {cpuInfo.cores > 0 ? `${cpuInfo.cores}核` : ""}{cpuInfo.threads > 0 ? `/${cpuInfo.threads}线程` : ""}
+                  {cpuInfo.isVirtual ? " · 虚机" : ""}
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                  <span className="h-1.5 w-1.5 rounded-full bg-blue-400 shadow-[0_0_6px_rgba(96,165,250,0.9)]" />
+                  实时
+                </span>
               )}
-              {metricCard(
-                "CPU 使用率",
-                `${safeFixed(metrics?.cpuUsage, 1)}%`,
-                `负载 ${loadAvgLabels.map((v) => v.value).join(" / ")}`,
-                getTextColor(metrics?.cpuUsage ?? 0),
-                <Cpu className="h-3.5 w-3.5 text-primary" />,
-              )}
-              {metricCard(
-                "内存使用率",
-                `${safeFixed(memoryUse * 100, 1)}%`,
-                `${formatGB(metrics?.memAvailableBytes ? metrics.memAvailableBytes / 1073741824 : 0)} 可用`,
-                getTextColor(memoryUse * 100),
-                <MemoryStick className="h-3.5 w-3.5 text-emerald-500" />,
-              )}
-              {metricCard(
-                "磁盘使用率",
-                `${safeFixed(maxDiskUse, 1)}%`,
-                `${diskItems.length} 个文件系统`,
-                getTextColor(maxDiskUse),
-                <HardDrive className="h-3.5 w-3.5 text-orange-500" />,
-              )}
-            </div>
-            <Card className="flex h-[158px] min-w-0 flex-col overflow-hidden border-border/60 shadow-sm">
-              <CardHeader className="pb-2">
-                <CardTitle className="flex items-center gap-1.5 text-xs"><Info className="h-3.5 w-3.5 text-primary" />系统基础</CardTitle>
-              </CardHeader>
-              <CardContent className="min-h-0 flex-1 overflow-hidden grid grid-cols-2 gap-1.5 text-[11px]">
-                <div className="min-w-0 rounded-md bg-muted/25 px-2.5 py-1.5">
-                  <span className="text-muted-foreground">OS</span>
-                  <div
-                    className="mt-1 truncate font-medium"
-                    title={metrics?.osName || "-"}
-                  >
-                    {metrics?.osName || "-"}
-                  </div>
+            </CardHeader>
+            <CardContent className="min-h-0 flex-1 flex flex-col p-2.5 overflow-hidden text-xs justify-between">
+              <div className="flex items-baseline justify-between shrink-0">
+                <div className={cn("text-2xl font-bold font-mono tabular-nums leading-none", getTextColor(metrics?.cpuUsage ?? 0))}>
+                  {safeFixed(metrics?.cpuUsage, 1)}%
                 </div>
-                <div className="min-w-0 rounded-md bg-muted/25 px-2.5 py-1.5">
-                  <span className="text-muted-foreground">Kernel</span>
-                  <div
-                    className="mt-1 truncate font-medium"
-                    title={metrics?.kernelVersion || "-"}
-                  >
-                    {metrics?.kernelVersion || "-"}
-                  </div>
+                <div className="text-[10.5px] text-muted-foreground font-mono">
+                  负载: {loadAvgLabels.map((v) => v.value).join(" / ")}
                 </div>
-                <div className="min-w-0 rounded-md bg-muted/25 px-2.5 py-1.5">
-                  <span className="text-muted-foreground">运行时间</span>
-                  <div className="mt-1 font-medium">
-                    {formatUptime(metrics?.uptime ?? 0, t)}
+              </div>
+
+              <div className="h-[120px] w-full rounded-md border border-blue-400/10 bg-background/30 p-1 my-1">
+                {cpuChartData.length > 0 ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={cpuChartData} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
+                      <defs>
+                        <linearGradient id="cpuAreaFill" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#60a5fa" stopOpacity={0.45} />
+                          <stop offset="100%" stopColor="#60a5fa" stopOpacity={0.02} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid vertical={false} stroke="currentColor" strokeOpacity={0.08} />
+                      <XAxis
+                        dataKey="idx"
+                        axisLine={false}
+                        tickLine={false}
+                        tick={{ fontSize: 8, fill: "currentColor", opacity: 0.5 }}
+                        tickCount={4}
+                        minTickGap={24}
+                        tickFormatter={(value) => `${Number(value) - cpuChartData.length + 1}s`}
+                      />
+                      <YAxis
+                        domain={cpuChartDomain}
+                        axisLine={false}
+                        tickLine={false}
+                        width={32}
+                        tickCount={3}
+                        tick={{ fontSize: 8, fill: "currentColor", opacity: 0.5 }}
+                        tickFormatter={(value) => `${safeFixed(Number(value), 0)}%`}
+                      />
+                      <RechartsTooltip
+                        contentStyle={{
+                          background: "hsl(var(--card))",
+                          border: "1px solid hsl(var(--border))",
+                          borderRadius: 6,
+                          fontSize: 10,
+                          padding: "4px 8px",
+                        }}
+                        formatter={(value) => [`${safeFixed(Number(value), 1)}%`, "CPU"]}
+                        labelFormatter={() => "采样"}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="value"
+                        stroke="#60a5fa"
+                        fill="url(#cpuAreaFill)"
+                        fillOpacity={1}
+                        strokeWidth={1.5}
+                        dot={false}
+                        activeDot={{ r: 2.5 }}
+                        isAnimationActive={false}
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="flex h-full items-center justify-center text-[10px] text-muted-foreground">
+                    等待 CPU 采样...
                   </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-4 gap-1 text-[10px] font-mono shrink-0 pt-1 border-t border-border/30">
+                <div className="text-center truncate">
+                  <span className="text-muted-foreground/70 block text-[9px]">用户态</span>
+                  <span className="font-medium">{safeFixed(metrics?.cpuUsr, 0)}%</span>
                 </div>
-                <div className="min-w-0 rounded-md bg-muted/25 px-2.5 py-1.5">
-                  <span className="text-muted-foreground">进程 / 僵尸</span>
-                  <div className="mt-1 font-medium">
-                    {metrics?.totalProcesses ?? 0} /{" "}
-                    <span
-                      className={metrics?.zombieProcesses ? "text-red-500" : ""}
-                    >
-                      {metrics?.zombieProcesses ?? 0}
+                <div className="text-center truncate">
+                  <span className="text-muted-foreground/70 block text-[9px]">系统态</span>
+                  <span className="font-medium">{safeFixed(metrics?.cpuSys, 0)}%</span>
+                </div>
+                <div className="text-center truncate">
+                  <span className="text-muted-foreground/70 block text-[9px]">IO等待</span>
+                  <span className="font-medium">{safeFixed(metrics?.cpuIowait, 0)}%</span>
+                </div>
+                <div className="text-center truncate">
+                  <span className="text-muted-foreground/70 block text-[9px]">Steal</span>
+                  <span className="font-medium">{safeFixed(metrics?.cpuSteal, 0)}%</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Card 2: 内存与交换分区 */}
+          <Card className="h-[270px] lg:h-[285px] flex flex-col min-w-0 overflow-hidden border-emerald-500/20 bg-gradient-to-br from-emerald-500/[0.04] via-card to-card shadow-xs">
+            <CardHeader className="flex-row items-center justify-between space-y-0 py-2 px-3 border-b border-border/40 shrink-0">
+              <CardTitle className="flex items-center gap-1.5 text-xs">
+                <MemoryStick className="h-3.5 w-3.5 text-emerald-400" />
+                <span>内存与交换分区</span>
+              </CardTitle>
+              <span className="text-[10px] text-muted-foreground tabular-nums font-mono">
+                总计 {formatGB(memTotalGB)}
+              </span>
+            </CardHeader>
+            <CardContent className="min-h-0 flex-1 flex flex-col p-2.5 overflow-hidden text-xs justify-between">
+              <div className="flex items-baseline justify-between shrink-0">
+                <div className={cn("text-2xl font-bold font-mono tabular-nums leading-none", getTextColor(memoryUse * 100))}>
+                  {safeFixed(memoryUse * 100, 1)}%
+                </div>
+                <div className="text-[10.5px] text-muted-foreground font-mono">
+                  可用: <span className="font-semibold text-foreground/90">{formatGB(memAvailableGB)}</span>
+                </div>
+              </div>
+
+              {/* 内存构成堆叠分段条 */}
+              <div className="my-1.5 space-y-1.5">
+                <div className="h-2.5 w-full bg-muted/50 rounded-full overflow-hidden flex border border-border/30">
+                  <div style={{ width: `${memParts.usedPct}%` }} className="bg-emerald-500 transition-all duration-300" title={`应用占用: ${formatGB(memParts.used)}`} />
+                  <div style={{ width: `${memParts.cachePct}%` }} className="bg-violet-400 transition-all duration-300" title={`缓存: ${formatGB(memParts.cache)}`} />
+                  <div style={{ width: `${memParts.buffersPct}%` }} className="bg-sky-400 transition-all duration-300" title={`缓冲: ${formatGB(memParts.buffers)}`} />
+                  <div style={{ width: `${memParts.freePct}%` }} className="bg-muted-foreground/20 transition-all duration-300" title={`空闲: ${formatGB(memParts.free)}`} />
+                </div>
+
+                <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[10px] font-mono">
+                  <div className="flex items-center justify-between">
+                    <span className="flex items-center gap-1 text-muted-foreground">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                      应用占用
                     </span>
+                    <span>{formatGB(memParts.used)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="flex items-center gap-1 text-muted-foreground">
+                      <span className="w-1.5 h-1.5 rounded-full bg-violet-400 shrink-0" />
+                      缓存
+                    </span>
+                    <span>{formatGB(memParts.cache)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="flex items-center gap-1 text-muted-foreground">
+                      <span className="w-1.5 h-1.5 rounded-full bg-sky-400 shrink-0" />
+                      缓冲区
+                    </span>
+                    <span>{formatGB(memParts.buffers)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="flex items-center gap-1 text-muted-foreground">
+                      <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 shrink-0" />
+                      空闲内存
+                    </span>
+                    <span>{formatGB(memParts.free)}</span>
                   </div>
                 </div>
-              </CardContent>
-            </Card>
-          </div>
-          <Card className="flex h-[310px] min-w-0 flex-col overflow-hidden border-border/60 shadow-sm">
-            <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
+              </div>
+
+              {/* 交换分区 (Swap) 区域 */}
+              <div className="border-t border-border/40 pt-1.5 shrink-0">
+                <div className="flex items-center justify-between text-[10.5px] font-mono mb-1">
+                  <span className="text-muted-foreground">
+                    交换 (Swap): <span className="font-semibold text-foreground/90">{formatGB(swapUsedGB)} / {formatGB(swapTotalGB)}</span>
+                  </span>
+                  <span className={cn(
+                    "text-[9px] px-1.5 py-0.2 rounded font-sans",
+                    swapUse >= 0.5 ? "bg-red-500/10 text-red-500 font-medium" : "bg-muted text-muted-foreground"
+                  )}>
+                    {swapTotalGB > 0 ? `${safeFixed(swapUse * 100, 0)}%` : "未启用"}
+                  </span>
+                </div>
+                <div className="h-1.5 w-full bg-muted/50 rounded-full overflow-hidden border border-border/20">
+                  <div
+                    className={cn("h-full transition-all duration-300", getProgressColor(swapUse * 100))}
+                    style={{ width: `${Math.min(100, Math.max(0, swapUse * 100))}%` }}
+                  />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Card 3: 网卡流量与质量 */}
+          <Card className="h-[270px] lg:h-[285px] flex flex-col min-w-0 overflow-hidden border-emerald-500/20 bg-gradient-to-br from-emerald-500/[0.04] via-card to-card shadow-xs">
+            <CardHeader className="flex-row items-center justify-between space-y-0 py-2 px-3 border-b border-border/40 shrink-0">
+              <CardTitle className="flex items-center gap-1.5 text-xs">
+                <Wifi className="h-3.5 w-3.5 text-emerald-400" />
+                <span>网卡流量与质量</span>
+              </CardTitle>
+              <IfaceSelect
+                options={ifaceOptions}
+                value={selectedIface}
+                onChange={handleIfaceChange}
+              />
+            </CardHeader>
+            <CardContent className="min-h-0 flex-1 flex flex-col p-2.5 overflow-hidden text-xs justify-between">
+              <div className="grid grid-cols-2 gap-2 shrink-0">
+                <div className="rounded-md border border-emerald-400/25 bg-emerald-500/10 p-1.5">
+                  <div className="flex items-center gap-1 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                    <ArrowDown className="h-3 w-3" />
+                    <span>接收 (下载)</span>
+                  </div>
+                  <div className="mt-0.5 text-base font-bold font-mono tabular-nums text-emerald-600 dark:text-emerald-400 leading-none">
+                    {formatNetRate(selectedNet?.rxKbps ?? 0)}
+                  </div>
+                  <div className="text-[9.5px] text-muted-foreground/80 font-mono">
+                    {formatKbps(selectedNet?.rxKbps ?? 0)}
+                  </div>
+                </div>
+                <div className="rounded-md border border-orange-400/25 bg-orange-500/10 p-1.5">
+                  <div className="flex items-center gap-1 text-[10px] font-medium text-orange-600 dark:text-orange-400">
+                    <ArrowUp className="h-3 w-3" />
+                    <span>发送 (上传)</span>
+                  </div>
+                  <div className="mt-0.5 text-base font-bold font-mono tabular-nums text-orange-600 dark:text-orange-400 leading-none">
+                    {formatNetRate(selectedNet?.txKbps ?? 0)}
+                  </div>
+                  <div className="text-[9.5px] text-muted-foreground/80 font-mono">
+                    {formatKbps(selectedNet?.txKbps ?? 0)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="h-[105px] w-full rounded-md border border-emerald-400/10 bg-background/30 p-1 my-1">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={netChartData} margin={{ top: 2, right: 6, bottom: 0, left: 0 }}>
+                    <defs>
+                      <linearGradient id="netRxFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#10b981" stopOpacity={0.9} />
+                        <stop offset="100%" stopColor="#10b981" stopOpacity={0.3} />
+                      </linearGradient>
+                      <linearGradient id="netTxFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#f97316" stopOpacity={0.9} />
+                        <stop offset="100%" stopColor="#f97316" stopOpacity={0.3} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid vertical={false} stroke="currentColor" strokeOpacity={0.08} />
+                    <XAxis
+                      dataKey="idx"
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fontSize: 8, fill: "currentColor", opacity: 0.5 }}
+                      tickCount={4}
+                      minTickGap={24}
+                      tickFormatter={(value) => `${Number(value) - netChartData.length + 1}s`}
+                    />
+                    <YAxis
+                      axisLine={false}
+                      tickLine={false}
+                      width={48}
+                      tickCount={3}
+                      tick={{ fontSize: 8, fill: "currentColor", opacity: 0.5 }}
+                      tickFormatter={(value) => formatNetRate(Number(value))}
+                    />
+                    <RechartsTooltip
+                      contentStyle={{
+                        background: "hsl(var(--card))",
+                        border: "1px solid hsl(var(--border))",
+                        borderRadius: 6,
+                        fontSize: 10,
+                        padding: "4px 8px",
+                      }}
+                      formatter={(value, name) => [
+                        `${formatNetRate(Number(value))} (${formatKbps(Number(value))})`,
+                        name === "rxKbps" ? "↓ 接收" : "↑ 发送",
+                      ]}
+                      labelFormatter={() => "采样"}
+                    />
+                    <Bar dataKey="rxKbps" fill="url(#netRxFill)" radius={[2, 2, 0, 0]} maxBarSize={6} isAnimationActive={false} />
+                    <Bar dataKey="txKbps" fill="url(#netTxFill)" radius={[2, 2, 0, 0]} maxBarSize={6} isAnimationActive={false} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div className="flex items-center justify-between text-[10px] font-mono text-muted-foreground shrink-0 pt-1 border-t border-border/30">
+                <span>TCP 重传: <span className="font-semibold text-foreground/90">{safeFixed((metrics?.tcpRetransRate ?? 0) * 100, 2)}%</span></span>
+                <span>连接: <span className="font-semibold text-foreground/90">{metrics?.tcpEstablished ?? "-"}</span></span>
+                <span>监听: <span className="font-semibold text-foreground/90">{metrics?.tcpListen ?? "-"}</span></span>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Card 4: 文件系统容量 (与小监控弹框 1:1 完全对齐) */}
+          <Card className="h-[270px] lg:h-[285px] flex flex-col min-w-0 overflow-hidden border-orange-500/20 bg-gradient-to-br from-orange-500/[0.04] via-card to-card shadow-xs">
+            <CardHeader className="flex-row items-center justify-between space-y-0 py-2 px-3 border-b border-border/40 shrink-0">
+              <CardTitle className="flex items-center gap-1.5 text-xs">
+                <HardDrive className="h-3.5 w-3.5 text-orange-400" />
+                <span>文件系统容量</span>
+              </CardTitle>
+              <span className="text-[10px] text-muted-foreground tabular-nums">
+                共 {diskItems.length} 个分区 · 最大 {safeFixed(maxDiskUse, 0)}%
+              </span>
+            </CardHeader>
+            <CardContent className="min-h-0 flex-1 flex flex-col p-0 overflow-hidden text-xs">
+              {/* 表头 (与小监控弹框对齐) */}
+              <div className="grid grid-cols-[1fr_56px_92px] bg-muted/40 text-[10px] font-medium text-center border-b border-border/40 py-1 px-2.5 text-muted-foreground font-sans shrink-0">
+                <span className="text-left">挂载路径</span>
+                <span className="text-right">占比</span>
+                <span className="text-right">可用 / 大小</span>
+              </div>
+
+              {/* 列表区 (与小监控弹框完全对齐：背景轻微进度条填充 + 可用/总量) */}
+              <div className="divide-y divide-border/30 font-mono text-[11px] overflow-y-auto flex-1">
+                {diskItems.length === 0 ? (
+                  <div className="py-8 text-center text-muted-foreground/60 text-xs">
+                    无磁盘挂载信息
+                  </div>
+                ) : (
+                  diskItems.map((d) => (
+                    <div
+                      key={d.mountPoint}
+                      className="relative grid grid-cols-[1fr_56px_92px] items-center px-2.5 py-1.5 hover:bg-muted/30 overflow-hidden"
+                      title={`${d.filesystem} -> ${d.mountPoint}`}
+                    >
+                      {/* 背景占用率微量填充条 (与小监控弹框完全一致) */}
+                      <div
+                        className={cn(
+                          "absolute left-0 top-0 bottom-0 opacity-15 pointer-events-none transition-all duration-300",
+                          getProgressColor(d.usePercent),
+                        )}
+                        style={{ width: `${Math.min(100, Math.max(0, d.usePercent))}%` }}
+                      />
+
+                      <div className="relative z-10 flex items-center gap-1.5 min-w-0 pr-1">
+                        <span className="truncate font-sans font-medium text-[11px] text-foreground/90">
+                          {d.mountPoint}
+                        </span>
+                        {d.filesystem && (
+                          <span className="text-[9px] text-muted-foreground/60 truncate font-mono hidden xl:inline">
+                            ({d.filesystem.split("/").pop()})
+                          </span>
+                        )}
+                      </div>
+
+                      <span
+                        className={cn(
+                          "relative z-10 text-right tabular-nums text-[11px]",
+                          getTextColor(d.usePercent),
+                        )}
+                      >
+                        {safeFixed(d.usePercent, 0)}%
+                      </span>
+
+                      <span className="relative z-10 text-right tabular-nums text-[10.5px] text-muted-foreground">
+                        {formatDiskSize(d.available)}/{formatDiskSize(d.total)}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Card 5: 磁盘 I/O */}
+          <Card className="h-[270px] lg:h-[285px] flex flex-col min-w-0 overflow-hidden border-amber-500/20 bg-gradient-to-br from-amber-500/[0.04] via-card to-card shadow-xs">
+            <CardHeader className="flex-row items-center justify-between space-y-0 py-2 px-3 border-b border-border/40 shrink-0">
+              <CardTitle className="flex items-center gap-1.5 text-xs">
+                <Zap className="h-3.5 w-3.5 text-amber-400" />
+                <span>磁盘 I/O</span>
+              </CardTitle>
+              <div className="flex rounded-md bg-muted/60 p-0.5 text-[10px]">
+                <button
+                  type="button"
+                  onClick={() => setDiskIoView("throughput")}
+                  className={cn("rounded px-1.5 py-0.5 transition-colors cursor-pointer", diskIoView === "throughput" ? "bg-background font-semibold shadow-xs" : "text-muted-foreground")}
+                >
+                  吞吐
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDiskIoView("read")}
+                  className={cn("rounded px-1.5 py-0.5 transition-colors cursor-pointer", diskIoView === "read" ? "bg-background font-semibold shadow-xs" : "text-muted-foreground")}
+                >
+                  读
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDiskIoView("write")}
+                  className={cn("rounded px-1.5 py-0.5 transition-colors cursor-pointer", diskIoView === "write" ? "bg-background font-semibold shadow-xs" : "text-muted-foreground")}
+                >
+                  写
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDiskIoView("util")}
+                  className={cn("rounded px-1.5 py-0.5 transition-colors cursor-pointer", diskIoView === "util" ? "bg-background font-semibold shadow-xs" : "text-muted-foreground")}
+                >
+                  利用率
+                </button>
+              </div>
+            </CardHeader>
+            <CardContent className="min-h-0 flex-1 flex flex-col p-2.5 overflow-hidden text-xs justify-between">
+              <div className="h-[155px] w-full rounded-md border border-amber-400/10 bg-background/30 p-1">
+                {diskIoDevices.length > 0 && diskIoHistory.length > 0 ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={diskIoHistory} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
+                      <CartesianGrid vertical={false} stroke="currentColor" strokeOpacity={0.08} />
+                      <XAxis
+                        dataKey="idx"
+                        axisLine={false}
+                        tickLine={false}
+                        tick={{ fontSize: 8, fill: "currentColor", opacity: 0.5 }}
+                        tickCount={4}
+                        minTickGap={24}
+                        tickFormatter={(value) => `${Number(value) - diskIoHistory.length + 1}s`}
+                      />
+                      <YAxis
+                        axisLine={false}
+                        tickLine={false}
+                        width={48}
+                        tickCount={3}
+                        tick={{ fontSize: 8, fill: "currentColor", opacity: 0.5 }}
+                        tickFormatter={(value) =>
+                          diskIoView === "util" ? `${safeFixed(Number(value), 0)}%` : formatDiskRateMbps(Number(value))
+                        }
+                      />
+                      <RechartsTooltip
+                        contentStyle={{
+                          background: "hsl(var(--card))",
+                          border: "1px solid hsl(var(--border))",
+                          borderRadius: 6,
+                          fontSize: 10,
+                          padding: "4px 8px",
+                        }}
+                        formatter={(value, name) => [
+                          diskIoView === "util" ? `${safeFixed(Number(value), 1)}%` : formatDiskRateMbps(Number(value)),
+                          name,
+                        ]}
+                        labelFormatter={() =>
+                          diskIoView === "util" ? "磁盘利用率" : diskIoView === "read" ? "读取" : diskIoView === "write" ? "写入" : "读写吞吐"
+                        }
+                      />
+                      {diskIoSeries.map(({ device, dataKey }, index) => (
+                        <Line
+                          key={device}
+                          type="monotone"
+                          dataKey={dataKey}
+                          name={device}
+                          stroke={DISK_IO_COLORS[index % DISK_IO_COLORS.length]}
+                          strokeWidth={1.5}
+                          dot={false}
+                          isAnimationActive={false}
+                        />
+                      ))}
+                    </LineChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="flex h-full items-center justify-center text-[10px] text-muted-foreground">
+                    等待磁盘 I/O 采样...
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 overflow-x-auto text-[10px] font-mono text-muted-foreground shrink-0 pt-1 border-t border-border/30">
+                {diskIoDevices.map((device, index) => (
+                  <span key={device} className="flex items-center gap-1 shrink-0">
+                    <span
+                      className="h-1.5 w-1.5 rounded-full"
+                      style={{ backgroundColor: DISK_IO_COLORS[index % DISK_IO_COLORS.length] }}
+                    />
+                    {device}
+                  </span>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Card 6: 实时进程排行 (与小监控弹框 1:1 完全对齐) */}
+          <Card className="h-[270px] lg:h-[285px] flex flex-col min-w-0 overflow-hidden border-border/60 shadow-xs">
+            <CardHeader className="flex-row items-center justify-between space-y-0 py-2 px-3 border-b border-border/40 shrink-0">
               <CardTitle className="flex items-center gap-1.5 text-xs">
                 <Activity className="h-3.5 w-3.5 text-primary" />
-                进程列表
+                <span>进程排行</span>
               </CardTitle>
               <div className="flex items-center gap-2">
                 <div className="flex rounded-md bg-muted/60 p-0.5 text-[10px]">
@@ -946,14 +1399,14 @@ export function OverviewModule({
                       setProcessSortDirection("desc");
                     }}
                     className={cn(
-                      "flex items-center gap-1 rounded px-2 py-0.5 transition-colors cursor-pointer select-none",
+                      "flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors cursor-pointer select-none",
                       processSortKey === "memory"
                         ? "bg-primary text-primary-foreground font-semibold shadow-xs"
-                        : "text-muted-foreground hover:text-foreground"
+                        : "text-muted-foreground hover:text-foreground",
                     )}
                   >
-                    <MemoryStick className="h-3 w-3" />
-                    按内存
+                    <MemoryStick className="h-2.5 w-2.5" />
+                    内存
                   </button>
                   <button
                     type="button"
@@ -962,14 +1415,14 @@ export function OverviewModule({
                       setProcessSortDirection("desc");
                     }}
                     className={cn(
-                      "flex items-center gap-1 rounded px-2 py-0.5 transition-colors cursor-pointer select-none",
+                      "flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors cursor-pointer select-none",
                       processSortKey === "cpu"
                         ? "bg-primary text-primary-foreground font-semibold shadow-xs"
-                        : "text-muted-foreground hover:text-foreground"
+                        : "text-muted-foreground hover:text-foreground",
                     )}
                   >
-                    <Cpu className="h-3 w-3" />
-                    按 CPU
+                    <Cpu className="h-2.5 w-2.5" />
+                    CPU
                   </button>
                 </div>
                 <span className="text-[10px] text-muted-foreground font-mono">
@@ -977,824 +1430,75 @@ export function OverviewModule({
                 </span>
               </div>
             </CardHeader>
-            <CardContent className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-              <table className="w-full table-fixed text-[10px]">
-                <thead className="workspace-table-head text-left">
-                  <tr className="border-b border-border/60">
-                    <th className="w-[62px] py-1.5 font-medium">
-                      <button
-                        type="button"
-                        onClick={() => handleProcessSort("pid")}
-                        className={
-                          processSortKey === "pid"
-                            ? "text-foreground font-semibold"
-                            : "hover:text-foreground"
-                        }
-                      >
-                        PID{processSortMark("pid")}
-                      </button>
-                    </th>
-                    <th className="w-[64px] py-1.5 text-right font-medium">
-                      <button
-                        type="button"
-                        onClick={() => handleProcessSort("cpu")}
-                        className={
-                          processSortKey === "cpu"
-                            ? "text-primary font-semibold"
-                            : "hover:text-foreground"
-                        }
-                      >
-                        CPU{processSortMark("cpu")}
-                      </button>
-                    </th>
-                    <th className="w-[72px] py-1.5 text-right font-medium">
-                      <button
-                        type="button"
-                        onClick={() => handleProcessSort("memory")}
-                        className={
-                          processSortKey === "memory"
-                            ? "text-primary font-semibold"
-                            : "hover:text-foreground"
-                        }
-                      >
-                        内存{processSortMark("memory")}
-                      </button>
-                    </th>
-                    <th className="py-1.5 pl-3 font-medium">命令</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedProcesses.map((process) => (
-                    <tr
-                      key={process.pid}
-                      className="border-b border-border/30 hover:bg-muted/25"
-                      title={`PID ${process.pid} | CPU: ${safeFixed(process.cpu, 1)}% | MEM: ${formatProcMem(process)}\n命令: ${process.command}`}
+            <CardContent className="min-h-0 flex-1 flex flex-col p-0 overflow-hidden text-xs">
+              <div className="grid grid-cols-[52px_46px_54px_1fr] bg-muted/40 text-[10px] font-medium text-center border-b border-border/40 py-1 px-2 text-muted-foreground font-sans shrink-0">
+                <button
+                  type="button"
+                  onClick={() => handleProcessSort("pid")}
+                  className={cn("text-left", processSortKey === "pid" && "text-foreground font-semibold")}
+                >
+                  PID{processSortMark("pid")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleProcessSort("cpu")}
+                  className={cn("text-right", processSortKey === "cpu" && "text-primary font-semibold")}
+                >
+                  CPU{processSortMark("cpu")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleProcessSort("memory")}
+                  className={cn("text-right pr-1", processSortKey === "memory" && "text-primary font-semibold")}
+                >
+                  内存{processSortMark("memory")}
+                </button>
+                <span className="text-left pl-2">命令</span>
+              </div>
+
+              <div className="divide-y divide-border/20 font-mono text-[11px] overflow-y-auto flex-1">
+                {sortedProcesses.length === 0 ? (
+                  <div className="py-8 text-center text-muted-foreground/60 text-xs">
+                    {processLoading ? "正在拉取进程列表..." : "暂无进程数据"}
+                  </div>
+                ) : (
+                  sortedProcesses.map((p) => (
+                    <div
+                      key={p.pid}
+                      className="grid grid-cols-[52px_46px_54px_1fr] items-center px-2 py-1 hover:bg-muted/30 text-xs"
+                      title={`PID ${p.pid} | CPU: ${safeFixed(p.cpu, 1)}% | MEM: ${formatProcMem(p)}\n命令: ${p.command}`}
                     >
-                      <td className="py-1.5 tabular-nums text-muted-foreground">
-                        {process.pid}
-                      </td>
-                      <td
+                      <span className="text-left tabular-nums text-muted-foreground/75 text-[10px]">
+                        {p.pid}
+                      </span>
+                      <span
                         className={cn(
-                          "py-1.5 text-right tabular-nums",
-                          processSortKey === "cpu" && "text-primary font-semibold",
+                          "text-right tabular-nums text-[10.5px]",
+                          processSortKey === "cpu" ? "text-primary font-semibold" : "text-muted-foreground",
                         )}
                       >
-                        {safeFixed(process.cpu, 1)}%
-                      </td>
-                      <td
+                        {safeFixed(p.cpu, 1)}%
+                      </span>
+                      <span
                         className={cn(
-                          "py-1.5 text-right tabular-nums",
-                          processSortKey === "memory" && "text-primary font-semibold",
+                          "text-right tabular-nums text-[10.5px] pr-1",
+                          processSortKey === "memory" ? "text-primary font-semibold" : "text-muted-foreground",
                         )}
                       >
-                        {formatProcMem(process)}
-                      </td>
-                      <td
-                        className="truncate py-1.5 pl-3 font-sans"
-                        title={process.command}
-                      >
-                        <span className="font-medium text-foreground/90">
-                          {getShortCommand(process.command)}
-                        </span>
-                        {process.user && (
-                          <span className="text-muted-foreground/60 text-[9px] ml-1.5 font-normal">
-                            ({process.user})
+                        {formatProcMem(p)}
+                      </span>
+                      <span className="text-left pl-2 truncate font-sans text-foreground/90 text-[11px]">
+                        <span className="font-medium">{getShortCommand(p.command)}</span>
+                        {p.user && (
+                          <span className="text-muted-foreground/50 text-[9px] ml-1">
+                            ({p.user})
                           </span>
                         )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {sortedProcesses.length === 0 && (
-                <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
-                  暂无进程数据
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-          <Card className="flex h-[320px] min-w-0 flex-col overflow-hidden border-blue-500/20 bg-gradient-to-br from-blue-500/[0.07] via-card to-card shadow-sm">
-            <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="flex items-center gap-1.5 text-xs">
-                <Cpu className="h-3.5 w-3.5 text-blue-400" />
-                CPU 使用率与趋势
-              </CardTitle>
-              <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                <span className="h-1.5 w-1.5 rounded-full bg-blue-400 shadow-[0_0_6px_rgba(96,165,250,0.9)]" />
-                实时
-              </span>
-            </CardHeader>
-            <CardContent className="min-h-0 flex-1 overflow-hidden">
-              <div className="flex items-center justify-between mb-3">
-                <div
-                  className={cn(
-                    "text-3xl font-semibold font-mono tabular-nums tracking-tight-title",
-                    getTextColor(metrics?.cpuUsage ?? 0),
-                  )}
-                >
-                  {safeFixed(metrics?.cpuUsage, 1)}%
-                </div>
-                {cpuInfo.model && (
-                  <div
-                    className="text-right text-[11px] text-muted-foreground truncate max-w-[220px]"
-                    title={cpuInfo.model}
-                  >
-                    <div className="truncate font-medium">{cpuInfo.model}</div>
-                    <div className="text-[10px] text-muted-foreground/75 font-mono">
-                      {cpuInfo.cores > 0 ? `${cpuInfo.cores} 核` : ""}
-                      {cpuInfo.threads > 0 ? ` / ${cpuInfo.threads} 线程` : ""}
-                      {cpuInfo.isVirtual ? " (虚拟机)" : ""}
+                      </span>
                     </div>
-                  </div>
+                  ))
                 )}
               </div>
-              <div className="h-[190px] min-h-[190px] min-w-0 w-full rounded-md border border-blue-400/10 bg-background/25 p-1">
-                {cpuChartData.length > 0 ? (
-                  <ResponsiveContainer width="100%" height={190} minWidth={1}>
-                    <AreaChart
-                      data={cpuChartData}
-                      margin={{ top: 6, right: 8, bottom: 2, left: 0 }}
-                    >
-                      <defs>
-                        <linearGradient
-                          id="cpuAreaFill"
-                          x1="0"
-                          y1="0"
-                          x2="0"
-                          y2="1"
-                        >
-                          <stop
-                            offset="0%"
-                            stopColor="#60a5fa"
-                            stopOpacity={0.5}
-                          />
-                          <stop
-                            offset="100%"
-                            stopColor="#60a5fa"
-                            stopOpacity={0.03}
-                          />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid
-                        vertical={false}
-                        stroke="currentColor"
-                        strokeOpacity={0.1}
-                      />
-                      <XAxis
-                        dataKey="idx"
-                        axisLine={false}
-                        tickLine={false}
-                        tick={{
-                          fontSize: 9,
-                          fill: "currentColor",
-                          opacity: 0.55,
-                        }}
-                        tickCount={4}
-                        minTickGap={24}
-                        tickFormatter={(value) =>
-                          `${Number(value) - cpuChartData.length + 1}s`
-                        }
-                      />
-                      <YAxis
-                        domain={cpuChartDomain}
-                        axisLine={false}
-                        tickLine={false}
-                        width={38}
-                        tickCount={4}
-                        tick={{
-                          fontSize: 9,
-                          fill: "currentColor",
-                          opacity: 0.55,
-                        }}
-                        tickFormatter={(value) =>
-                          `${safeFixed(Number(value), 0)}%`
-                        }
-                      />
-                      <RechartsTooltip
-                        contentStyle={{
-                          background: "hsl(var(--card))",
-                          border: "1px solid hsl(var(--border))",
-                          borderRadius: 6,
-                          fontSize: 11,
-                        }}
-                        formatter={(value) => [
-                          `${safeFixed(Number(value), 1)}%`,
-                          "CPU",
-                        ]}
-                        labelFormatter={() => "采样"}
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="value"
-                        stroke="#60a5fa"
-                        fill="url(#cpuAreaFill)"
-                        fillOpacity={1}
-                        strokeWidth={2}
-                        dot={{ r: 2, fill: "#60a5fa", strokeWidth: 0 }}
-                        activeDot={{ r: 3 }}
-                        isAnimationActive={false}
-                      />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
-                    等待 CPU 采样数据...
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-          <Card className="flex h-[320px] min-w-0 flex-col overflow-hidden border-violet-500/20 bg-gradient-to-br from-violet-500/[0.05] via-card to-card shadow-sm">
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-1.5 text-xs">
-                <Zap className="h-3.5 w-3.5 text-violet-400" />
-                CPU 模式与系统负载
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="min-h-0 flex-1 overflow-hidden space-y-3 text-xs">
-              {[
-                ["用户态", metrics?.cpuUsr],
-                ["系统态", metrics?.cpuSys],
-                ["I/O 等待", metrics?.cpuIowait],
-                ["Steal", metrics?.cpuSteal],
-              ].map(([label, value]) => (
-                <div key={String(label)}>
-                  <div className="mb-1 flex justify-between">
-                    <span>{label}</span>
-                    <span className="tabular-nums">
-                      {safeFixed(value as number, 1)}%
-                    </span>
-                  </div>
-                  <Progress value={value as number} className="h-1.5" />
-                </div>
-              ))}
-              <div className="border-t border-border/50 pt-2">
-                Load 1 / 5 / 15：{loadAvgLabels.map((v) => v.value).join(" / ")}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-          <Card className="flex h-[300px] min-w-0 flex-col overflow-hidden border-emerald-500/20 bg-gradient-to-br from-emerald-500/[0.05] via-card to-card shadow-sm">
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-1.5 text-xs">
-                <MemoryStick className="h-3.5 w-3.5 text-emerald-400" />
-                内存使用与构成
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="min-h-0 flex-1 overflow-hidden">
-              {memoryBreakdownData.length > 0 ? (
-                <div className="grid h-full min-w-0 grid-cols-[128px_138px_max-content] items-center justify-start gap-4">
-                  <div className="min-w-0 self-stretch py-2">
-                    <div className="text-3xl font-semibold font-mono tabular-nums tracking-tight-title text-emerald-500">
-                      {safeFixed(memoryUse * 100, 1)}%
-                    </div>
-                    <div className="mt-1 text-[10px] text-muted-foreground">
-                      总内存使用率
-                    </div>
-                    <Progress value={memoryUse * 100} className="mt-3 h-2" />
-                    <div className="mt-5 space-y-3 text-xs">
-                      <div className="flex justify-between gap-2">
-                        <span className="text-muted-foreground">总内存</span>
-                        <span className="font-semibold">
-                          {formatGB(metrics?.memoryTotal ?? 0)}
-                        </span>
-                      </div>
-                      <div className="flex justify-between gap-2">
-                        <span className="text-muted-foreground">可用</span>
-                        <span className="font-semibold">
-                          {formatGB(
-                            (metrics?.memAvailableBytes ?? 0) / 1073741824,
-                          )}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="relative flex h-[174px] w-[138px] items-center justify-center">
-                    <PieChart width={138} height={174}>
-                      <Pie
-                        data={memoryBreakdownData}
-                        dataKey="value"
-                        nameKey="name"
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={39}
-                        outerRadius={62}
-                        paddingAngle={2}
-                        stroke="none"
-                        isAnimationActive={false}
-                      >
-                        {memoryBreakdownData.map((item, index) => (
-                          <Cell
-                            key={item.key}
-                            fill={
-                              MEMORY_CHART_COLORS[
-                                index % MEMORY_CHART_COLORS.length
-                              ]
-                            }
-                          />
-                        ))}
-                      </Pie>
-                      <RechartsTooltip
-                        contentStyle={{
-                          background: "hsl(var(--card))",
-                          border: "1px solid hsl(var(--border))",
-                          borderRadius: 6,
-                          fontSize: 11,
-                        }}
-                        formatter={(value, name) => [
-                          formatGB(Number(value)),
-                          name,
-                        ]}
-                      />
-                    </PieChart>
-                    <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-                      <span className="text-[10px] text-muted-foreground">
-                        总计
-                      </span>
-                      <span className="text-sm font-semibold">
-                        {formatGB(memoryBreakdownTotal)}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="w-max space-y-2 text-[11px]">
-                    {memoryBreakdownData.map((item, index) => (
-                      <div
-                        key={item.key}
-                        className="grid grid-cols-[8px_72px_auto] items-center gap-2"
-                      >
-                        <span
-                          className="h-2 w-2 rounded-full"
-                          style={{
-                            backgroundColor:
-                              MEMORY_CHART_COLORS[
-                                index % MEMORY_CHART_COLORS.length
-                              ],
-                          }}
-                        />
-                        <span className="truncate text-muted-foreground">
-                          {item.name}
-                        </span>
-                        <span className="text-right tabular-nums">
-                          {formatGB(item.value)} ·{" "}
-                          {safeFixed(
-                            (item.value / memoryBreakdownTotal) * 100,
-                            1,
-                          )}
-                          %
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
-                  暂无内存构成数据
-                </div>
-              )}
-            </CardContent>
-          </Card>
-          <Card className="flex h-[300px] min-w-0 flex-col overflow-hidden border-violet-500/20 bg-gradient-to-br from-violet-500/[0.05] via-card to-card shadow-sm">
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-1.5 text-xs">
-                <HardDrive className="h-3.5 w-3.5 text-violet-400" />
-                交换分区 (Swap) 与内存压力
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="min-h-0 flex-1 overflow-hidden">
-              <div className="flex items-end justify-between gap-3">
-                <div>
-                  <div
-                    className={`text-3xl font-semibold font-mono tabular-nums tracking-tight-title ${swapUse >= 0.5 || memoryUse >= 0.9 ? "text-red-500" : swapUse >= 0.3 || memoryUse >= 0.8 ? "text-amber-500" : "text-violet-500"}`}
-                  >
-                    {safeFixed(swapUse * 100, 1)}%
-                  </div>
-                  <div className="mt-1 text-[10px] text-muted-foreground">
-                    Swap 使用率
-                  </div>
-                </div>
-                <span
-                  className={`rounded-full px-2 py-1 text-[10px] font-medium ${swapUse >= 0.5 || memoryUse >= 0.9 ? "bg-red-500/10 text-red-500" : swapUse >= 0.3 || memoryUse >= 0.8 ? "bg-amber-500/10 text-amber-500" : "bg-emerald-500/10 text-emerald-500"}`}
-                >
-                  {swapUse >= 0.5 || memoryUse >= 0.9
-                    ? "压力较高"
-                    : swapUse >= 0.3 || memoryUse >= 0.8
-                      ? "需要关注"
-                      : "状态正常"}
-                </span>
-              </div>
-              <Progress value={swapUse * 100} className="mt-4 h-2" />
-              <div className="mt-5 grid grid-cols-3 gap-2 text-[11px]">
-                <div className="rounded-md bg-background/30 px-2.5 py-2.5">
-                  <span className="text-muted-foreground">Swap 已用</span>
-                  <div className="mt-1 font-semibold">
-                    {formatGB(metrics?.swapUsed ?? 0)}
-                  </div>
-                </div>
-                <div className="rounded-md bg-background/30 px-2.5 py-2.5">
-                  <span className="text-muted-foreground">Swap 总量</span>
-                  <div className="mt-1 font-semibold">
-                    {formatGB(metrics?.swapTotal ?? 0)}
-                  </div>
-                </div>
-                <div className="rounded-md bg-background/30 px-2.5 py-2.5">
-                  <span className="text-muted-foreground">可用内存</span>
-                  <div className="mt-1 font-semibold">
-                    {formatGB((metrics?.memAvailableBytes ?? 0) / 1073741824)}
-                  </div>
-                </div>
-              </div>
-              <div className="mt-5 border-t border-border/40 pt-4 text-[11px] leading-5 text-muted-foreground">
-                Swap 持续增长或可用内存低于 10%
-                时，建议优先检查高内存进程和应用内存释放情况。
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-          <Card className="flex h-[300px] flex-col overflow-hidden border-orange-500/20 bg-gradient-to-br from-orange-500/[0.05] via-card to-card shadow-sm">
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-1.5 text-xs">
-                <HardDrive className="h-3.5 w-3.5 text-orange-400" />
-                文件系统容量
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="min-h-0 flex-1 overflow-y-auto space-y-3">
-              {diskItems.length ? (
-                diskItems.map((d) => (
-                  <div key={d.mountPoint}>
-                    <div className="mb-1 flex justify-between text-xs">
-                      <span className="truncate font-medium">{d.mountPoint}</span>
-                      <span className="tabular-nums text-muted-foreground text-[11px]">
-                        {safeFixed(d.usePercent, 1)}% · 可用 {formatDiskSize(d.available)} / 共 {formatDiskSize(d.total)}
-                      </span>
-                    </div>
-                    <div className="relative h-2 w-full bg-muted/60 rounded-full overflow-hidden">
-                      <div
-                        className={cn("h-full transition-all duration-300", getProgressColor(d.usePercent))}
-                        style={{ width: `${Math.min(100, Math.max(0, d.usePercent))}%` }}
-                      />
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <span className="text-xs text-muted-foreground">
-                  暂无磁盘数据
-                </span>
-              )}
-            </CardContent>
-          </Card>
-          <Card className="flex h-[300px] min-w-0 flex-col overflow-hidden border-amber-500/20 bg-gradient-to-br from-amber-500/[0.05] via-card to-card shadow-sm">
-            <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="flex items-center gap-1.5 text-xs">
-                <Zap className="h-3.5 w-3.5 text-amber-400" />
-                磁盘 I/O
-              </CardTitle>
-              <div className="flex rounded-md bg-muted/60 p-0.5 text-[10px]">
-                <button
-                  type="button"
-                  onClick={() => setDiskIoView("throughput")}
-                  className={`rounded px-2 py-1 ${diskIoView === "throughput" ? "bg-background font-medium shadow-sm" : "text-muted-foreground"}`}
-                >
-                  吞吐
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDiskIoView("read")}
-                  className={`rounded px-2 py-1 ${diskIoView === "read" ? "bg-background font-medium shadow-sm" : "text-muted-foreground"}`}
-                >
-                  读
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDiskIoView("write")}
-                  className={`rounded px-2 py-1 ${diskIoView === "write" ? "bg-background font-medium shadow-sm" : "text-muted-foreground"}`}
-                >
-                  写
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDiskIoView("util")}
-                  className={`rounded px-2 py-1 ${diskIoView === "util" ? "bg-background font-medium shadow-sm" : "text-muted-foreground"}`}
-                >
-                  利用率
-                </button>
-              </div>
-            </CardHeader>
-            <CardContent className="min-h-0 flex-1 overflow-hidden">
-              {diskIoDevices.length > 0 && diskIoHistory.length > 0 ? (
-                <>
-                  <div className="h-[190px] min-h-0 rounded-md border border-amber-400/10 bg-background/25 p-1">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart
-                        data={diskIoHistory}
-                        margin={{ top: 6, right: 8, bottom: 2, left: 0 }}
-                      >
-                        <CartesianGrid
-                          vertical={false}
-                          stroke="currentColor"
-                          strokeOpacity={0.1}
-                        />
-                        <XAxis
-                          dataKey="idx"
-                          axisLine={false}
-                          tickLine={false}
-                          tick={{
-                            fontSize: 9,
-                            fill: "currentColor",
-                            opacity: 0.55,
-                          }}
-                          tickCount={4}
-                          minTickGap={24}
-                          tickFormatter={(value) =>
-                            `${Number(value) - diskIoHistory.length + 1}s`
-                          }
-                        />
-                        <YAxis
-                          axisLine={false}
-                          tickLine={false}
-                          allowDecimals
-                          width={58}
-                          tickCount={4}
-                          tick={{
-                            fontSize: 9,
-                            fill: "currentColor",
-                            opacity: 0.55,
-                          }}
-                          tickFormatter={(value) =>
-                            diskIoView === "util"
-                              ? `${safeFixed(Number(value), 0)}%`
-                              : formatDiskRateMbps(Number(value))
-                          }
-                        />
-                        <RechartsTooltip
-                          contentStyle={{
-                            background: "hsl(var(--card))",
-                            border: "1px solid hsl(var(--border))",
-                            borderRadius: 6,
-                            fontSize: 11,
-                          }}
-                          formatter={(value, name) => [
-                            diskIoView === "util"
-                              ? `${safeFixed(Number(value), 1)}%`
-                              : formatDiskRateMbps(Number(value)),
-                            name,
-                          ]}
-                          labelFormatter={() =>
-                            diskIoView === "util"
-                              ? "磁盘利用率"
-                              : diskIoView === "read"
-                                ? "磁盘读取"
-                                : diskIoView === "write"
-                                  ? "磁盘写入"
-                                  : "磁盘吞吐（读+写）"
-                          }
-                        />
-                        {diskIoSeries.map(({ device, dataKey }, index) => (
-                          <Line
-                            key={device}
-                            type="monotone"
-                            dataKey={dataKey}
-                            name={device}
-                            stroke={
-                              DISK_IO_COLORS[index % DISK_IO_COLORS.length]
-                            }
-                            strokeWidth={2}
-                            dot={false}
-                            isAnimationActive={false}
-                          />
-                        ))}
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-                  <div className="mt-2 max-h-[34px] overflow-y-auto flex flex-wrap gap-x-3 gap-y-1 pr-1 text-[10px] text-muted-foreground">
-                    {diskIoDevices.map((device, index) => (
-                      <span key={device} className="flex items-center gap-1">
-                        <span
-                          className="h-1.5 w-3 rounded-full"
-                          style={{
-                            backgroundColor:
-                              DISK_IO_COLORS[index % DISK_IO_COLORS.length],
-                          }}
-                        />
-                        {device}
-                      </span>
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
-                  等待磁盘 I/O 采样数据...
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-          <Card className="flex h-[320px] min-w-0 flex-col overflow-hidden border-emerald-500/20 bg-gradient-to-br from-emerald-500/[0.06] via-card to-card shadow-sm">
-            <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="flex items-center gap-1.5 text-xs">
-                <Wifi className="h-3.5 w-3.5 text-emerald-400" />
-                网卡流量
-              </CardTitle>
-              <IfaceSelect
-                options={ifaceOptions}
-                value={selectedIface}
-                onChange={handleIfaceChange}
-              />
-            </CardHeader>
-            <CardContent className="min-h-0 flex-1 overflow-hidden">
-              <div className="grid grid-cols-2 gap-2">
-                <div className="rounded-md border border-emerald-400/20 bg-emerald-500/10 p-2.5">
-                  <div className="flex items-center gap-1 text-[11px] font-medium text-emerald-500">
-                    <ArrowDown className="h-3 w-3" />
-                    <span>接收 (下载)</span>
-                  </div>
-                  <div className="mt-1 text-lg font-semibold font-mono tabular-nums text-emerald-500">
-                    {formatNetRate(selectedNet?.rxKbps ?? 0)}
-                  </div>
-                  <div className="mt-0.5 text-[10px] text-muted-foreground font-mono">
-                    {formatKbps(selectedNet?.rxKbps ?? 0)}
-                  </div>
-                </div>
-                <div className="rounded-md border border-orange-400/20 bg-orange-500/10 p-2.5">
-                  <div className="flex items-center gap-1 text-[11px] font-medium text-orange-500">
-                    <ArrowUp className="h-3 w-3" />
-                    <span>发送 (上传)</span>
-                  </div>
-                  <div className="mt-1 text-lg font-semibold font-mono tabular-nums text-orange-500">
-                    {formatNetRate(selectedNet?.txKbps ?? 0)}
-                  </div>
-                  <div className="mt-0.5 text-[10px] text-muted-foreground font-mono">
-                    {formatKbps(selectedNet?.txKbps ?? 0)}
-                  </div>
-                </div>
-              </div>
-              <div className="mt-3 h-[180px] rounded-md border border-emerald-400/10 bg-background/25 p-1">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={netChartData}
-                    margin={{ top: 6, right: 8, bottom: 2, left: 0 }}
-                  >
-                    <defs>
-                      <linearGradient
-                        id="netRxFill"
-                        x1="0"
-                        y1="0"
-                        x2="0"
-                        y2="1"
-                      >
-                        <stop
-                          offset="0%"
-                          stopColor="#10b981"
-                          stopOpacity={0.95}
-                        />
-                        <stop
-                          offset="100%"
-                          stopColor="#10b981"
-                          stopOpacity={0.35}
-                        />
-                      </linearGradient>
-                      <linearGradient
-                        id="netTxFill"
-                        x1="0"
-                        y1="0"
-                        x2="0"
-                        y2="1"
-                      >
-                        <stop
-                          offset="0%"
-                          stopColor="#f97316"
-                          stopOpacity={0.95}
-                        />
-                        <stop
-                          offset="100%"
-                          stopColor="#f97316"
-                          stopOpacity={0.35}
-                        />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid
-                      vertical={false}
-                      stroke="currentColor"
-                      strokeOpacity={0.1}
-                    />
-                    <XAxis
-                      dataKey="idx"
-                      axisLine={false}
-                      tickLine={false}
-                      tick={{
-                        fontSize: 9,
-                        fill: "currentColor",
-                        opacity: 0.55,
-                      }}
-                      tickCount={4}
-                      minTickGap={24}
-                      tickFormatter={(value) =>
-                        `${Number(value) - netChartData.length + 1}s`
-                      }
-                    />
-                    <YAxis
-                      axisLine={false}
-                      tickLine={false}
-                      width={58}
-                      tickCount={4}
-                      tick={{
-                        fontSize: 9,
-                        fill: "currentColor",
-                        opacity: 0.55,
-                      }}
-                      tickFormatter={(value) => formatNetRate(Number(value))}
-                    />
-                    <RechartsTooltip
-                      contentStyle={{
-                        background: "hsl(var(--card))",
-                        border: "1px solid hsl(var(--border))",
-                        borderRadius: 6,
-                        fontSize: 11,
-                      }}
-                      formatter={(value, name) => [
-                        `${formatNetRate(Number(value))} (${formatKbps(Number(value))})`,
-                        name === "rxKbps" ? "↓ 接收" : "↑ 发送",
-                      ]}
-                      labelFormatter={() => "采样"}
-                    />
-                    <Bar
-                      dataKey="rxKbps"
-                      fill="url(#netRxFill)"
-                      radius={[3, 3, 0, 0]}
-                      maxBarSize={8}
-                    />
-                    <Bar
-                      dataKey="txKbps"
-                      fill="url(#netTxFill)"
-                      radius={[3, 3, 0, 0]}
-                      maxBarSize={8}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </CardContent>
-          </Card>
-          <Card className="flex h-[320px] flex-col overflow-hidden border-sky-500/20 bg-gradient-to-br from-sky-500/[0.05] via-card to-card shadow-sm">
-            <CardHeader className="flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="flex items-center gap-1.5 text-xs">
-                <Activity className="h-3.5 w-3.5 text-sky-400" />
-                网络质量
-              </CardTitle>
-              <span
-                className={`rounded-full px-2 py-1 text-[10px] font-medium ${metrics?.tcpRetransRate && metrics.tcpRetransRate >= 0.02 ? "bg-red-500/10 text-red-500" : sortedNetwork.some((n) => n.rxErrors + n.txErrors > 0 || n.dropRate > 0) ? "bg-amber-500/10 text-amber-500" : "bg-emerald-500/10 text-emerald-500"}`}
-              >
-                {metrics?.tcpRetransRate && metrics.tcpRetransRate >= 0.02
-                  ? "异常"
-                  : sortedNetwork.some(
-                        (n) => n.rxErrors + n.txErrors > 0 || n.dropRate > 0,
-                      )
-                    ? "需要关注"
-                    : "状态正常"}
-              </span>
-            </CardHeader>
-            <CardContent className="min-h-0 flex-1 overflow-y-auto space-y-3 text-xs">
-              <div className="flex justify-between">
-                TCP 重传率
-                <span className="font-semibold">
-                  {safeFixed((metrics?.tcpRetransRate ?? 0) * 100, 2)}%
-                </span>
-              </div>
-              <div className="grid grid-cols-3 gap-2 border-t border-border/40 pt-2 text-[11px]">
-                <div className="rounded-md bg-background/30 px-2 py-2">
-                  <span className="text-muted-foreground">已建立</span>
-                  <div className="mt-1 font-semibold tabular-nums">
-                    {metrics?.tcpEstablished ?? "-"}
-                  </div>
-                </div>
-                <div className="rounded-md bg-background/30 px-2 py-2">
-                  <span className="text-muted-foreground">监听</span>
-                  <div className="mt-1 font-semibold tabular-nums">
-                    {metrics?.tcpListen ?? "-"}
-                  </div>
-                </div>
-                <div className="rounded-md bg-background/30 px-2 py-2">
-                  <span className="text-muted-foreground">TimeWait</span>
-                  <div className="mt-1 font-semibold tabular-nums">
-                    {metrics?.tcpTimeWait ?? "-"}
-                  </div>
-                </div>
-              </div>
-              {sortedNetwork.map((n) => (
-                <div
-                  key={n.interface}
-                  className="flex items-center justify-between border-t border-border/40 pt-2"
-                >
-                  <span>{n.interface}</span>
-                  <span>
-                    错误 {n.rxErrors + n.txErrors} · 丢包{" "}
-                    {safeFixed(n.dropRate * 100, 3)}%
-                  </span>
-                </div>
-              ))}
             </CardContent>
           </Card>
         </div>
@@ -1802,7 +1506,6 @@ export function OverviewModule({
     </div>
   );
 }
-
 // ==================== 工具函数 ====================
 
 function formatUptime(seconds: number, t: (key: string) => string): string {
