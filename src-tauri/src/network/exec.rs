@@ -310,12 +310,15 @@ pub async fn run_quick_check(
     target: String,
     port: Option<u16>,
     protocol: Option<String>,
+    run_id: Option<String>,
 ) -> Result<NetworkRun, String> {
     validate_target(&target)?;
     let target_port = port.unwrap_or(if protocol.as_deref() == Some("https") { 443 } else { 80 });
     let proto = protocol.unwrap_or_else(|| (if target_port == 443 { "https" } else { "http" }).to_string());
 
-    let run_id = Uuid::new_v4().to_string();
+    let run_id = run_id
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
     let spec = RunSpec {
         target: target.clone(),
         port: Some(target_port),

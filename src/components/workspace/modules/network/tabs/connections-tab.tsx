@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react'
+import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -72,10 +73,13 @@ export function ConnectionsTab({
     setIsKilling(true)
     try {
       await sshService.killPortByPid(serverId, killPid)
+      toast.success(t('proc_kill_done')?.replace('{pid}', String(killPid)) || `已终止进程 (PID: ${killPid})`)
       setKillPid(null)
       onRefresh()
     } catch (err) {
       console.error('Failed to kill pid:', err)
+      const msg = err instanceof Error ? err.message : String(err)
+      toast.error(`${t('prts_err_kill_generic') || '终止进程失败'}: ${msg}`)
     } finally {
       setIsKilling(false)
     }

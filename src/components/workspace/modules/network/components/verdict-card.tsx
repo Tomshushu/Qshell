@@ -2,6 +2,12 @@ import { useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from '@/components/ui/dropdown-menu'
 import { CheckCircle2, AlertOctagon, AlertTriangle, Download, Copy, Check } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTranslation } from '@/i18n'
@@ -84,15 +90,29 @@ export function VerdictCard({ verdict, run, onExport }: VerdictCardProps) {
             {copied ? t('net_copy_success') : t('common_copy') || '复制'}
           </Button>
           {run && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handleExport('html')}
-              className="h-7 text-xs px-2 gap-1"
-            >
-              <Download className="h-3.5 w-3.5" />
-              {t('net_diag_export_report')}
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs px-2 gap-1 cursor-pointer"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  {t('net_diag_export_report')}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="text-xs">
+                <DropdownMenuItem onClick={() => handleExport('html')} className="cursor-pointer">
+                  HTML 网页报告 (.html)
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleExport('json')} className="cursor-pointer">
+                  JSON 原始数据 (.json)
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleExport('csv')} className="cursor-pointer">
+                  CSV 数据表格 (.csv)
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
         </div>
       </CardHeader>

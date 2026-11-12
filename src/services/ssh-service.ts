@@ -1144,9 +1144,10 @@ export const sshService = {
     target: string,
     port?: number,
     protocol?: string,
+    runId?: string,
   ): Promise<NetworkRun> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.network.runQuickCheck(serverId, target, port, protocol);
+    return backend.network.runQuickCheck(serverId, target, port, protocol, runId);
   },
 
   async runTraceroute(

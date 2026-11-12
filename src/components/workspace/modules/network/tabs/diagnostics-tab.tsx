@@ -55,44 +55,6 @@ export function DiagnosticsTab({
   const [advLoading, setAdvLoading] = useState(false)
   const [advOutput, setAdvOutput] = useState<string | null>(null)
 
-  // Listen for real-time progressive steps
-  useEffect(() => {
-    let unlistenStep: UnlistenFn | undefined
-    let unlistenDone: UnlistenFn | undefined
-
-    if (currentRun?.id) {
-      const stepChannel = `net://run/${currentRun.id}/step`
-      const doneChannel = `net://run/${currentRun.id}/done`
-
-      listen<StepResult>(stepChannel, (event) => {
-        setPipelineSteps((prev) => {
-          const idx = prev.findIndex((s) => s.layer === event.payload.layer)
-          if (idx >= 0) {
-            const copy = [...prev]
-            copy[idx] = event.payload
-            return copy
-          }
-          return [...prev, event.payload]
-        })
-      }).then((fn) => {
-        unlistenStep = fn
-      })
-
-      listen<NetworkRun>(doneChannel, (event) => {
-        setCurrentRun(event.payload)
-        setPipelineSteps(event.payload.steps)
-        setIsRunning(false)
-      }).then((fn) => {
-        unlistenDone = fn
-      })
-    }
-
-    return () => {
-      unlistenStep?.()
-      unlistenDone?.()
-    }
-  }, [currentRun?.id])
-
   const handleRunDiagnosis = async () => {
     setValidationError(null)
     const cleanTarget = target.trim()
@@ -115,6 +77,7 @@ export function DiagnosticsTab({
       return
     }
 
+    const runId = crypto.randomUUID()
     setIsRunning(true)
     setCurrentRun(null)
     setPipelineSteps(
@@ -128,12 +91,34 @@ export function DiagnosticsTab({
       }))
     )
 
+    let unlistenStep: UnlistenFn | undefined
+    let unlistenDone: UnlistenFn | undefined
+
     try {
+      unlistenStep = await listen<StepResult>(`net://run/${runId}/step`, (event) => {
+        setPipelineSteps((prev) => {
+          const idx = prev.findIndex((s) => s.layer === event.payload.layer)
+          if (idx >= 0) {
+            const copy = [...prev]
+            copy[idx] = event.payload
+            return copy
+          }
+          return [...prev, event.payload]
+        })
+      })
+
+      unlistenDone = await listen<NetworkRun>(`net://run/${runId}/done`, (event) => {
+        setCurrentRun(event.payload)
+        setPipelineSteps(event.payload.steps)
+        setIsRunning(false)
+      })
+
       const runResult = await sshService.runQuickCheck(
         serverId,
         cleanTarget,
         portNum,
-        protocol
+        protocol,
+        runId
       )
       setCurrentRun(runResult)
       if (runResult.steps && runResult.steps.length > 0) {
@@ -143,6 +128,11 @@ export function DiagnosticsTab({
       console.error('Quick check failed:', err)
       setValidationError(err instanceof Error ? err.message : t('net_err_execute'))
     } finally {
+      unlistenStep?.()
+      unlistenDone?.()
+      setIsRunning(false)
+    }
+  }
       setIsRunning(false)
     }
   }

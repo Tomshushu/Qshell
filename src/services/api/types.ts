@@ -1233,6 +1233,7 @@ export interface BackendAdapter {
       target: string,
       port?: number,
       protocol?: string,
+      runId?: string,
     ) => Promise<NetworkRun>;
     runTraceroute: (
       serverId: string,

@@ -31,7 +31,6 @@ export function PortsModule({ serverId, initialSearchQuery, initialSubTab = 'lis
   }
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [expandedPort, setExpandedPort] = useState<number | null>(null)
   const [killingPid, setKillingPid] = useState<number | null>(null)
 
   const fetchPorts = useCallback(async () => {
@@ -178,7 +177,7 @@ export function PortsModule({ serverId, initialSearchQuery, initialSubTab = 'lis
                   </thead>
                   <tbody className="tabular-nums">
                     {filteredPorts.map((port, i) => (
-                      <tr key={`${port.protocol}-${port.port}-${i}`} className="border-b hover:bg-accent/30 cursor-pointer" onClick={() => setExpandedPort(expandedPort === i ? null : i)}>
+                      <tr key={`${port.protocol}-${port.port}-${i}`} className="border-b hover:bg-accent/30">
                         <td className="px-3 py-1.5">
                           <Badge variant={port.protocol === 'tcp' ? 'soft-info' : 'soft'} className="px-1.5 py-0 text-[10px] font-mono font-normal">
                             {port.protocol.toUpperCase()}

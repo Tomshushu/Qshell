@@ -87,8 +87,9 @@ pub async fn net_run_quick_check(
     target: String,
     port: Option<u16>,
     protocol: Option<String>,
+    run_id: Option<String>,
 ) -> Result<NetworkRun, String> {
-    crate::network::exec::run_quick_check(app, server_id, target, port, protocol).await
+    crate::network::exec::run_quick_check(app, server_id, target, port, protocol, run_id).await
 }
 
 /// 路径追踪 (Traceroute)

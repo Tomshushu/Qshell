@@ -1341,13 +1341,17 @@ export const tauriAdapter: BackendAdapter = {
         refresh: refresh ?? false,
       });
     },
-    async runQuickCheck(serverId, target, port, protocol) {
-      return safeInvoke<NetworkRun>("net_run_quick_check", {
+    async runQuickCheck(serverId, target, port, protocol, runId) {
+      const payload: Record<string, unknown> = {
         serverId,
         target,
         port: port ?? null,
         protocol: protocol ?? null,
-      });
+      };
+      if (runId) {
+        payload.runId = runId;
+      }
+      return safeInvoke<NetworkRun>("net_run_quick_check", payload);
     },
     async runTraceroute(serverId, target, mode) {
       return safeInvoke<string>("net_run_traceroute", {

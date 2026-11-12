@@ -3,6 +3,12 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from '@/components/ui/dropdown-menu'
+import {
   History,
   GitCompare,
   Trash2,
@@ -203,16 +209,30 @@ export function HistoryTab({
                       </td>
                       <td className="py-2.5 px-3 text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1 font-sans">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleExport(r.id, 'html')}
-                            className="h-6 px-1.5 text-[10px] text-muted-foreground hover:text-foreground gap-1"
-                            title="导出 HTML"
-                          >
-                            <Download className="h-3 w-3" />
-                            HTML
-                          </Button>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 px-1.5 text-[10px] text-muted-foreground hover:text-foreground gap-1"
+                                title="导出报告 (HTML/JSON/CSV)"
+                              >
+                                <Download className="h-3 w-3" />
+                                <span>导出</span>
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="text-xs">
+                              <DropdownMenuItem onClick={() => handleExport(r.id, 'html')} className="cursor-pointer">
+                                HTML 网页报告 (.html)
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => handleExport(r.id, 'json')} className="cursor-pointer">
+                                JSON 原始数据 (.json)
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => handleExport(r.id, 'csv')} className="cursor-pointer">
+                                CSV 数据表格 (.csv)
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                           <Button
                             variant="ghost"
                             size="sm"
