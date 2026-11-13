@@ -29,6 +29,7 @@ export interface ToolItem {
   icon: React.ComponentType<{ className?: string }>;
   description: string;
   keywords: string[];
+  hideHeader?: boolean;
   component: React.ComponentType<{
     initialSeed?: string;
     initialText?: string;
@@ -50,6 +51,7 @@ export const DEV_TOOLS: ToolItem[] = [
     icon: Braces,
     description: "格式化、压缩与键名排序",
     keywords: ["json", "format", "beautify", "minify", "escape", "压缩", "美化", "排序"],
+    hideHeader: true,
     component: (props) => <JsonStudioTool initialJson={props.initialSeed || props.initialText} />,
   },
   {

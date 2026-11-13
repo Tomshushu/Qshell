@@ -418,26 +418,36 @@ export function FloatingTextFormatter() {
 
         {/* 右侧：主工具交互区域 */}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background/40">
-          <div className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-border px-4">
-            <div className="flex min-w-0 items-center gap-2">
-              {(() => {
-                const ActiveIcon = activeTool.icon;
-                return <ActiveIcon className="h-4 w-4 shrink-0 text-primary" />;
-              })()}
-              <span className="truncate text-[13px] font-semibold text-foreground">
-                {activeTool.name}
-              </span>
-              <span className="hidden truncate text-xs text-muted-foreground md:inline">
-                — {activeTool.description}
+          {!activeTool.hideHeader && (
+            <div className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-border px-4">
+              <div className="flex min-w-0 items-center gap-2">
+                {(() => {
+                  const ActiveIcon = activeTool.icon;
+                  return <ActiveIcon className="h-4 w-4 shrink-0 text-primary" />;
+                })()}
+                <span className="truncate text-[13px] font-semibold text-foreground">
+                  {activeTool.name}
+                </span>
+                <span className="hidden truncate text-xs text-muted-foreground md:inline">
+                  — {activeTool.description}
+                </span>
+              </div>
+              <span className="hidden shrink-0 rounded-md border border-border px-2 py-0.5 text-[10px] text-muted-foreground lg:inline">
+                {activeTool.categoryLabel}
               </span>
             </div>
-            <span className="hidden shrink-0 rounded-md border border-border px-2 py-0.5 text-[10px] text-muted-foreground lg:inline">
-              {activeTool.categoryLabel}
-            </span>
-          </div>
+          )}
 
           {/* 工具组件容器 */}
-          <div className="flex-1 overflow-y-auto" data-devtools-content>
+          <div
+            className={cn(
+              "flex-1",
+              activeTool.hideHeader
+                ? "flex flex-col min-h-0 overflow-hidden"
+                : "overflow-y-auto"
+            )}
+            data-devtools-content
+          >
             <ActiveComponent initialSeed={seed} />
           </div>
         </div>

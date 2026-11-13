@@ -1,12 +1,28 @@
-import { useState, useEffect } from "react";
-import { Copy, Check, Braces, Minimize2, ArrowUpDown, AlertCircle, CheckCircle2 } from "lucide-react";
+import { useState, useEffect, useMemo, useCallback } from "react";
+import {
+  Copy,
+  Check,
+  Braces,
+  Minimize2,
+  ArrowUpDown,
+  AlertCircle,
+  CheckCircle2,
+  ClipboardPaste,
+  Trash2,
+  GitCompare,
+  ArrowRight,
+  ArrowLeft,
+  ArrowLeftRight,
+  ChevronDown,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 interface JsonStudioToolProps {
   initialJson?: string;
 }
 
-const SAMPLE_JSON = `{
+const SAMPLE_LEFT_JSON = `{
   "status": "success",
   "code": 200,
   "data": {
@@ -20,6 +36,25 @@ const SAMPLE_JSON = `{
     "metrics": {
       "cpuUsage": 12.4,
       "memoryUsedMb": 1024,
+      "memoryTotalMb": 4096
+    }
+  }
+}`;
+
+const SAMPLE_RIGHT_JSON = `{
+  "status": "success",
+  "code": 200,
+  "data": {
+    "server": "prod-gateway-02",
+    "ip": "10.0.4.99",
+    "uptimeSeconds": 920000,
+    "services": [
+      { "name": "nginx", "port": 80, "healthy": true },
+      { "name": "auth-service", "port": 8080, "healthy": false }
+    ],
+    "metrics": {
+      "cpuUsage": 28.6,
+      "memoryUsedMb": 2048,
       "memoryTotalMb": 4096
     }
   }
@@ -40,109 +75,319 @@ function sortJsonKeys(obj: unknown): unknown {
   return obj;
 }
 
+export interface JsonDiffItem {
+  path: string;
+  type: "added" | "removed" | "modified";
+  leftVal?: unknown;
+  rightVal?: unknown;
+}
+
+export function computeJsonDiff(left: unknown, right: unknown, path = ""): JsonDiffItem[] {
+  if (left === right) return [];
+
+  const leftType = typeof left;
+  const rightType = typeof right;
+
+  if (left === null || right === null || leftType !== rightType || leftType !== "object") {
+    return [{ path: path || "(root)", type: "modified", leftVal: left, rightVal: right }];
+  }
+
+  if (Array.isArray(left) && Array.isArray(right)) {
+    const diffs: JsonDiffItem[] = [];
+    const maxLen = Math.max(left.length, right.length);
+    for (let i = 0; i < maxLen; i++) {
+      const curPath = path ? `${path}[${i}]` : `[${i}]`;
+      if (i >= left.length) {
+        diffs.push({ path: curPath, type: "added", rightVal: right[i] });
+      } else if (i >= right.length) {
+        diffs.push({ path: curPath, type: "removed", leftVal: left[i] });
+      } else {
+        diffs.push(...computeJsonDiff(left[i], right[i], curPath));
+      }
+    }
+    return diffs;
+  }
+
+  if (Array.isArray(left) !== Array.isArray(right)) {
+    return [{ path: path || "(root)", type: "modified", leftVal: left, rightVal: right }];
+  }
+
+  const leftObj = left as Record<string, unknown>;
+  const rightObj = right as Record<string, unknown>;
+  const allKeys = Array.from(new Set([...Object.keys(leftObj), ...Object.keys(rightObj)]));
+  const diffs: JsonDiffItem[] = [];
+
+  for (const k of allKeys) {
+    const curPath = path ? `${path}.${k}` : k;
+    if (!(k in leftObj)) {
+      diffs.push({ path: curPath, type: "added", rightVal: rightObj[k] });
+    } else if (!(k in rightObj)) {
+      diffs.push({ path: curPath, type: "removed", leftVal: leftObj[k] });
+    } else {
+      diffs.push(...computeJsonDiff(leftObj[k], rightObj[k], curPath));
+    }
+  }
+
+  return diffs;
+}
+
 export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
-  const [input, setInput] = useState(initialJson.trim() || SAMPLE_JSON);
+  // 左侧原始 JSON
+  const [leftText, setLeftText] = useState(() => initialJson.trim() || SAMPLE_LEFT_JSON);
+  // 右侧对比/格式化 JSON
+  const [rightText, setRightText] = useState(() => {
+    if (initialJson.trim()) {
+      try {
+        return JSON.stringify(JSON.parse(initialJson.trim()), null, 2);
+      } catch {
+        return "";
+      }
+    }
+    return SAMPLE_RIGHT_JSON;
+  });
+
   const [indentSize, setIndentSize] = useState<number>(2);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [stats, setStats] = useState<{ keys: number; sizeKb: string } | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copiedLeft, setCopiedLeft] = useState(false);
+  const [copiedRight, setCopiedRight] = useState(false);
+  const [showDiffDrawer, setShowDiffDrawer] = useState(false);
+
+  // 解析并校验左侧 JSON
+  const leftParseResult = useMemo(() => {
+    if (!leftText.trim()) return { data: null, error: null };
+    try {
+      const data = JSON.parse(leftText);
+      return { data, error: null };
+    } catch (e) {
+      return { data: null, error: e instanceof Error ? e.message : String(e) };
+    }
+  }, [leftText]);
+
+  // 解析并校验右侧 JSON
+  const rightParseResult = useMemo(() => {
+    if (!rightText.trim()) return { data: null, error: null };
+    try {
+      const data = JSON.parse(rightText);
+      return { data, error: null };
+    } catch (e) {
+      return { data: null, error: e instanceof Error ? e.message : String(e) };
+    }
+  }, [rightText]);
+
+  // 计算差异列表
+  const diffs = useMemo(() => {
+    if (leftParseResult.data === null || rightParseResult.data === null) {
+      return null;
+    }
+    return computeJsonDiff(leftParseResult.data, rightParseResult.data);
+  }, [leftParseResult.data, rightParseResult.data]);
 
   // 格式化函数
-  const formatJson = (text: string, indent: number) => {
-    try {
-      const parsed = JSON.parse(text);
-      setErrorMsg(null);
-      const formatted = JSON.stringify(parsed, null, indent);
-      setInput(formatted);
-
-      // 计算统计
-      let keyCount = 0;
-      const countKeys = (item: unknown) => {
-        if (Array.isArray(item)) item.forEach(countKeys);
-        else if (item !== null && typeof item === "object") {
-          const keys = Object.keys(item);
-          keyCount += keys.length;
-          keys.forEach((k) => countKeys((item as Record<string, unknown>)[k]));
+  const handleFormat = useCallback(
+    (targetSide: "left" | "right" | "both" = "both", indent = indentSize) => {
+      if (targetSide === "left" || targetSide === "both") {
+        if (leftText.trim()) {
+          try {
+            const parsed = JSON.parse(leftText);
+            setLeftText(JSON.stringify(parsed, null, indent));
+            // 如果右侧为空，顺带将格式化结果填充到右侧
+            if (!rightText.trim()) {
+              setRightText(JSON.stringify(parsed, null, indent));
+            }
+          } catch {
+            /* ignore */
+          }
         }
-      };
-      countKeys(parsed);
-      setStats({
-        keys: keyCount,
-        sizeKb: (new Blob([formatted]).size / 1024).toFixed(2),
-      });
-    } catch (e) {
-      setErrorMsg(String(e));
-      setStats(null);
-    }
-  };
+      }
+      if (targetSide === "right" || targetSide === "both") {
+        if (rightText.trim()) {
+          try {
+            const parsed = JSON.parse(rightText);
+            setRightText(JSON.stringify(parsed, null, indent));
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+    },
+    [leftText, rightText, indentSize]
+  );
 
+  // 初始格式化一次
   useEffect(() => {
-    if (input.trim()) {
-      formatJson(input, indentSize);
+    if (initialJson.trim()) {
+      handleFormat("both", indentSize);
     }
-  }, []);
+  }, [initialJson, handleFormat, indentSize]);
 
   // 压缩为一行
-  const handleMinify = () => {
-    try {
-      const parsed = JSON.parse(input);
-      setInput(JSON.stringify(parsed));
-      setErrorMsg(null);
-    } catch (e) {
-      setErrorMsg(String(e));
+  const handleMinify = (targetSide: "left" | "right" | "both" = "both") => {
+    if (targetSide === "left" || targetSide === "both") {
+      try {
+        if (leftText.trim()) {
+          setLeftText(JSON.stringify(JSON.parse(leftText)));
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    if (targetSide === "right" || targetSide === "both") {
+      try {
+        if (rightText.trim()) {
+          setRightText(JSON.stringify(JSON.parse(rightText)));
+        }
+      } catch {
+        /* ignore */
+      }
     }
   };
 
-  // 递归按字母排序
-  const handleSortKeys = () => {
-    try {
-      const parsed = JSON.parse(input);
-      const sorted = sortJsonKeys(parsed);
-      setInput(JSON.stringify(sorted, null, indentSize));
-      setErrorMsg(null);
-    } catch (e) {
-      setErrorMsg(String(e));
+  // 递归排序键名 (双侧)
+  const handleSortKeys = (targetSide: "left" | "right" | "both" = "both") => {
+    if (targetSide === "left" || targetSide === "both") {
+      try {
+        if (leftText.trim()) {
+          const sorted = sortJsonKeys(JSON.parse(leftText));
+          setLeftText(JSON.stringify(sorted, null, indentSize));
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    if (targetSide === "right" || targetSide === "both") {
+      try {
+        if (rightText.trim()) {
+          const sorted = sortJsonKeys(JSON.parse(rightText));
+          setRightText(JSON.stringify(sorted, null, indentSize));
+        }
+      } catch {
+        /* ignore */
+      }
     }
   };
 
   // 转义带反斜杠
   const handleEscape = () => {
-    setInput(JSON.stringify(input));
-  };
-
-  // 去除反斜杠转义
-  const handleUnescape = () => {
-    try {
-      const unescaped = JSON.parse(input);
-      if (typeof unescaped === "string") {
-        setInput(unescaped);
-      }
-    } catch {
-      setInput(input.replace(/\\"/g, '"').replace(/\\\\/g, "\\"));
+    if (rightText.trim()) {
+      setRightText(JSON.stringify(rightText));
+    } else if (leftText.trim()) {
+      setRightText(JSON.stringify(leftText));
     }
   };
 
-  const copyText = async () => {
-    if (!input) return;
+  // 去除反斜杠还原
+  const handleUnescape = () => {
+    const src = rightText.trim() ? rightText : leftText;
+    if (!src) return;
     try {
-      await navigator.clipboard.writeText(input);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      const unescaped = JSON.parse(src);
+      const res = typeof unescaped === "string" ? unescaped : JSON.stringify(unescaped, null, indentSize);
+      if (rightText.trim()) setRightText(res);
+      else setLeftText(res);
+    } catch {
+      const res = src.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+      if (rightText.trim()) setRightText(res);
+      else setLeftText(res);
+    }
+  };
+
+  // 交换左右两侧内容
+  const handleSwap = () => {
+    setLeftText(rightText);
+    setRightText(leftText);
+  };
+
+  // 复制左侧
+  const handleCopyLeft = async () => {
+    if (!leftText) return;
+    try {
+      await navigator.clipboard.writeText(leftText);
+      setCopiedLeft(true);
+      setTimeout(() => setCopiedLeft(false), 2000);
     } catch {
       /* ignore */
     }
   };
 
+  // 复制右侧
+  const handleCopyRight = async () => {
+    if (!rightText) return;
+    try {
+      await navigator.clipboard.writeText(rightText);
+      setCopiedRight(true);
+      setTimeout(() => setCopiedRight(false), 2000);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  // 从剪贴板粘贴到左侧
+  const handlePasteLeft = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) setLeftText(text);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  // 将左侧格式化并同步到右侧
+  const handleSyncToRight = () => {
+    if (!leftText.trim()) return;
+    try {
+      const parsed = JSON.parse(leftText);
+      setRightText(JSON.stringify(parsed, null, indentSize));
+    } catch {
+      setRightText(leftText);
+    }
+  };
+
+  // 载入示例对比数据
+  const handleLoadSample = () => {
+    setLeftText(SAMPLE_LEFT_JSON);
+    setRightText(SAMPLE_RIGHT_JSON);
+    setShowDiffDrawer(true);
+  };
+
+  // 清空全部
+  const handleClearAll = () => {
+    setLeftText("");
+    setRightText("");
+    setShowDiffDrawer(false);
+  };
+
+  // 统计信息
+  const leftStats = useMemo(() => {
+    if (!leftText) return "0 行 · 0 B";
+    const lines = leftText.split("\n").length;
+    const bytes = new Blob([leftText]).size;
+    const sizeStr = bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
+    return `${lines} 行 · ${sizeStr}`;
+  }, [leftText]);
+
+  const rightStats = useMemo(() => {
+    if (!rightText) return "0 行 · 0 B";
+    const lines = rightText.split("\n").length;
+    const bytes = new Blob([rightText]).size;
+    const sizeStr = bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
+    return `${lines} 行 · ${sizeStr}`;
+  }, [rightText]);
+
   return (
-    <div className="p-4 text-[13px] h-full flex flex-col gap-3">
-      {/* 顶部单行集成工具栏 (极简紧凑、按压触感微缩) */}
-      <div className="flex items-center justify-between gap-2 border-b border-black/5 dark:border-white/10 pb-2 shrink-0">
-        {/* 左侧：格式化与常用转换 */}
-        <div className="flex items-center gap-1.5 flex-wrap">
+    <div className="flex h-full w-full flex-col select-text overflow-hidden bg-background">
+      {/* 顶部单行集成工具栏 (将操作上提至首行，去除多余介绍标题) */}
+      <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border bg-muted/20 px-3">
+        {/* 左侧：格式化、缩进、常用变换与对比控制 */}
+        <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+          <div className="flex items-center gap-1.5 mr-1 font-semibold text-xs text-foreground shrink-0">
+            <Braces className="h-4 w-4 text-primary" />
+            <span className="hidden sm:inline">JSON 格式化</span>
+          </div>
+
           <Button
             size="sm"
-            className="h-7 px-2.5 text-xs gap-1 font-medium active:scale-[0.97] transition-all cursor-pointer"
-            onClick={() => formatJson(input, indentSize)}
+            className="h-7 px-2.5 text-xs gap-1 font-medium active:scale-[0.97] transition-all cursor-pointer shadow-2xs"
+            onClick={() => handleFormat("both")}
+            title="格式化左侧和右侧 JSON (若右侧为空则自动同步)"
           >
             <Braces className="h-3.5 w-3.5" /> 格式化
           </Button>
@@ -152,21 +397,21 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
             onChange={(e) => {
               const sz = parseInt(e.target.value, 10);
               setIndentSize(sz);
-              formatJson(input, sz);
+              handleFormat("both", sz);
             }}
-            className="h-7 rounded-md border border-black/10 dark:border-white/10 bg-black/[0.03] dark:bg-white/[0.05] px-2 text-xs text-foreground outline-none cursor-pointer hover:border-black/20 dark:hover:border-white/20 transition-colors"
+            className="h-7 rounded-md border border-input bg-background/80 px-2 text-xs text-foreground outline-none cursor-pointer hover:border-primary/40 transition-colors"
           >
             <option value={2}>2 空格</option>
             <option value={4}>4 空格</option>
           </select>
 
-          <div className="h-4 w-px bg-black/10 dark:bg-white/10 mx-0.5" />
+          <div className="h-4 w-px bg-border/60 mx-0.5" />
 
           <Button
             variant="outline"
             size="sm"
-            className="h-7 px-2 text-xs gap-1 text-muted-foreground hover:text-foreground border-black/10 dark:border-white/10 active:scale-[0.97] transition-all cursor-pointer"
-            onClick={handleMinify}
+            className="h-7 px-2 text-xs gap-1 text-muted-foreground hover:text-foreground active:scale-[0.97] transition-all cursor-pointer"
+            onClick={() => handleMinify("both")}
             title="压缩成单行紧凑 JSON"
           >
             <Minimize2 className="h-3 w-3" /> 压缩
@@ -175,21 +420,19 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
           <Button
             variant="outline"
             size="sm"
-            className="h-7 px-2 text-xs gap-1 text-muted-foreground hover:text-foreground border-black/10 dark:border-white/10 active:scale-[0.97] transition-all cursor-pointer"
-            onClick={handleSortKeys}
-            title="递归按键名字母升序排序"
+            className="h-7 px-2 text-xs gap-1 text-muted-foreground hover:text-foreground active:scale-[0.97] transition-all cursor-pointer"
+            onClick={() => handleSortKeys("both")}
+            title="按键名字母升序递归排序 (对比神器)"
           >
             <ArrowUpDown className="h-3 w-3" /> 键名排序
           </Button>
-
-          <div className="h-4 w-px bg-black/10 dark:bg-white/10 mx-0.5" />
 
           <Button
             variant="ghost"
             size="sm"
             className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground active:scale-[0.97] transition-all cursor-pointer"
             onClick={handleEscape}
-            title="转换为反斜杠转义字符串"
+            title="将右侧或当前 JSON 转换为反斜杠转义字符串"
           >
             转义
           </Button>
@@ -199,88 +442,343 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
             size="sm"
             className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground active:scale-[0.97] transition-all cursor-pointer"
             onClick={handleUnescape}
-            title="去除反斜杠还原 JSON"
+            title="去除反斜杠转义还原"
           >
             去转义
           </Button>
-        </div>
 
-        {/* 右侧：状态指示与快捷辅助 */}
-        <div className="flex items-center gap-2 shrink-0">
-          {errorMsg ? (
-            <span
-              className="inline-flex items-center gap-1 text-[10.5px] text-destructive font-medium px-2 py-0.5 rounded-md bg-destructive/10 border border-destructive/20 max-w-[200px] truncate"
-              title={errorMsg}
-            >
-              <AlertCircle className="h-3 w-3 shrink-0" />
-              <span className="truncate">语法错误</span>
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1.5 text-[10.5px] text-emerald-600 dark:text-emerald-400 font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 tabular-nums">
-              <CheckCircle2 className="h-3 w-3 shrink-0" />
-              <span>合法 JSON</span>
-              {stats && (
-                <span className="text-muted-foreground/75 font-normal hidden md:inline">
-                  ({stats.keys} 键 · {stats.sizeKb} KB)
-                </span>
-              )}
-            </span>
-          )}
+          <div className="h-4 w-px bg-border/60 mx-0.5" />
 
-          <div className="h-4 w-px bg-black/10 dark:bg-white/10 mx-0.5" />
+          <Button
+            variant={showDiffDrawer ? "secondary" : "outline"}
+            size="sm"
+            className={cn(
+              "h-7 px-2 text-xs gap-1 active:scale-[0.97] transition-all cursor-pointer",
+              showDiffDrawer ? "text-primary font-medium" : "text-muted-foreground hover:text-foreground"
+            )}
+            onClick={() => setShowDiffDrawer((v) => !v)}
+            title="展开/折叠左右 JSON 差异清单"
+          >
+            <GitCompare className="h-3 w-3" /> 对比差异
+            {diffs && diffs.length > 0 && (
+              <span className="ml-0.5 rounded-full bg-amber-500/20 px-1 py-0.2 text-[10px] font-mono text-amber-600 dark:text-amber-400">
+                {diffs.length}
+              </span>
+            )}
+          </Button>
 
           <Button
             variant="ghost"
             size="sm"
             className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground active:scale-[0.97] transition-all cursor-pointer"
-            onClick={() => setInput(SAMPLE_JSON)}
-            title="载入示例数据"
+            onClick={handleSwap}
+            title="左右两侧内容互换"
+          >
+            <ArrowLeftRight className="h-3 w-3" /> 互换
+          </Button>
+        </div>
+
+        {/* 右侧：状态指示器与快捷辅助 */}
+        <div className="flex items-center gap-2 shrink-0">
+          {/* 实时校验与对比状态提示 */}
+          {leftParseResult.error ? (
+            <span
+              className="inline-flex items-center gap-1 text-[11px] text-destructive font-medium px-2 py-0.5 rounded-md bg-destructive/10 border border-destructive/20 max-w-[170px] truncate"
+              title={`左侧错误: ${leftParseResult.error}`}
+            >
+              <AlertCircle className="h-3 w-3 shrink-0" />
+              <span className="truncate">左侧语法错误</span>
+            </span>
+          ) : rightParseResult.error ? (
+            <span
+              className="inline-flex items-center gap-1 text-[11px] text-destructive font-medium px-2 py-0.5 rounded-md bg-destructive/10 border border-destructive/20 max-w-[170px] truncate"
+              title={`右侧错误: ${rightParseResult.error}`}
+            >
+              <AlertCircle className="h-3 w-3 shrink-0" />
+              <span className="truncate">右侧语法错误</span>
+            </span>
+          ) : diffs ? (
+            diffs.length === 0 ? (
+              <span className="inline-flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400 font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20">
+                <CheckCircle2 className="h-3 w-3 shrink-0" />
+                <span>两边一致</span>
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowDiffDrawer(true)}
+                className="inline-flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400 font-medium px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/15 cursor-pointer transition-colors"
+                title="点击展开查看差异详情"
+              >
+                <GitCompare className="h-3 w-3 shrink-0" />
+                <span>{diffs.length} 处差异</span>
+              </button>
+            )
+          ) : (
+            <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground px-2 py-0.5">
+              <span>输入中...</span>
+            </span>
+          )}
+
+          <div className="h-4 w-px bg-border/60 mx-0.5" />
+
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground active:scale-[0.97] transition-all cursor-pointer"
+            onClick={handleLoadSample}
+            title="载入双栏对比示例数据"
           >
             示例
           </Button>
+
           <Button
             variant="ghost"
             size="sm"
             className="h-7 px-2 text-xs text-muted-foreground hover:text-destructive active:scale-[0.97] transition-all cursor-pointer"
-            onClick={() => {
-              setInput("");
-              setErrorMsg(null);
-              setStats(null);
-            }}
-            title="清空内容"
+            onClick={handleClearAll}
+            title="清空左右两侧数据"
           >
             清空
           </Button>
+
           <Button
             variant="outline"
             size="sm"
-            className="h-7 px-2.5 text-xs gap-1 border-black/10 dark:border-white/10 active:scale-[0.97] transition-all cursor-pointer"
-            onClick={copyText}
+            className="h-7 px-2.5 text-xs gap-1 active:scale-[0.97] transition-all cursor-pointer shadow-2xs"
+            onClick={handleCopyRight}
+            title="复制右侧 JSON"
           >
-            {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3 text-muted-foreground" />}
-            <span>{copied ? "已复制" : "复制"}</span>
+            {copiedRight ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3 text-muted-foreground" />}
+            <span>{copiedRight ? "已复制" : "复制"}</span>
           </Button>
         </div>
       </div>
 
-      {/* 代码输入与展示区 - 占满全高 */}
-      <div className="flex-1 min-h-0 relative">
-        <textarea
-          value={input}
-          onChange={(e) => {
-            const val = e.target.value;
-            setInput(val);
-            try {
-              JSON.parse(val);
-              setErrorMsg(null);
-            } catch (err) {
-              setErrorMsg(String(err));
-            }
-          }}
-          placeholder="在此粘贴或输入 JSON 数据..."
-          spellCheck={false}
-          className="h-full w-full resize-none rounded-lg border border-black/10 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.03] p-3 font-mono text-xs leading-relaxed text-foreground placeholder:text-muted-foreground/40 outline-none focus:border-primary/40 transition-colors"
-        />
+      {/* 主体左右双栏对比编辑区 (占满全高，独立滚动与辅助操作) */}
+      <div className="flex flex-1 min-h-0 flex-col overflow-hidden p-3 gap-2">
+        <div className="grid grid-cols-2 gap-3 flex-1 min-h-0">
+          {/* 左侧栏：原始/对比输入 */}
+          <div className="flex flex-col min-h-0 rounded-xl border border-border bg-card/40 overflow-hidden shadow-2xs">
+            {/* 左侧顶栏 */}
+            <div className="flex h-8 shrink-0 items-center justify-between border-b border-border/70 bg-muted/30 px-3 text-xs">
+              <div className="flex items-center gap-2">
+                <span className="flex items-center gap-1.5 font-medium text-foreground text-[11.5px]">
+                  <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
+                  原始 / 左侧 JSON
+                </span>
+                <span className="text-[10px] text-muted-foreground tabular-nums">
+                  ({leftStats})
+                </span>
+              </div>
+
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground cursor-pointer gap-0.5"
+                  onClick={handlePasteLeft}
+                  title="从剪贴板粘贴到左侧"
+                >
+                  <ClipboardPaste className="h-3 w-3" />
+                  <span>粘贴</span>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground cursor-pointer gap-0.5"
+                  onClick={handleSyncToRight}
+                  title="将左侧格式化并同步到右侧"
+                >
+                  <ArrowRight className="h-3 w-3" />
+                  <span>格式化到右</span>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-destructive cursor-pointer"
+                  onClick={() => setLeftText("")}
+                  title="清空左侧"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground cursor-pointer"
+                  onClick={handleCopyLeft}
+                  title="复制左侧内容"
+                >
+                  {copiedLeft ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+                </Button>
+              </div>
+            </div>
+
+            {/* 左侧编辑器 */}
+            <div className="relative flex-1 min-h-0">
+              <textarea
+                value={leftText}
+                onChange={(e) => setLeftText(e.target.value)}
+                placeholder="在此粘贴或输入原始 JSON (左侧)..."
+                spellCheck={false}
+                className="h-full w-full resize-none p-3 font-mono text-xs leading-relaxed text-foreground placeholder:text-muted-foreground/40 bg-transparent outline-none"
+              />
+              {leftParseResult.error && (
+                <div className="absolute bottom-2 left-2 right-2 rounded-md bg-destructive/15 border border-destructive/30 px-2.5 py-1 text-[11px] text-destructive backdrop-blur-md truncate shadow-sm">
+                  ⚠️ {leftParseResult.error}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* 右侧栏：目标/对比输入 */}
+          <div className="flex flex-col min-h-0 rounded-xl border border-border bg-card/40 overflow-hidden shadow-2xs">
+            {/* 右侧顶栏 */}
+            <div className="flex h-8 shrink-0 items-center justify-between border-b border-border/70 bg-muted/30 px-3 text-xs">
+              <div className="flex items-center gap-2">
+                <span className="flex items-center gap-1.5 font-medium text-foreground text-[11.5px]">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                  对比 / 右侧 JSON
+                </span>
+                <span className="text-[10px] text-muted-foreground tabular-nums">
+                  ({rightStats})
+                </span>
+              </div>
+
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground cursor-pointer gap-0.5"
+                  onClick={() => {
+                    setLeftText(rightText);
+                  }}
+                  title="将右侧内容覆写到左侧"
+                >
+                  <ArrowLeft className="h-3 w-3" />
+                  <span>同步到左</span>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-destructive cursor-pointer"
+                  onClick={() => setRightText("")}
+                  title="清空右侧"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground cursor-pointer"
+                  onClick={handleCopyRight}
+                  title="复制右侧内容"
+                >
+                  {copiedRight ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+                </Button>
+              </div>
+            </div>
+
+            {/* 右侧编辑器 */}
+            <div className="relative flex-1 min-h-0">
+              <textarea
+                value={rightText}
+                onChange={(e) => setRightText(e.target.value)}
+                placeholder="在此粘贴对比 JSON (右侧)，或点击上方「格式化」自动生成..."
+                spellCheck={false}
+                className="h-full w-full resize-none p-3 font-mono text-xs leading-relaxed text-foreground placeholder:text-muted-foreground/40 bg-transparent outline-none"
+              />
+              {rightParseResult.error && (
+                <div className="absolute bottom-2 left-2 right-2 rounded-md bg-destructive/15 border border-destructive/30 px-2.5 py-1 text-[11px] text-destructive backdrop-blur-md truncate shadow-sm">
+                  ⚠️ {rightParseResult.error}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* 底部差异比对详情抽屉 (支持一键展开/折叠) */}
+        {showDiffDrawer && diffs && (
+          <div className="flex shrink-0 flex-col rounded-xl border border-border bg-card/60 p-2.5 shadow-sm max-h-36 overflow-hidden animate-in fade-in slide-in-from-bottom-2">
+            <div className="flex items-center justify-between pb-1.5 border-b border-border/50 text-[11px]">
+              <div className="flex items-center gap-2">
+                <GitCompare className="h-3.5 w-3.5 text-primary" />
+                <span className="font-semibold text-foreground">
+                  JSON 差异列表 (共 {diffs.length} 处不同)
+                </span>
+                {diffs.length === 0 && (
+                  <span className="text-emerald-600 dark:text-emerald-400">两边数据结构与键值完全一致</span>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDiffDrawer(false)}
+                className="text-muted-foreground hover:text-foreground p-0.5 rounded cursor-pointer"
+                title="收起差异列表"
+              >
+                <ChevronDown className="h-3.5 w-3.5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-1 pt-1.5 font-mono text-[11px]">
+              {diffs.length === 0 ? (
+                <div className="py-2 text-center text-xs text-muted-foreground">
+                  两边 JSON 没有检测到任何差异
+                </div>
+              ) : (
+                diffs.map((diff, index) => (
+                  <div
+                    key={`${diff.path}-${index}`}
+                    className="flex items-center justify-between gap-2 rounded px-2 py-0.5 hover:bg-muted/40 transition-colors"
+                  >
+                    <div className="flex items-center gap-1.5 truncate">
+                      {diff.type === "modified" && (
+                        <span className="rounded bg-amber-500/20 px-1 text-[9.5px] font-bold text-amber-600 dark:text-amber-400">
+                          MOD
+                        </span>
+                      )}
+                      {diff.type === "added" && (
+                        <span className="rounded bg-emerald-500/20 px-1 text-[9.5px] font-bold text-emerald-600 dark:text-emerald-400">
+                          ADD
+                        </span>
+                      )}
+                      {diff.type === "removed" && (
+                        <span className="rounded bg-destructive/20 px-1 text-[9.5px] font-bold text-destructive">
+                          DEL
+                        </span>
+                      )}
+                      <span className="font-medium text-foreground truncate">{diff.path}</span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 text-muted-foreground text-[10.5px] shrink-0">
+                      {diff.type === "modified" && (
+                        <>
+                          <span className="line-through text-destructive/80 max-w-[120px] truncate">
+                            {JSON.stringify(diff.leftVal)}
+                          </span>
+                          <span>➔</span>
+                          <span className="text-emerald-600 dark:text-emerald-400 font-semibold max-w-[120px] truncate">
+                            {JSON.stringify(diff.rightVal)}
+                          </span>
+                        </>
+                      )}
+                      {diff.type === "added" && (
+                        <span className="text-emerald-600 dark:text-emerald-400 font-semibold max-w-[200px] truncate">
+                          + {JSON.stringify(diff.rightVal)}
+                        </span>
+                      )}
+                      {diff.type === "removed" && (
+                        <span className="line-through text-destructive/80 max-w-[200px] truncate">
+                          - {JSON.stringify(diff.leftVal)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
