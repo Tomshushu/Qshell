@@ -271,8 +271,8 @@ export function ModuleTabs({
           </button>
         ))}
 
-        {/* 文本格式化器：全局浮动弹框入口（仅在支持 Shell/终端的环境显示，纯 VNC / 纯 RDP 模式下隐藏） */}
-        {!isPureVncServer(server) && !flags.isRdpServer && (
+        {/* 文本格式化器：终端专属辅助浮窗入口（仅在终端模块下显示，切换到其他模块时自动隐藏） */}
+        {!isPureVncServer(server) && !flags.isRdpServer && activeModule === "terminal" && (
           <button
             className={cn(
               "theme-module-item flex flex-shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap text-[11px] rounded-lg transition-all active:scale-[0.97]",

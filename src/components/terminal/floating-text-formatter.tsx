@@ -12,6 +12,7 @@ import {
 import { cn } from "@/lib/utils";
 import { playSound, SoundType } from "@/lib/sound";
 import { useTextFormatterStore } from "@/store/text-formatter-store";
+import { useAppStore } from "@/store";
 import { DEV_TOOLS, guessBestToolId } from "./tools/tool-registry";
 
 const DEFAULT_WIDTH = 980;
@@ -107,6 +108,48 @@ export function FloatingTextFormatter() {
   const [resizing, setResizing] = useState(false);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const tabs = useAppStore((s) => s.tabs);
+  const activeTabId = useAppStore((s) => s.activeTabId);
+
+  // 记录打开该浮窗时的会话标签 ID
+  const openerTabIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      if (!openerTabIdRef.current && activeTabId) {
+        openerTabIdRef.current = activeTabId;
+      }
+    } else {
+      openerTabIdRef.current = null;
+    }
+  }, [open, activeTabId]);
+
+  // 方案 1 生命周期：
+  // 1. 如果打开浮窗的终端标签页被关闭，或应用内所有标签页均关闭/回到首页，自动销毁并关闭浮窗
+  useEffect(() => {
+    if (!open) return;
+    if (openerTabIdRef.current) {
+      const openerExists = tabs.some((t) => t.id === openerTabIdRef.current);
+      if (!openerExists) {
+        closeTextFormatter();
+      }
+    } else if (tabs.length === 0 || !activeTabId) {
+      closeTextFormatter();
+    }
+  }, [open, tabs, activeTabId, closeTextFormatter]);
+
+  // 2. 方案 1 显示控制：仅在当前处于「终端」模块下可见；切换到「文件 (SFTP)」「Docker」「进程」或「首页」时自动隐匿，切回终端时自动恢复
+  const isTerminalActive = useMemo(() => {
+    // 单元测试或无 tabs 环境下兼容放行
+    if (tabs.length === 0 && !activeTabId) return true;
+    if (!activeTabId) return false;
+    const curTab = tabs.find((t) => t.id === activeTabId);
+    if (!curTab) return false;
+    // 排除纯 SFTP 固定标签与非终端模块 (files, docker, services, processes, rdp 等)
+    if (curTab.serverId === "sftp") return false;
+    return curTab.module === "terminal";
+  }, [activeTabId, tabs]);
 
   const dragRef = useRef<{
     startX: number;
@@ -347,7 +390,7 @@ export function FloatingTextFormatter() {
   const activeTool = DEV_TOOLS.find((t) => t.id === activeToolId) || DEV_TOOLS[0];
   const ActiveComponent = activeTool.component;
 
-  if (!open) return null;
+  if (!open || !isTerminalActive) return null;
 
   const width = size?.width ?? DEFAULT_WIDTH;
   const height = size?.height ?? DEFAULT_HEIGHT;

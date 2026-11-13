@@ -9,10 +9,15 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
 import { FloatingTextFormatter } from "../floating-text-formatter";
 import { useTextFormatterStore } from "@/store/text-formatter-store";
+import { useAppStore } from "@/store";
 
 describe("FloatingTextFormatter", () => {
   beforeEach(() => {
     useTextFormatterStore.setState({ open: false, seed: "" });
+    useAppStore.setState({
+      activeTabId: "test-tab",
+      tabs: [{ id: "test-tab", serverId: "srv-1", serverName: "Test", module: "terminal", title: "Terminal" }],
+    });
   });
 
   afterEach(() => {
@@ -58,5 +63,36 @@ describe("FloatingTextFormatter", () => {
       useTextFormatterStore.getState().openTextFormatter("1700000000");
     });
     expect(screen.getAllByText("时间戳转换").length).toBeGreaterThan(0);
+  });
+
+  it("follows terminal lifecycle: hides on non-terminal modules and closes when the tab is closed", () => {
+    const view = openToolbox();
+    expect(screen.getByText("开发运维工具箱")).toBeTruthy();
+
+    // 1. 切换到文件模块（SFTP）：浮窗自动临时隐匿
+    act(() => {
+      useAppStore.setState({
+        tabs: [{ id: "test-tab", serverId: "srv-1", serverName: "Test", module: "files", title: "Files" }],
+      });
+    });
+    expect(view.container.firstChild).toBeNull();
+
+    // 2. 切回终端模块：浮窗自动恢复
+    act(() => {
+      useAppStore.setState({
+        tabs: [{ id: "test-tab", serverId: "srv-1", serverName: "Test", module: "terminal", title: "Terminal" }],
+      });
+    });
+    expect(screen.getByText("开发运维工具箱")).toBeTruthy();
+
+    // 3. 关闭终端标签：浮窗彻底销毁关闭
+    act(() => {
+      useAppStore.setState({
+        tabs: [],
+        activeTabId: null,
+      });
+    });
+    expect(useTextFormatterStore.getState().open).toBe(false);
+    expect(view.container.firstChild).toBeNull();
   });
 });
