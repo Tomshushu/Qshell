@@ -6,6 +6,8 @@ import {
   Search,
   Terminal,
   ClipboardPaste,
+  PanelLeftClose,
+  PanelLeft,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { playSound, SoundType } from "@/lib/sound";
@@ -25,6 +27,70 @@ interface PanelSize {
   height: number;
 }
 
+interface BoundingBox {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * 获取当前工作区终端视图的精准尺寸边界（避免最大化时遮盖应用顶栏 TabBar 与底栏撰写/状态栏）
+ */
+function getTerminalViewportBounds(): BoundingBox {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return { left: 16, top: 72, width: 960, height: 600 };
+  }
+
+  // 1. 优先寻找当前处于活动显示状态（可见且非隐藏）的终端视口容器
+  const activeTermHost = Array.from(document.querySelectorAll<HTMLElement>(".term-host")).find((el) => {
+    return el.offsetParent !== null && !el.closest(".hidden");
+  });
+  const terminalViewport =
+    activeTermHost?.closest<HTMLElement>("[data-terminal-viewport]") ||
+    document.querySelector<HTMLElement>("[data-terminal-viewport]:not(.hidden)") ||
+    activeTermHost?.parentElement;
+
+  if (terminalViewport) {
+    const rect = terminalViewport.getBoundingClientRect();
+    if (rect.width >= 200 && rect.height >= 150) {
+      const pad = 4;
+      return {
+        left: Math.round(rect.left + pad),
+        top: Math.round(rect.top + pad),
+        width: Math.round(Math.max(200, rect.width - pad * 2)),
+        height: Math.round(Math.max(150, rect.height - pad * 2)),
+      };
+    }
+  }
+
+  // 2. 其次寻找工作区内容区域（避开应用顶栏 TabBar 和底栏 ComposeBar / StatusBar）
+  const workspaceArea = document.querySelector<HTMLElement>("[data-workspace-content]");
+  if (workspaceArea) {
+    const rect = workspaceArea.getBoundingClientRect();
+    if (rect.width >= 200 && rect.height >= 150) {
+      const pad = 4;
+      return {
+        left: Math.round(rect.left + pad),
+        top: Math.round(rect.top + pad),
+        width: Math.round(Math.max(200, rect.width - pad * 2)),
+        height: Math.round(Math.max(150, rect.height - pad * 2)),
+      };
+    }
+  }
+
+  // 3. 兜底保护：自动避开顶部 TabBar+ModuleTabs（约 72px）和底部 ComposeBar+StatusBar（约 42px）
+  const topOffset = 72;
+  const bottomOffset = 42;
+  const pad = 12;
+  return {
+    left: pad,
+    top: topOffset,
+    width: Math.max(MIN_WIDTH, window.innerWidth - pad * 2),
+    height: Math.max(MIN_HEIGHT, window.innerHeight - topOffset - bottomOffset),
+  };
+}
+
 export function FloatingTextFormatter() {
   const open = useTextFormatterStore((s) => s.open);
   const seed = useTextFormatterStore((s) => s.seed);
@@ -35,6 +101,8 @@ export function FloatingTextFormatter() {
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const [size, setSize] = useState<PanelSize | null>(null);
   const [isMaximized, setIsMaximized] = useState(false);
+  const [maximizedBounds, setMaximizedBounds] = useState<BoundingBox | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [resizing, setResizing] = useState(false);
 
@@ -97,6 +165,25 @@ export function FloatingTextFormatter() {
     window.addEventListener("qshell:inject-json-studio", handleInject);
     return () => window.removeEventListener("qshell:inject-json-studio", handleInject);
   }, []);
+
+  // 最大化时自动同步终端视口边界，确保严格贴合终端窗口且不遮挡顶栏底栏
+  useEffect(() => {
+    if (!open || !isMaximized) return;
+    const updateBounds = () => {
+      setMaximizedBounds(getTerminalViewportBounds());
+    };
+    updateBounds();
+    window.addEventListener("resize", updateBounds);
+    return () => window.removeEventListener("resize", updateBounds);
+  }, [open, isMaximized]);
+
+  // 当窗口宽度较小 (< 780px) 时，侧边栏自动推荐收起，优先保证编辑区域视野
+  useEffect(() => {
+    const curW = size?.width ?? DEFAULT_WIDTH;
+    if (curW < 780) {
+      setSidebarCollapsed(true);
+    }
+  }, [size?.width]);
 
   const handlePasteAndJump = async () => {
     try {
@@ -291,13 +378,23 @@ export function FloatingTextFormatter() {
         (dragging || resizing) && "transition-none select-none"
       )}
       style={
-        isMaximized
+        isMaximized && maximizedBounds
           ? {
-              left: `${VIEWPORT_PADDING}px`,
-              top: `${VIEWPORT_PADDING}px`,
-              width: `calc(100vw - ${VIEWPORT_PADDING * 2}px)`,
-              height: `calc(100vh - ${VIEWPORT_PADDING * 2}px)`,
+              left: `${maximizedBounds.left}px`,
+              top: `${maximizedBounds.top}px`,
+              width: `${maximizedBounds.width}px`,
+              height: `${maximizedBounds.height}px`,
             }
+          : isMaximized
+          ? (() => {
+              const b = getTerminalViewportBounds();
+              return {
+                left: `${b.left}px`,
+                top: `${b.top}px`,
+                width: `${b.width}px`,
+                height: `${b.height}px`,
+              };
+            })()
           : {
               left: `${finalPos.x}px`,
               top: `${finalPos.y}px`,
@@ -312,16 +409,26 @@ export function FloatingTextFormatter() {
       <div
         onPointerDown={handleDragStart}
         onDoubleClick={() => setIsMaximized((m) => !m)}
-        className="flex h-11 shrink-0 cursor-move select-none items-center justify-between border-b border-border bg-muted/40 px-4"
+        className="flex h-10 shrink-0 cursor-move select-none items-center justify-between border-b border-border bg-muted/40 px-3"
       >
-        <div className="flex items-center gap-2.5">
-          <div className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10 text-primary">
-            <Terminal className="h-3.5 w-3.5" />
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setSidebarCollapsed((c) => !c)}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground cursor-pointer"
+            title={sidebarCollapsed ? "展开工具侧边栏" : "折叠工具侧边栏 (释放编辑区宽度)"}
+          >
+            {sidebarCollapsed ? <PanelLeft className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+          </button>
+          <div className="flex items-center gap-2">
+            <div className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10 text-primary">
+              <Terminal className="h-3.5 w-3.5" />
+            </div>
+            <span className="text-[13px] font-semibold text-foreground">开发运维工具箱</span>
+            <span className="rounded-md border border-border bg-background/70 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hidden sm:inline">
+              DevTools
+            </span>
           </div>
-          <span className="text-[13px] font-semibold text-foreground">开发运维工具箱</span>
-          <span className="rounded-md border border-border bg-background/70 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-            DevTools
-          </span>
         </div>
 
         <div className="flex items-center gap-1" onPointerDown={(e) => e.stopPropagation()}>
@@ -329,7 +436,7 @@ export function FloatingTextFormatter() {
             type="button"
             onClick={() => setIsMaximized((m) => !m)}
             className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground cursor-pointer"
-            title={isMaximized ? "还原窗口" : "最大化 (双击标题栏)"}
+            title={isMaximized ? "还原窗口" : "最大化 (贴合终端区域，双击标题栏)"}
           >
             {isMaximized ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
           </button>
@@ -346,35 +453,91 @@ export function FloatingTextFormatter() {
 
       {/* 工作台双栏主体 */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
-        {/* 左侧：搜索与工具分类导航 */}
-        <div className="flex min-h-0 w-52 shrink-0 flex-col border-r border-border bg-muted/25">
-          <div className="border-b border-border p-3">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-              <input
-                ref={searchInputRef}
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="搜索工具..."
-                className="h-8 w-full rounded-md border border-input bg-background pl-8 pr-9 text-xs text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
-              />
+        {/* 左侧：搜索与工具分类导航（支持收起/展开，小窗口下更灵活） */}
+        <div
+          className={cn(
+            "flex min-h-0 shrink-0 flex-col border-r border-border bg-muted/25 transition-[width] duration-150 ease-out",
+            sidebarCollapsed ? "w-12" : "w-52"
+          )}
+        >
+          {sidebarCollapsed ? (
+            <div className="border-b border-border p-2 flex justify-center">
               <button
                 type="button"
-                onClick={handlePasteAndJump}
-                className="absolute right-1.5 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground cursor-pointer"
-                title="读取剪贴板，自动跳转到对应工具"
+                onClick={() => setSidebarCollapsed(false)}
+                className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer transition-colors"
+                title="展开工具列表"
               >
-                <ClipboardPaste className="h-3.5 w-3.5" />
+                <PanelLeft className="h-4 w-4" />
               </button>
             </div>
-          </div>
+          ) : (
+            <div className="border-b border-border p-2.5 flex items-center gap-1.5">
+              <div className="relative flex-1 min-w-0">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  ref={searchInputRef}
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="搜索工具..."
+                  className="h-7 w-full rounded-md border border-input bg-background pl-8 pr-7 text-xs text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-primary focus:ring-1 focus:ring-primary/20"
+                />
+                <button
+                  type="button"
+                  onClick={handlePasteAndJump}
+                  className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:text-foreground cursor-pointer"
+                  title="读取剪贴板并跳转"
+                >
+                  <ClipboardPaste className="h-3 w-3" />
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSidebarCollapsed(true)}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground cursor-pointer transition-colors"
+                title="折叠工具列表 (释放编辑器宽度)"
+              >
+                <PanelLeftClose className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
 
-          {/* 平铺工具列表（无需多余分类，一目了然） */}
-          <div className="flex-1 space-y-1 overflow-y-auto p-2">
+          {/* 平铺工具列表 */}
+          <div className="flex-1 space-y-1 overflow-y-auto p-1.5">
             {filteredTools.map((tool) => {
               const Icon = tool.icon;
               const isActive = tool.id === activeToolId;
+              if (sidebarCollapsed) {
+                return (
+                  <button
+                    key={tool.id}
+                    type="button"
+                    onClick={() => {
+                      setActiveToolId(tool.id);
+                      playSound(SoundType.Click);
+                    }}
+                    title={`${tool.name} — ${tool.description}`}
+                    className={cn(
+                      "group relative flex h-9 w-9 mx-auto items-center justify-center rounded-lg transition-colors cursor-pointer select-none",
+                      isActive
+                        ? "bg-primary/10 font-medium text-primary shadow-2xs"
+                        : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                    )}
+                  >
+                    {isActive && (
+                      <span className="absolute -left-1.5 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-r-full bg-primary" />
+                    )}
+                    <Icon
+                      className={cn(
+                        "h-4 w-4 shrink-0",
+                        isActive ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
+                      )}
+                    />
+                  </button>
+                );
+              }
+
               return (
                 <button
                   key={tool.id}
@@ -384,9 +547,9 @@ export function FloatingTextFormatter() {
                     playSound(SoundType.Click);
                   }}
                   className={cn(
-                    "group relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors cursor-pointer select-none",
+                    "group relative flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[12.5px] transition-colors cursor-pointer select-none",
                     isActive
-                      ? "bg-primary/10 font-medium text-primary"
+                      ? "bg-primary/10 font-medium text-primary shadow-2xs"
                       : "text-muted-foreground hover:bg-muted hover:text-foreground"
                   )}
                 >
@@ -419,10 +582,12 @@ export function FloatingTextFormatter() {
             )}
           </div>
 
-          <div className="flex shrink-0 select-none items-center justify-between border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
-            <span>Ctrl+F 搜索 · Esc 关闭</span>
-            <span className="tabular-nums">{filteredTools.length} 个工具</span>
-          </div>
+          {!sidebarCollapsed && (
+            <div className="flex shrink-0 select-none items-center justify-between border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
+              <span>Ctrl+F 搜索</span>
+              <span className="tabular-nums">{filteredTools.length} 个工具</span>
+            </div>
+          )}
         </div>
 
         {/* 右侧：主工具交互区域 */}

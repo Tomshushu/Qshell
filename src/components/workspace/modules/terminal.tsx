@@ -9377,6 +9377,7 @@ export function TerminalModule({
       {/* Terminal area */}
       <div
         ref={terminalContainerRef}
+        data-terminal-viewport="true"
         className={cn(
           "flex-1 h-full w-full relative overflow-hidden",
           selectionToolbar?.visible && "terminal-has-selection",

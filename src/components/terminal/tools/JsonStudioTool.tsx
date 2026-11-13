@@ -462,6 +462,12 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
     return `${lines} 行 · ${sizeStr}`;
   }, [leftText]);
 
+  const leftStatsCompact = useMemo(() => {
+    if (!leftText) return "0 行";
+    const lines = leftText.split("\n").length;
+    return `${lines} 行`;
+  }, [leftText]);
+
   const rightStats = useMemo(() => {
     if (!rightText) return "0 行 · 0 B";
     const lines = rightText.split("\n").length;
@@ -470,24 +476,26 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
     return `${lines} 行 · ${sizeStr}`;
   }, [rightText]);
 
+  const rightStatsCompact = useMemo(() => {
+    if (!rightText) return "0 行";
+    const lines = rightText.split("\n").length;
+    return `${lines} 行`;
+  }, [rightText]);
+
   return (
     <div className="flex h-full w-full flex-col select-text overflow-hidden bg-background">
-      {/* 顶部单行集成工具栏 (将操作上提至首行，去除多余介绍标题) */}
-      <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border bg-muted/20 px-3">
+      {/* 顶部单行集成工具栏 (将操作上提至首行，小窗口下自适应紧凑布局，绝不折行换行) */}
+      <div className="flex h-10 shrink-0 items-center justify-between gap-1.5 border-b border-border bg-muted/20 px-2.5 overflow-x-auto no-scrollbar">
         {/* 左侧：格式化、缩进、常用变换与对比控制 */}
-        <div className="flex items-center gap-1.5 flex-wrap min-w-0">
-          <div className="flex items-center gap-1.5 mr-1 font-semibold text-xs text-foreground shrink-0">
-            <Braces className="h-4 w-4 text-primary" />
-            <span className="hidden sm:inline">JSON 格式化</span>
-          </div>
-
+        <div className="flex items-center gap-1 shrink-0 flex-nowrap">
           <Button
             size="sm"
-            className="h-7 px-2.5 text-xs gap-1 font-medium active:scale-[0.97] transition-all cursor-pointer shadow-2xs"
+            className="h-7 px-2 text-xs gap-1 font-medium active:scale-[0.97] transition-all cursor-pointer shadow-2xs shrink-0"
             onClick={() => handleFormat("both")}
             title="格式化左侧和右侧 JSON (若右侧为空则自动同步)"
           >
-            <Braces className="h-3.5 w-3.5" /> 格式化
+            <Braces className="h-3.5 w-3.5 text-primary-foreground" />
+            <span>格式化</span>
           </Button>
 
           <select
@@ -497,38 +505,40 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
               setIndentSize(sz);
               handleFormat("both", sz);
             }}
-            className="h-7 rounded-md border border-input bg-background/80 px-2 text-xs text-foreground outline-none cursor-pointer hover:border-primary/40 transition-colors"
+            className="h-7 rounded-md border border-input bg-background/80 px-1.5 text-xs text-foreground outline-none cursor-pointer hover:border-primary/40 transition-colors shrink-0"
           >
             <option value={2}>2 空格</option>
             <option value={4}>4 空格</option>
           </select>
 
-          <div className="h-4 w-px bg-border/60 mx-0.5" />
+          <div className="h-3.5 w-px bg-border/60 mx-0.5 shrink-0" />
 
           <Button
             variant="outline"
             size="sm"
-            className="h-7 px-2 text-xs gap-1 text-muted-foreground hover:text-foreground active:scale-[0.97] transition-all cursor-pointer"
+            className="h-7 px-1.5 text-xs gap-1 text-muted-foreground hover:text-foreground active:scale-[0.97] transition-all cursor-pointer shrink-0"
             onClick={() => handleMinify("both")}
             title="压缩成单行紧凑 JSON"
           >
-            <Minimize2 className="h-3 w-3" /> 压缩
+            <Minimize2 className="h-3 w-3" />
+            <span>压缩</span>
           </Button>
 
           <Button
             variant="outline"
             size="sm"
-            className="h-7 px-2 text-xs gap-1 text-muted-foreground hover:text-foreground active:scale-[0.97] transition-all cursor-pointer"
+            className="h-7 px-1.5 text-xs gap-1 text-muted-foreground hover:text-foreground active:scale-[0.97] transition-all cursor-pointer shrink-0"
             onClick={() => handleSortKeys("both")}
             title="按键名字母升序递归排序 (对比神器)"
           >
-            <ArrowUpDown className="h-3 w-3" /> 键名排序
+            <ArrowUpDown className="h-3 w-3" />
+            <span>排序</span>
           </Button>
 
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground active:scale-[0.97] transition-all cursor-pointer"
+            className="h-7 px-1.5 text-xs text-muted-foreground hover:text-foreground active:scale-[0.97] transition-all cursor-pointer shrink-0"
             onClick={handleEscape}
             title="将右侧或当前 JSON 转换为反斜杠转义字符串"
           >
@@ -538,26 +548,27 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground active:scale-[0.97] transition-all cursor-pointer"
+            className="h-7 px-1.5 text-xs text-muted-foreground hover:text-foreground active:scale-[0.97] transition-all cursor-pointer shrink-0"
             onClick={handleUnescape}
             title="去除反斜杠转义还原"
           >
             去转义
           </Button>
 
-          <div className="h-4 w-px bg-border/60 mx-0.5" />
+          <div className="h-3.5 w-px bg-border/60 mx-0.5 shrink-0" />
 
           <Button
             variant={showDiffDrawer ? "secondary" : "outline"}
             size="sm"
             className={cn(
-              "h-7 px-2 text-xs gap-1 active:scale-[0.97] transition-all cursor-pointer",
+              "h-7 px-1.5 text-xs gap-1 active:scale-[0.97] transition-all cursor-pointer shrink-0",
               showDiffDrawer ? "text-primary font-medium" : "text-muted-foreground hover:text-foreground"
             )}
             onClick={() => setShowDiffDrawer((v) => !v)}
             title="展开/折叠左右 JSON 差异清单"
           >
-            <GitCompare className="h-3 w-3" /> 对比差异
+            <GitCompare className="h-3 w-3" />
+            <span>对比</span>
             {diffs && diffs.length > 0 && (
               <span className="ml-0.5 rounded-full bg-amber-500/20 px-1 py-0.2 text-[10px] font-mono text-amber-600 dark:text-amber-400">
                 {diffs.length}
@@ -568,20 +579,21 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground active:scale-[0.97] transition-all cursor-pointer"
+            className="h-7 px-1.5 text-xs text-muted-foreground hover:text-foreground active:scale-[0.97] transition-all cursor-pointer shrink-0"
             onClick={handleSwap}
             title="左右两侧内容互换"
           >
-            <ArrowLeftRight className="h-3 w-3" /> 互换
+            <ArrowLeftRight className="h-3 w-3" />
+            <span className="hidden 2xl:inline">互换</span>
           </Button>
         </div>
 
         {/* 右侧：状态指示器与快捷辅助 */}
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0 flex-nowrap ml-auto">
           {/* 实时校验与对比状态提示 */}
           {leftParseResult.error ? (
             <span
-              className="inline-flex items-center gap-1 text-[11px] text-destructive font-medium px-2 py-0.5 rounded-md bg-destructive/10 border border-destructive/20 max-w-[170px] truncate"
+              className="inline-flex items-center gap-1 text-[11px] text-destructive font-medium px-1.5 py-0.5 rounded-md bg-destructive/10 border border-destructive/20 max-w-[120px] truncate shrink-0"
               title={`左侧错误: ${leftParseResult.error}`}
             >
               <AlertCircle className="h-3 w-3 shrink-0" />
@@ -589,7 +601,7 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
             </span>
           ) : rightParseResult.error ? (
             <span
-              className="inline-flex items-center gap-1 text-[11px] text-destructive font-medium px-2 py-0.5 rounded-md bg-destructive/10 border border-destructive/20 max-w-[170px] truncate"
+              className="inline-flex items-center gap-1 text-[11px] text-destructive font-medium px-1.5 py-0.5 rounded-md bg-destructive/10 border border-destructive/20 max-w-[120px] truncate shrink-0"
               title={`右侧错误: ${rightParseResult.error}`}
             >
               <AlertCircle className="h-3 w-3 shrink-0" />
@@ -597,7 +609,7 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
             </span>
           ) : diffs ? (
             diffs.length === 0 ? (
-              <span className="inline-flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400 font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20">
+              <span className="inline-flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400 font-medium px-1.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 shrink-0">
                 <CheckCircle2 className="h-3 w-3 shrink-0" />
                 <span>两边一致</span>
               </span>
@@ -605,7 +617,7 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
               <button
                 type="button"
                 onClick={() => setShowDiffDrawer(true)}
-                className="inline-flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400 font-medium px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/15 cursor-pointer transition-colors"
+                className="inline-flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400 font-medium px-1.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/15 cursor-pointer transition-colors shrink-0"
                 title="点击展开查看差异详情"
               >
                 <GitCompare className="h-3 w-3 shrink-0" />
@@ -613,17 +625,17 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
               </button>
             )
           ) : (
-            <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground px-2 py-0.5">
+            <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground px-1.5 py-0.5 shrink-0">
               <span>输入中...</span>
             </span>
           )}
 
-          <div className="h-4 w-px bg-border/60 mx-0.5" />
+          <div className="h-3.5 w-px bg-border/60 mx-0.5 shrink-0" />
 
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground active:scale-[0.97] transition-all cursor-pointer"
+            className="h-7 px-1.5 text-xs text-muted-foreground hover:text-foreground active:scale-[0.97] transition-all cursor-pointer shrink-0"
             onClick={handleLoadSample}
             title="载入双栏对比示例数据"
           >
@@ -633,7 +645,7 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 px-2 text-xs text-muted-foreground hover:text-destructive active:scale-[0.97] transition-all cursor-pointer"
+            className="h-7 px-1.5 text-xs text-muted-foreground hover:text-destructive active:scale-[0.97] transition-all cursor-pointer shrink-0"
             onClick={handleClearAll}
             title="清空左右两侧数据"
           >
@@ -643,7 +655,7 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
           <Button
             variant="outline"
             size="sm"
-            className="h-7 px-2.5 text-xs gap-1 active:scale-[0.97] transition-all cursor-pointer shadow-2xs"
+            className="h-7 px-2 text-xs gap-1 active:scale-[0.97] transition-all cursor-pointer shadow-2xs shrink-0"
             onClick={handleCopyRight}
             title="复制右侧 JSON"
           >
@@ -654,47 +666,47 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
       </div>
 
       {/* 主体左右双栏对比编辑区 (占满全高，独立滚动与辅助操作) */}
-      <div className="flex flex-1 min-h-0 flex-col overflow-hidden p-3 gap-2">
-        <div className="grid grid-cols-2 gap-3 flex-1 min-h-0">
+      <div className="flex flex-1 min-h-0 flex-col overflow-hidden p-2.5 gap-2">
+        <div className="grid grid-cols-2 gap-2.5 flex-1 min-h-0">
           {/* 左侧栏：原始/对比输入 */}
           <div className="flex flex-col min-h-0 rounded-xl border border-border bg-card/40 overflow-hidden shadow-2xs">
             {/* 左侧顶栏 */}
-            <div className="flex h-8 shrink-0 items-center justify-between border-b border-border/70 bg-muted/30 px-3 text-xs">
-              <div className="flex items-center gap-2">
-                <span className="flex items-center gap-1.5 font-medium text-foreground text-[11.5px]">
-                  <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
-                  原始 / 左侧 JSON
+            <div className="flex h-8 shrink-0 items-center justify-between border-b border-border/70 bg-muted/30 px-2 text-xs min-w-0">
+              <div className="flex items-center gap-1.5 min-w-0 shrink">
+                <span className="flex items-center gap-1 font-medium text-foreground text-[11px] shrink-0 whitespace-nowrap">
+                  <span className="h-1.5 w-1.5 rounded-full bg-sky-500 shrink-0" />
+                  原始 JSON
                 </span>
-                <span className="text-[10px] text-muted-foreground tabular-nums">
-                  ({leftStats})
+                <span className="text-[10px] text-muted-foreground tabular-nums truncate whitespace-nowrap" title={leftStats}>
+                  ({leftStatsCompact})
                 </span>
               </div>
 
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-0.5 shrink-0">
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground cursor-pointer gap-0.5"
+                  className="h-6 px-1 text-[11px] text-muted-foreground hover:text-foreground cursor-pointer gap-0.5"
                   onClick={handlePasteLeft}
-                  title="从剪贴板粘贴到左侧"
+                  title="从剪贴板粘贴到左侧并格式化"
                 >
                   <ClipboardPaste className="h-3 w-3" />
-                  <span>粘贴</span>
+                  <span className="hidden xl:inline">粘贴</span>
                 </Button>
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground cursor-pointer gap-0.5"
+                  className="h-6 px-1.5 text-[11px] text-sky-500 hover:text-sky-600 dark:hover:text-sky-400 cursor-pointer gap-0.5 font-medium whitespace-nowrap"
                   onClick={handleSyncToRight}
                   title="将左侧格式化并同步到右侧"
                 >
                   <ArrowRight className="h-3 w-3" />
-                  <span>格式化到右</span>
+                  <span className="whitespace-nowrap">格式化到右</span>
                 </Button>
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-destructive cursor-pointer"
+                  className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive cursor-pointer"
                   onClick={() => setLeftText("")}
                   title="清空左侧"
                 >
@@ -703,7 +715,7 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground cursor-pointer"
+                  className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground cursor-pointer"
                   onClick={handleCopyLeft}
                   title="复制左侧内容"
                 >
@@ -732,34 +744,34 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
           {/* 右侧栏：目标/对比输入 */}
           <div className="flex flex-col min-h-0 rounded-xl border border-border bg-card/40 overflow-hidden shadow-2xs">
             {/* 右侧顶栏 */}
-            <div className="flex h-8 shrink-0 items-center justify-between border-b border-border/70 bg-muted/30 px-3 text-xs">
-              <div className="flex items-center gap-2">
-                <span className="flex items-center gap-1.5 font-medium text-foreground text-[11.5px]">
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                  对比 / 右侧 JSON
+            <div className="flex h-8 shrink-0 items-center justify-between border-b border-border/70 bg-muted/30 px-2 text-xs min-w-0">
+              <div className="flex items-center gap-1.5 min-w-0 shrink">
+                <span className="flex items-center gap-1 font-medium text-foreground text-[11px] shrink-0 whitespace-nowrap">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />
+                  格式化目标
                 </span>
-                <span className="text-[10px] text-muted-foreground tabular-nums">
-                  ({rightStats})
+                <span className="text-[10px] text-muted-foreground tabular-nums truncate whitespace-nowrap" title={rightStats}>
+                  ({rightStatsCompact})
                 </span>
               </div>
 
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-0.5 shrink-0">
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground cursor-pointer gap-0.5"
+                  className="h-6 px-1.5 text-[11px] text-emerald-500 hover:text-emerald-600 dark:hover:text-emerald-400 cursor-pointer gap-0.5 font-medium whitespace-nowrap"
                   onClick={() => {
                     setLeftText(rightText);
                   }}
                   title="将右侧内容覆写到左侧"
                 >
                   <ArrowLeft className="h-3 w-3" />
-                  <span>同步到左</span>
+                  <span className="whitespace-nowrap">同步到左</span>
                 </Button>
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-destructive cursor-pointer"
+                  className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive cursor-pointer"
                   onClick={() => setRightText("")}
                   title="清空右侧"
                 >
@@ -768,7 +780,7 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-6 px-1.5 text-[11px] text-muted-foreground hover:text-foreground cursor-pointer"
+                  className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground cursor-pointer"
                   onClick={handleCopyRight}
                   title="复制右侧内容"
                 >

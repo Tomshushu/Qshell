@@ -613,7 +613,7 @@ function AppContent() {
           <TabBar />
 
           {/* Content */}
-          <div className="flex-1 overflow-hidden relative">
+          <div data-workspace-content="true" className="flex-1 overflow-hidden relative">
             {/* Dashboard - 无活跃标签时显示 */}
             <div className={!hasActiveTab ? 'h-full' : 'hidden'}>
               <Dashboard />
