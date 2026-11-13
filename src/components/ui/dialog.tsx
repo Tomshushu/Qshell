@@ -4,7 +4,10 @@ import { X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAppStore } from "@/store"
 
-const Dialog = DialogPrimitive.Root
+/** 默认仍是模态；传 modal={false} 可把配置类弹框变成可交互窗口（不锁背景、无 focus trap） */
+const Dialog = ({ modal = true, ...props }: React.ComponentProps<typeof DialogPrimitive.Root>) => (
+  <DialogPrimitive.Root modal={modal} {...props} />
+)
 const DialogTrigger = DialogPrimitive.Trigger
 const DialogClose = DialogPrimitive.Close
 const DialogPortal = DialogPrimitive.Portal
@@ -16,7 +19,7 @@ const DialogOverlay = React.forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      "fixed inset-0 z-50 bg-black/40 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+      "fixed inset-0 z-modal bg-black/40 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
       className
     )}
     {...props}
@@ -33,8 +36,12 @@ const DialogContent = React.forwardRef<
      * 会浮在自定义标题栏之上，与标题栏右侧的搜索框/操作按钮重叠，且形成两个 ×。
      */
     showCloseButton?: boolean
+    /** 窗口模式：不渲染遮罩，让背景其它窗口仍可交互 */
+    showOverlay?: boolean
+    /** 窗口模式：由全局窗口层级栈分配的动态 z-index */
+    layerZIndex?: number
   }
->(function DialogContentInner({ className, children, onPointerDownOutside, onCloseAutoFocus, showCloseButton = true, ...props }, ref) {
+>(function DialogContentInner({ className, children, onPointerDownOutside, onCloseAutoFocus, showCloseButton = true, showOverlay = true, layerZIndex, ...props }, ref) {
   const uiStyle = useAppStore(s => s.uiStyle)
   const isAnime = uiStyle === 'anime'
 
@@ -47,9 +54,14 @@ const DialogContent = React.forwardRef<
 
   return (
   <DialogPortal>
-    <DialogOverlay />
+    {showOverlay && (
+      <DialogOverlay style={layerZIndex !== undefined ? { zIndex: layerZIndex } : undefined} />
+    )}
     {/* 外层定位容器：让猫耳能浮到弹框上方而不被 overflow:hidden 裁切 */}
-    <div className="fixed left-[50%] top-[50%] z-50 translate-x-[-50%] translate-y-[-50%] group/dialog">
+    <div
+      className="fixed left-[50%] top-[50%] z-modal-content translate-x-[-50%] translate-y-[-50%] group/dialog"
+      style={layerZIndex !== undefined ? { zIndex: layerZIndex } : undefined}
+    >
       {/* 二次元猫耳装饰 (Anime Dialog Cat Ears) */}
       {isAnime && (
         <>

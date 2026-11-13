@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
 import { FloatingTextFormatter } from "../floating-text-formatter";
 import { useTextFormatterStore } from "@/store/text-formatter-store";
+import { useWindowLayerStore, WINDOW_Z_BASE } from "@/store/window-layer-store";
 import { useAppStore } from "@/store";
 
 describe("FloatingTextFormatter", () => {
@@ -17,6 +18,9 @@ describe("FloatingTextFormatter", () => {
     useAppStore.setState({
       activeTabId: "test-tab",
       tabs: [{ id: "test-tab", serverId: "srv-1", serverName: "Test", module: "terminal", title: "Terminal" }],
+      terminalThemeId: "termius-dark",
+      customTerminalThemes: [],
+      terminalThemeOverrides: {},
     });
   });
 
@@ -94,5 +98,58 @@ describe("FloatingTextFormatter", () => {
     });
     expect(useTextFormatterStore.getState().open).toBe(false);
     expect(view.container.firstChild).toBeNull();
+  });
+
+  it("工具箱配色跟随应用明暗主题，不绑定终端主题", () => {
+    useAppStore.setState({ terminalThemeId: "termius-dark" });
+    openToolbox();
+
+    const panel = document.querySelector(".devtools-scope") as HTMLElement;
+    // 浮窗不注入终端原始色，也不自行切换 dark / colorScheme / 全局语义色
+    expect(panel.hasAttribute("data-term-theme")).toBe(false);
+    expect(panel.style.getPropertyValue("--dt-bg")).toBe("");
+    expect(panel.style.getPropertyValue("--dt-fg")).toBe("");
+    expect(panel.style.getPropertyValue("--dt-accent")).toBe("");
+    expect(panel.style.colorScheme).toBe("");
+    expect(panel.classList.contains("dark")).toBe(false);
+    expect(panel.style.getPropertyValue("--color-background")).toBe("");
+
+    // 明暗由 ThemeProvider 挂在根元素上的 .dark / .light 决定；
+    // 同时换一套终端主题也不应改变工具箱配色。
+    document.documentElement.classList.add("dark");
+    try {
+      expect(document.documentElement.classList.contains("dark")).toBe(true);
+      expect(panel.classList.contains("dark")).toBe(false);
+
+      act(() => {
+        useAppStore.setState({ terminalThemeId: "termius-light" });
+      });
+      const after = document.querySelector(".devtools-scope") as HTMLElement;
+      expect(after.hasAttribute("data-term-theme")).toBe(false);
+      expect(after.style.getPropertyValue("--dt-bg")).toBe("");
+    } finally {
+      document.documentElement.classList.remove("dark");
+    }
+  });
+
+  it("打开时自动置顶，点击浮窗可再次成为顶层", () => {
+    useWindowLayerStore.setState({ layers: {}, topZ: WINDOW_Z_BASE - 1 });
+    openToolbox();
+
+    const panel = document.querySelector(".devtools-scope") as HTMLElement;
+    const initialZ = Number(panel.style.zIndex);
+    expect(initialZ).toBeGreaterThanOrEqual(WINDOW_Z_BASE);
+    expect(useWindowLayerStore.getState().layers["devtools"]).toBe(initialZ);
+
+    // 另一个窗口打开后抢占顶层
+    useWindowLayerStore.getState().register("other-window");
+    expect(useWindowLayerStore.getState().layers["other-window"]).toBeGreaterThan(initialZ);
+
+    // 点击工具箱任意位置，重新回到最上层
+    fireEvent.pointerDown(panel, { bubbles: true });
+    expect(useWindowLayerStore.getState().layers["devtools"]).toBeGreaterThan(
+      useWindowLayerStore.getState().layers["other-window"],
+    );
+    expect(Number(panel.style.zIndex)).toBe(useWindowLayerStore.getState().layers["devtools"]);
   });
 });

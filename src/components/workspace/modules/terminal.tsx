@@ -2002,7 +2002,7 @@ export function TerminalModule({
     [runMatchHints],
   );
 
-  // 复制选中内容
+  // 复制选中内容：只写系统剪贴板，绝不自动把文本灌进工具箱
   const handleCopy = useCallback(() => {
     const term = getActiveTerm();
     if (!term) return;
@@ -2011,14 +2011,6 @@ export function TerminalModule({
       try {
         navigator.clipboard.writeText(selection);
         playSound(SoundType.Click);
-        if (useTextFormatterStore.getState().open) {
-          useTextFormatterStore.getState().openTextFormatter(selection);
-          window.dispatchEvent(
-            new CustomEvent("qshell:inject-json-studio", {
-              detail: { text: selection },
-            }),
-          );
-        }
       } catch {
         toastRef.current?.warning(t("tm_toast_copy_failed"));
       }

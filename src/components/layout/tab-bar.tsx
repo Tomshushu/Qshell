@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from 'react'
+import { useRef, useEffect, useMemo } from 'react'
 import { useAppStore } from '@/store'
 import { Button } from '@/components/ui/button'
 import {
@@ -23,7 +23,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuGroup,
 } from '@/components/ui/dropdown-menu'
-import { SettingsDialog } from '@/components/layout/settings-dialog'
+import { useSettingsDialogStore } from '@/store/settings-dialog-store'
 import { TabStrip } from '@/components/layout/tab-strip'
 import { UserAvatar } from '@/components/ui/user-avatar'
 import { QshellLoader } from '@/components/ui/qshell-loader'
@@ -79,27 +79,12 @@ export function TabBar() {
   const lastSyncTime = useSyncStore((s) => s.lastSyncTime)
   const backup = useSyncStore((s) => s.backup)
 
-  const [showSettings, setShowSettings] = useState(false)
-  const [settingsTab, setSettingsTab] = useState<
-    "general" | "security" | "account" | "ai" | "terminal" | "sftp" | "logs" | "shortcuts" | "known_hosts"
-  >("general")
-
-  useEffect(() => {
-    const handleOpenSettings = (e: CustomEvent<string | { tab?: string }>) => {
-      const tab = typeof e.detail === 'string' ? e.detail : e.detail?.tab
-      if (tab) {
-        setSettingsTab(tab as any)
-      }
-      setShowSettings(true)
-    }
-    window.addEventListener('open-settings' as any, handleOpenSettings)
-    return () => window.removeEventListener('open-settings' as any, handleOpenSettings)
-  }, [])
+  // 设置弹框由 App 顶层统一渲染，这里只负责发起打开（含指定分页）
+  const openSettings = useSettingsDialogStore((s) => s.openSettings)
 
   const handleQuickBackup = async () => {
     if (!masterPassword) {
-      setSettingsTab('account')
-      setShowSettings(true)
+      openSettings('account')
       toast.warning(t('sync_toast_pwd_needed_for_backup'))
       return
     }
@@ -247,10 +232,7 @@ export function TabBar() {
         <DropdownMenuContent align="end" sideOffset={6} className="w-64 p-2 glass-strong border border-border/60 rounded-xl shadow-xl space-y-1">
           {/* 1. 用户信息卡片（可点击直达云同步设置） */}
           <div
-            onClick={() => {
-              setSettingsTab('account')
-              setShowSettings(true)
-            }}
+            onClick={() => openSettings('account')}
             className="p-2.5 rounded-lg bg-muted/40 hover:bg-muted/70 transition-colors border border-border/50 cursor-pointer group select-none"
             title={t('sync_manage_menu')}
           >
@@ -334,10 +316,7 @@ export function TabBar() {
             )}
 
             <DropdownMenuItem
-              onClick={() => {
-                setSettingsTab('account')
-                setShowSettings(true)
-              }}
+              onClick={() => openSettings('account')}
               className="text-xs gap-2 py-2 cursor-pointer"
             >
               <Cloud className="h-3.5 w-3.5 text-primary shrink-0" />
@@ -345,10 +324,7 @@ export function TabBar() {
             </DropdownMenuItem>
 
             <DropdownMenuItem
-              onClick={() => {
-                setSettingsTab('general')
-                setShowSettings(true)
-              }}
+              onClick={() => openSettings('general')}
               className="text-xs gap-2 py-2 cursor-pointer"
             >
               <Settings className="h-3.5 w-3.5 text-foreground/80 shrink-0" />
@@ -358,17 +334,6 @@ export function TabBar() {
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {/* 全局设置弹窗 */}
-      <SettingsDialog
-        open={showSettings}
-        defaultTab={settingsTab}
-        onOpenChange={(open) => {
-          setShowSettings(open);
-          if (!open) {
-            window.dispatchEvent(new CustomEvent('focus-active-terminal'));
-          }
-        }}
-      />
     </div>
   )
 }

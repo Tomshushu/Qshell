@@ -23,7 +23,7 @@ import { cn } from '@/lib/utils'
 import { useAppStore } from '@/store'
 import { UI_STYLES } from '@/styles/themes/registry'
 import { ServerFormDialog } from '@/components/server/server-form-dialog'
-import { SettingsDialog } from '@/components/layout/settings-dialog'
+import { useSettingsDialogStore } from '@/store/settings-dialog-store'
 import { useShortcutStore } from '@/store/shortcut-store'
 import { Kbd } from '@/components/ui/kbd'
 
@@ -45,7 +45,7 @@ interface CommandItem {
  * - 连接服务器：每个服务器一条「连接」命令（store.openTab）
  * - 跳转分组：每个分组一条（全局事件桥接 Dashboard 局部 state）
  *
- * 局部动作（新建服务器、设置）通过自渲染对应受控弹窗解耦；
+ * 局部动作（新建服务器）通过自渲染受控弹窗解耦；设置由全局 store 统一打开；
  * 分组跳转 / 导入通过 window 自定义事件桥接到 Dashboard。
  */
 export function CommandPalette() {
@@ -53,8 +53,8 @@ export function CommandPalette() {
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const [showServerForm, setShowServerForm] = useState(false)
-  const [showSettings, setShowSettings] = useState(false)
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const openSettings = useSettingsDialogStore((s) => s.openSettings)
 
   const openTab = useAppStore((s) => s.openTab)
   const openSftpWithServers = useAppStore((s) => s.openSftpWithServers)
@@ -115,7 +115,7 @@ export function CommandPalette() {
       group: '操作',
       label: '打开设置',
       icon: <SettingsIcon className="h-4 w-4" />,
-      run: () => setShowSettings(true),
+      run: () => openSettings(),
     })
     items.push({
       id: 'sftp',
@@ -183,7 +183,7 @@ export function CommandPalette() {
       })
     }
     return items
-  }, [servers, serverGroups, openTab, openSftpWithServers, setTheme, setUiStyle])
+  }, [servers, serverGroups, openTab, openSftpWithServers, setTheme, setUiStyle, openSettings])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -225,9 +225,9 @@ export function CommandPalette() {
         }}
       >
         <DialogPrimitive.Portal>
-          <DialogPrimitive.Overlay className="fixed inset-0 z-[100] bg-black/40 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+          <DialogPrimitive.Overlay className="fixed inset-0 z-modal bg-black/40 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
           <DialogPrimitive.Content
-            className="fixed left-1/2 top-[15%] z-[101] -translate-x-1/2 w-[calc(100vw-2rem)] max-w-xl rounded-2xl border border-border/60 glass-strong shadow-2xl dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08),0_24px_48px_-12px_rgba(0,0,0,0.7)] ring-1 ring-white/5 overflow-hidden focus:outline-none"
+            className="fixed left-1/2 top-[15%] z-modal-content -translate-x-1/2 w-[calc(100vw-2rem)] max-w-xl rounded-2xl border border-border/60 glass-strong shadow-2xl dark:shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08),0_24px_48px_-12px_rgba(0,0,0,0.7)] ring-1 ring-white/5 overflow-hidden focus:outline-none"
             onCloseAutoFocus={(e) => {
               if (!e.defaultPrevented) {
                 window.dispatchEvent(new CustomEvent('focus-active-terminal'))
@@ -301,7 +301,6 @@ export function CommandPalette() {
         mode="add"
         onSaved={() => setShowServerForm(false)}
       />
-      <SettingsDialog open={showSettings} onOpenChange={setShowSettings} />
     </>
   )
 }

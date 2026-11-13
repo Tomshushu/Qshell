@@ -22,6 +22,7 @@ import {
 } from '@/utils/terminal-themes'
 import type { HighlightRule } from '@/utils/terminal-highlighter'
 import { useToast } from '@/components/ui/toast'
+import { useWindowLayer } from '@/hooks/use-window-layer'
 import { QshellLoader } from '@/components/ui/qshell-loader'
 import { Plus, Trash2, Copy, Check, Info, AlertTriangle, Download, Upload, Monitor, Loader2, RotateCcw } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -53,6 +54,10 @@ import {
 interface TerminalThemeDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** 从工作台顶栏打开时作为可交互窗口（非模态、无遮罩、参与全局窗口层级） */
+  windowMode?: boolean
+  /** 非窗口模式下显式指定模态层 z-index：供「设置」这类 owner 把本弹框抬成子弹框 */
+  dialogZIndex?: number
 }
 
 /**
@@ -87,8 +92,12 @@ function colorToHex6(colorStr: string): string {
   return '#808080'
 }
 
-export function TerminalThemeDialog({ open, onOpenChange }: TerminalThemeDialogProps) {
+export function TerminalThemeDialog({ open, onOpenChange, windowMode = false, dialogZIndex }: TerminalThemeDialogProps) {
   const { t } = useTranslation()
+  const { zIndex: themeWindowZ, activate: activateThemeWindow } = useWindowLayer(
+    'terminal-theme-dialog',
+    Boolean(open && windowMode),
+  )
   const { toast } = useToast()
   const {
     terminalThemeId,
@@ -684,8 +693,15 @@ export function TerminalThemeDialog({ open, onOpenChange }: TerminalThemeDialogP
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl h-[min(620px,calc(100vh-2rem))] flex flex-col p-6 bg-background border rounded-xl overflow-hidden gap-0">
+    <Dialog open={open} onOpenChange={onOpenChange} modal={!windowMode}>
+      <DialogContent
+        className="max-w-4xl h-[min(620px,calc(100vh-2rem))] flex flex-col p-6 bg-background border rounded-xl overflow-hidden gap-0"
+        showOverlay={!windowMode}
+        layerZIndex={windowMode ? themeWindowZ : dialogZIndex}
+        onPointerDownCapture={windowMode ? activateThemeWindow : undefined}
+        onPointerDownOutside={windowMode ? (e) => e.preventDefault() : undefined}
+        onInteractOutside={windowMode ? (e) => e.preventDefault() : undefined}
+      >
         <DialogHeader className="pb-4 border-b">
           <DialogTitle className="text-lg font-bold flex items-center gap-2">
             🎨 {t('thm_dialog_title')}

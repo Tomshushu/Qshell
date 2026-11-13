@@ -60,7 +60,7 @@ export function WorkspaceModuleModal({
   return (
     <div
       className={cn(
-        "fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5",
+        "fixed inset-0 z-modal flex items-center justify-center p-3 sm:p-5",
         !open && "hidden pointer-events-none"
       )}
       aria-hidden={!open}

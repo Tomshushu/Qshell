@@ -3,7 +3,7 @@ export function MarqueeRect({ marquee }: { marquee: { left: number; top: number;
   if (!marquee) return null
   return (
     <div
-      className="fixed z-50 pointer-events-none rounded-sm border border-primary/70 bg-primary/10"
+      className="fixed z-drag pointer-events-none rounded-sm border border-primary/70 bg-primary/10"
       style={{ left: marquee.left, top: marquee.top, width: marquee.w, height: marquee.h }}
     />
   )

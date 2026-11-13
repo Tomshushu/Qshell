@@ -133,26 +133,9 @@ export function computeJsonDiff(left: unknown, right: unknown, path = ""): JsonD
   return diffs;
 }
 
-const STORAGE_KEY_LEFT = "qshell_json_studio_left";
-const STORAGE_KEY_RIGHT = "qshell_json_studio_right";
 const STORAGE_KEY_INDENT = "qshell_json_studio_indent";
 
-function loadSavedLeftText(): string | null {
-  try {
-    return localStorage.getItem(STORAGE_KEY_LEFT);
-  } catch {
-    return null;
-  }
-}
-
-function loadSavedRightText(): string | null {
-  try {
-    return localStorage.getItem(STORAGE_KEY_RIGHT);
-  } catch {
-    return null;
-  }
-}
-
+// 只持久化缩进偏好；文本内容绝不自动恢复，弹框每次打开都是干净的
 function loadSavedIndent(): number {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_INDENT);
@@ -163,10 +146,8 @@ function loadSavedIndent(): number {
   return 2;
 }
 
-function saveJsonStudioState(left: string, right: string, indent: number) {
+function saveIndentPreference(indent: number) {
   try {
-    localStorage.setItem(STORAGE_KEY_LEFT, left);
-    localStorage.setItem(STORAGE_KEY_RIGHT, right);
     localStorage.setItem(STORAGE_KEY_INDENT, String(indent));
   } catch {
     /* ignore */
@@ -174,66 +155,78 @@ function saveJsonStudioState(left: string, right: string, indent: number) {
 }
 
 /**
- * 健壮的 JSON 解析器：标准严格 JSON 优先；若包含反斜杠转义（日志常见）或外层引号则智能尝试解包解析
+ * 健壮的 JSON 解析器：
+ * 1. 标准严格 JSON 优先，绝不做全局字符替换（否则会破坏字符串值内合法的 \" 与 \\）
+ *    若解析结果是「被外层引号包住的 JSON 字符串」('"{\"a\":1}"')，再解一层拿到真正的对象
+ * 2. 日志/终端输出里整段被转义的 JSON（'{\"a\":1}'，可能多层转义）：
+ *    按 JSON 字符串字面量语义逐层解包，且只有解包结果是对象/数组且能严格解析时才认定为 JSON，
+ *    避免普通日志被误判，也避免粗暴替换导致解析出错误内容
  */
-function tryParseJson(text: string): { success: boolean; data?: unknown; error?: string } {
+export function tryParseJson(text: string): { success: boolean; data?: unknown; error?: string } {
   const clean = text.trim();
   if (!clean) return { success: false, error: "内容为空" };
-  // 1. 标准严格解析
+
+  // 1. 标准严格解析（含外层引号包裹的 JSON 字符串）
   try {
-    return { success: true, data: JSON.parse(clean) };
-  } catch (e1) {
-    // 2. 尝试去外层引号后解析 (例如 '"{\"a\":1}"')
-    if (clean.startsWith('"') && clean.endsWith('"') && clean.length > 2) {
-      try {
-        const unquoted = JSON.parse(clean);
-        if (typeof unquoted === "string") {
-          return { success: true, data: JSON.parse(unquoted) };
+    const parsed = JSON.parse(clean);
+    if (typeof parsed === "string") {
+      const inner = parsed.trim();
+      if (/^[{\[]/.test(inner)) {
+        try {
+          return { success: true, data: JSON.parse(inner) };
+        } catch {
+          // 字符串内容不是完整 JSON，按普通字符串返回
         }
-      } catch {
-        // ignore
       }
     }
-    // 3. 尝试去除反斜杠转义后解析 (日志/终端输出常见 '{\"a\":1}')
-    try {
-      const unescaped = clean.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
-      return { success: true, data: JSON.parse(unescaped) };
-    } catch {
-      // ignore
+    return { success: true, data: parsed };
+  } catch (e1) {
+    // 2. 按 JSON 字符串字面量语义逐层解包（最多 3 层转义）
+    if (clean.includes("\\")) {
+      let candidate = clean;
+      for (let depth = 0; depth < 3; depth++) {
+        try {
+          candidate = JSON.parse(`"${candidate.replace(/\r?\n/g, "\\n")}"`) as string;
+        } catch {
+          break;
+        }
+        const trimmed = candidate.trim();
+        if (!/^[{\[]/.test(trimmed)) break;
+        try {
+          return { success: true, data: JSON.parse(trimmed) };
+        } catch {
+          // 可能还有一层转义，继续解包
+        }
+      }
     }
+
     return { success: false, error: e1 instanceof Error ? e1.message : String(e1) };
   }
 }
 
 export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
-  // 左侧原始 JSON：优先取外部传入内容，其次取历史持久化缓存，最后兜底默认示例
-  const [leftText, setLeftText] = useState(() => {
-    if (initialJson && initialJson.trim()) return initialJson.trim();
-    const saved = loadSavedLeftText();
-    if (saved !== null) return saved;
-    return SAMPLE_LEFT_JSON;
-  });
+  // 左侧原始文本：默认留空，仅右键/划词「格式化 JSON」等用户主动入口才会带内容进来
+  const [leftText, setLeftText] = useState(() =>
+    initialJson && initialJson.trim() ? initialJson.trim() : ""
+  );
 
-  // 右侧对比/格式化 JSON：取历史持久化缓存；新输入时默认保留原样或为空，绝不强制自动格式化
-  const [rightText, setRightText] = useState(() => {
-    const saved = loadSavedRightText();
-    if (saved !== null) return saved;
-    return initialJson && initialJson.trim() ? "" : SAMPLE_RIGHT_JSON;
-  });
+  // 右侧对比目标：默认留空，绝不自动填充示例或上次编辑内容
+  const [rightText, setRightText] = useState("");
 
   const [indentSize, setIndentSize] = useState<number>(() => loadSavedIndent());
   const [copiedLeft, setCopiedLeft] = useState(false);
   const [copiedRight, setCopiedRight] = useState(false);
   const [viewMode, setViewMode] = useState<"edit" | "diff">("edit");
 
-  // 1. 监听 initialJson 变化：当弹框已打开时，外部传入新内容仅填充左侧原始输入，等待用户主动点击「格式化」
+  // 1. 仅用户主动入口（右键/划词「格式化 JSON」、弹框内读取剪贴板）会设置 seed，
+  //    这里把内容填到左侧原始输入，等待用户主动点击「格式化」
   useEffect(() => {
     if (initialJson && initialJson.trim()) {
       setLeftText(initialJson.trim());
     }
   }, [initialJson]);
 
-  // 2. 全局自定义事件注入：无论何时右键或点击格式化，均仅覆盖左侧原始区域，等待用户手动格式化
+  // 2. 显式注入事件：同样只由用户主动入口派发，覆盖左侧原文，不自动格式化
   useEffect(() => {
     const handleInject = (e: Event) => {
       const customEvt = e as CustomEvent<{ text: string }>;
@@ -246,13 +239,13 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
     return () => window.removeEventListener("qshell:inject-json-studio", handleInject);
   }, []);
 
-  // 3. 客户最后一次编辑内容防抖持久化：即使重启应用也能完美恢复最后的状态
+  // 3. 只持久化缩进偏好；文本内容不落盘、不自动恢复
   useEffect(() => {
     const timer = setTimeout(() => {
-      saveJsonStudioState(leftText, rightText, indentSize);
+      saveIndentPreference(indentSize);
     }, 200);
     return () => clearTimeout(timer);
-  }, [leftText, rightText, indentSize]);
+  }, [indentSize]);
 
   // 解析并校验左侧 JSON (用于语法指示与 Diff)
   const leftParseResult = useMemo(() => {
@@ -288,6 +281,7 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
   // 调研成熟产品 (DevToys / CyberChef / Postman / JSONDiff)：
   // 场景 A：如果右侧为空或与左侧相同，用户输入在左侧，点击「格式化」是将左侧格式化输出到右侧（保留左侧原始输入用于对照）
   // 场景 B：如果左右两侧都有不同的 JSON（双栏对比场景），点击「格式化」对双侧分别进行规范化缩进与美化，以便精准高亮 Diff
+  // 场景 C：右侧是普通文本/日志（非 JSON），保留右侧原样，仅就地美化左侧，绝不覆盖用户的对比目标
   const handleFormat = useCallback(
     (targetSide: "left" | "right" | "both" = "both", indent = indentSize) => {
       if (targetSide === "left") {
@@ -320,7 +314,8 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
           setLeftText(formattedLeft);
           setRightText(JSON.stringify(rightParse.data, null, indent));
         } else {
-          setRightText(formattedLeft);
+          // 右侧是用户粘贴的普通文本/日志（非 JSON）：原样保留，只在左侧就地美化
+          setLeftText(formattedLeft);
         }
         playSound(SoundType.Click);
       } else if (rightParse.success) {
@@ -331,17 +326,44 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
     [leftText, rightText, indentSize]
   );
 
+  /**
+   * 主「格式化」按钮 / Ctrl+Enter 入口：
+   * 左右都为空时，仅在用户主动点击的这一刻从剪贴板取内容（绝不监听复制事件或轮询剪贴板），
+   * 原文填入左侧，格式化结果输出到右侧；其余情况走常规格式化。
+   */
+  const handleFormatButton = useCallback(async () => {
+    if (!leftText.trim() && !rightText.trim()) {
+      let clip = "";
+      try {
+        clip = navigator.clipboard?.readText ? await navigator.clipboard.readText() : "";
+      } catch {
+        /* ignore */
+      }
+      if (clip && clip.trim()) {
+        const clean = clip.trim();
+        setLeftText(clean);
+        const res = tryParseJson(clean);
+        if (res.success) {
+          setRightText(JSON.stringify(res.data, null, indentSize));
+        }
+        playSound(SoundType.Click);
+        return;
+      }
+    }
+    handleFormat("both");
+  }, [leftText, rightText, indentSize, handleFormat]);
+
   // 键盘快捷键：Ctrl+Enter 或 Cmd+Enter 手动触发格式化
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
         e.preventDefault();
-        handleFormat("both");
+        void handleFormatButton();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleFormat]);
+  }, [handleFormatButton]);
 
   // 压缩为一行
   const handleMinify = (targetSide: "left" | "right" | "both" = "both") => {
@@ -355,7 +377,8 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
         setLeftText(minifiedLeft);
         setRightText(JSON.stringify(rightParse.data));
       } else {
-        setRightText(minifiedLeft);
+        // 右侧非 JSON 时保留对比目标，不覆盖丢失
+        setLeftText(minifiedLeft);
       }
       playSound(SoundType.Click);
     } else if (rightParse.success) {
@@ -376,7 +399,8 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
         setLeftText(sortedLeft);
         setRightText(JSON.stringify(sortJsonKeys(rightParse.data), null, indentSize));
       } else {
-        setRightText(sortedLeft);
+        // 右侧非 JSON 时保留对比目标，不覆盖丢失
+        setLeftText(sortedLeft);
       }
       playSound(SoundType.Click);
     } else if (rightParse.success) {
@@ -516,8 +540,8 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
           <Button
             size="sm"
             className="h-7 px-2 text-xs gap-1 font-medium active:scale-[0.97] transition-all cursor-pointer shadow-2xs shrink-0"
-            onClick={() => handleFormat("both")}
-            title="格式化左侧和右侧 JSON (若右侧为空则自动同步)"
+            onClick={() => void handleFormatButton()}
+            title="格式化左侧和右侧 JSON（左右都为空时由本次点击从剪贴板读取，不会自动写入）"
           >
             <Braces className="h-3.5 w-3.5 text-primary-foreground" />
             <span>格式化</span>

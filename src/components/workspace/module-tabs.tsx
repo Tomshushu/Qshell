@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useAppStore } from "@/store";
 import type { WorkspaceModule } from "@/types";
 import { useTranslation } from "@/i18n";
@@ -161,8 +161,13 @@ export function ModuleTabs({
   const { t } = useTranslation();
   const isFormatterOpen = useTextFormatterStore((s) => s.open);
   const toggleTextFormatter = useTextFormatterStore((s) => s.toggleTextFormatter);
-  const openTextFormatter = useTextFormatterStore((s) => s.openTextFormatter);
   const [showThemeDialog, setShowThemeDialog] = useState(false);
+  // 顶栏「终端配色」按钮只在 terminal 模块可见。切到其它模块时必须关掉并卸载主题窗口，
+  // 否则它会以窗口层 60~99、无遮罩、背景可交互地浮在服务/进程/Docker 之上，
+  // 而入口按钮已经消失，只剩窗口自己的 × 能关（孤儿窗口）。
+  useEffect(() => {
+    if (activeModule !== "terminal") setShowThemeDialog(false);
+  }, [activeModule]);
   const [customBreakInput, setCustomBreakInput] = useState("");
   const [breakDropdownOpen, setBreakDropdownOpen] = useState(false);
   // 按连接目标类型过滤可见的工作区模块（linux 保持全部，其余类型按注册表声明）
@@ -281,29 +286,9 @@ export function ModuleTabs({
                 : "mx-0.5 my-0.5 px-2.5 py-1 is-horizontal",
               isFormatterOpen && "is-active",
             )}
-            onClick={async () => {
-              if (!isFormatterOpen) {
-                let clip = "";
-                try {
-                  if (navigator.clipboard?.readText) {
-                    clip = await navigator.clipboard.readText();
-                  }
-                } catch {
-                  /* ignore */
-                }
-                if (clip && clip.trim().length > 0 && clip.trim().length <= 50000) {
-                  openTextFormatter(clip.trim());
-                  window.dispatchEvent(
-                    new CustomEvent("qshell:inject-json-studio", {
-                      detail: { text: clip.trim() },
-                    }),
-                  );
-                } else {
-                  toggleTextFormatter();
-                }
-              } else {
-                toggleTextFormatter();
-              }
+            onClick={() => {
+              // 仅开关弹框：不读取剪贴板、不注入任何文本，内容只能由用户在弹框内主动写入
+              toggleTextFormatter();
               playSound(isFormatterOpen ? SoundType.Close : SoundType.Open);
             }}
             title={t("fmt_dialog_title")}
@@ -651,10 +636,13 @@ export function ModuleTabs({
         )}
       </div>
 
-      <TerminalThemeDialog
-        open={showThemeDialog}
-        onOpenChange={setShowThemeDialog}
-      />
+      {activeModule === "terminal" && (
+        <TerminalThemeDialog
+          open={showThemeDialog}
+          onOpenChange={setShowThemeDialog}
+          windowMode
+        />
+      )}
     </div>
   );
 }

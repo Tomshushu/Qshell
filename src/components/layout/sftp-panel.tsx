@@ -5944,7 +5944,7 @@ export function SftpPanel() {
       {/* SFTP 面板内拖拽预览：跟随光标，不拦截事件 */}
       {dragPreview && createPortal(
         <div
-          className="fixed z-[100] pointer-events-none flex items-center gap-2 rounded-lg border border-border/60 bg-popover px-3 py-1.5 text-xs text-popover-foreground shadow-lg"
+          className="fixed z-drag pointer-events-none flex items-center gap-2 rounded-lg border border-border/60 bg-popover px-3 py-1.5 text-xs text-popover-foreground shadow-lg"
           style={{ left: dragPreview.x + 14, top: dragPreview.y + 14 }}
         >
           <span className="max-w-[220px] truncate font-medium">{dragPreview.label}</span>
@@ -7372,7 +7372,7 @@ export function SftpPanel() {
                     )}
                     {/* 递归搜索结果浮层 */}
                     {searchMode === 'recursive' && (
-                      <div className="absolute top-full left-0 right-0 mt-1 z-50 bg-popover border border-slate-200/90 dark:border-white/15 rounded-md shadow-xl max-h-72 overflow-y-auto">
+                      <div className="absolute top-full left-0 right-0 mt-1 z-popup bg-popover border border-slate-200/90 dark:border-white/15 rounded-md shadow-xl max-h-72 overflow-y-auto">
                         {recursiveSearching && (
                           <div className="flex items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
                             <Loader2 className="h-3 w-3 animate-spin" />

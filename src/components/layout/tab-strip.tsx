@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useAppStore } from "@/store";
+import { Z_LAYER } from "@/lib/z-layer";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import {
   isConfirmSuppressed,
@@ -1477,7 +1478,7 @@ export function TabStrip({ tabs, className }: TabStripProps) {
       {showServerPicker &&
         createPortal(
           <div
-            className="fixed inset-0 z-[120] flex items-start justify-center bg-black/40 backdrop-blur-sm pt-[12vh]"
+            className="fixed inset-0 z-modal flex items-start justify-center bg-black/40 backdrop-blur-sm pt-[12vh]"
             onMouseDown={(event) => {
               if (event.target === event.currentTarget)
                 setShowServerPicker(false);
@@ -1707,7 +1708,7 @@ export function TabStrip({ tabs, className }: TabStripProps) {
               return (
                 <div
                   data-ctx-menu
-                  className="fixed z-[100] min-w-[180px] rounded-xl border border-slate-200/90 dark:border-white/15 bg-white/98 dark:bg-[#13141f]/98 backdrop-blur-2xl shadow-[0_16px_36px_-6px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.9)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-1 text-xs origin-top-left animate-in fade-in-0 zoom-in-95 duration-100"
+                  className="fixed z-popup min-w-[180px] rounded-xl border border-slate-200/90 dark:border-white/15 bg-white/98 dark:bg-[#13141f]/98 backdrop-blur-2xl shadow-[0_16px_36px_-6px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.9)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-1 text-xs origin-top-left animate-in fade-in-0 zoom-in-95 duration-100"
                   style={{ left: mainPos.left, top: mainPos.top }}
                   onClick={(e) => e.stopPropagation()}
                   onContextMenu={(e) => e.preventDefault()}
@@ -1748,7 +1749,7 @@ export function TabStrip({ tabs, className }: TabStripProps) {
                     {/* 颜色子菜单：根据右侧空间向右/向左拉出 */}
                     <div
                       className={cn(
-                        "absolute top-0 z-[101] hidden group-hover/color:block",
+                        "absolute top-0 z-popup-nested hidden group-hover/color:block",
                         colorSide === "right"
                           ? "left-[calc(100%-4px)] pl-2"
                           : "right-[calc(100%-4px)] pr-2",
@@ -1820,7 +1821,7 @@ export function TabStrip({ tabs, className }: TabStripProps) {
             return (
               <div
                 data-ctx-menu
-                className="fixed z-[100] min-w-[180px] rounded-xl border border-slate-200/90 dark:border-white/15 bg-white/98 dark:bg-[#13141f]/98 backdrop-blur-2xl shadow-[0_16px_36px_-6px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.9)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-1 text-xs origin-top-left animate-in fade-in-0 zoom-in-95 duration-100"
+                className="fixed z-popup min-w-[180px] rounded-xl border border-slate-200/90 dark:border-white/15 bg-white/98 dark:bg-[#13141f]/98 backdrop-blur-2xl shadow-[0_16px_36px_-6px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.9)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-1 text-xs origin-top-left animate-in fade-in-0 zoom-in-95 duration-100"
                 style={{ left: mainPos.left, top: mainPos.top }}
                 onClick={(e) => e.stopPropagation()}
                 onContextMenu={(e) => e.preventDefault()}
@@ -1875,7 +1876,7 @@ export function TabStrip({ tabs, className }: TabStripProps) {
                   {/* 颜色子菜单：根据右侧空间向右/向左拉出 */}
                   <div
                     className={cn(
-                      "absolute top-0 z-[101] hidden group-hover/color:block",
+                      "absolute top-0 z-popup-nested hidden group-hover/color:block",
                       colorSide === "right"
                         ? "left-[calc(100%-4px)] pl-2"
                         : "right-[calc(100%-4px)] pr-2",
@@ -2019,7 +2020,7 @@ export function TabStrip({ tabs, className }: TabStripProps) {
               width: dragStartRect ? Math.min(dragStartRect.width, 200) : "auto",
               maxWidth: 200,
               height: dragStartRect ? dragStartRect.height : "auto",
-              zIndex: 9999,
+              zIndex: Z_LAYER.DRAG,
               pointerEvents: "none",
             };
             const wsColor = ws.color;
@@ -2102,7 +2103,7 @@ export function TabStrip({ tabs, className }: TabStripProps) {
             width: dragStartRect ? Math.min(dragStartRect.width, 200) : "auto",
             maxWidth: 200,
             height: dragStartRect ? dragStartRect.height : "auto",
-            zIndex: 9999,
+            zIndex: Z_LAYER.DRAG,
             pointerEvents: "none",
           };
 

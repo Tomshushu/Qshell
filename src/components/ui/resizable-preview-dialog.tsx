@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X, Maximize2, Minimize2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { Z_LAYER } from '@/lib/z-layer'
 import { useAppStore } from '@/store'
 import { formatFileSize } from '@/components/workspace/modules/local-file-picker-utils'
 
@@ -245,7 +246,7 @@ export function ResizablePreviewDialog({
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
         {/* 背景半透明遮罩 */}
-        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+        <DialogPrimitive.Overlay className="fixed inset-0 z-modal bg-black/50 backdrop-blur-xs data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
 
         {/* 窗口容器 */}
         <DialogPrimitive.Content asChild aria-describedby={undefined}>
@@ -256,7 +257,7 @@ export function ResizablePreviewDialog({
               top: `${rect.y}px`,
               width: `${rect.width}px`,
               height: `${rect.height}px`,
-              zIndex: 50,
+              zIndex: Z_LAYER.MODAL_CONTENT,
             }}
             className={cn(
               "flex flex-col bg-background border border-border/80 rounded-xl shadow-2xl overflow-hidden focus:outline-none select-text transition-[border-color,box-shadow]",
@@ -266,7 +267,7 @@ export function ResizablePreviewDialog({
           >
             {/* 拖拽或拉伸过程中，全屏透明防穿透遮罩，防止 iframe 吞光标事件导致拖拽中断 */}
             {isInteracting && (
-              <div className="fixed inset-0 z-[100] cursor-grabbing select-none" />
+              <div className="fixed inset-0 z-modal-guard cursor-grabbing select-none" />
             )}
 
             {/* 标题栏（可拖拽移动，双击最大化/还原；flex-wrap 防窄窗口下操作按钮被裁切） */}

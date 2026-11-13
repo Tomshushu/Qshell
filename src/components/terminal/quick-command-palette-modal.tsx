@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Z_LAYER } from "@/lib/z-layer";
 import { Switch } from "@/components/ui/switch";
 import { useTranslation } from "@/i18n";
 import { useShortcutStore } from "@/store/shortcut-store";
@@ -659,13 +660,13 @@ export function QuickCommandPaletteModal() {
       <DialogPrimitive.Root open={open} onOpenChange={setOpen}>
       <DialogPrimitive.Portal>
         {/* 半透明毛玻璃沉浸遮罩 */}
-        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/45 backdrop-blur-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 duration-150" />
+        <DialogPrimitive.Overlay className="fixed inset-0 z-modal bg-black/45 backdrop-blur-md data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 duration-150" />
 
         {/* 屏幕正中心半透明弹框容器（一体化容器，固定尺寸与平滑滚动，列表与增删改完全融合） */}
         <DialogPrimitive.Content
           aria-describedby={undefined}
           className={cn(
-            "fixed left-[50%] top-[50%] z-50 translate-x-[-50%] translate-y-[-50%]",
+            "fixed left-[50%] top-[50%] z-modal-content translate-x-[-50%] translate-y-[-50%]",
             "w-[640px] max-w-[94vw] h-[480px] max-h-[85vh] rounded-2xl",
             "border border-border/70 dark:border-white/10",
             "bg-background/95 dark:bg-zinc-900/90 backdrop-blur-2xl",
@@ -1208,7 +1209,7 @@ export function QuickCommandPaletteModal() {
             left: railLeft,
             top: clampedTop,
             width: railWidth,
-            zIndex: 99999,
+            zIndex: Z_LAYER.DRAG,
             pointerEvents: "none",
           }}
           className={cn(

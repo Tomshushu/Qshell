@@ -14,6 +14,7 @@ import { playSound, SoundType } from "@/lib/sound";
 import { useTextFormatterStore } from "@/store/text-formatter-store";
 import { useAppStore } from "@/store";
 import { DEV_TOOLS, guessBestToolId } from "./tools/tool-registry";
+import { useWindowLayer } from "@/hooks/use-window-layer";
 
 const DEFAULT_WIDTH = 980;
 const DEFAULT_HEIGHT = 650;
@@ -150,6 +151,15 @@ export function FloatingTextFormatter() {
     if (curTab.serverId === "sftp") return false;
     return curTab.module === "terminal";
   }, [activeTabId, tabs]);
+
+  // 窗口层级：打开即置顶，点击浮窗任意位置可再次置顶（Windows 窗口式）
+  const { zIndex: windowZ, activate: bringWindowToFront } = useWindowLayer(
+    "devtools",
+    open && isTerminalActive,
+  );
+
+  // 工具箱配色跟随应用明暗主题：不注入任何终端主题色，也不自行覆盖 dark / colorScheme，
+  // 直接继承 ThemeProvider 挂在 documentElement 上的全局 --color-* 变量。
 
   const dragRef = useRef<{
     startX: number;
@@ -414,14 +424,16 @@ export function FloatingTextFormatter() {
 
   return (
     <div
+      onPointerDownCapture={bringWindowToFront}
       className={cn(
-        "devtools-scope fixed z-[60] flex flex-col overflow-hidden rounded-xl",
+        "devtools-scope fixed flex flex-col overflow-hidden rounded-xl",
         "border border-border bg-card/95 backdrop-blur-xl shadow-xl",
         "select-text transition-[box-shadow,border-color] duration-150 ease-out",
         (dragging || resizing) && "transition-none select-none"
       )}
-      style={
-        isMaximized && maximizedBounds
+      style={{
+        zIndex: windowZ,
+        ...(isMaximized && maximizedBounds
           ? {
               left: `${maximizedBounds.left}px`,
               top: `${maximizedBounds.top}px`,
@@ -445,8 +457,8 @@ export function FloatingTextFormatter() {
               height: `${height}px`,
               maxWidth: `calc(100vw - ${VIEWPORT_PADDING * 2}px)`,
               maxHeight: `calc(100vh - ${VIEWPORT_PADDING * 2}px)`,
-            }
-      }
+            }),
+      }}
     >
       {/* 顶部标题栏 */}
       <div

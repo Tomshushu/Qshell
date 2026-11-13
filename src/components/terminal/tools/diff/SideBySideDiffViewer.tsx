@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo, useCallback } from "react";
+import { useState, useRef, useMemo, useCallback, useLayoutEffect } from "react";
 import {
   Copy,
   Check,
@@ -32,6 +32,22 @@ interface SideBySideDiffViewerProps {
 
 const LINE_HEIGHT = 22; // 像素，与 font-mono text-xs leading-[22px] 严格吻合
 const GUTTER_WIDTH = 34; // 中间贝塞尔曲线连接带宽度
+const WRAP_STORAGE_KEY = "qshell_json_diff_wrap_lines";
+
+/**
+ * 对比视图默认自动换行，与编辑区 textarea 的软换行排版保持一致：
+ * 避免长日志 / 单行长 JSON 在切换「对比」后被挤成一整行，丢失用户原有阅读格式。
+ * 用户仍可通过「换行」按钮关闭，偏好会持久化。
+ */
+function loadWrapLinesPreference(): boolean {
+  try {
+    const saved = localStorage.getItem(WRAP_STORAGE_KEY);
+    if (saved !== null) return saved === "true";
+  } catch {
+    /* ignore */
+  }
+  return true;
+}
 
 export function SideBySideDiffViewer({
   leftText,
@@ -42,7 +58,7 @@ export function SideBySideDiffViewer({
 }: SideBySideDiffViewerProps) {
   const [copiedLeft, setCopiedLeft] = useState(false);
   const [copiedRight, setCopiedRight] = useState(false);
-  const [wrapLines, setWrapLines] = useState(false);
+  const [wrapLines, setWrapLines] = useState<boolean>(loadWrapLinesPreference);
   const [activeChunkIndex, setActiveChunkIndex] = useState<number>(0);
 
   // 计算差异结果
@@ -52,6 +68,55 @@ export function SideBySideDiffViewer({
 
   const leftLines = useMemo(() => (leftText ? leftText.split(/\r?\n/) : []), [leftText]);
   const rightLines = useMemo(() => (rightText ? rightText.split(/\r?\n/) : []), [rightText]);
+  const rowCount = Math.max(leftLines.length, rightLines.length);
+
+  const leftContentRefs = useRef(new Map<number, HTMLDivElement>());
+  const rightContentRefs = useRef(new Map<number, HTMLDivElement>());
+  const [rowHeights, setRowHeights] = useState<number[]>([]);
+
+  /**
+   * 自动换行时，长行在左右两栏产生的视觉高度不同。
+   * 测量每个逻辑行的自然高度并取左右最大值，保证并排行严格对齐、
+   * 联动滚动不偏移、中间连接带位置正确。
+   */
+  useLayoutEffect(() => {
+    if (!wrapLines) {
+      setRowHeights([]);
+      return;
+    }
+
+    const measure = () => {
+      const next: number[] = [];
+      for (let i = 0; i < rowCount; i++) {
+        const lh = leftContentRefs.current.get(i)?.offsetHeight ?? 0;
+        const rh = rightContentRefs.current.get(i)?.offsetHeight ?? 0;
+        next.push(Math.max(LINE_HEIGHT, lh, rh));
+      }
+      setRowHeights((prev) =>
+        prev.length === next.length && prev.every((h, i) => h === next[i]) ? prev : next
+      );
+    };
+
+    measure();
+
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    leftContentRefs.current.forEach((el) => observer.observe(el));
+    rightContentRefs.current.forEach((el) => observer.observe(el));
+    return () => observer.disconnect();
+  }, [wrapLines, rowCount, leftText, rightText]);
+
+  // 每行顶部相对内容区顶部的像素偏移（换行模式下按实测行高累加）
+  const rowOffsets = useMemo(() => {
+    const offsets = new Array<number>(rowCount + 1);
+    offsets[0] = 0;
+    for (let i = 0; i < rowCount; i++) {
+      offsets[i + 1] = offsets[i] + (wrapLines ? (rowHeights[i] ?? LINE_HEIGHT) : LINE_HEIGHT);
+    }
+    return offsets;
+  }, [wrapLines, rowHeights, rowCount]);
+
+  const totalContentHeight = rowOffsets[rowCount] + 80;
 
   const leftScrollRef = useRef<HTMLDivElement>(null);
   const rightScrollRef = useRef<HTMLDivElement>(null);
@@ -92,7 +157,8 @@ export function SideBySideDiffViewer({
       const targetIdx = (index + diffResult.chunks.length) % diffResult.chunks.length;
       setActiveChunkIndex(targetIdx);
       const chunk = diffResult.chunks[targetIdx];
-      const targetTop = (Math.max(1, chunk.leftStartLine) - 1) * LINE_HEIGHT - 40;
+      const lineIdx = Math.max(0, Math.min(chunk.leftStartLine - 1, rowCount));
+      const targetTop = (rowOffsets[lineIdx] ?? 0) - 40;
       const topVal = Math.max(0, targetTop);
       if (leftScrollRef.current) {
         leftScrollRef.current.scrollTo({ top: topVal, behavior: "smooth" });
@@ -104,7 +170,7 @@ export function SideBySideDiffViewer({
         gutterScrollRef.current.scrollTo({ top: topVal, behavior: "smooth" });
       }
     },
-    [diffResult.chunks]
+    [diffResult.chunks, rowOffsets, rowCount]
   );
 
   // 复制功能
@@ -146,6 +212,17 @@ export function SideBySideDiffViewer({
     }
   }, [leftText, rightText, onUpdateLeftText, onUpdateRightText]);
 
+  // 切换自动换行并记住偏好
+  const handleToggleWrap = useCallback(() => {
+    const next = !wrapLines;
+    setWrapLines(next);
+    try {
+      localStorage.setItem(WRAP_STORAGE_KEY, String(next));
+    } catch {
+      /* ignore */
+    }
+  }, [wrapLines]);
+
   // 构建差异块映射表以便行渲染查询
   const chunkMap = useMemo(() => {
     const leftMap = new Map<number, DiffChunk>();
@@ -186,14 +263,15 @@ export function SideBySideDiffViewer({
     const paths: { d: string; type: DiffChunk["type"]; id: string; isActive: boolean }[] = [];
     const w = GUTTER_WIDTH;
 
-    diffResult.chunks.forEach((chunk, idx) => {
-      // 左侧区间 Y (以 0-based 像素计算)
-      const topL = (chunk.leftStartLine - 1) * LINE_HEIGHT;
-      const bottomL = chunk.leftLineCount > 0 ? chunk.leftEndLine * LINE_HEIGHT : topL + 3;
+    const offsetAt = (line: number) => rowOffsets[Math.max(0, Math.min(line, rowCount))] ?? 0;
 
-      // 右侧区间 Y
-      const topR = (chunk.rightStartLine - 1) * LINE_HEIGHT;
-      const bottomR = chunk.rightLineCount > 0 ? chunk.rightEndLine * LINE_HEIGHT : topR + 3;
+    diffResult.chunks.forEach((chunk, idx) => {
+      // 左右区间 Y 均按实测行高累加，换行模式下连接带仍严格贴合差异块
+      const topL = offsetAt(chunk.leftStartLine - 1);
+      const bottomL = chunk.leftLineCount > 0 ? offsetAt(chunk.leftEndLine) : topL + 3;
+
+      const topR = offsetAt(chunk.rightStartLine - 1);
+      const bottomR = chunk.rightLineCount > 0 ? offsetAt(chunk.rightEndLine) : topR + 3;
 
       const cp1x = w * 0.45;
       const cp2x = w * 0.55;
@@ -215,9 +293,7 @@ export function SideBySideDiffViewer({
     });
 
     return paths;
-  }, [diffResult.chunks, activeChunkIndex]);
-
-  const totalContentHeight = Math.max(leftLines.length, rightLines.length) * LINE_HEIGHT + 80;
+  }, [diffResult.chunks, activeChunkIndex, rowOffsets, rowCount]);
 
   return (
     <div className="flex flex-1 min-h-0 flex-col overflow-hidden bg-background">
@@ -275,8 +351,8 @@ export function SideBySideDiffViewer({
               "h-7 px-2 text-xs gap-1 cursor-pointer",
               wrapLines ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"
             )}
-            onClick={() => setWrapLines((v) => !v)}
-            title="切换代码自动换行"
+            onClick={handleToggleWrap}
+            title="切换代码自动换行（默认自动换行，完整保留编辑区排版）"
           >
             <WrapText className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">换行</span>
@@ -366,7 +442,7 @@ export function SideBySideDiffViewer({
                         ? "bg-rose-500/10 dark:bg-rose-950/25 text-rose-950 dark:text-rose-100"
                         : "hover:bg-muted/40 text-foreground"
                     )}
-                    style={{ height: wrapLines ? "auto" : LINE_HEIGHT }}
+                    style={{ height: wrapLines ? (rowHeights[idx] ?? LINE_HEIGHT) : LINE_HEIGHT }}
                   >
                     {/* 行号与操作箭头区 (用户截图中行号旁边的 ▶ 操作块) */}
                     <div className="w-14 shrink-0 flex items-center justify-between px-2 select-none border-r border-border/50 bg-muted/15 text-[11px] text-muted-foreground font-mono">
@@ -383,28 +459,35 @@ export function SideBySideDiffViewer({
                       )}
                     </div>
 
-                    {/* 行文本内容 */}
+                    {/* 行文本内容：pre-wrap 保留原有空格与换行，按窗口宽度软换行 */}
                     <div
                       className={cn(
                         "flex-1 px-3 py-0",
-                        wrapLines ? "whitespace-pre-wrap break-all" : "whitespace-pre"
+                        wrapLines ? "whitespace-pre-wrap break-words" : "whitespace-pre"
                       )}
                     >
-                      {tokens && tokens.length > 0 ? (
-                        tokens.map((tok, tIdx) => (
-                          <span
-                            key={tIdx}
-                            className={cn(
-                              tok.type === "removed" &&
-                                "bg-rose-500/30 dark:bg-rose-500/40 text-rose-950 dark:text-rose-50 rounded-xs px-0.5 font-semibold"
-                            )}
-                          >
-                            {tok.text}
-                          </span>
-                        ))
-                      ) : (
-                        <span>{lineText || " "}</span>
-                      )}
+                      <div
+                        ref={(el) => {
+                          if (el) leftContentRefs.current.set(idx, el);
+                          else leftContentRefs.current.delete(idx);
+                        }}
+                      >
+                        {tokens && tokens.length > 0 ? (
+                          tokens.map((tok, tIdx) => (
+                            <span
+                              key={tIdx}
+                              className={cn(
+                                tok.type === "removed" &&
+                                  "bg-rose-500/30 dark:bg-rose-500/40 text-rose-950 dark:text-rose-50 rounded-xs font-semibold"
+                              )}
+                            >
+                              {tok.text}
+                            </span>
+                          ))
+                        ) : (
+                          <span>{lineText || " "}</span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 );
@@ -487,35 +570,42 @@ export function SideBySideDiffViewer({
                         ? "bg-emerald-500/10 dark:bg-emerald-950/25 text-emerald-950 dark:text-emerald-100"
                         : "hover:bg-muted/40 text-foreground"
                     )}
-                    style={{ height: wrapLines ? "auto" : LINE_HEIGHT }}
+                    style={{ height: wrapLines ? (rowHeights[idx] ?? LINE_HEIGHT) : LINE_HEIGHT }}
                   >
                     {/* 行号区 */}
                     <div className="w-12 shrink-0 flex items-center justify-between px-2 select-none border-r border-border/50 bg-muted/15 text-[11px] text-muted-foreground font-mono">
                       <span>{lineNum}</span>
                     </div>
 
-                    {/* 行文本内容 */}
+                    {/* 行文本内容：pre-wrap 保留原有空格与换行，按窗口宽度软换行 */}
                     <div
                       className={cn(
                         "flex-1 px-3 py-0",
-                        wrapLines ? "whitespace-pre-wrap break-all" : "whitespace-pre"
+                        wrapLines ? "whitespace-pre-wrap break-words" : "whitespace-pre"
                       )}
                     >
-                      {tokens && tokens.length > 0 ? (
-                        tokens.map((tok, tIdx) => (
-                          <span
-                            key={tIdx}
-                            className={cn(
-                              tok.type === "added" &&
-                                "bg-emerald-500/30 dark:bg-emerald-500/40 text-emerald-950 dark:text-emerald-50 rounded-xs px-0.5 font-semibold"
-                            )}
-                          >
-                            {tok.text}
-                          </span>
-                        ))
-                      ) : (
-                        <span>{lineText || " "}</span>
-                      )}
+                      <div
+                        ref={(el) => {
+                          if (el) rightContentRefs.current.set(idx, el);
+                          else rightContentRefs.current.delete(idx);
+                        }}
+                      >
+                        {tokens && tokens.length > 0 ? (
+                          tokens.map((tok, tIdx) => (
+                            <span
+                              key={tIdx}
+                              className={cn(
+                                tok.type === "added" &&
+                                  "bg-emerald-500/30 dark:bg-emerald-500/40 text-emerald-950 dark:text-emerald-50 rounded-xs font-semibold"
+                              )}
+                            >
+                              {tok.text}
+                            </span>
+                          ))
+                        ) : (
+                          <span>{lineText || " "}</span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 );

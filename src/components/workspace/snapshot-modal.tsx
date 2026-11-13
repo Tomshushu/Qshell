@@ -203,7 +203,7 @@ export function SnapshotModal({ open, onClose, serverName, serverId }: SnapshotM
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+    <div className="fixed inset-0 z-modal flex items-center justify-center bg-black/50 backdrop-blur-sm">
       <div role="dialog" aria-modal="true" className="bg-card border border-border/60 rounded-xl shadow-2xl w-[min(760px,calc(100vw-2rem))] h-[min(680px,calc(100vh-2rem))] flex flex-col overflow-hidden">
         {/* 标题栏：固定不动 */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-border/60 bg-gradient-to-r from-primary/5 to-transparent flex-shrink-0">

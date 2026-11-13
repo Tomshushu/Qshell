@@ -158,7 +158,7 @@ export function FileContextMenu({
   return createPortal(
     <div
       ref={ctxMenuRef}
-      className="fixed z-[9999] min-w-[13rem] rounded-xl border border-slate-200/90 dark:border-white/15 bg-white/98 dark:bg-[#13141f]/98 backdrop-blur-2xl shadow-[0_16px_36px_-6px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.9)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-1 text-xs text-popover-foreground select-none animate-in fade-in-0 zoom-in-95 origin-top-left duration-100"
+      className="fixed z-popup min-w-[13rem] rounded-xl border border-slate-200/90 dark:border-white/15 bg-white/98 dark:bg-[#13141f]/98 backdrop-blur-2xl shadow-[0_16px_36px_-6px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.9)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-1 text-xs text-popover-foreground select-none animate-in fade-in-0 zoom-in-95 origin-top-left duration-100"
       style={{ left: mainPos.left, top: mainPos.top }}
       onClick={(e) => e.stopPropagation()}
     >

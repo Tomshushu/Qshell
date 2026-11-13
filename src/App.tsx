@@ -38,6 +38,8 @@ import { UpdateDialog } from '@/components/layout/update-dialog'
 import { useToast } from '@/components/ui/toast'
 import { FloatingAIAssistant } from '@/components/ai/floating-ai-assistant'
 import { FloatingTextFormatter } from '@/components/terminal/floating-text-formatter'
+import { SettingsDialog } from '@/components/layout/settings-dialog'
+import { useSettingsDialogStore, type SettingsTab } from '@/store/settings-dialog-store'
 
 
 function AppContent() {
@@ -54,6 +56,22 @@ function AppContent() {
   useKeyboardShortcuts()
   useOverflowTitle()
   useAppIdleLock()
+
+  // 全局设置弹框：唯一 Owner。TabBar / CommandPalette / open-settings 事件都写这个 store，
+  // 避免两份 SettingsDialog 各自 Portal 到 body 后互不知情。
+  const settingsOpen = useSettingsDialogStore((s) => s.open)
+  const settingsTab = useSettingsDialogStore((s) => s.tab)
+  const openSettings = useSettingsDialogStore((s) => s.openSettings)
+  const closeSettings = useSettingsDialogStore((s) => s.closeSettings)
+
+  useEffect(() => {
+    const handleOpenSettings = (e: CustomEvent<string | { tab?: string }>) => {
+      const tab = typeof e.detail === 'string' ? e.detail : e.detail?.tab
+      openSettings(tab as SettingsTab | undefined)
+    }
+    window.addEventListener('open-settings' as any, handleOpenSettings)
+    return () => window.removeEventListener('open-settings' as any, handleOpenSettings)
+  }, [openSettings])
 
   // 应用锁配置弹窗状态（响应全局事件如 Ctrl+Alt+L 或标题栏设置）
   const [appLockSetupState, setAppLockSetupState] = useState<{
@@ -632,6 +650,18 @@ function AppContent() {
           <StatusBar />
         </div>
       </div>
+
+      {/* 全局设置弹框（全应用唯一实例，模态层由 ui/dialog.tsx 统一分配） */}
+      <SettingsDialog
+        open={settingsOpen}
+        defaultTab={settingsTab}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeSettings()
+            window.dispatchEvent(new CustomEvent('focus-active-terminal'))
+          }
+        }}
+      />
 
       {/* SSH 连接稳定性测试面板（Ctrl+Shift+T 打开） */}
       <StabilityTestPanel />

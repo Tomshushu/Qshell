@@ -12,6 +12,8 @@ import { useAIStore } from '@/store/ai-store'
 import { useAppStore } from '@/store'
 import { getServerConnectionFlags } from '@/services/connection-targets'
 import { getTerminalTheme } from '@/utils/terminal-themes'
+import { useWindowLayer } from '@/hooks/use-window-layer'
+import { Z_LAYER } from '@/lib/z-layer'
 import { AIMascotAvatar } from './ai-mascot-avatar'
 import { useTranslation } from '@/i18n'
 import { playSound, SoundType } from '@/lib/sound'
@@ -1155,6 +1157,12 @@ function UnattachedServerPicker({
 
 export function FloatingAIAssistant() {
   const { t } = useTranslation()
+  // 对话面板作为窗口型浮层接入全局层级栈
+  const isAiWindowOpen = useAIStore((s) => s.isFloatingAssistantOpen)
+  const { zIndex: aiWindowZ, activate: activateAiWindow } = useWindowLayer(
+    'ai-assistant',
+    Boolean(isAiWindowOpen),
+  )
   const {
     enableAiGlobal,
     showFloatingMascot,
@@ -2353,7 +2361,7 @@ export function FloatingAIAssistant() {
             left: mascotMenuPosition.left,
             top: mascotMenuPosition.top,
             bottom: mascotMenuPosition.bottom,
-            zIndex: 70,
+            zIndex: Z_LAYER.POPUP,
           }}
           className="w-[196px] rounded-lg border border-border/60 bg-background/98 p-1 text-xs text-foreground shadow-xl backdrop-blur-xl select-none"
         >
@@ -2413,13 +2421,14 @@ export function FloatingAIAssistant() {
           role="dialog"
           aria-modal="false"
           tabIndex={-1}
+          onPointerDownCapture={activateAiWindow}
           style={{
             position: 'fixed',
             left: `${dialogLayout.x}px`,
             top: `${dialogLayout.y}px`,
             width: `${dialogLayout.width}px`,
             height: `${dialogLayout.height}px`,
-            zIndex: 50,
+            zIndex: aiWindowZ,
           }}
           onContextMenu={handleContextMenu}
           onMouseDown={handleDialogMouseDown}

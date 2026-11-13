@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useMetricsStore, useMetricsSubscription } from '@/store/metrics-store'
 import type { ProcessInfo, DiskInfo } from '@/types'
+import { useWindowLayer } from '@/hooks/use-window-layer'
 
 const POS_STORAGE_KEY_V2 = 'qshell_floating_hud_pos_v2'
 const POS_STORAGE_KEY_V3 = 'qshell_floating_hud_pos_v3'
@@ -145,6 +146,11 @@ function FloatingMetricsHudInner({
   onClose,
   onOpenFullOverview,
 }: FloatingMetricsHudProps) {
+  // 窗口层级：打开即置顶，点击 HUD 任意位置可再次置顶
+  const { zIndex: hudWindowZ, activate: activateHudWindow } = useWindowLayer(
+    'metrics-hud',
+    Boolean(visible && isConnected),
+  )
   // 进程排序方式 (cpu | memory)
   const [procSort, setProcSort] = useState<'cpu' | 'memory'>('cpu')
   // 选中的网络接口（'all' 或指定网卡名称，默认恢复历史选择或留空等待网卡列表选择首个）
@@ -542,12 +548,13 @@ function FloatingMetricsHudInner({
   return (
     <div
       ref={hudRef}
+      onPointerDownCapture={activateHudWindow}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
-      style={hudStyle}
+      style={{ ...hudStyle, zIndex: hudWindowZ }}
       className={cn(
-        'z-30 select-none',
+        'select-none',
         'rounded-xl',
         // 苹果液态玻璃 (Apple Liquid Glass) 质感：超高斯毛玻璃 + 饱和度色彩增益
         'backdrop-blur-2xl backdrop-saturate-150',
@@ -760,7 +767,7 @@ function FloatingMetricsHudInner({
                     className="fixed inset-0 z-40"
                     onClick={() => setIfaceMenuOpen(false)}
                   />
-                  <div className="absolute right-0 top-full mt-1.5 z-50 min-w-[170px] max-w-[230px] max-h-60 overflow-y-auto bg-white dark:bg-zinc-950 border border-slate-200/90 dark:border-white/15 rounded-xl shadow-[0_16px_40px_-6px_rgba(0,0,0,0.3),0_0_0_1px_rgba(0,0,0,0.06)] dark:shadow-[0_20px_50px_-8px_rgba(0,0,0,0.9),0_0_0_1px_rgba(255,255,255,0.1)] p-1 text-xs animate-in fade-in-0 zoom-in-95 origin-top-right select-none">
+                  <div className="absolute right-0 top-full mt-1.5 z-popup min-w-[170px] max-w-[230px] max-h-60 overflow-y-auto bg-white dark:bg-zinc-950 border border-slate-200/90 dark:border-white/15 rounded-xl shadow-[0_16px_40px_-6px_rgba(0,0,0,0.3),0_0_0_1px_rgba(0,0,0,0.06)] dark:shadow-[0_20px_50px_-8px_rgba(0,0,0,0.9),0_0_0_1px_rgba(255,255,255,0.1)] p-1 text-xs animate-in fade-in-0 zoom-in-95 origin-top-right select-none">
                     <div className="px-2 py-1 text-[10px] font-medium text-slate-500 dark:text-slate-400 border-b border-black/5 dark:border-white/10 mb-1 flex items-center justify-between sticky top-0 bg-white dark:bg-zinc-950 z-10">
                       <span>选择监控网卡</span>
                       <span className="text-[9px] opacity-70">共 {sortedNetwork.length} 个</span>

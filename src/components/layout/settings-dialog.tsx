@@ -82,6 +82,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useUpdaterStore } from "@/store/updater-store";
+import { Z_LAYER } from "@/lib/z-layer";
 import { useAppVersion } from "@/utils/version";
 import { getAllFileIconThemes } from "@/components/file-icons";
 import { KnownHostsPanel } from "./known-hosts-panel";
@@ -494,10 +495,12 @@ export function SettingsDialog({ open, onOpenChange, defaultTab }: SettingsDialo
           <SettingsPanel defaultTab={defaultTab} onOpenThemeDialog={() => setShowThemeDialog(true)} />
         </DialogContent>
       {/* 主题弹框嵌套进设置 Dialog 内（而非兄弟节点），共享 DismissableLayer 作用域，
-          关闭主题弹框时不会误关设置弹框（修复「关一个全关」问题）。 */}
+          关闭主题弹框时不会误关设置弹框（修复「关一个全关」问题）。
+          显式抬到「设置」之上，不再只依赖 Portal 的 DOM 后置顺序。 */}
       <TerminalThemeDialog
         open={showThemeDialog}
         onOpenChange={setShowThemeDialog}
+        dialogZIndex={Z_LAYER.MODAL_CONTENT + 2}
       />
       </Dialog>
     </TooltipProvider>
@@ -684,7 +687,7 @@ function SidebarQuickSelect({
         createPortal(
           <div
             ref={panelRef}
-            className="fixed z-[100] w-[200px] rounded-xl border bg-popover shadow-xl overflow-hidden animate-in fade-in-0 zoom-in-95 origin-left"
+            className="fixed z-popup w-[200px] rounded-xl border bg-popover shadow-xl overflow-hidden animate-in fade-in-0 zoom-in-95 origin-left"
             style={{ animationDuration: "130ms", top: pos.top, left: pos.left }}
             onMouseEnter={cancelClose}
             onMouseLeave={scheduleClose}
@@ -2024,7 +2027,7 @@ function SettingsPanel({
                       createPortal(
                         <div
                           ref={fontDropdownPanelRef}
-                          className="fixed z-[100] w-[220px] max-h-[320px] flex flex-col rounded-lg border bg-popover shadow-xl overflow-hidden animate-in fade-in-0 zoom-in-95"
+                          className="fixed z-popup w-[220px] max-h-[320px] flex flex-col rounded-lg border bg-popover shadow-xl overflow-hidden animate-in fade-in-0 zoom-in-95"
                           style={{
                             animationDuration: "120ms",
                             top: fontDropdownPos.top,
@@ -2151,7 +2154,7 @@ function SettingsPanel({
                         createPortal(
                           <div
                             ref={themeDropdownPanelRef}
-                            className="fixed z-[100] w-[240px] max-h-[360px] flex flex-col rounded-lg border bg-popover shadow-xl overflow-hidden animate-in fade-in-0 zoom-in-95"
+                            className="fixed z-popup w-[240px] max-h-[360px] flex flex-col rounded-lg border bg-popover shadow-xl overflow-hidden animate-in fade-in-0 zoom-in-95"
                             style={{
                               animationDuration: "120ms",
                               top: dropdownPos.top,
@@ -2203,7 +2206,7 @@ function SettingsPanel({
                         themePreviewPos &&
                         createPortal(
                           <div
-                            className="fixed z-[101] w-[280px] pointer-events-none animate-in fade-in-0 zoom-in-95"
+                            className="fixed z-popup-nested w-[280px] pointer-events-none animate-in fade-in-0 zoom-in-95"
                             style={{
                               animationDuration: "100ms",
                               top: themePreviewPos.top,

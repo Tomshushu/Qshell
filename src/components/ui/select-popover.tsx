@@ -150,7 +150,7 @@ export function SelectPopover({
             }
           }}
           className={cn(
-            'z-[100] rounded-xl border border-slate-200/90 dark:border-white/15 bg-popover shadow-xl p-1 flex flex-col',
+            'z-popup rounded-xl border border-slate-200/90 dark:border-white/15 bg-popover shadow-xl p-1 flex flex-col',
             panelClassName ?? 'w-52',
           )}
         >

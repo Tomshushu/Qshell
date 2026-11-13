@@ -112,7 +112,7 @@ export function GroupFilterChip({
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-1.5 w-56 rounded-lg border border-slate-200/90 dark:border-white/15 bg-popover shadow-xl p-1.5">
+        <div className="absolute left-0 top-full z-popup mt-1.5 w-56 rounded-lg border border-slate-200/90 dark:border-white/15 bg-popover shadow-xl p-1.5">
           <button
             type="button"
             onClick={() => pick(null)}

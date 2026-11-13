@@ -206,7 +206,7 @@ export function AppLockOverlay() {
           ? t("app_lock_reset_confirm_title")
           : t("app_lock_overlay_title")
       }
-      className="fixed inset-0 z-[99999] flex flex-col items-center justify-center bg-background/80 backdrop-blur-2xl p-6 select-none animate-in fade-in duration-200"
+      className="fixed inset-0 z-lock flex flex-col items-center justify-center bg-background/80 backdrop-blur-2xl p-6 select-none animate-in fade-in duration-200"
       onClick={() => {
         if (!showResetConfirm && !isPattern) inputRef.current?.focus();
       }}

@@ -33,6 +33,10 @@
   font-size: 11.5px;
 }
 
+/* 开发运维工具箱配色统一继承应用明暗主题（ThemeProvider 在根元素切换
+   .light / .dark 与全局 --color-*）。不要在 .devtools-scope 内注入终端主题色或
+   覆盖 dark / colorScheme，否则工具页会脱离应用主题、跟终端配色绑定。 */
+
 /* 优先加载本地打包的等宽字体，确保完全离线可用与闪电加载 */
 
 /* Source Code Pro */
@@ -193,7 +197,36 @@
   --shadow-md: 0 4px 12px oklch(0 0 0 / 0.08), 0 2px 4px oklch(0 0 0 / 0.04);
   --shadow-lg: 0 8px 28px oklch(0 0 0 / 0.10), 0 4px 8px oklch(0 0 0 / 0.05);
   --shadow-xl: 0 16px 48px oklch(0 0 0 / 0.14), 0 8px 16px oklch(0 0 0 / 0.06);
+
+  /* === 全局浮层分层（数值与 src/lib/z-layer.ts 的 Z_LAYER 保持一致）===
+     类别之间是硬边界：窗口 < 模态 < 菜单 < 拖拽 < Toast < 应用锁。
+     Portal 到 body 的浮层只写语义类 z-modal / z-popup / ...，不再各自硬编码数字；
+     Tailwind 内置 z-0~z-50 仍用于页面内局部层叠（应被模态遮住的元素）。 */
+  --z-layout: 0;
+  --z-inline: 30;
+  --z-window: 60;
+  --z-modal: 200;
+  --z-modal-content: 201;
+  --z-modal-guard: 250;
+  --z-popup: 300;
+  --z-popup-nested: 301;
+  --z-drag: 400;
+  --z-toast: 900;
+  --z-lock: 9999;
 }
+
+/* 语义化 z-index 工具类：单一变量基准，避免数值军备竞赛 */
+@utility z-layout { z-index: var(--z-layout); }
+@utility z-inline { z-index: var(--z-inline); }
+@utility z-window { z-index: var(--z-window); }
+@utility z-modal { z-index: var(--z-modal); }
+@utility z-modal-content { z-index: var(--z-modal-content); }
+@utility z-modal-guard { z-index: var(--z-modal-guard); }
+@utility z-popup { z-index: var(--z-popup); }
+@utility z-popup-nested { z-index: var(--z-popup-nested); }
+@utility z-drag { z-index: var(--z-drag); }
+@utility z-toast { z-index: var(--z-toast); }
+@utility z-lock { z-index: var(--z-lock); }
 
 /* === 暗色主题 (Deep Slate — 分层清晰 / 低眩光 / 冷调统一) ===
  *
@@ -4480,7 +4513,7 @@
 /* SFTP Windows 风格悬浮属性弹窗 */
 .sftp-properties-tooltip {
   position: fixed;
-  z-index: 9999;
+  z-index: var(--z-popup);
   pointer-events: none;
   width: 288px;
   max-width: calc(100vw - 24px);

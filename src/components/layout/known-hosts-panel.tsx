@@ -305,7 +305,7 @@ export function KnownHostsPanel() {
 
       {/* 确认清空全部弹窗 */}
       {showClearConfirm && (
-        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-modal bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-background border border-border rounded-xl shadow-xl max-w-md w-full p-6 space-y-4 animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-center gap-3 text-rose-500">
               <div className="p-2 rounded-full bg-rose-500/10">

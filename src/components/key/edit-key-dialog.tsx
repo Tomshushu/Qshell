@@ -275,7 +275,7 @@ export function EditKeyDialog({ open, onClose, keyId, initialKeyType = 'private'
 
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onClose() }}>
-      <DialogContent className="z-[100] w-[min(460px,calc(100vw-2rem))] max-w-[460px] max-h-[90vh] overflow-y-auto p-0 gap-0 bg-card">
+      <DialogContent className="w-[min(460px,calc(100vw-2rem))] max-w-[460px] max-h-[90vh] overflow-y-auto p-0 gap-0 bg-card">
         <div className="p-6">
           <DialogTitle className="text-lg font-bold mb-4 flex items-center gap-2 text-foreground">
             <KeyIcon className="h-5 w-5 text-primary" />
