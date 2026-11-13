@@ -89,6 +89,15 @@ export function FloatingTextFormatter() {
     setSearchQuery("");
   }, [open, seed]);
 
+  // 监听外部显式格式化 JSON 事件，自动切换激活至 json 工具
+  useEffect(() => {
+    const handleInject = () => {
+      setActiveToolId("json");
+    };
+    window.addEventListener("qshell:inject-json-studio", handleInject);
+    return () => window.removeEventListener("qshell:inject-json-studio", handleInject);
+  }, []);
+
   const handlePasteAndJump = async () => {
     try {
       const text = await navigator.clipboard.readText();

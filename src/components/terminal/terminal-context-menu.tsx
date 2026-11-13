@@ -15,6 +15,7 @@ import {
   Layers,
   Zap,
   PenSquare,
+  Braces,
 } from "lucide-react";
 import { useAppStore } from "@/store";
 import { cn } from "@/lib/utils";
@@ -30,6 +31,7 @@ export interface TerminalContextMenuProps {
   onCopyAll: () => void;
   onPaste: () => void;
   onPasteSelection: () => void;
+  onFormatJson?: () => void;
   onSearch: () => void;
   onClearScreen: () => void;
   onClearScrollback: () => void;
@@ -63,6 +65,7 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
   onCopyAll,
   onPaste,
   onPasteSelection,
+  onFormatJson,
   onSearch,
   onClearScreen,
   onClearScrollback,
@@ -177,6 +180,24 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
         <Clipboard className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
         <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_paste_selected")}</span>
       </button>
+
+      {/* 格式化 JSON */}
+      {onFormatJson && (
+        <button
+          type="button"
+          data-testid="terminal-menu-format-json"
+          className={cn(
+            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+            isLightTerminal
+              ? "text-amber-700 hover:bg-amber-500/10 hover:text-amber-900"
+              : "text-amber-300 hover:bg-amber-500/15 hover:text-amber-200",
+          )}
+          onClick={onFormatJson}
+        >
+          <Braces className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+          <span className="truncate tracking-tight font-sans text-[11.5px] font-medium">{t("tm_format_json") || "格式化 JSON"}</span>
+        </button>
+      )}
 
       {/* AI 诊断选中文本 */}
       {onAIDiagnosis && ctxMenu.hasSelection && (

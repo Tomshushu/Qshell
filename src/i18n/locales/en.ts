@@ -1700,6 +1700,7 @@ export default {
   tm_search_next: "Next",
   tm_search_close: "Close",
   tm_copy: "Copy",
+  tm_format_json: "Format JSON",
   fmt_short_label: "Tools",
   fmt_format_action: "Format {type}",
   fmt_format_tooltip: "Format the selected {type} content",

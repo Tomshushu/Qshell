@@ -1677,6 +1677,7 @@ export default {
   tm_search_next: "下一个",
   tm_search_close: "关闭",
   tm_copy: "复制",
+  tm_format_json: "格式化 JSON",
   fmt_short_label: "工具",
   fmt_format_action: "格式化 {type}",
   fmt_format_tooltip: "格式化选中的 {type} 内容",

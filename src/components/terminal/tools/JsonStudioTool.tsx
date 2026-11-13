@@ -131,25 +131,115 @@ export function computeJsonDiff(left: unknown, right: unknown, path = ""): JsonD
   return diffs;
 }
 
+const STORAGE_KEY_LEFT = "qshell_json_studio_left";
+const STORAGE_KEY_RIGHT = "qshell_json_studio_right";
+const STORAGE_KEY_INDENT = "qshell_json_studio_indent";
+
+function loadSavedLeftText(): string | null {
+  try {
+    return localStorage.getItem(STORAGE_KEY_LEFT);
+  } catch {
+    return null;
+  }
+}
+
+function loadSavedRightText(): string | null {
+  try {
+    return localStorage.getItem(STORAGE_KEY_RIGHT);
+  } catch {
+    return null;
+  }
+}
+
+function loadSavedIndent(): number {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_INDENT);
+    if (raw === "4") return 4;
+  } catch {
+    /* ignore */
+  }
+  return 2;
+}
+
+function saveJsonStudioState(left: string, right: string, indent: number) {
+  try {
+    localStorage.setItem(STORAGE_KEY_LEFT, left);
+    localStorage.setItem(STORAGE_KEY_RIGHT, right);
+    localStorage.setItem(STORAGE_KEY_INDENT, String(indent));
+  } catch {
+    /* ignore */
+  }
+}
+
 export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
-  // 左侧原始 JSON
-  const [leftText, setLeftText] = useState(() => initialJson.trim() || SAMPLE_LEFT_JSON);
-  // 右侧对比/格式化 JSON
+  // 左侧原始 JSON：优先取新注入内容，其次取历史持久化缓存，最后兜底默认示例
+  const [leftText, setLeftText] = useState(() => {
+    if (initialJson && initialJson.trim()) return initialJson.trim();
+    const saved = loadSavedLeftText();
+    if (saved !== null) return saved;
+    return SAMPLE_LEFT_JSON;
+  });
+
+  // 右侧对比/格式化 JSON：优先取新注入的格式化结果，其次取历史持久化缓存
   const [rightText, setRightText] = useState(() => {
-    if (initialJson.trim()) {
+    if (initialJson && initialJson.trim()) {
       try {
         return JSON.stringify(JSON.parse(initialJson.trim()), null, 2);
       } catch {
         return "";
       }
     }
+    const saved = loadSavedRightText();
+    if (saved !== null) return saved;
     return SAMPLE_RIGHT_JSON;
   });
 
-  const [indentSize, setIndentSize] = useState<number>(2);
+  const [indentSize, setIndentSize] = useState<number>(() => loadSavedIndent());
   const [copiedLeft, setCopiedLeft] = useState(false);
   const [copiedRight, setCopiedRight] = useState(false);
   const [showDiffDrawer, setShowDiffDrawer] = useState(false);
+
+  // 1. 监听 initialJson 变化：当弹框已打开时，外部传入新内容立即无条件覆盖左侧并格式化到右侧
+  useEffect(() => {
+    if (initialJson && initialJson.trim()) {
+      const clean = initialJson.trim();
+      setLeftText(clean);
+      try {
+        const parsed = JSON.parse(clean);
+        setRightText(JSON.stringify(parsed, null, indentSize));
+      } catch {
+        /* 非严格 JSON 时依然填入左侧 */
+      }
+    }
+  }, [initialJson, indentSize]);
+
+  // 2. 全局自定义事件注入：无论何时右键或点击格式化，均直接强制覆写左侧区域
+  useEffect(() => {
+    const handleInject = (e: Event) => {
+      const customEvt = e as CustomEvent<{ text: string }>;
+      const text = customEvt.detail?.text;
+      if (text && text.trim()) {
+        const clean = text.trim();
+        setLeftText(clean);
+        try {
+          const parsed = JSON.parse(clean);
+          setRightText(JSON.stringify(parsed, null, indentSize));
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+    window.addEventListener("qshell:inject-json-studio", handleInject);
+    return () => window.removeEventListener("qshell:inject-json-studio", handleInject);
+  }, [indentSize]);
+
+  // 3. 客户最后一次编辑内容防抖持久化：即使重启应用也能完美恢复最后的状态
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      saveJsonStudioState(leftText, rightText, indentSize);
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [leftText, rightText, indentSize]);
 
   // 解析并校验左侧 JSON
   const leftParseResult = useMemo(() => {
@@ -320,11 +410,19 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
     }
   };
 
-  // 从剪贴板粘贴到左侧
+  // 从剪贴板粘贴到左侧并自动格式化到右侧
   const handlePasteLeft = async () => {
     try {
       const text = await navigator.clipboard.readText();
-      if (text) setLeftText(text);
+      if (text) {
+        setLeftText(text);
+        try {
+          const parsed = JSON.parse(text.trim());
+          setRightText(JSON.stringify(parsed, null, indentSize));
+        } catch {
+          /* ignore */
+        }
+      }
     } catch {
       /* ignore */
     }

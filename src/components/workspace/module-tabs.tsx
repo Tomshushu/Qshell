@@ -293,6 +293,11 @@ export function ModuleTabs({
                 }
                 if (clip && clip.trim().length > 0 && clip.trim().length <= 50000) {
                   openTextFormatter(clip.trim());
+                  window.dispatchEvent(
+                    new CustomEvent("qshell:inject-json-studio", {
+                      detail: { text: clip.trim() },
+                    }),
+                  );
                 } else {
                   toggleTextFormatter();
                 }

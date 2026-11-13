@@ -2013,6 +2013,11 @@ export function TerminalModule({
         playSound(SoundType.Click);
         if (useTextFormatterStore.getState().open) {
           useTextFormatterStore.getState().openTextFormatter(selection);
+          window.dispatchEvent(
+            new CustomEvent("qshell:inject-json-studio", {
+              detail: { text: selection },
+            }),
+          );
         }
       } catch {
         toastRef.current?.warning(t("tm_toast_copy_failed"));
@@ -2022,6 +2027,34 @@ export function TerminalModule({
     term.focus();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [getActiveTerm]);
+
+  // 从终端右键菜单触发 JSON 格式化：无条件覆盖左侧 JSON 区域并自动格式化
+  const handleFormatJsonFromContext = useCallback(async () => {
+    const term = getActiveTerm();
+    let text = term?.getSelection() || "";
+    if (!text) {
+      try {
+        if (navigator.clipboard?.readText) {
+          text = await navigator.clipboard.readText();
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    if (text) {
+      openTextFormatter(text);
+      window.dispatchEvent(
+        new CustomEvent("qshell:inject-json-studio", {
+          detail: { text },
+        }),
+      );
+      playSound(SoundType.Click);
+    } else {
+      openTextFormatter();
+      playSound(SoundType.Click);
+    }
+    setCtxMenu(null);
+  }, [getActiveTerm, openTextFormatter]);
 
   // AI 选中文本诊断触发
 
@@ -9123,6 +9156,11 @@ export function TerminalModule({
   const handleFormatJson = useCallback(
     (text: string) => {
       openTextFormatter(text);
+      window.dispatchEvent(
+        new CustomEvent("qshell:inject-json-studio", {
+          detail: { text },
+        }),
+      );
     },
     [openTextFormatter],
   );
@@ -9695,6 +9733,7 @@ export function TerminalModule({
         onCopyAll={handleCopyAllOutput}
         onPaste={handlePaste}
         onPasteSelection={handlePasteSelection}
+        onFormatJson={handleFormatJsonFromContext}
         onSearch={handleSearch}
         onClearScreen={handleClearScreen}
         onClearScrollback={handleClearScrollback}
