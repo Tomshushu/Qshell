@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { playSound, SoundType } from "@/lib/sound";
 
 interface JsonStudioToolProps {
   initialJson?: string;
@@ -171,8 +172,40 @@ function saveJsonStudioState(left: string, right: string, indent: number) {
   }
 }
 
+/**
+ * 健壮的 JSON 解析器：标准严格 JSON 优先；若包含反斜杠转义（日志常见）或外层引号则智能尝试解包解析
+ */
+function tryParseJson(text: string): { success: boolean; data?: unknown; error?: string } {
+  const clean = text.trim();
+  if (!clean) return { success: false, error: "内容为空" };
+  // 1. 标准严格解析
+  try {
+    return { success: true, data: JSON.parse(clean) };
+  } catch (e1) {
+    // 2. 尝试去外层引号后解析 (例如 '"{\"a\":1}"')
+    if (clean.startsWith('"') && clean.endsWith('"') && clean.length > 2) {
+      try {
+        const unquoted = JSON.parse(clean);
+        if (typeof unquoted === "string") {
+          return { success: true, data: JSON.parse(unquoted) };
+        }
+      } catch {
+        // ignore
+      }
+    }
+    // 3. 尝试去除反斜杠转义后解析 (日志/终端输出常见 '{\"a\":1}')
+    try {
+      const unescaped = clean.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+      return { success: true, data: JSON.parse(unescaped) };
+    } catch {
+      // ignore
+    }
+    return { success: false, error: e1 instanceof Error ? e1.message : String(e1) };
+  }
+}
+
 export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
-  // 左侧原始 JSON：优先取新注入内容，其次取历史持久化缓存，最后兜底默认示例
+  // 左侧原始 JSON：优先取外部传入内容，其次取历史持久化缓存，最后兜底默认示例
   const [leftText, setLeftText] = useState(() => {
     if (initialJson && initialJson.trim()) return initialJson.trim();
     const saved = loadSavedLeftText();
@@ -180,18 +213,11 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
     return SAMPLE_LEFT_JSON;
   });
 
-  // 右侧对比/格式化 JSON：优先取新注入的格式化结果，其次取历史持久化缓存
+  // 右侧对比/格式化 JSON：取历史持久化缓存；新输入时默认保留原样或为空，绝不强制自动格式化
   const [rightText, setRightText] = useState(() => {
-    if (initialJson && initialJson.trim()) {
-      try {
-        return JSON.stringify(JSON.parse(initialJson.trim()), null, 2);
-      } catch {
-        return "";
-      }
-    }
     const saved = loadSavedRightText();
     if (saved !== null) return saved;
-    return SAMPLE_RIGHT_JSON;
+    return initialJson && initialJson.trim() ? "" : SAMPLE_RIGHT_JSON;
   });
 
   const [indentSize, setIndentSize] = useState<number>(() => loadSavedIndent());
@@ -199,39 +225,25 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
   const [copiedRight, setCopiedRight] = useState(false);
   const [showDiffDrawer, setShowDiffDrawer] = useState(false);
 
-  // 1. 监听 initialJson 变化：当弹框已打开时，外部传入新内容立即无条件覆盖左侧并格式化到右侧
+  // 1. 监听 initialJson 变化：当弹框已打开时，外部传入新内容仅填充左侧原始输入，等待用户主动点击「格式化」
   useEffect(() => {
     if (initialJson && initialJson.trim()) {
-      const clean = initialJson.trim();
-      setLeftText(clean);
-      try {
-        const parsed = JSON.parse(clean);
-        setRightText(JSON.stringify(parsed, null, indentSize));
-      } catch {
-        /* 非严格 JSON 时依然填入左侧 */
-      }
+      setLeftText(initialJson.trim());
     }
-  }, [initialJson, indentSize]);
+  }, [initialJson]);
 
-  // 2. 全局自定义事件注入：无论何时右键或点击格式化，均直接强制覆写左侧区域
+  // 2. 全局自定义事件注入：无论何时右键或点击格式化，均仅覆盖左侧原始区域，等待用户手动格式化
   useEffect(() => {
     const handleInject = (e: Event) => {
       const customEvt = e as CustomEvent<{ text: string }>;
       const text = customEvt.detail?.text;
       if (text && text.trim()) {
-        const clean = text.trim();
-        setLeftText(clean);
-        try {
-          const parsed = JSON.parse(clean);
-          setRightText(JSON.stringify(parsed, null, indentSize));
-        } catch {
-          /* ignore */
-        }
+        setLeftText(text.trim());
       }
     };
     window.addEventListener("qshell:inject-json-studio", handleInject);
     return () => window.removeEventListener("qshell:inject-json-studio", handleInject);
-  }, [indentSize]);
+  }, []);
 
   // 3. 客户最后一次编辑内容防抖持久化：即使重启应用也能完美恢复最后的状态
   useEffect(() => {
@@ -241,26 +253,20 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
     return () => clearTimeout(timer);
   }, [leftText, rightText, indentSize]);
 
-  // 解析并校验左侧 JSON
+  // 解析并校验左侧 JSON (用于语法指示与 Diff)
   const leftParseResult = useMemo(() => {
     if (!leftText.trim()) return { data: null, error: null };
-    try {
-      const data = JSON.parse(leftText);
-      return { data, error: null };
-    } catch (e) {
-      return { data: null, error: e instanceof Error ? e.message : String(e) };
-    }
+    const res = tryParseJson(leftText);
+    if (res.success) return { data: res.data, error: null };
+    return { data: null, error: res.error || "JSON 语法错误" };
   }, [leftText]);
 
-  // 解析并校验右侧 JSON
+  // 解析并校验右侧 JSON (用于语法指示与 Diff)
   const rightParseResult = useMemo(() => {
     if (!rightText.trim()) return { data: null, error: null };
-    try {
-      const data = JSON.parse(rightText);
-      return { data, error: null };
-    } catch (e) {
-      return { data: null, error: e instanceof Error ? e.message : String(e) };
-    }
+    const res = tryParseJson(rightText);
+    if (res.success) return { data: res.data, error: null };
+    return { data: null, error: res.error || "JSON 语法错误" };
   }, [rightText]);
 
   // 计算差异列表
@@ -271,87 +277,104 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
     return computeJsonDiff(leftParseResult.data, rightParseResult.data);
   }, [leftParseResult.data, rightParseResult.data]);
 
-  // 格式化函数
+  // 手动格式化执行函数：由用户主动触发（点击按钮或快捷键 Ctrl+Enter）
+  // 调研成熟产品 (DevToys / CyberChef / Postman / JSONDiff)：
+  // 场景 A：如果右侧为空或与左侧相同，用户输入在左侧，点击「格式化」是将左侧格式化输出到右侧（保留左侧原始输入用于对照）
+  // 场景 B：如果左右两侧都有不同的 JSON（双栏对比场景），点击「格式化」对双侧分别进行规范化缩进与美化，以便精准高亮 Diff
   const handleFormat = useCallback(
     (targetSide: "left" | "right" | "both" = "both", indent = indentSize) => {
-      if (targetSide === "left" || targetSide === "both") {
-        if (leftText.trim()) {
-          try {
-            const parsed = JSON.parse(leftText);
-            setLeftText(JSON.stringify(parsed, null, indent));
-            // 如果右侧为空，顺带将格式化结果填充到右侧
-            if (!rightText.trim()) {
-              setRightText(JSON.stringify(parsed, null, indent));
-            }
-          } catch {
-            /* ignore */
-          }
+      if (targetSide === "left") {
+        const parseRes = tryParseJson(leftText);
+        if (parseRes.success) {
+          setLeftText(JSON.stringify(parseRes.data, null, indent));
+          playSound(SoundType.Click);
         }
+        return;
       }
-      if (targetSide === "right" || targetSide === "both") {
-        if (rightText.trim()) {
-          try {
-            const parsed = JSON.parse(rightText);
-            setRightText(JSON.stringify(parsed, null, indent));
-          } catch {
-            /* ignore */
-          }
+
+      if (targetSide === "right") {
+        const parseRes = tryParseJson(rightText);
+        if (parseRes.success) {
+          setRightText(JSON.stringify(parseRes.data, null, indent));
+          playSound(SoundType.Click);
         }
+        return;
+      }
+
+      // targetSide === "both" (主格式化按钮)
+      const leftParse = tryParseJson(leftText);
+      const rightParse = tryParseJson(rightText);
+
+      if (leftParse.success) {
+        const formattedLeft = JSON.stringify(leftParse.data, null, indent);
+        if (!rightText.trim() || rightText === leftText) {
+          setRightText(formattedLeft);
+        } else if (rightParse.success) {
+          setLeftText(formattedLeft);
+          setRightText(JSON.stringify(rightParse.data, null, indent));
+        } else {
+          setRightText(formattedLeft);
+        }
+        playSound(SoundType.Click);
+      } else if (rightParse.success) {
+        setRightText(JSON.stringify(rightParse.data, null, indent));
+        playSound(SoundType.Click);
       }
     },
     [leftText, rightText, indentSize]
   );
 
-  // 初始格式化一次
+  // 键盘快捷键：Ctrl+Enter 或 Cmd+Enter 手动触发格式化
   useEffect(() => {
-    if (initialJson.trim()) {
-      handleFormat("both", indentSize);
-    }
-  }, [initialJson, handleFormat, indentSize]);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        handleFormat("both");
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [handleFormat]);
 
   // 压缩为一行
   const handleMinify = (targetSide: "left" | "right" | "both" = "both") => {
-    if (targetSide === "left" || targetSide === "both") {
-      try {
-        if (leftText.trim()) {
-          setLeftText(JSON.stringify(JSON.parse(leftText)));
-        }
-      } catch {
-        /* ignore */
+    const leftParse = tryParseJson(leftText);
+    const rightParse = tryParseJson(rightText);
+    if (leftParse.success) {
+      const minifiedLeft = JSON.stringify(leftParse.data);
+      if (!rightText.trim() || rightText === leftText) {
+        setRightText(minifiedLeft);
+      } else if (rightParse.success) {
+        setLeftText(minifiedLeft);
+        setRightText(JSON.stringify(rightParse.data));
+      } else {
+        setRightText(minifiedLeft);
       }
-    }
-    if (targetSide === "right" || targetSide === "both") {
-      try {
-        if (rightText.trim()) {
-          setRightText(JSON.stringify(JSON.parse(rightText)));
-        }
-      } catch {
-        /* ignore */
-      }
+      playSound(SoundType.Click);
+    } else if (rightParse.success) {
+      setRightText(JSON.stringify(rightParse.data));
+      playSound(SoundType.Click);
     }
   };
 
   // 递归排序键名 (双侧)
   const handleSortKeys = (targetSide: "left" | "right" | "both" = "both") => {
-    if (targetSide === "left" || targetSide === "both") {
-      try {
-        if (leftText.trim()) {
-          const sorted = sortJsonKeys(JSON.parse(leftText));
-          setLeftText(JSON.stringify(sorted, null, indentSize));
-        }
-      } catch {
-        /* ignore */
+    const leftParse = tryParseJson(leftText);
+    const rightParse = tryParseJson(rightText);
+    if (leftParse.success) {
+      const sortedLeft = JSON.stringify(sortJsonKeys(leftParse.data), null, indentSize);
+      if (!rightText.trim() || rightText === leftText) {
+        setRightText(sortedLeft);
+      } else if (rightParse.success) {
+        setLeftText(sortedLeft);
+        setRightText(JSON.stringify(sortJsonKeys(rightParse.data), null, indentSize));
+      } else {
+        setRightText(sortedLeft);
       }
-    }
-    if (targetSide === "right" || targetSide === "both") {
-      try {
-        if (rightText.trim()) {
-          const sorted = sortJsonKeys(JSON.parse(rightText));
-          setRightText(JSON.stringify(sorted, null, indentSize));
-        }
-      } catch {
-        /* ignore */
-      }
+      playSound(SoundType.Click);
+    } else if (rightParse.success) {
+      setRightText(JSON.stringify(sortJsonKeys(rightParse.data), null, indentSize));
+      playSound(SoundType.Click);
     }
   };
 
@@ -410,31 +433,26 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
     }
   };
 
-  // 从剪贴板粘贴到左侧并自动格式化到右侧
+  // 从剪贴板粘贴到左侧原始区域（仅填充左侧，绝不自动覆盖或格式化右侧）
   const handlePasteLeft = async () => {
     try {
       const text = await navigator.clipboard.readText();
       if (text) {
-        setLeftText(text);
-        try {
-          const parsed = JSON.parse(text.trim());
-          setRightText(JSON.stringify(parsed, null, indentSize));
-        } catch {
-          /* ignore */
-        }
+        setLeftText(text.trim());
       }
     } catch {
       /* ignore */
     }
   };
 
-  // 将左侧格式化并同步到右侧
+  // 点击「格式化到右」：主动将左侧内容格式化输出到右侧
   const handleSyncToRight = () => {
     if (!leftText.trim()) return;
-    try {
-      const parsed = JSON.parse(leftText);
-      setRightText(JSON.stringify(parsed, null, indentSize));
-    } catch {
+    const res = tryParseJson(leftText);
+    if (res.success) {
+      setRightText(JSON.stringify(res.data, null, indentSize));
+      playSound(SoundType.Click);
+    } else {
       setRightText(leftText);
     }
   };
@@ -794,10 +812,30 @@ export function JsonStudioTool({ initialJson = "" }: JsonStudioToolProps) {
               <textarea
                 value={rightText}
                 onChange={(e) => setRightText(e.target.value)}
-                placeholder="在此粘贴对比 JSON (右侧)，或点击上方「格式化」自动生成..."
+                placeholder="在此粘贴对比 JSON (右侧)，或点击上方「格式化」将左侧生成到此处 (快捷键 Ctrl+Enter)..."
                 spellCheck={false}
                 className="h-full w-full resize-none p-3 font-mono text-xs leading-relaxed text-foreground placeholder:text-muted-foreground/40 bg-transparent outline-none"
               />
+              {!rightText.trim() && leftText.trim() && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center p-4 pointer-events-none">
+                  <div className="pointer-events-auto flex flex-col items-center gap-2 rounded-xl border border-dashed border-border/80 bg-background/85 backdrop-blur-sm p-4 text-center shadow-xs max-w-[280px]">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                      <Braces className="h-4 w-4" />
+                    </div>
+                    <span className="text-xs font-medium text-foreground">原始数据已就绪</span>
+                    <span className="text-[11px] text-muted-foreground">已填入左侧，点击按钮执行手动格式化</span>
+                    <Button
+                      size="sm"
+                      className="mt-1 h-7 px-3 text-xs gap-1.5 font-medium cursor-pointer shadow-2xs"
+                      onClick={() => handleFormat("both")}
+                    >
+                      <Braces className="h-3.5 w-3.5" />
+                      <span>格式化到右侧</span>
+                      <span className="text-[10px] opacity-75 font-mono ml-0.5">(Ctrl+Enter)</span>
+                    </Button>
+                  </div>
+                </div>
+              )}
               {rightParseResult.error && (
                 <div className="absolute bottom-2 left-2 right-2 rounded-md bg-destructive/15 border border-destructive/30 px-2.5 py-1 text-[11px] text-destructive backdrop-blur-md truncate shadow-sm">
                   ⚠️ {rightParseResult.error}
