@@ -22,6 +22,7 @@ import { sshService } from "@/services/ssh-service";
 import type { KnownHostRecord } from "@/services/api/types";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
+import { useModalStack } from "@/hooks/use-modal-stack";
 
 function getKeyTypeBadge(keyType: string) {
   const kt = keyType.toLowerCase();
@@ -55,6 +56,11 @@ export function KnownHostsPanel() {
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [clearing, setClearing] = useState(false);
+
+  // 确认清空弹窗置入全局模态栈：Esc 优先关闭本确认框而非底层 SettingsDialog
+  useModalStack("known-hosts-clear-confirm", showClearConfirm, () => {
+    if (!clearing) setShowClearConfirm(false);
+  });
 
   const fetchHosts = useCallback(async () => {
     try {

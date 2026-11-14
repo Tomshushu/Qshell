@@ -3,6 +3,7 @@ import { X, Maximize2, Minimize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useTranslation } from "@/i18n";
+import { useModalStack } from "@/hooks/use-modal-stack";
 
 interface WorkspaceModuleModalProps {
   open: boolean;
@@ -36,21 +37,14 @@ export function WorkspaceModuleModal({
     }
   }, [open, hasOpened]);
 
-  // 监听 ESC 键关闭
-  useEffect(() => {
-    if (!open) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        if (isMaximized) {
-          setIsMaximized(false);
-        } else {
-          onClose();
-        }
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [open, isMaximized, onClose]);
+  // 接入全局模态栈：仅栈顶时响应 ESC（最大化状态先退出全屏）
+  useModalStack("workspace-module-modal", open, () => {
+    if (isMaximized) {
+      setIsMaximized(false);
+    } else {
+      onClose();
+    }
+  });
 
   // 如果从未打开过且无需渲染，则提前返回
   if (!open && (!keepMounted || !hasOpened)) {

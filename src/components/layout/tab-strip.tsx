@@ -33,6 +33,7 @@ import {
   collectGroupIds,
 } from "@/utils/split-layout";
 import { clampMenuToViewport } from "@/lib/menu-position";
+import { useModalStack } from "@/hooks/use-modal-stack";
 import {
   buildGroupTree,
   buildGroupPathMap,
@@ -1006,18 +1007,11 @@ export function TabStrip({ tabs, className }: TabStripProps) {
     requestAnimationFrame(updateTabScrollState);
   }, [topItemIds, updateTabScrollState]);
 
-  useEffect(() => {
-    if (!showServerPicker) return;
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setShowServerPicker(false);
-        setSelectedServerId(null);
-        setServerQuery("");
-      }
-    };
-    window.addEventListener("keydown", handleEscape);
-    return () => window.removeEventListener("keydown", handleEscape);
-  }, [showServerPicker]);
+  useModalStack("tab-strip-server-picker", showServerPicker, () => {
+    setShowServerPicker(false);
+    setSelectedServerId(null);
+    setServerQuery("");
+  });
 
   // ── 渲染 ──────────────────────────────────────────────────────────────
 

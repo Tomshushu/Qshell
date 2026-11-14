@@ -619,11 +619,7 @@ fn create_tables(conn: &Connection) -> SqliteResult<()> {
         CREATE INDEX IF NOT EXISTS idx_net_runs_fp ON network_runs(server_id, spec_fingerprint);
         "
     )?;
-    // 兼容旧版本数据库：如果表已存在但缺少新列，则补齐
-    migrate_servers_table(conn);
-    migrate_ssh_keys_table(conn);
-    migrate_proxies_table(conn);
-    migrate_server_groups_table(conn);
+    apply_schema_migrations(conn)?;
     ensure_host_group(conn)?;
     // servers.group_id 的索引必须在迁移补列之后再建：
     // 老库 servers 表已存在时 CREATE TABLE IF NOT EXISTS 不会新增列，
@@ -632,6 +628,37 @@ fn create_tables(conn: &Connection) -> SqliteResult<()> {
         "CREATE INDEX IF NOT EXISTS idx_servers_group_id ON servers(group_id)",
         [],
     )?;
+    Ok(())
+}
+
+/// 当前数据库结构版本号（通过 SQLite 内置 `PRAGMA user_version` 追踪）。
+/// 后续 Wave 1+ 新增 `auth_profiles` 等表与字段时递增此常量并在 `apply_schema_migrations` 追加分支。
+pub const CURRENT_SCHEMA_VERSION: i32 = 1;
+
+pub(crate) fn read_schema_version(conn: &Connection) -> SqliteResult<i32> {
+    conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i32>(0))
+}
+
+fn write_schema_version(conn: &Connection, version: i32) -> SqliteResult<()> {
+    conn.pragma_update(None, "user_version", version)
+}
+
+/// 版本化迁移调度入口（兼容 `user_version == 0` 的老库平滑接入）。
+fn apply_schema_migrations(conn: &Connection) -> SqliteResult<()> {
+    let mut version = read_schema_version(conn)?;
+
+    // v0 -> v1：兼容老版本未追踪版本号的数据库，幂等补齐所有历史列并标定为 v1。
+    if version < 1 {
+        migrate_servers_table(conn);
+        migrate_ssh_keys_table(conn);
+        migrate_proxies_table(conn);
+        migrate_server_groups_table(conn);
+        write_schema_version(conn, 1)?;
+        version = 1;
+    }
+
+    // 预留：后续 v2+ 增量迁移需使用 `conn.unchecked_transaction()` 原子升级后再推进 `version`。
+    let _ = version;
     Ok(())
 }
 
@@ -3900,6 +3927,52 @@ mod known_host_tests {
         )
         .expect("explicit protocols update");
         assert_eq!(protocols_of(&id), r#"["ssh","vnc"]"#, "显式提交才规范化去重");
+    }
+}
+
+#[cfg(test)]
+mod schema_migration_tests {
+    use super::*;
+
+    #[test]
+    fn fresh_database_sets_current_schema_version_and_is_idempotent() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        assert_eq!(read_schema_version(&conn).unwrap(), 0);
+
+        create_tables(&conn).expect("first create_tables");
+        assert_eq!(read_schema_version(&conn).unwrap(), CURRENT_SCHEMA_VERSION);
+
+        create_tables(&conn).expect("idempotent second create_tables");
+        assert_eq!(read_schema_version(&conn).unwrap(), CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn legacy_unversioned_database_migrates_to_current_version() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        // 模拟老版本最小 servers 表（user_version = 0，缺少后续新增列）
+        conn.execute_batch(
+            "
+            CREATE TABLE servers (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                host TEXT NOT NULL,
+                port INTEGER DEFAULT 22,
+                username TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            ",
+        )
+        .expect("create legacy servers table");
+
+        create_tables(&conn).expect("migrate legacy db");
+        assert_eq!(read_schema_version(&conn).unwrap(), CURRENT_SCHEMA_VERSION);
+
+        // 验证新列 group_id 与索引均已补齐
+        let has_group_id: bool = conn
+            .prepare("SELECT group_id FROM servers LIMIT 1")
+            .is_ok();
+        assert!(has_group_id, "legacy servers table should gain group_id column");
     }
 }
 

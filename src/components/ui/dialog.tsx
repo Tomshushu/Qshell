@@ -3,6 +3,8 @@ import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAppStore } from "@/store"
+import { useModalStack } from "@/hooks/use-modal-stack"
+import { useModalStackStore } from "@/store/modal-stack-store"
 
 /** 默认仍是模态；传 modal={false} 可把配置类弹框变成可交互窗口（不锁背景、无 focus trap） */
 const Dialog = ({ modal = true, ...props }: React.ComponentProps<typeof DialogPrimitive.Root>) => (
@@ -41,9 +43,10 @@ const DialogContent = React.forwardRef<
     /** 窗口模式：由全局窗口层级栈分配的动态 z-index */
     layerZIndex?: number
   }
->(function DialogContentInner({ className, children, onPointerDownOutside, onCloseAutoFocus, showCloseButton = true, showOverlay = true, layerZIndex, ...props }, ref) {
+>(function DialogContentInner({ className, children, onPointerDownOutside, onCloseAutoFocus, onEscapeKeyDown, showCloseButton = true, showOverlay = true, layerZIndex, ...props }, ref) {
   const uiStyle = useAppStore(s => s.uiStyle)
   const isAnime = uiStyle === 'anime'
+  const modalId = useModalStack("radix-dialog", true)
 
   React.useEffect(() => {
     return () => {
@@ -121,6 +124,14 @@ const DialogContent = React.forwardRef<
           if (!event.defaultPrevented) {
             window.dispatchEvent(new CustomEvent("focus-active-terminal"))
           }
+        }}
+        onEscapeKeyDown={(event) => {
+          // 若当前之上还叠有非 Radix 模态（如确认遮罩/命令面板），禁止底层 Radix 对话框抢先关掉
+          if (!useModalStackStore.getState().isTopModal(modalId)) {
+            event.preventDefault()
+            return
+          }
+          onEscapeKeyDown?.(event)
         }}
         onPointerDownOutside={(event) => {
           // 修复 Radix react-dialog@1.1.x 嵌套弹框 bug：Content 硬编码

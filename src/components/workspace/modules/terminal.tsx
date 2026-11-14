@@ -42,6 +42,20 @@ import {
 } from "@/lib/serial-checksum";
 import { decodeBase64Bytes, formatSerialHex } from "@/lib/serial-utils";
 import {
+  clearOutputBusSession,
+  dispatchTerminalOutputObservers,
+} from "@/lib/terminal-output-bus";
+import {
+  applyDomRendererForeground,
+  applyTerminalFontFamilyOption,
+  applyTerminalFontSizeOption,
+  clearTerminalTextureAtlasSafely,
+  resolveBellStyle,
+  resolveMinimumContrastRatio,
+  syncTerminalBellStyle,
+  syncTerminalThemeOptions,
+} from "@/lib/terminal-options-sync";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -880,13 +894,8 @@ export function TerminalModule({
   // 监听终端铃声配置变化，动态调整所有终端实例的 bellStyle。
   // 仅负责终端收到 BEL (\x07) 时的响铃；全局界面音效由 store.uiSoundEnabled 控制，二者已解耦。
   useEffect(() => {
-    const enabled = terminalBellSound ?? false;
     xtermInstances.current.forEach(({ term }) => {
-      // 关闭铃声时改为 visual：静默 + 视觉闪烁（xterm.css 已引入），与设置项描述一致
-      // xterm 6 的 ITerminalOptions 类型已移除 bellStyle（运行时仍支持），经 unknown 写入
-      (term.options as unknown as { bellStyle?: string }).bellStyle = enabled
-        ? "sound"
-        : "visual";
+      syncTerminalBellStyle(term, terminalBellSound);
     });
   }, [terminalBellSound]);
 
@@ -1393,16 +1402,18 @@ export function TerminalModule({
   // 监听字体大小变化，动态调整所有终端实例的字号并 resize 后端 PTY
   useEffect(() => {
     xtermInstances.current.forEach(({ term, fitAddon, sessionId }) => {
-      if (term.options.fontSize !== terminalFontSize) {
-        term.options.fontSize = terminalFontSize;
-        try {
-          fitTerminalSafely(fitAddon, term);
-          if (sessionId) {
-            sshService.resizeShell(sessionId, term.cols, term.rows);
-          }
-        } catch (e) {
-          console.warn("[Terminal] Fit failed on font size change:", e);
-        }
+      try {
+        applyTerminalFontSizeOption(
+          term,
+          fitAddon,
+          terminalFontSize,
+          fitTerminalSafely,
+          (cols, rows) => {
+            if (sessionId) sshService.resizeShell(sessionId, cols, rows);
+          },
+        );
+      } catch (e) {
+        console.warn("[Terminal] Fit failed on font size change:", e);
       }
     });
   }, [terminalFontSize]);
@@ -1486,51 +1497,18 @@ export function TerminalModule({
       if (cancelled || isUnmountedRef.current) return;
 
       xtermInstances.current.forEach(({ term, fitAddon, sessionId }) => {
-        if (term.options.fontFamily !== terminalFontFamily) {
-          term.options.fontFamily = terminalFontFamily;
-          // 强制 xterm.js 重新测量字符尺寸。
-          // 注意：xterm.js 6.x 的 ICharSizeService 接口只有 measure()，没有 clear()。
-          // 之前用 clear() 是 no-op，导致字符宽度测量错误后不重新测量，
-          // selection 起点会偏移到 col 1，第一个字符选中后视觉不高亮且 getSelection() 丢失。
-          // measure() 在尺寸变化时触发 onCharSizeChange → handleCharSizeChanged → 渲染器重建尺寸。
-          try {
-            interface XtermCore {
-              _charSizeService?: { measure?: () => void };
-              _renderService?: { clear?: () => void };
-            }
-            const core = (term as unknown as { _core?: XtermCore })._core;
-            if (
-              core &&
-              core._charSizeService &&
-              typeof core._charSizeService.measure === "function"
-            ) {
-              core._charSizeService.measure();
-            }
-            if (
-              core &&
-              core._renderService &&
-              typeof core._renderService.clear === "function"
-            ) {
-              core._renderService.clear();
-            }
-          } catch {
-            // ignore
-          }
-
-          try {
-            term.clearTextureAtlas();
-          } catch {
-            // ignore
-          }
-
-          try {
-            fitTerminalSafely(fitAddon, term);
-            if (sessionId) {
-              sshService.resizeShell(sessionId, term.cols, term.rows);
-            }
-          } catch (e) {
-            console.warn("[Terminal] Fit failed on font family change:", e);
-          }
+        try {
+          applyTerminalFontFamilyOption(
+            term,
+            fitAddon,
+            terminalFontFamily,
+            fitTerminalSafely,
+            (cols, rows) => {
+              if (sessionId) sshService.resizeShell(sessionId, cols, rows);
+            },
+          );
+        } catch (e) {
+          console.warn("[Terminal] Fit failed on font family change:", e);
         }
       });
     };
@@ -1553,25 +1531,7 @@ export function TerminalModule({
       // 若中途开关背景图不同步，会出现「清了背景仍在 DOM 渲染器（性能损耗）」或
       // 「已有终端开背景后仍用 WebGL（canvas 覆盖背景媒体）」两种不一致。
       terminalWebglManager.updateState(instanceTermId, { hasBgMedia });
-      term.options.minimumContrastRatio = hasBgMedia ? 1 : 4.5;
-      term.options.theme = xtermTheme;
-      // DOM 渲染器回退兜底：DomRenderer 不给默认前景色的单元格写 inline color，
-      // 文字颜色依赖 CSS 继承，会被应用全局主题（浅色 = 深色文字）污染，
-      // 在深色终端背景上形成暗底暗字。显式把主题前景色钉到 DOM 宿主与行容器。
-      const host = term.element as HTMLElement | null;
-      if (host) {
-        host.style.color = xtermTheme.foreground;
-        const rowsEl = host.querySelector(".xterm-rows") as HTMLElement | null;
-        if (rowsEl) rowsEl.style.color = xtermTheme.foreground;
-      }
-      // WebGL renderer 会缓存包含颜色信息的字形纹理。只修改 theme 时，已有字形
-      // （尤其是当前选区）可能继续沿用旧前景色，看起来像 selectionForeground
-      // 没有生效。清理纹理后再刷新，确保 Canvas 与 WebGL 渲染路径表现一致。
-      try {
-        term.clearTextureAtlas();
-      } catch {
-        // 终端尚未挂载渲染器或正在销毁时无需处理
-      }
+      syncTerminalThemeOptions(term, xtermTheme, hasBgMedia);
       terminalWebglManager.clearAllTextureAtlases();
       // xterm 通常会在 options.theme setter 中触发重绘，但在隐藏标签、
       // WebGL context 切换或主题覆盖层变化时不一定立即刷新。显式刷新
@@ -1721,12 +1681,8 @@ export function TerminalModule({
     // xterm 对比度算法忽略 alpha 按纯黑计算，结果不可信 —— 切换时同步禁用/启用
     // 对比度改写，并清理纹理与对比度缓存，避免残留被改写的前景色（暗底暗字）。
     xtermInstances.current.forEach(({ term }) => {
-      term.options.minimumContrastRatio = hasBgMedia ? 1 : 4.5;
-      try {
-        term.clearTextureAtlas();
-      } catch {
-        // ignore
-      }
+      term.options.minimumContrastRatio = resolveMinimumContrastRatio(hasBgMedia);
+      clearTerminalTextureAtlasSafely(term);
     });
     terminalWebglManager.clearAllTextureAtlases();
   }, [
@@ -1793,17 +1749,7 @@ export function TerminalModule({
     }
     const xtermTheme = themeToXtermTheme(activeTheme);
     const themeHasBgMedia = !!(activeTheme.background?.image || activeTheme.background?.videoPath);
-    instance.term.options.minimumContrastRatio = themeHasBgMedia ? 1 : 4.5;
-    instance.term.options.theme = xtermTheme;
-    // DOM 渲染器回退兜底：显式钉主题前景色（见主题应用 effect 注释）
-    container.style.color = xtermTheme.foreground;
-    const rowsEl = container.querySelector(".xterm-rows") as HTMLElement | null;
-    if (rowsEl) rowsEl.style.color = xtermTheme.foreground;
-    try {
-      instance.term.clearTextureAtlas();
-    } catch {
-      // 终端尚未挂载渲染器或正在销毁时无需处理
-    }
+    syncTerminalThemeOptions(instance.term, xtermTheme, themeHasBgMedia, container);
     const frame = requestAnimationFrame(() => {
       try {
         fitTerminalSafely(instance.fitAddon, instance.term);
@@ -3215,6 +3161,14 @@ export function TerminalModule({
           });
         });
       }
+
+      // 统一旁路输出观察者总线：触发器 / 脚本录制 / 流量计量等外置能力由此分发
+      dispatchTerminalOutputObservers(
+        termId,
+        data,
+        outputData,
+        xtermInstances.current.get(termId)?.sessionId,
+      );
 
       if (
         recordingTermIdsRef.current.has(termId) &&
@@ -4640,7 +4594,7 @@ export function TerminalModule({
         scrollback: terminalScrollbackLinesRef.current,
         rightClickSelectsWord: true,
         // xterm 6 类型已移除 fastScrollModifier / bellStyle（运行时仍支持），经展开绕过多余属性检查
-        ...(({ fastScrollModifier: "shift", bellStyle: (terminalBellSound ?? false) ? "sound" : "visual" }) as object),
+        ...(({ fastScrollModifier: "shift", bellStyle: resolveBellStyle(terminalBellSound) }) as object),
         fastScrollSensitivity: 5,
         scrollSensitivity: 1,
         drawBoldTextInBrightColors: terminalDrawBoldInBrightColors ?? true,
@@ -4648,7 +4602,7 @@ export function TerminalModule({
         // 注意：背景媒体模式下 theme.background 是 rgba(0,0,0,0)，xterm 的对比度
         // 算法会忽略 alpha 把它当纯黑参与计算（浅色主题的深前景会被改写成中灰），
         // 结果不可信 —— 此时关闭对比度改写（可读性由 --xterm-bg-overlay 压暗/提亮层保证）。
-        minimumContrastRatio: hasBgMediaAtInit ? 1 : 4.5,
+        minimumContrastRatio: resolveMinimumContrastRatio(hasBgMediaAtInit),
         // 允许背景透明：themeToXtermTheme 在有背景图时把 background 降为半透明 rgba，
         // 必须开启 allowTransparency 才能让 xterm canvas 透出底层背景图 div。
         allowTransparency: true,
@@ -4673,9 +4627,7 @@ export function TerminalModule({
       // 因此无论当前实际使用哪个渲染器，都显式把主题前景色钉到 DOM。
       const initXtermTheme = themeToXtermTheme(themeAtInit);
       try {
-        container.style.color = initXtermTheme.foreground;
-        const rowsEl = container.querySelector(".xterm-rows") as HTMLElement | null;
-        if (rowsEl) rowsEl.style.color = initXtermTheme.foreground;
+        applyDomRendererForeground(container, initXtermTheme.foreground);
         if (hasBgMediaAtInit) {
           console.warn(
             `[Terminal Init] ${sId} 背景媒体模式启用，minimumContrastRatio 已禁用（透明背景参与对比度计算不可信）`,
@@ -7413,7 +7365,10 @@ export function TerminalModule({
       serialPausedOutputRef.current.clear();
       serialLineStartMapRef.current.clear();
       terminalLineStartMapRef.current.clear();
-      sendExpectStatesRef.current.forEach((st) => cleanupSendExpectState(st));
+      sendExpectStatesRef.current.forEach((st, tid) => {
+        cleanupSendExpectState(st);
+        clearOutputBusSession(tid);
+      });
       sendExpectStatesRef.current.clear();
       pausedShellsRef.current.clear();
       sigintActiveUntilRef.current.clear();

@@ -9,6 +9,7 @@ import { Camera, Download, Copy, X, Cpu, MemoryStick, Activity, Network, Contain
 import { sshService } from '@/services/ssh-service'
 import { useTranslation } from '@/i18n'
 import { cn } from '@/lib/utils'
+import { useModalStack } from '@/hooks/use-modal-stack'
 
 interface SnapshotRawData {
   serverId: string
@@ -72,6 +73,8 @@ export function SnapshotModal({ open, onClose, serverName, serverId }: SnapshotM
   const [snapshot, setSnapshot] = useState<SnapshotRawData | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+
+  useModalStack('snapshot-modal', open, onClose)
 
   const startCollection = useCallback(async () => {
     setStep('collecting')
