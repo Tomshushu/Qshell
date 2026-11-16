@@ -1,17 +1,94 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useAppStore } from '@/store'
-import { Wifi, WifiOff, Server, Copy, Check, Monitor, Zap, PenSquare, Layers } from 'lucide-react'
+import { Wifi, WifiOff, Server, Copy, Check, Monitor, Zap, PenSquare, Layers, Lock } from 'lucide-react'
 import { useTranslation } from '@/i18n'
 import { sshService } from '@/services/ssh-service'
+import { backend } from '@/services/api'
+import type { RemoteFsCapabilities } from '@/types'
+import { useSessionTrafficStore } from '@/store/session-traffic-store'
+import { useTerminalLockStore } from '@/store/terminal-lock-store'
 import { collectGroupIds } from '@/utils/split-layout'
 import { playSound, SoundType } from '@/lib/sound'
 import { extractBaseServerId } from '@/services/ssh-connection-state'
 import { cn } from '@/lib/utils'
 import { StatusBarMetricsPill } from '@/components/workspace/floating-metrics-hud'
-import { getServerConnectionFlags, deviceStatusKeys, isPureVncServer } from '@/services/connection-targets'
+import { getServerConnectionFlags, deviceStatusKeys, isPureVncServer, resolveServerForTab } from '@/services/connection-targets'
 
 /** 复制成功对勾的显示时长（ms） */
 const COPY_FEEDBACK_MS = 1500
+
+interface RemoteFsBackendChangedPayload {
+  serverId?: string
+  connId?: string
+  capabilities?: RemoteFsCapabilities
+  backend?: string
+  fallbackFromSftp?: boolean
+  supportsSftp?: boolean
+  supportsChmod?: boolean
+  supportsSymlink?: boolean
+  supportsResume?: boolean
+}
+
+function subscribeRemoteFsBackendChanged(
+  connId: string,
+  serverId: string | undefined,
+  onCapabilities: (caps: RemoteFsCapabilities) => void,
+  onRefresh: () => void,
+): () => void {
+  let cancelled = false
+  let unlisten: UnlistenFn | undefined
+  const baseServerId = serverId ? extractBaseServerId(serverId) : undefined
+
+  const matchesTarget = (target?: string | null): boolean => {
+    if (!target) return true
+    if (target === connId || target === serverId) return true
+    if (!baseServerId) return false
+    return extractBaseServerId(target) === baseServerId
+  }
+
+  try {
+    void Promise.resolve(
+      listen<RemoteFsBackendChangedPayload>('remote-fs-backend-changed', (event) => {
+        if (cancelled) return
+        const payload = event?.payload
+        const targetId = payload?.connId || payload?.serverId
+        if (!matchesTarget(targetId)) return
+        if (payload?.capabilities && typeof payload.capabilities.backend === 'string') {
+          onCapabilities(payload.capabilities)
+          return
+        }
+        if (typeof payload?.backend === 'string') {
+          onCapabilities({
+            backend: payload.backend,
+            fallbackFromSftp: Boolean(payload.fallbackFromSftp),
+            supportsSftp: payload.supportsSftp ?? payload.backend === 'sftp',
+            supportsChmod: payload.supportsChmod ?? true,
+            supportsSymlink:
+              payload.supportsSymlink ?? (payload.backend !== 'ftp' && payload.backend !== 'ftps'),
+            supportsResume: payload.supportsResume ?? payload.backend !== 'scp',
+          })
+          return
+        }
+        onRefresh()
+      }),
+    )
+      .then((fn) => {
+        if (cancelled) fn()
+        else unlisten = fn
+      })
+      .catch(() => {
+        // Non-Tauri / jsdom environment without event runtime
+      })
+  } catch {
+    // Ignore when Tauri event runtime is unavailable
+  }
+
+  return () => {
+    cancelled = true
+    unlisten?.()
+  }
+}
 
 function formatSerialBytes(value: number): string {
   if (value < 1024) return `${Math.round(value)} B`
@@ -22,12 +99,25 @@ function formatSerialBytes(value: number): string {
 
 export function StatusBar() {
   const { t } = useTranslation()
-  const { activeTabId, tabs, connectedServers, servers, layout, workspaces, terminalComposeBarVisible } =
-    useAppStore()
+  const {
+    activeTabId,
+    tabs,
+    connectedServers,
+    servers,
+    layout,
+    workspaces,
+    terminalComposeBarVisible,
+    terminalType,
+    appLockEnabled,
+    appLockPasswordHash,
+  } = useAppStore()
+  const activeSessionByTab = useSessionTrafficStore((s) => s.activeSessionByTab)
+  const lockedByTermId = useTerminalLockStore((s) => s.lockedByTermId)
+  const unlockTerminal = useTerminalLockStore((s) => s.unlockTerminal)
 
   const activeTab = tabs.find((t) => t.id === activeTabId)
   const serverId = activeTab?.serverId
-  const server = servers.find((s) => s.id === serverId)
+  const server = resolveServerForTab(servers, serverId, activeTab)
 
   // 分屏判定：底部状态栏只反映当前活动 tab。分屏下现在仍渲染，但会切换为
   // 「分屏摘要 / 当前焦点会话」展示，而不是单连接状态，避免误导用户。
@@ -80,6 +170,7 @@ export function StatusBar() {
   const deviceStatus = deviceStatusKeys(server?.targetType)
   const isRdpServer = serverFlags.isRdpServer
   const isSerialServer = serverFlags.isSerialServer
+  const isLocalServer = serverFlags.isLocalServer
   const isTelnetServer = serverFlags.isTelnetServer || server?.protocol === 'telnet'
   const isFtpServer = server?.protocol === 'ftp'
   const isVncMode = activeTab?.module === 'vnc' || isPureVncServer(server)
@@ -87,10 +178,12 @@ export function StatusBar() {
   const isDashboard = !activeTab || !serverId
 
   const connId =
-    activeTab?.id && serverId && !isSerialServer && !isRdpServer && !isBmcServer && !isVncMode
+    activeTab?.id && serverId && !isSerialServer && !isLocalServer && !isRdpServer && !isBmcServer && !isVncMode
       ? `ws:${serverId}:${activeTab.id}`
       : serverId
-  const isConnected = connId
+  const isConnected = isLocalServer
+    ? Boolean(activeTabId && (activeSessionByTab[activeTabId] ?? sshService.getTabActiveSessionId(activeTabId)))
+    : connId
     ? ((activeTab ? connectedServers[`ws:${serverId}:${activeTab.id}`] : undefined) ??
         connectedServers[connId] ??
         connectedServers[serverId || ''] ??
@@ -98,6 +191,9 @@ export function StatusBar() {
     : false
 
   const focusTitle = useMemo(() => {
+    if (isLocalServer) {
+      return activeTab?.tempTitle || activeTab?.serverName || 'Local Shell'
+    }
     if (isSerialServer) {
       return server?.name ? `${server.name} (${server.host || 'COM'})` : server?.host || 'COM'
     }
@@ -106,9 +202,27 @@ export function StatusBar() {
       return `${server.name} (${server.host})`
     }
     return server.host || server.name || '?'
-  }, [server, activeTab, isSerialServer])
+  }, [server, activeTab, isSerialServer, isLocalServer])
 
   const [serialStats, setSerialStats] = useState({ rxBytes: 0, txBytes: 0, rxRate: 0, txRate: 0 })
+  const [fsCapabilitiesState, setFsCapabilitiesState] = useState<{
+    connId: string
+    caps: RemoteFsCapabilities
+  } | null>(null)
+
+  const activeTabLock = useMemo(
+    () =>
+      activeTabId
+        ? Object.values(lockedByTermId).find(
+            (entry) =>
+              entry.tabId === activeTabId ||
+              Boolean(activeTab?.workspaceId && entry.workspaceId === activeTab.workspaceId) ||
+              Boolean(entry.memberTabIds?.includes(activeTabId)),
+          )
+        : undefined,
+    [lockedByTermId, activeTabId, activeTab?.workspaceId],
+  )
+  const activeTermType = server?.terminalType || terminalType || 'xterm-256color'
 
   useEffect(() => {
     if (!isSerialServer || !activeTabId) {
@@ -152,6 +266,79 @@ export function StatusBar() {
       window.clearInterval(timer)
     }
   }, [activeTabId, isSerialServer])
+
+  const canQueryFsBackend = Boolean(
+    isConnected &&
+      connId &&
+      (!isSftpTab || (Boolean(server) && !isFtpServer)) &&
+      !isFtpServer &&
+      !isTelnetServer &&
+      !isLocalServer &&
+      !isSerialServer &&
+      !isRdpServer &&
+      !isBmcServer &&
+      !isVncMode,
+  )
+
+  useEffect(() => {
+    setFsCapabilitiesState(null)
+    if (!canQueryFsBackend || !connId) {
+      return
+    }
+    let cancelled = false
+
+    const fetchCapabilities = () => {
+      if (!backend?.files?.getBackendCapabilities) return
+      void backend.files
+        .getBackendCapabilities(connId)
+        .then((caps) => {
+          if (!cancelled) setFsCapabilitiesState({ connId, caps })
+        })
+        .catch(() => {
+          if (!cancelled) setFsCapabilitiesState(null)
+        })
+    }
+
+    fetchCapabilities()
+
+    const unsubscribe = subscribeRemoteFsBackendChanged(
+      connId,
+      serverId,
+      (caps) => {
+        if (!cancelled) setFsCapabilitiesState({ connId, caps })
+      },
+      fetchCapabilities,
+    )
+
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
+  }, [canQueryFsBackend, connId, serverId])
+
+  const visibleFsCapabilities =
+    canQueryFsBackend && fsCapabilitiesState && fsCapabilitiesState.connId === connId
+      ? fsCapabilitiesState.caps
+      : null
+
+  const fsFallbackBadge =
+    !isLocalServer &&
+    !isSerialServer &&
+    visibleFsCapabilities &&
+    (visibleFsCapabilities.fallbackFromSftp || visibleFsCapabilities.backend === 'scp') ? (
+      <span
+        className="inline-flex items-center rounded border border-amber-500/40 bg-amber-500/15 px-1.5 py-0 text-[9px] font-mono font-medium text-amber-500 flex-shrink-0"
+        title={
+          visibleFsCapabilities.fallbackFromSftp
+            ? t('status_fs_fallback_scp')
+            : visibleFsCapabilities.backend.toUpperCase()
+        }
+      >
+        {visibleFsCapabilities.fallbackFromSftp
+          ? t('status_fs_fallback_scp')
+          : visibleFsCapabilities.backend.toUpperCase()}
+      </span>
+    ) : null
 
   // 复制 IP（server.host）到剪贴板，复制成功后图标短暂变为对勾
   const [copiedIp, setCopiedIp] = useState(false)
@@ -210,6 +397,7 @@ export function StatusBar() {
                 · {t('status_sftp_connected_count').replace('{n}', String(connectedCount))}
               </span>
             )}
+            {fsFallbackBadge}
           </>
         ) : isConnected ? (
           isSplitMode ? (
@@ -223,16 +411,20 @@ export function StatusBar() {
                 </span>
               </span>
               {copyIpButton}
+              {fsFallbackBadge}
             </>
           ) : (
             <>
               <Wifi className="h-3 w-3 text-success flex-shrink-0" />
               <span className="truncate">
-                {isSerialServer
-                  ? `${t('status_serial_mode')} · ${server?.host || 'COM'}`
-                  : `${t('status_connected_to')} ${server?.host || '?'}`}
+                {isLocalServer
+                  ? focusTitle
+                  : isSerialServer
+                    ? `${t('status_serial_mode')} · ${server?.host || 'COM'}`
+                    : `${t('status_connected_to')} ${server?.host || '?'}`}
               </span>
-              {copyIpButton}
+              {!isLocalServer && copyIpButton}
+              {fsFallbackBadge}
             </>
           )
         ) : isBmcServer ? (
@@ -291,6 +483,33 @@ export function StatusBar() {
 
       {/* 右侧工具胶囊组（快捷命令、资源监控、协议模式），紧凑微距排布 */}
       <div className="flex items-center gap-1.5 shrink-0">
+        {activeTabLock && (() => {
+          const hasAppLock = Boolean(appLockEnabled && appLockPasswordHash)
+          return (
+            <button
+              type="button"
+              onClick={() => {
+                // 若应用锁已在设置中被关闭，允许一键解除残留的局部锁状态
+                if (!hasAppLock) {
+                  unlockTerminal(activeTabLock.termId)
+                }
+              }}
+              title={
+                hasAppLock
+                  ? t('tm_lock_status_pin_hint') || '当前工作台已锁定，请在工作台遮罩层使用应用锁密码或图案解锁'
+                  : t('tm_lock_app_disabled_hint') || '应用锁已关闭，点击可直接解锁'
+              }
+              className={cn(
+                'inline-flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-500 transition-colors shrink-0',
+                hasAppLock ? 'cursor-default' : 'hover:bg-amber-500/25 cursor-pointer',
+              )}
+            >
+              <Lock className="h-2.5 w-2.5" />
+              <span>{t('tm_lock_badge') || '已锁定'}</span>
+            </button>
+          )
+        })()}
+
         {isSerialServer && (
           <span
             className="hidden items-center gap-2 font-mono tabular-nums text-[10px] sm:flex mr-1"
@@ -306,7 +525,7 @@ export function StatusBar() {
         )}
 
         {/* 快捷命令底栏触发按钮（位于资源监控左侧） */}
-        {isConnected && !isSftpTab && (
+        {isConnected && !isSftpTab && !activeTabLock && (
           <button
             type="button"
             onClick={() => window.dispatchEvent(new CustomEvent('qshell:toggle-quick-commands'))}
@@ -322,7 +541,7 @@ export function StatusBar() {
         )}
 
         {/* 命令撰写与多机分发底栏触发按钮 */}
-        {isConnected && !isSftpTab && (
+        {isConnected && !isSftpTab && !activeTabLock && (
           <button
             type="button"
             onClick={() => window.dispatchEvent(new CustomEvent('qshell:toggle-compose-bar', { detail: { forceToggle: true } }))}
@@ -352,10 +571,15 @@ export function StatusBar() {
 
         {/* Workspace mode（仅在具体会话标签页下展示协议模式，首页/仪表盘不展示任何模式胶囊） */}
         {!isDashboard && (
-          <span className="text-muted-foreground/70 flex-shrink-0 font-mono text-[10px] uppercase tracking-wider bg-muted/40 border border-border/40 px-1.5 py-0.5 rounded shadow-2xs">
+          <span
+            title={`TERM=${activeTermType}`}
+            className="text-muted-foreground/70 flex-shrink-0 font-mono text-[10px] uppercase tracking-wider bg-muted/40 border border-border/40 px-1.5 py-0.5 rounded shadow-2xs"
+          >
             {isSftpTab
               ? 'SFTP'
-              : isBmcServer
+              : isLocalServer
+                ? t('status_local_mode')
+                : isBmcServer
                 ? t(deviceStatus.modeKey)
                 : isRdpServer
                   ? t('module_rdp')

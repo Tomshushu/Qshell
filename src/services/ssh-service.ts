@@ -44,6 +44,7 @@ import type {
   ExportResult,
 } from "@/types";
 import { backend, isDesktopAvailable } from "@/services/api";
+import { useSessionTrafficStore } from "@/store/session-traffic-store";
 import type {
   CommandResult,
   OperationResult,
@@ -55,6 +56,9 @@ import type {
   FileDownloadResult,
   FileUploadResult,
   FileStatInfo,
+  FileChunkResult,
+  ExclusionConfigOptions,
+  ExternalEditSession,
   FileEntry,
   FtpTestConfigInput,
   ServiceResourceRawMap,
@@ -84,7 +88,12 @@ import type {
   SshKey,
   SshKeyInput,
   SshKeyUpdate,
+  ServerBatchPatch,
+  AuthProfile,
+  AuthProfileInput,
+  AuthProfileUpdate,
 } from "@/services/api";
+import type { LocalShellProfile } from "@/types";
 import {
   ConnectionState,
   SshErrorKind,
@@ -94,6 +103,41 @@ import {
   isConnecting as isStateConnecting,
   isReady as isStateReady,
 } from "@/services/ssh-connection-state";
+
+export type TransferProtocolKind = "auto" | "sftp" | "scp" | "ftp" | "ftps";
+
+/**
+ * 解析服务器配置文件传输协议（纯解析，不触发任何 SSH-only 探测调用）
+ */
+export function getTransferProtocolForServer(
+  server?: { fileTransferConfig?: string | null } | null,
+): TransferProtocolKind {
+  const raw = server?.fileTransferConfig;
+  if (!raw || typeof raw !== "string" || !raw.trim()) return "sftp";
+  try {
+    const parsed = JSON.parse(raw) as { protocol?: unknown };
+    const proto = String(parsed?.protocol || "sftp").trim().toLowerCase();
+    if (
+      proto === "auto" ||
+      proto === "sftp" ||
+      proto === "scp" ||
+      proto === "ftp" ||
+      proto === "ftps"
+    ) {
+      return proto;
+    }
+  } catch {
+    // ignore invalid JSON
+  }
+  return "sftp";
+}
+
+export function isFtpTransferProtocol(
+  server?: { fileTransferConfig?: string | null } | null,
+): boolean {
+  const proto = getTransferProtocolForServer(server);
+  return proto === "ftp" || proto === "ftps";
+}
 
 export interface ActiveTransferRecord {
   transferId: string;
@@ -163,24 +207,48 @@ async function withTransferCancelTimeout<T>(promise: Promise<T>, operation: stri
  */
 const aliveSessions = new Set<string>();
 
-/** 带超时保护的 connect Promise 包装 */
+/** 带超时保护的 connect Promise 包装（支持交互式 OTP/MFA 动态续期，避免用户输入验证码期间触发 30s 超时） */
+const connectWatchdogs = new Map<string, (timeoutMs: number) => void>();
+let authWatchdogRegistered = false;
+
+function ensureAuthInteractionWatchdog() {
+  if (authWatchdogRegistered || !backend) return;
+  authWatchdogRegistered = true;
+  backend.ssh.onAuthInteractionRequired((req) => {
+    const bump = connectWatchdogs.get(req.serverId);
+    if (bump) {
+      const nextMs = Math.max(CONNECT_TIMEOUT_MS, ((req.timeoutSecs || 90) + 15) * 1000);
+      bump(nextMs);
+    }
+  });
+}
+
 function connectWithTimeout(serverId: string): Promise<ConnectResult> {
+  ensureAuthInteractionWatchdog();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
+  let rejectFn: ((reason?: unknown) => void) | undefined;
+  const arm = (ms: number) => {
+    if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
-      reject(
+      rejectFn?.(
         new Error(
-          "Connection timeout (no response in 30s, backend may be blocked or network unreachable)",
+          `Connection timeout (no response in ${Math.round(ms / 1000)}s, backend may be blocked or network unreachable)`,
         ),
       );
-    }, CONNECT_TIMEOUT_MS);
+    }, ms);
+  };
+  const timeout = new Promise<never>((_, reject) => {
+    rejectFn = reject;
+    arm(CONNECT_TIMEOUT_MS);
   });
+  connectWatchdogs.set(serverId, arm);
   const backendP = backend!.ssh.connect(serverId);
   // Promise.race settle 后，若 backendP 最终 reject 会产生 unhandledrejection。
   // 附加一个空的 catch handler 吞掉后续 rejection，防止全局错误。
   backendP.catch(() => {});
   return Promise.race([backendP, timeout]).finally(() => {
     if (timer) clearTimeout(timer);
+    connectWatchdogs.delete(serverId);
   });
 }
 
@@ -286,6 +354,13 @@ export const sshService = {
     if (!backend) throw new Error(NOT_AVAILABLE);
     const res = await backend.servers.deleteBatch(ids);
     if (res.success) notifyDataMutated('deleteServersBatch');
+    return res;
+  },
+
+  async batchUpdateServers(ids: string[], patch: ServerBatchPatch): Promise<OperationResult> {
+    if (!backend) throw new Error(NOT_AVAILABLE);
+    const res = await backend.servers.batchUpdate(ids, patch);
+    if (res.success) notifyDataMutated('batchUpdateServers');
     return res;
   },
 
@@ -436,6 +511,38 @@ export const sshService = {
     return res;
   },
 
+  // ==================== 全局身份凭证（跨主机复用，P1-11） ====================
+  async listAuthProfiles(): Promise<AuthProfile[]> {
+    if (!backend) return [];
+    return backend.authProfiles.list();
+  },
+
+  async listAuthProfilesForSync(): Promise<AuthProfile[]> {
+    if (!backend) return [];
+    return backend.authProfiles.listForSync();
+  },
+
+  async addAuthProfile(input: AuthProfileInput): Promise<OperationResult> {
+    if (!backend) throw new Error(NOT_AVAILABLE);
+    const res = await backend.authProfiles.add(input);
+    if (res.success) notifyDataMutated('addAuthProfile');
+    return res;
+  },
+
+  async updateAuthProfile(id: string, updates: AuthProfileUpdate): Promise<OperationResult> {
+    if (!backend) throw new Error(NOT_AVAILABLE);
+    const res = await backend.authProfiles.update(id, updates);
+    if (res.success) notifyDataMutated('updateAuthProfile');
+    return res;
+  },
+
+  async deleteAuthProfile(id: string): Promise<OperationResult> {
+    if (!backend) throw new Error(NOT_AVAILABLE);
+    const res = await backend.authProfiles.delete(id);
+    if (res.success) notifyDataMutated('deleteAuthProfile');
+    return res;
+  },
+
   // ==================== 标签目录（独立存储） ====================
   async listTags(): Promise<string[]> {
     if (!backend) return [];
@@ -553,6 +660,27 @@ export const sshService = {
   onStateChanged(callback: (data: ConnectionStateData) => void): () => void {
     if (!backend) return () => {};
     return backend.ssh.onStateChanged(callback);
+  },
+
+  /**
+   * 提交键盘交互式认证（OTP / MFA）响应；responses 为 null 表示用户取消。
+   */
+  async submitAuthInteraction(
+    requestId: string,
+    responses: string[] | null,
+  ): Promise<boolean> {
+    if (!backend) return false;
+    return backend.ssh.submitAuthInteraction(requestId, responses);
+  },
+
+  /**
+   * 订阅后端推送的 ssh:auth-interaction-required 挑战事件。
+   */
+  onAuthInteractionRequired(
+    callback: (data: import("./api/types").AuthInteractionRequest) => void,
+  ): () => void {
+    if (!backend) return () => {};
+    return backend.ssh.onAuthInteractionRequired(callback);
   },
 
   /**
@@ -718,6 +846,7 @@ export const sshService = {
     cols: number,
     rows: number,
     encoding = "utf-8",
+    termType?: string,
   ): Promise<CreateShellResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
     const result = await backend.ssh.createShell(
@@ -725,6 +854,7 @@ export const sshService = {
       cols,
       rows,
       encoding,
+      termType,
     );
     if (result.sessionId) aliveSessions.add(result.sessionId);
     return result;
@@ -741,6 +871,7 @@ export const sshService = {
     rows: number,
     timeoutSecs?: number,
     encoding = "utf-8",
+    termType?: string,
   ): Promise<CreateShellResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
     const result = await backend.telnet.createShell(
@@ -751,7 +882,31 @@ export const sshService = {
       rows,
       timeoutSecs,
       encoding,
+      termType,
     );
+    if (result.sessionId) aliveSessions.add(result.sessionId);
+    return result;
+  },
+
+  // ==================== 本地 Shell / ConPTY（P0-02） ====================
+  async listLocalShellProfiles(): Promise<LocalShellProfile[]> {
+    if (!backend) return [];
+    return backend.local.listProfiles();
+  },
+
+  async createLocalShell(
+    serverId: string,
+    options?: {
+      profileId?: string;
+      cwd?: string;
+      cols?: number;
+      rows?: number;
+      encoding?: string;
+      termType?: string;
+    },
+  ): Promise<CreateShellResult & { shellLabel?: string; shellPath?: string }> {
+    if (!backend) throw new Error(NOT_AVAILABLE);
+    const result = await backend.local.createShell(serverId, options);
     if (result.sessionId) aliveSessions.add(result.sessionId);
     return result;
   },
@@ -798,6 +953,7 @@ export const sshService = {
 
   async closeShell(sessionId: string): Promise<OperationResult> {
     aliveSessions.delete(sessionId);
+    useSessionTrafficStore.getState().clearSessionTraffic(sessionId);
     if (!backend) return { success: true };
     return backend.ssh.closeShell(sessionId);
   },
@@ -848,6 +1004,7 @@ export const sshService = {
     }
     if (tabActiveSessions.get(tabId) === sessionId) {
       tabActiveSessions.delete(tabId);
+      useSessionTrafficStore.getState().setTabActiveSession(tabId, undefined);
     }
   },
 
@@ -885,8 +1042,10 @@ export const sshService = {
   setTabActiveSession(tabId: string, sessionId?: string) {
     if (sessionId && aliveSessions.has(sessionId)) {
       tabActiveSessions.set(tabId, sessionId);
+      useSessionTrafficStore.getState().setTabActiveSession(tabId, sessionId);
     } else {
       tabActiveSessions.delete(tabId);
+      useSessionTrafficStore.getState().setTabActiveSession(tabId, undefined);
     }
   },
 
@@ -900,6 +1059,7 @@ export const sshService = {
   clearTabSessions(tabId: string) {
     tabSessions.delete(tabId);
     tabActiveSessions.delete(tabId);
+    useSessionTrafficStore.getState().setTabActiveSession(tabId, undefined);
   },
 
   /** 获取 Shell 历史输出（恢复终端内容） */
@@ -1258,6 +1418,17 @@ export const sshService = {
     return backend.files.readBinary(serverId, path);
   },
 
+  /** 分块读取远程文件原始字节（base64），支持大文件分页预览与二进制对比 */
+  async readFileChunk(
+    serverId: string,
+    path: string,
+    offset: number,
+    len: number,
+  ): Promise<FileChunkResult> {
+    if (!backend) throw new Error(NOT_AVAILABLE);
+    return backend.files.readFileChunk(serverId, path, offset, len);
+  },
+
   async writeFile(
     serverId: string,
     path: string,
@@ -1346,9 +1517,16 @@ export const sshService = {
     serverId: string,
     remotePath: string,
     format: string = "tar.gz",
+    transferId?: string,
   ): Promise<FileDownloadResult> {
     if (!backend) throw new Error(NOT_AVAILABLE);
-    return backend.files.downloadArchive(serverId, remotePath, format);
+    return backend.files.downloadArchive(serverId, remotePath, format, transferId);
+  },
+
+  getTransferProtocolForServer(
+    server?: { fileTransferConfig?: string | null } | null,
+  ): TransferProtocolKind {
+    return getTransferProtocolForServer(server);
   },
 
   async extractArchive(serverId: string | null, path: string, conflictAction?: "overwrite" | "keep") {
@@ -1631,6 +1809,7 @@ export const sshService = {
    */
   async setTransferRateLimit(kbps: number): Promise<void> {
     if (!backend) throw new Error(NOT_AVAILABLE);
+    if (typeof backend.files?.setTransferRateLimit !== "function") return;
     return backend.files.setTransferRateLimit(kbps);
   },
 
@@ -1641,9 +1820,30 @@ export const sshService = {
     enabled: boolean,
     patterns: string[],
     respectGitignore: boolean,
+    options?: ExclusionConfigOptions,
   ): Promise<void> {
-    if (!backend?.files) return;
-    return backend.files.setExclusionConfig(enabled, patterns, respectGitignore);
+    if (typeof backend?.files?.setExclusionConfig !== "function") return;
+    return backend.files.setExclusionConfig(
+      enabled,
+      patterns,
+      respectGitignore,
+      options,
+    );
+  },
+
+  async startExternalEdit(
+    serverId: string,
+    remotePath: string,
+    editorCmd?: string,
+    maxSizeBytes?: number | null,
+  ): Promise<ExternalEditSession> {
+    if (!backend) throw new Error(NOT_AVAILABLE);
+    return backend.files.startExternalEdit(
+      serverId,
+      remotePath,
+      editorCmd,
+      maxSizeBytes,
+    );
   },
 
   async setSymlinkPolicy(policy: "skip" | "follow"): Promise<void> {

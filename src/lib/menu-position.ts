@@ -96,3 +96,55 @@ export function computeDropdownVerticalPosition(
     : Math.max(PAD, triggerRect.top - panelH - gap)
   return { top, placeBelow }
 }
+
+/**
+ * 计算二级/嵌套悬停子菜单的纵向偏移量（相对于触发项容器 top）与最大可用高度：
+ * 当触发项靠近视口底部导致子菜单向下溢出时，自动向上收拢，确保不超出屏幕边界。
+ */
+export function computeSubmenuVerticalClamp(
+  triggerTop: number,
+  panelHeight: number,
+  padding = 6,
+  initialOffset = -4
+): { offsetTop: number; maxHeight: number } {
+  if (typeof window === 'undefined' || window.innerHeight <= 0) {
+    return { offsetTop: initialOffset, maxHeight: Math.max(120, panelHeight) }
+  }
+  const vh = window.innerHeight
+  const maxHeight = Math.max(120, vh - padding * 2)
+  const effectiveH = Math.min(panelHeight, maxHeight)
+  const clampedTop = Math.max(
+    padding,
+    Math.min(triggerTop + initialOffset, vh - effectiveH - padding)
+  )
+  return {
+    offsetTop: Math.round(clampedTop - triggerTop),
+    maxHeight,
+  }
+}
+
+/**
+ * 计算 Portal 固定定位下拉浮层的视口安全坐标与最大高度：
+ * 下方空间不足时自动翻转为向上展开，并结合视口边界限制 maxHeight 以免底部/顶部截断。
+ */
+export function computeFloatingPopoverPosition(
+  triggerRect: DOMRect,
+  panelW: number,
+  panelH: number,
+  padding = 8,
+  gap = 4
+): { left: number; top: number; placeBelow: boolean; maxHeight: number } {
+  const vw = typeof window !== 'undefined' ? window.innerWidth : 1000
+  const vh = typeof window !== 'undefined' ? window.innerHeight : 800
+  const left = Math.max(padding, Math.min(triggerRect.left, vw - panelW - padding))
+  const spaceBelow = Math.max(0, vh - triggerRect.bottom - gap - padding)
+  const spaceAbove = Math.max(0, triggerRect.top - gap - padding)
+  const placeBelow = spaceBelow >= panelH || spaceBelow >= spaceAbove
+  const availableH = placeBelow ? spaceBelow : spaceAbove
+  const maxHeight = Math.max(120, Math.min(panelH, availableH))
+  const effectiveH = Math.min(panelH, maxHeight)
+  const top = placeBelow
+    ? triggerRect.bottom + gap
+    : Math.max(padding, triggerRect.top - effectiveH - gap)
+  return { left, top, placeBelow, maxHeight }
+}

@@ -73,11 +73,12 @@ function AppContent() {
     return () => window.removeEventListener('open-settings' as any, handleOpenSettings)
   }, [openSettings])
 
-  // 应用锁配置弹窗状态（响应全局事件如 Ctrl+Alt+L 或标题栏设置）
+  // 应用锁配置弹窗状态（响应全局事件如 Ctrl+Alt+L、标题栏设置或终端锁首次引导）
   const [appLockSetupState, setAppLockSetupState] = useState<{
     open: boolean;
     mode: "setup" | "change" | "disable";
     lockImmediately: boolean;
+    onSuccess?: () => void;
   }>({
     open: false,
     mode: "setup",
@@ -89,11 +90,13 @@ function AppContent() {
       const customEvent = e as CustomEvent<{
         mode?: "setup" | "change" | "disable";
         lockImmediately?: boolean;
+        onSuccess?: () => void;
       }>;
       setAppLockSetupState({
         open: true,
         mode: customEvent.detail?.mode || "setup",
         lockImmediately: customEvent.detail?.lockImmediately ?? false,
+        onSuccess: customEvent.detail?.onSuccess,
       });
     };
     window.addEventListener("open-app-lock-setup", handleOpenSetup);
@@ -695,8 +698,9 @@ function AppContent() {
         open={appLockSetupState.open}
         mode={appLockSetupState.mode}
         lockImmediatelyOnSetup={appLockSetupState.lockImmediately}
+        onSuccess={appLockSetupState.onSuccess}
         onClose={() => {
-          setAppLockSetupState((s) => ({ ...s, open: false }))
+          setAppLockSetupState((s) => ({ ...s, open: false, onSuccess: undefined }))
           window.dispatchEvent(new CustomEvent('focus-active-terminal'))
         }}
       />

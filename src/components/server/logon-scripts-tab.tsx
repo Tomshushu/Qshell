@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import {
   Plus,
   Trash2,
@@ -34,7 +34,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useAppStore } from "@/store";
 import { cn } from "@/lib/utils";
-import type { SendExpectRule, LogonScriptsConfig } from "@/types";
+import type { SendExpectRule, LogonScriptsConfig, ScriptParam } from "@/types";
 
 interface LogonScriptsTabProps {
   config: LogonScriptsConfig;
@@ -87,6 +87,8 @@ export function LogonScriptsTab({
   } | null>(null);
 
   const globalLogonConfig = useAppStore((s) => s.globalLogonScriptsConfig);
+  const paramKeysRef = useRef<string[]>([]);
+  const paramKeySeqRef = useRef(0);
 
   const toggleShowSecret = (id: string) => {
     setShowSecrets((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -106,18 +108,31 @@ export function LogonScriptsTab({
     onChange({ ...config, inheritGlobal });
   };
 
+  const hasGlobalRules = (globalLogonConfig?.rules?.length ?? 0) > 0;
+  const hasGlobalParams = (globalLogonConfig?.parameters?.length ?? 0) > 0;
+
   const handleImportFromGlobal = () => {
-    if (!globalLogonConfig || !globalLogonConfig.rules || globalLogonConfig.rules.length === 0) {
+    if (!globalLogonConfig || (!hasGlobalRules && !hasGlobalParams)) {
       return;
     }
-    const cloned = globalLogonConfig.rules.map((r) => ({
+    const clonedRules = (globalLogonConfig.rules || []).map((r) => ({
       ...r,
       id: `rule-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
     }));
+    const existingParams = config.parameters || [];
+    const existingNames = new Set(existingParams.map((p) => p.name));
+    const importedParams: ScriptParam[] = [];
+    for (const p of globalLogonConfig.parameters || []) {
+      if (!p.name || existingNames.has(p.name)) continue;
+      existingNames.add(p.name);
+      importedParams.push({ ...p });
+    }
+    const nextParams = [...existingParams, ...importedParams];
     onChange({
       ...config,
       enabled: true,
-      rules: [...config.rules, ...cloned],
+      rules: [...config.rules, ...clonedRules],
+      ...(nextParams.length > 0 ? { parameters: nextParams } : {}),
     });
   };
 
@@ -188,6 +203,34 @@ export function LogonScriptsTab({
       customScript: currentCode + "\n\n" + snippet,
     });
     setSyntaxStatus(null);
+  };
+
+  const parameters = config.parameters || [];
+  while (paramKeysRef.current.length < parameters.length) {
+    paramKeysRef.current.push(`param-${++paramKeySeqRef.current}`);
+  }
+  if (paramKeysRef.current.length > parameters.length) {
+    paramKeysRef.current = paramKeysRef.current.slice(0, parameters.length);
+  }
+
+  const handleAddParam = () => {
+    paramKeysRef.current.push(`param-${++paramKeySeqRef.current}`);
+    const next: ScriptParam[] = [
+      ...parameters,
+      { name: `param${parameters.length + 1}`, label: "", defaultValue: "", secret: false, required: false },
+    ];
+    onChange({ ...config, parameters: next });
+  };
+
+  const handleUpdateParam = (idx: number, patch: Partial<ScriptParam>) => {
+    const next = parameters.map((p, i) => (i === idx ? { ...p, ...patch } : p));
+    onChange({ ...config, parameters: next });
+  };
+
+  const handleDeleteParam = (idx: number) => {
+    paramKeysRef.current.splice(idx, 1);
+    const next = parameters.filter((_, i) => i !== idx);
+    onChange({ ...config, parameters: next.length > 0 ? next : undefined });
   };
 
   return (
@@ -274,14 +317,14 @@ export function LogonScriptsTab({
                   <span>{tr("继承全局默认脚本", "Inherit Global Defaults")}</span>
                 </label>
 
-                {globalLogonConfig?.rules && globalLogonConfig.rules.length > 0 && (
+                {(hasGlobalRules || hasGlobalParams) && (
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
                     onClick={handleImportFromGlobal}
                     className="h-6 px-2 text-[11px] gap-1 cursor-pointer"
-                    title={tr("从全局默认脚本配置中复制规则到当前服务器", "Copy rules from global defaults")}
+                    title={tr("从全局默认脚本配置中复制规则与参数到当前服务器", "Copy rules and parameters from global defaults")}
                   >
                     <Download className="h-3 w-3" />
                     <span>{tr("导入全局规则", "Import Global")}</span>
@@ -817,6 +860,112 @@ export function LogonScriptsTab({
               </div>
             </fieldset>
           )}
+
+          {/* 显式脚本参数清单 (%P{name} / session.params) */}
+          <fieldset className="space-y-2 rounded-lg border border-border/70 p-3 bg-card/10">
+            <legend className="text-[11px] font-medium px-1.5 text-muted-foreground flex items-center justify-between w-full">
+              <span>{tr("脚本参数 (%P{name} / session.params)", "Script Parameters (%P{name} / session.params)")}</span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleAddParam}
+                className="h-6 px-2 text-[11px] gap-1 cursor-pointer"
+              >
+                <Plus className="h-3 w-3" />
+                <span>{tr("添加参数", "Add Param")}</span>
+              </Button>
+            </legend>
+
+            {parameters.length === 0 ? (
+              <p className="text-[11px] text-muted-foreground py-1">
+                {tr(
+                  "可选：声明可复用参数，在规则发送串中使用 %P{name} 或在脚本中读取 session.params.name",
+                  "Optional: declare parameters referenced via %P{name} or session.params.name"
+                )}
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {parameters.map((param, idx) => {
+                  const paramKey = paramKeysRef.current[idx] || `param-${idx}`;
+                  const isParamSecretVisible = Boolean(showSecrets[`param:${paramKey}`]);
+                  return (
+                    <div
+                      key={paramKey}
+                      className="flex flex-wrap sm:flex-nowrap gap-2 items-center rounded border border-border/50 bg-background/70 p-2"
+                    >
+                      <Input
+                        value={param.name}
+                        onChange={(e) => handleUpdateParam(idx, { name: e.target.value })}
+                        placeholder="name"
+                        className="flex-1 min-w-0 h-7 text-xs font-mono"
+                      />
+                      <Input
+                        value={param.label ?? ""}
+                        onChange={(e) => handleUpdateParam(idx, { label: e.target.value })}
+                        placeholder={tr("标签说明", "Label")}
+                        className="flex-1 min-w-0 h-7 text-xs"
+                      />
+                      <div className="relative flex-[1.2] min-w-0">
+                        <Input
+                          type={param.secret && !isParamSecretVisible ? "password" : "text"}
+                          value={param.defaultValue ?? ""}
+                          onChange={(e) => handleUpdateParam(idx, { defaultValue: e.target.value })}
+                          placeholder={tr("默认值", "Default value")}
+                          className={cn("h-7 text-xs font-mono", param.secret && "pr-7")}
+                        />
+                        {param.secret && (
+                          <button
+                            type="button"
+                            onClick={() => toggleShowSecret(`param:${paramKey}`)}
+                            className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
+                            title={isParamSecretVisible ? tr("隐藏", "Hide") : tr("显示", "Show")}
+                            aria-label={isParamSecretVisible ? tr("隐藏", "Hide") : tr("显示", "Show")}
+                          >
+                            {isParamSecretVisible ? (
+                              <EyeOff className="h-3.5 w-3.5" />
+                            ) : (
+                              <Eye className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                        )}
+                      </div>
+                      <div className="flex items-center justify-end gap-2 text-[11px] shrink-0">
+                        <label className="flex items-center gap-1 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(param.required)}
+                            onChange={(e) => handleUpdateParam(idx, { required: e.target.checked })}
+                            className="accent-primary h-3 w-3"
+                          />
+                          <span>{tr("必填", "Required")}</span>
+                        </label>
+                        <label className="flex items-center gap-1 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(param.secret)}
+                            onChange={(e) => handleUpdateParam(idx, { secret: e.target.checked })}
+                            className="accent-primary h-3 w-3"
+                          />
+                          <span>{tr("脱敏", "Secret")}</span>
+                        </label>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 text-destructive"
+                          onClick={() => handleDeleteParam(idx)}
+                          title={tr("删除", "Delete")}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </fieldset>
         </div>
       )}
     </div>

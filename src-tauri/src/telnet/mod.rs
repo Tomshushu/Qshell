@@ -125,13 +125,25 @@ struct IacParser {
     state: IacState,
     /// 待发回给对端的协商响应字节
     pending_response: Vec<u8>,
+    /// 本会话宣告的 TERMINAL-TYPE 字节（默认 `XTERM-256COLOR`）
+    terminal_type: Vec<u8>,
 }
 
 impl IacParser {
     fn new() -> Self {
+        Self::with_terminal_type_bytes(TERMINAL_TYPE.to_vec())
+    }
+
+    fn with_terminal_type(term_type: &str) -> Self {
+        let normalized = crate::session::normalize_term_type(Some(term_type)).to_ascii_uppercase();
+        Self::with_terminal_type_bytes(normalized.into_bytes())
+    }
+
+    fn with_terminal_type_bytes(terminal_type: Vec<u8>) -> Self {
         Self {
             state: IacState::Data,
             pending_response: Vec::new(),
+            terminal_type,
         }
     }
 
@@ -297,7 +309,7 @@ impl IacParser {
             if !data.is_empty() && data[0] == SUBCMD_TERMINAL_TYPE_SEND {
                 // 响应：SB TERMINAL-TYPE IS <type> IAC SE
                 let mut resp = vec![IAC, SB, OPT_TERMINAL_TYPE, SUBCMD_TERMINAL_TYPE_IS];
-                resp.extend_from_slice(TERMINAL_TYPE);
+                resp.extend_from_slice(&self.terminal_type);
                 resp.push(IAC);
                 resp.push(SE);
                 self.pending_response.extend(resp);
@@ -420,9 +432,16 @@ pub async fn telnet_create_shell(
     rows: u32,
     timeout_secs: u32,
     encoding: String,
+    term_type: Option<String>,
     login_username: Option<String>,
     login_password: Option<String>,
 ) -> Result<String, String> {
+    let resolved_term_type = term_type
+        .as_deref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| crate::session::normalize_term_type(Some(s)).to_ascii_uppercase())
+        .unwrap_or_else(|| String::from_utf8_lossy(TERMINAL_TYPE).to_string());
     let session_id = format!("telnet-{}", uuid::Uuid::new_v4());
     let sid = session_id.clone();
 
@@ -509,7 +528,12 @@ pub async fn telnet_create_shell(
             .unwrap_or_else(|_| TerminalCodec::utf8());
         let mut flush_interval = tokio::time::interval(Duration::from_millis(30));
         flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        let mut iac_parser = IacParser::new();
+        let mut iac_parser = IacParser::with_terminal_type(&resolved_term_type);
+        let mut rx_bytes_total: u64 = 0;
+        let mut tx_bytes_total: u64 = 0;
+        let mut last_emitted_rx: u64 = 0;
+        let mut last_emitted_tx: u64 = 0;
+        let mut last_traffic_emit = tokio::time::Instant::now();
         let mut prompt_buffer = String::new();
         let mut username_sent = false;
         let mut password_sent = false;
@@ -532,6 +556,7 @@ pub async fn telnet_create_shell(
                         Ok(_) => {
                             // 写入历史缓存（先复制一份，避免借用 buffer 跨越后续 await）
                             let data: Vec<u8> = buffer.clone();
+                            rx_bytes_total = rx_bytes_total.saturating_add(data.len() as u64);
                             {
                                 // poison 容错：task 内其他位置 panic 会毒化 mutex，
                                 // unwrap() 会级联 panic 跳过会话清理，改为取出内层数据继续
@@ -623,7 +648,9 @@ pub async fn telnet_create_shell(
                             }
                         };
                         match timeout(Duration::from_secs(10), writer.write_all(&escaped)).await {
-                            Ok(Ok(())) => {}
+                            Ok(Ok(())) => {
+                                tx_bytes_total = tx_bytes_total.saturating_add(escaped.len() as u64);
+                            }
                             Ok(Err(e)) => {
                                 #[cfg(debug_assertions)]
                                 eprintln!("[Telnet] {} write error: {}", sid, e);
@@ -661,6 +688,14 @@ pub async fn telnet_create_shell(
                 },
                 // 定时刷新缓冲区（保留以对齐 shell.rs 架构，Telnet 端读取后立即推送）
                 _ = flush_interval.tick() => {
+                    if last_traffic_emit.elapsed() >= Duration::from_millis(500) {
+                        if rx_bytes_total != last_emitted_rx || tx_bytes_total != last_emitted_tx {
+                            crate::session::emit_session_traffic(&app_clone, &sid, rx_bytes_total, tx_bytes_total);
+                            last_emitted_rx = rx_bytes_total;
+                            last_emitted_tx = tx_bytes_total;
+                        }
+                        last_traffic_emit = tokio::time::Instant::now();
+                    }
                     if cancel_for_task.load(Ordering::Relaxed) {
                         break;
                     }

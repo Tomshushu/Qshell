@@ -16,6 +16,20 @@ describe('connection diagnostics', () => {
     expect(buildConnectionDiagnosticReport(invalid, 'connection timed out').code).toBe('config')
   })
 
+  it('allows bound authProfileId servers without inline username or credentials', () => {
+    const profileBound: Server = {
+      ...server,
+      username: '',
+      password: '',
+      privateKeyPath: '',
+      certificatePath: '',
+      authType: 'privateKey',
+      authProfileId: 'profile-prod-root',
+    }
+    expect(validateConnectionConfiguration(profileBound)).toEqual([])
+    expect(buildConnectionDiagnosticReport(profileBound, 'connection timed out').code).not.toBe('config')
+  })
+
   it('classifies host key mismatches as a non-retryable security issue', () => {
     const report = buildConnectionDiagnosticReport(server, 'Host key has changed', SshErrorKind.HostKeyMismatch)
     expect(report.code).toBe('hostKey')

@@ -3,7 +3,6 @@ import {
   Folder,
   FolderOpen,
   ChevronDown,
-  ChevronRight,
   List,
   Grid2X2,
   LayoutGrid,
@@ -12,13 +11,9 @@ import {
   RefreshCw,
   FolderPlus,
   FilePlus,
-  Eye,
-  EyeOff,
   CheckSquare,
   ArrowRight,
   Trash2,
-  Link,
-  ArrowLeftRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -27,9 +22,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { GroupTreePicker } from "@/components/ui/group-tree-picker";
@@ -242,22 +234,27 @@ export function ViewModeDropdown({
   viewMode,
   onChange,
   t,
+  showLabel = false,
+  buttonClassName,
 }: {
   viewMode: SftpViewMode;
   onChange: (mode: SftpViewMode) => void;
   t: (key: string) => string;
+  showLabel?: boolean;
+  buttonClassName?: string;
 }) {
   const viewModeIcon = (mode: SftpViewMode) => {
+    const iconCls = showLabel ? "h-3.5 w-3.5" : "h-4 w-4";
     switch (mode) {
       case "large":
-        return <Grid2X2 className="h-4 w-4" />;
+        return <Grid2X2 className={iconCls} />;
       case "medium":
-        return <LayoutGrid className="h-4 w-4" />;
+        return <LayoutGrid className={iconCls} />;
       case "small":
-        return <Grid3X3 className="h-4 w-4" />;
+        return <Grid3X3 className={iconCls} />;
       case "list":
       default:
-        return <List className="h-4 w-4" />;
+        return <List className={iconCls} />;
     }
   };
 
@@ -266,12 +263,18 @@ export function ViewModeDropdown({
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
-          size="icon"
-          className="h-7 w-7 flex-shrink-0 text-muted-foreground hover:text-foreground"
+          size={showLabel ? "sm" : "icon"}
+          className={cn(
+            showLabel
+              ? "h-6 px-2 text-xs gap-1.5 text-muted-foreground hover:text-foreground"
+              : "h-7 w-7 flex-shrink-0 text-muted-foreground hover:text-foreground",
+            buttonClassName,
+          )}
           title={t("sftp_view_mode") || "View Mode"}
           aria-label={t("sftp_view_mode") || "View Mode"}
         >
           {viewModeIcon(viewMode)}
+          {showLabel && <span>{t("sftp_view_mode") || "View Mode"}</span>}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-44">
@@ -321,10 +324,6 @@ export function ViewModeDropdown({
 }
 
 export interface SftpActionsDropdownProps {
-  viewMode: SftpViewMode;
-  onViewModeChange: (mode: SftpViewMode) => void;
-  showHidden: boolean;
-  onToggleShowHidden: () => void;
   onRefresh: () => void;
   onNewFolder: () => void;
   onNewFile: () => void;
@@ -337,18 +336,9 @@ export interface SftpActionsDropdownProps {
   transferIcon?: ReactNode;
   loading?: boolean;
   t: (key: string) => string;
-  syncBrowsing?: boolean;
-  onToggleSyncBrowsing?: () => void;
-  compareActive?: boolean;
-  onToggleCompareActive?: () => void;
-  onOpenSyncWizard?: () => void;
 }
 
 export function SftpActionsDropdown({
-  viewMode,
-  onViewModeChange,
-  showHidden,
-  onToggleShowHidden,
   onRefresh,
   onNewFolder,
   onNewFile,
@@ -361,11 +351,6 @@ export function SftpActionsDropdown({
   transferIcon,
   loading = false,
   t,
-  syncBrowsing,
-  onToggleSyncBrowsing,
-  compareActive,
-  onToggleCompareActive,
-  onOpenSyncWizard,
 }: SftpActionsDropdownProps) {
   return (
     <DropdownMenu>
@@ -401,145 +386,6 @@ export function SftpActionsDropdown({
           <FilePlus className="mr-2 h-3.5 w-3.5 text-muted-foreground" />
           <span>{t("sftp_new_file") || "New File"}</span>
         </DropdownMenuItem>
-
-        <DropdownMenuSeparator />
-
-        {/* 视图模式子菜单 */}
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger className="text-xs cursor-pointer">
-            <LayoutGrid className="mr-2 h-3.5 w-3.5 text-muted-foreground" />
-            <span>{t("sftp_view_mode") || "View Mode"}</span>
-            <ChevronRight className="ml-auto h-3 w-3 text-muted-foreground" />
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent className="w-44">
-            <DropdownMenuItem
-              className="flex items-center justify-between text-xs cursor-pointer"
-              onClick={() => onViewModeChange("list")}
-            >
-              <div className="flex items-center gap-2">
-                <List className="h-3.5 w-3.5" />
-                <span>{t("sftp_view_list") || "Details (List)"}</span>
-              </div>
-              {viewMode === "list" && (
-                <Check className="h-3.5 w-3.5 text-primary" />
-              )}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              className="flex items-center justify-between text-xs cursor-pointer"
-              onClick={() => onViewModeChange("large")}
-            >
-              <div className="flex items-center gap-2">
-                <Grid2X2 className="h-3.5 w-3.5" />
-                <span>{t("sftp_view_large") || "Large Icons"}</span>
-              </div>
-              {viewMode === "large" && (
-                <Check className="h-3.5 w-3.5 text-primary" />
-              )}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              className="flex items-center justify-between text-xs cursor-pointer"
-              onClick={() => onViewModeChange("medium")}
-            >
-              <div className="flex items-center gap-2">
-                <LayoutGrid className="h-3.5 w-3.5" />
-                <span>{t("sftp_view_medium") || "Medium Icons"}</span>
-              </div>
-              {viewMode === "medium" && (
-                <Check className="h-3.5 w-3.5 text-primary" />
-              )}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              className="flex items-center justify-between text-xs cursor-pointer"
-              onClick={() => onViewModeChange("small")}
-            >
-              <div className="flex items-center gap-2">
-                <Grid3X3 className="h-3.5 w-3.5" />
-                <span>{t("sftp_view_small") || "Small Icons"}</span>
-              </div>
-              {viewMode === "small" && (
-                <Check className="h-3.5 w-3.5 text-primary" />
-              )}
-            </DropdownMenuItem>
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-
-        {/* 隐藏文件切换 */}
-        <DropdownMenuItem
-          onClick={onToggleShowHidden}
-          className="flex items-center justify-between text-xs cursor-pointer"
-        >
-          <div className="flex items-center gap-2">
-            {showHidden ? (
-              <Eye className="h-3.5 w-3.5 text-primary" />
-            ) : (
-              <EyeOff className="h-3.5 w-3.5 text-muted-foreground" />
-            )}
-            <span>
-              {showHidden
-                ? t("sftp_hide_hidden") || "Hide Hidden Files"
-                : t("sftp_show_hidden") || "Show Hidden Files"}
-            </span>
-          </div>
-          {showHidden && <Check className="h-3.5 w-3.5 text-primary" />}
-        </DropdownMenuItem>
-
-        {(onToggleSyncBrowsing || onToggleCompareActive) && (
-          <>
-            <DropdownMenuSeparator />
-            {onToggleSyncBrowsing && (
-              <DropdownMenuItem
-                onClick={onToggleSyncBrowsing}
-                title={
-                  syncBrowsing
-                    ? t("sftp_sync_browsing_on") || "Synchronized Browsing (Enabled)"
-                    : t("sftp_sync_browsing_off") || "Synchronized Browsing"
-                }
-                className="flex items-center justify-between text-xs cursor-pointer"
-              >
-                <div className="flex items-center gap-2">
-                  <Link
-                    className={cn(
-                      "h-3.5 w-3.5",
-                      syncBrowsing ? "text-primary" : "text-muted-foreground"
-                    )}
-                  />
-                  <span>{t("sftp_sync_browsing") || "Synchronized Browsing"}</span>
-                </div>
-                {syncBrowsing && <Check className="h-3.5 w-3.5 text-primary" />}
-              </DropdownMenuItem>
-            )}
-            {onToggleCompareActive && (
-              <DropdownMenuItem
-                onClick={onToggleCompareActive}
-                title={t("sftp_compare_directories") || "Compare Directories"}
-                className="flex items-center justify-between text-xs cursor-pointer"
-              >
-                <div className="flex items-center gap-2">
-                  <ArrowLeftRight
-                    className={cn(
-                      "h-3.5 w-3.5",
-                      compareActive ? "text-primary" : "text-muted-foreground"
-                    )}
-                  />
-                  <span>{t("sftp_compare_directories") || "Compare Directories"}</span>
-                </div>
-                {compareActive && <Check className="h-3.5 w-3.5 text-primary" />}
-              </DropdownMenuItem>
-            )}
-            {onOpenSyncWizard && (
-              <DropdownMenuItem
-                onClick={onOpenSyncWizard}
-                title={t("sftp_directory_sync_wizard") || "目录同步向导"}
-                className="flex items-center justify-between text-xs cursor-pointer"
-              >
-                <div className="flex items-center gap-2">
-                  <RefreshCw className="h-3.5 w-3.5 text-primary" />
-                  <span>{t("sftp_directory_sync_wizard") || "目录同步向导..."}</span>
-                </div>
-              </DropdownMenuItem>
-            )}
-          </>
-        )}
 
         <DropdownMenuSeparator />
 

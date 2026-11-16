@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { FileViewer } from '@open-file-viewer/react'
 import {
   imagePlugin,
@@ -19,10 +19,17 @@ import {
 import '@open-file-viewer/core/style.css'
 import pdfWorkerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import pdfLegacyWorkerSrc from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
+import { Binary, Eye } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { isLogFileName, TEXT_EXT_SET } from '@/components/workspace/modules/local-file-picker-utils'
+import {
+  BINARY_EXT_SET,
+  isLogFileName,
+  isUniversalPreviewSupported,
+  TEXT_EXT_SET,
+} from '@/components/workspace/modules/local-file-picker-utils'
 import { LogViewer } from '@/components/ui/log-viewer'
 import { ArchiveViewer } from '@/components/ui/archive-viewer'
+import { HexViewer } from '@/components/ui/hex-viewer'
 import { useAppStore } from '@/store'
 
 export interface UniversalFileViewerProps {
@@ -42,6 +49,14 @@ export interface UniversalFileViewerProps {
   onError?: (err: Error) => void
   /** 是否隐藏子预览器的标题与文件名（在外层弹窗已有标题时默认隐藏，消除重复），缺省为 true */
   hideTitle?: boolean
+  /** 初始预览模式：auto 根据文件类型/数据源自动决定，preview 常规预览，hex 十六进制视图 */
+  initialMode?: 'auto' | 'preview' | 'hex'
+  /** 分块加载模式总字节数（配合 onLoadRange 使用） */
+  totalSize?: number
+  /** 分块按需拉取字节范围回调（提供时直接启用 HexViewer 分块模式） */
+  onLoadRange?: (offset: number, len: number) => Promise<Uint8Array>
+  /** 是否隐藏顶部 预览 / Hex 切换栏 */
+  hideModeSwitcher?: boolean
 }
 
 /** 根据文件名推断 MIME 类型，帮助 Blob 解析 */
@@ -110,6 +125,10 @@ export function UniversalFileViewer({
   toolbar = true,
   onError,
   hideTitle = true,
+  initialMode = 'auto',
+  totalSize,
+  onLoadRange,
+  hideModeSwitcher = false,
 }: UniversalFileViewerProps) {
   // 暗黑/明亮主题精准同步：优先继承应用全局主题，确保工具栏与视口背景随系统或设置实时响应
   const appTheme = useAppStore((s) => s.theme)
@@ -133,6 +152,12 @@ export function UniversalFileViewer({
     return 0
   }, [data])
 
+  const hasChunkedSource =
+    typeof onLoadRange === 'function' &&
+    typeof totalSize === 'number' &&
+    Number.isFinite(totalSize) &&
+    totalSize >= 0
+
   // 智能多轨制：
   // 1. 运维日志（.log, .out, .err, syslog 等）自动使用自研虚拟化 LogViewer（默认滚至末尾）
   // 2. 超过 500KB 的非 log 纯文本/代码（如大 SQL、大 JSON、大 CSV、大 TXT）自动转入虚拟化 LogViewer（从顶部开始），彻底解除 open-file-viewer 585.9KB 截断限制
@@ -140,6 +165,61 @@ export function UniversalFileViewer({
   const ext = fileName.split('.').pop()?.toLowerCase() || ''
   const isText = isLog || TEXT_EXT_SET.has(ext)
   const shouldVirtualizeText = isLog || (isText && dataSize > 500 * 1024)
+  const isBinaryInput = data instanceof Uint8Array || data instanceof ArrayBuffer
+
+  const defaultMode: 'preview' | 'hex' = useMemo(() => {
+    if (hasChunkedSource) return 'hex'
+    if (initialMode === 'hex') return 'hex'
+    if (initialMode === 'preview') return 'preview'
+    if (!isText && !isUniversalPreviewSupported(fileName) && (isBinaryInput || BINARY_EXT_SET.has(ext))) {
+      return 'hex'
+    }
+    return 'preview'
+  }, [hasChunkedSource, initialMode, isText, fileName, isBinaryInput, ext])
+
+  const [modeOverride, setModeOverride] = useState<'preview' | 'hex' | null>(null)
+  useEffect(() => {
+    setModeOverride(null)
+  }, [fileName, initialMode, onLoadRange, totalSize])
+
+  const activeMode: 'preview' | 'hex' = hasChunkedSource
+    ? 'hex'
+    : (modeOverride ?? defaultMode)
+
+  // 仅在切换至 Hex 模式时按需编码字符串数据，避免常规预览产生额外内存拷贝
+  const hexDirectOrEncoded = useMemo<Uint8Array | ArrayBuffer | null>(() => {
+    if (activeMode !== 'hex' || hasChunkedSource || data === null || data === undefined) {
+      return null
+    }
+    if (data instanceof Uint8Array || data instanceof ArrayBuffer) return data
+    if (typeof data === 'string') return new TextEncoder().encode(data)
+    return null
+  }, [activeMode, hasChunkedSource, data])
+
+  const onErrorRef = useRef(onError)
+  onErrorRef.current = onError
+
+  const [blobHexBytes, setBlobHexBytes] = useState<Uint8Array | null>(null)
+  useEffect(() => {
+    if (activeMode !== 'hex' || hasChunkedSource || !(data instanceof Blob)) {
+      setBlobHexBytes(null)
+      return
+    }
+    let cancelled = false
+    data
+      .arrayBuffer()
+      .then((buf) => {
+        if (!cancelled) setBlobHexBytes(new Uint8Array(buf))
+      })
+      .catch((err) => {
+        if (!cancelled) onErrorRef.current?.(err instanceof Error ? err : new Error(String(err)))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [activeMode, hasChunkedSource, data])
+
+  const effectiveHexData = hexDirectOrEncoded ?? blobHexBytes
 
   // 构造标准插件列表（只初始化一次）
   const plugins = useMemo(() => [
@@ -207,35 +287,21 @@ export function UniversalFileViewer({
   }, [toolbar, isText, fileName])
 
   // 所有 Hook 严格在组件顶层无条件执行完毕，严禁在 return 之后调用任何 Hook
-  if (shouldVirtualizeText) {
+  if (hasChunkedSource) {
     return (
-      <LogViewer
-        data={data ?? null}
-        fileName={fileName}
-        fileSize={dataSize}
-        className={className}
-        initialScrollToBottom={isLog}
-        hideTitle={hideTitle}
-      />
+      <div className={cn('w-full h-full flex flex-col overflow-hidden bg-background', className)}>
+        <HexViewer
+          totalSize={totalSize}
+          onLoadRange={onLoadRange}
+          fileName={fileName}
+          className="flex-1 min-h-0"
+        />
+      </div>
     )
   }
 
-  // 360 压缩风格树状目录浏览：对 .zip, .jar, .war, .ear, .apk, .nupkg, .whl 归档包自动采用自研 ArchiveViewer
-  // 彻底告别原先 500 个平铺长路径截断（...）痛点，支持层级文件夹逐级展开/折叠、全包秒搜与联动预览
-  const isZip = /\.(?:zip|jar|war|ear|apk|nupkg|whl)$/i.test(fileName)
-  if (isZip) {
-    return (
-      <ArchiveViewer
-        data={data}
-        fileName={fileName}
-        className={className}
-        onError={onError}
-        hideTitle={hideTitle}
-      />
-    )
-  }
-
-  if (!fileSource) {
+  const hasData = data !== null && data !== undefined
+  if (!hasData) {
     return (
       <div className={cn('w-full h-full flex items-center justify-center text-muted-foreground text-sm', className)}>
         暂无可预览的文件数据
@@ -243,19 +309,121 @@ export function UniversalFileViewer({
     )
   }
 
+  const showSwitcher = !hideModeSwitcher
+  const isZip = /\.(?:zip|jar|war|ear|apk|nupkg|whl)$/i.test(fileName)
+
+  const renderPreviewBody = () => {
+    if (shouldVirtualizeText) {
+      return (
+        <LogViewer
+          data={data ?? null}
+          fileName={fileName}
+          fileSize={dataSize}
+          className="flex-1 min-h-0 h-full"
+          initialScrollToBottom={isLog}
+          hideTitle={hideTitle}
+        />
+      )
+    }
+
+    // 360 压缩风格树状目录浏览：对 .zip, .jar, .war, .ear, .apk, .nupkg, .whl 归档包自动采用自研 ArchiveViewer
+    // 彻底告别原先 500 个平铺长路径截断（...）痛点，支持层级文件夹逐级展开/折叠、全包秒搜与联动预览
+    if (isZip) {
+      return (
+        <ArchiveViewer
+          data={data}
+          fileName={fileName}
+          className="flex-1 min-h-0 h-full"
+          onError={onError}
+          hideTitle={hideTitle}
+        />
+      )
+    }
+
+    if (!fileSource) {
+      return (
+        <div className="w-full h-full flex items-center justify-center text-muted-foreground text-sm">
+          暂无可预览的文件数据
+        </div>
+      )
+    }
+
+    return (
+      <div className="flex-1 min-h-0 w-full relative overflow-hidden bg-background">
+        <FileViewer
+          file={fileSource}
+          fileName={viewerFileName}
+          plugins={plugins}
+          width="100%"
+          height="100%"
+          fit={fit}
+          toolbar={effectiveToolbar}
+          theme={resolvedTheme}
+          onError={onError}
+        />
+      </div>
+    )
+  }
+
   return (
-    <div className={cn('w-full h-full relative overflow-hidden bg-background', className)}>
-      <FileViewer
-        file={fileSource}
-        fileName={viewerFileName}
-        plugins={plugins}
-        width="100%"
-        height="100%"
-        fit={fit}
-        toolbar={effectiveToolbar}
-        theme={resolvedTheme}
-        onError={onError}
-      />
+    <div className={cn('w-full h-full flex flex-col overflow-hidden bg-background', className)}>
+      {showSwitcher && (
+        <div className="flex items-center justify-between gap-2 border-b border-border/60 bg-muted/20 px-3 py-1.5 shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            {!hideTitle && (
+              <span className="text-xs font-medium text-foreground truncate" title={fileName}>
+                {fileName}
+              </span>
+            )}
+          </div>
+          <div
+            className="inline-flex items-center rounded-md border border-border/60 bg-background p-0.5 shrink-0"
+            role="group"
+            aria-label="预览模式切换"
+          >
+            <button
+              type="button"
+              onClick={() => setModeOverride('preview')}
+              aria-pressed={activeMode === 'preview'}
+              className={cn(
+                'inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium transition-colors cursor-pointer',
+                activeMode === 'preview'
+                  ? 'bg-primary text-primary-foreground shadow-2xs'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <Eye className="h-3 w-3" />
+              <span>预览</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setModeOverride('hex')}
+              aria-pressed={activeMode === 'hex'}
+              className={cn(
+                'inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium transition-colors cursor-pointer',
+                activeMode === 'hex'
+                  ? 'bg-primary text-primary-foreground shadow-2xs'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <Binary className="h-3 w-3" />
+              <span>Hex</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+        {activeMode === 'hex' ? (
+          <HexViewer
+            data={effectiveHexData}
+            fileName={fileName}
+            className="flex-1 min-h-0 border-0 rounded-none"
+          />
+        ) : (
+          renderPreviewBody()
+        )}
+      </div>
     </div>
   )
 }

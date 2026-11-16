@@ -16,6 +16,7 @@ import { useTranslation } from "@/i18n";
 import { verifyAppLockPassword, patternToKey } from "@/lib/app-lock";
 import { PatternLock } from "@/components/ui/pattern-lock";
 import { playSound, SoundType } from "@/lib/sound";
+import { useTerminalLockStore } from "@/store/terminal-lock-store";
 
 export function AppLockOverlay() {
   const { t } = useTranslation();
@@ -185,6 +186,7 @@ export function AppLockOverlay() {
     playSound(SoundType.Click);
     // 强制掐断并销毁所有 SSH/SFTP 活跃会话与标签页（含被锁定的 tab）
     closeAllTabs(true);
+    useTerminalLockStore.getState().reset();
     // 清空应用锁设置与密码哈希
     setAppLock(false, null, "password");
     // 解除界面锁定状态

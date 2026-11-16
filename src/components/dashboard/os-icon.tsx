@@ -1,4 +1,4 @@
-import { Router, Cpu, Cable, Server, Boxes } from 'lucide-react'
+import { Router, Cpu, Cable, Server, Boxes, Terminal } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export interface OsIconProps {
@@ -56,6 +56,15 @@ export function OsIcon({ osType, osInfo, targetType, className }: OsIconProps) {
     return (
       <div className={cn(className, "flex items-center justify-center bg-emerald-600/20 text-emerald-500 rounded-lg")}>
         <Cable className="h-3/5 w-3/5" />
+      </div>
+    )
+  }
+
+  // 3b. 本地终端 (Local Shell)
+  if (tt === 'local' || os === 'local') {
+    return (
+      <div className={cn(className, "flex items-center justify-center bg-emerald-600/15 text-emerald-500 rounded-lg")}>
+        <Terminal className="h-3/5 w-3/5" />
       </div>
     )
   }

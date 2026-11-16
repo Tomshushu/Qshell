@@ -23,6 +23,7 @@ import { translate } from '@/i18n'
 import type { Server, ServerGroup, LogBookmark } from '@/types'
 import type {
   SshKey,
+  AuthProfile,
   TagRow,
   KnownHostRecord,
   FavoriteCommand,
@@ -59,6 +60,7 @@ export const AUTO_SYNC_STORAGE_KEY = 'qshell_sync_auto_sync'
 export interface RestoreStats {
   servers: number
   groups: number
+  authProfiles?: number
   sshKeys?: number
   tags?: number
   favCmds?: number
@@ -75,6 +77,7 @@ export interface SyncPayload {
   timestamp: string
   servers: Server[]
   groups: ServerGroup[]
+  authProfiles?: AuthProfile[]
   sshKeys?: SshKey[]
   preferences?: Record<string, unknown>
   favorites?: unknown[]
@@ -218,6 +221,7 @@ function computeConfigFingerprint(
   servers: any[],
   groups: any[],
   keys: any[],
+  authProfiles: any[] = [],
 ): string {
   const normServers = (servers || [])
     .map((s) => ({
@@ -227,6 +231,8 @@ function computeConfigFingerprint(
       port: s.port,
       username: s.username,
       groupId: s.groupId || '',
+      authProfileId: s.authProfileId || '',
+      terminalType: s.terminalType || '',
       tags: typeof s.tags === 'string' ? s.tags : JSON.stringify(s.tags || []),
     }))
     .sort((a, b) => a.id.localeCompare(b.id))
@@ -239,7 +245,25 @@ function computeConfigFingerprint(
     .map((k) => ({ id: k.id, name: k.name, keyType: k.keyType }))
     .sort((a, b) => a.id.localeCompare(b.id))
 
-  return JSON.stringify({ s: normServers, g: normGroups, k: normKeys })
+  const normProfiles = (authProfiles || [])
+    .map((p) => ({
+      id: p.id,
+      name: p.name,
+      username: p.username || '',
+      authType: p.authType || 'password',
+      password: p.password || '',
+      sshKeyId: p.sshKeyId || '',
+      privateKeyPath: p.privateKeyPath || '',
+      privateKeyPassphrase: p.privateKeyPassphrase || '',
+      certificatePath: p.certificatePath || '',
+      agentIdentity: p.agentIdentity || '',
+      forwardAgent: Boolean(p.forwardAgent),
+      notes: p.notes || '',
+      updatedAt: p.updatedAt || '',
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id))
+
+  return JSON.stringify({ s: normServers, g: normGroups, k: normKeys, ap: normProfiles })
 }
 
 export const useSyncStore = create<SyncState>((set, get) => ({
@@ -513,13 +537,15 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       const localServers = await sshService.listServersForSync()
       const localGroups = await sshService.listGroups()
       const localKeys = await sshService.listKeysForSync()
+      const localAuthProfiles = (await sshService.listAuthProfilesForSync?.()) ?? []
 
       const cloudFp = computeConfigFingerprint(
         cloudPayload.servers || [],
         cloudPayload.groups || [],
         cloudPayload.sshKeys || [],
+        cloudPayload.authProfiles || [],
       )
-      const localFp = computeConfigFingerprint(localServers, localGroups, localKeys)
+      const localFp = computeConfigFingerprint(localServers, localGroups, localKeys, localAuthProfiles)
 
       // 3. 若配置指纹完全一致，说明本地与云端已保持同步，无需产生任何云端提交与同步读写
       if (cloudFp === localFp) {
@@ -557,10 +583,11 @@ export const useSyncStore = create<SyncState>((set, get) => ({
     set({ isSyncing: true, lastSyncResult: null })
 
     try {
-      // 1. 提取全量服务器、分组与 SSH 密钥
+      // 1. 提取全量服务器、分组、全局身份凭证与 SSH 密钥
       let servers: Server[] = []
       let groups: ServerGroup[] = []
       let sshKeys: SshKey[] = []
+      let authProfiles: AuthProfile[] = []
       try {
         servers = await sshService.listServersForSync()
         groups = await sshService.listGroups()
@@ -568,6 +595,11 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       } catch {
         servers = useAppStore.getState().servers || []
         sshKeys = useAppStore.getState().keys || []
+      }
+      try {
+        authProfiles = (await sshService.listAuthProfilesForSync?.()) ?? []
+      } catch {
+        authProfiles = []
       }
 
       // 若用户关闭了密码同步，剥离敏感密码与口令
@@ -582,6 +614,11 @@ export const useSyncStore = create<SyncState>((set, get) => ({
           privateKeyContent: '',
           privateKeyPassphrase: '',
           certificateContent: '',
+        }))
+        authProfiles = authProfiles.map((p) => ({
+          ...p,
+          password: '',
+          privateKeyPassphrase: '',
         }))
       }
 
@@ -677,6 +714,8 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         terminalWindowSizeKb: appState.terminalWindowSizeKb,
         terminalRecordingDirectory: appState.terminalRecordingDirectory,
         terminalEncoding: appState.terminalEncoding,
+        terminalType: appState.terminalType,
+        terminalBracketedPaste: appState.terminalBracketedPaste,
         terminalRecordingMaxSizeMb: appState.terminalRecordingMaxSizeMb,
         sftpDefaultViewMode: appState.sftpDefaultViewMode,
         sftpLocalViewMode: appState.sftpLocalViewMode,
@@ -779,6 +818,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         timestamp: new Date().toISOString(),
         servers,
         groups,
+        authProfiles,
         sshKeys,
         tags,
         knownHosts,
@@ -1001,6 +1041,56 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         }
       }
 
+      // 3.55 还原全局身份凭证到本地 SQLite（必须在还原服务器之前，避免 authProfileId 悬空）
+      let restoredAuthProfilesCount = 0
+      if (Array.isArray(payload.authProfiles) && payload.authProfiles.length > 0 && sshService.listAuthProfiles) {
+        try {
+          const existingProfiles = await sshService.listAuthProfiles()
+          const existingProfileMap = new Map(existingProfiles.map((p) => [p.id, p]))
+          for (const p of payload.authProfiles) {
+            const sanitizeSecret = (val?: string) => (val && val !== '•••••' ? val : undefined)
+            const passwordVal = sanitizeSecret(p.password)
+            const passphraseVal = sanitizeSecret(p.privateKeyPassphrase)
+            if (existingProfileMap.has(p.id)) {
+              await sshService.updateAuthProfile(p.id, {
+                name: p.name,
+                username: p.username,
+                authType: p.authType,
+                ...(passwordVal !== undefined ? { password: passwordVal } : {}),
+                sshKeyId: p.sshKeyId ?? '',
+                privateKeyPath: p.privateKeyPath ?? '',
+                ...(passphraseVal !== undefined ? { privateKeyPassphrase: passphraseVal } : {}),
+                agentIdentity: p.agentIdentity ?? '',
+                certificatePath: p.certificatePath ?? '',
+                forwardAgent: p.forwardAgent,
+                notes: p.notes ?? '',
+              })
+            } else {
+              await sshService.addAuthProfile({
+                id: p.id,
+                name: p.name,
+                username: p.username,
+                authType: p.authType,
+                password: passwordVal,
+                sshKeyId: p.sshKeyId,
+                privateKeyPath: p.privateKeyPath,
+                privateKeyPassphrase: passphraseVal,
+                agentIdentity: p.agentIdentity,
+                certificatePath: p.certificatePath,
+                forwardAgent: p.forwardAgent,
+                notes: p.notes,
+              })
+            }
+            restoredAuthProfilesCount++
+          }
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('qshell:auth-profiles-changed'))
+          }
+        } catch (err) {
+          console.warn('[Sync] Failed to restore auth profiles:', err)
+        }
+      }
+
       // 4. 还原服务器到本地 SQLite
       let importedCount = 0
       try {
@@ -1087,6 +1177,8 @@ export const useSyncStore = create<SyncState>((set, get) => ({
           terminalWindowSizeKb: (prefs.terminalWindowSizeKb as number) ?? prev.terminalWindowSizeKb,
           terminalRecordingDirectory: (prefs.terminalRecordingDirectory as string) ?? prev.terminalRecordingDirectory,
           terminalEncoding: (prefs.terminalEncoding as string) ?? prev.terminalEncoding,
+          terminalType: (prefs.terminalType as string) ?? prev.terminalType,
+          terminalBracketedPaste: (prefs.terminalBracketedPaste as boolean) ?? prev.terminalBracketedPaste,
           terminalRecordingMaxSizeMb: (prefs.terminalRecordingMaxSizeMb as number) ?? prev.terminalRecordingMaxSizeMb,
           sftpDefaultViewMode: (prefs.sftpDefaultViewMode as typeof prev.sftpDefaultViewMode) ?? prev.sftpDefaultViewMode,
           sftpLocalViewMode: (prefs.sftpLocalViewMode as typeof prev.sftpLocalViewMode) ?? prev.sftpLocalViewMode,
@@ -1247,6 +1339,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
           servers: importedCount,
           pathBookmarks: restoredPathBookmarksCount,
           groups: restoredGroupsCount,
+          authProfiles: restoredAuthProfilesCount,
           sshKeys: restoredKeysCount,
           tags: restoredTagsCount,
           knownHosts: restoredKnownHostsCount,

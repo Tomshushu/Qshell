@@ -21,6 +21,7 @@ import type {
   ServiceResourceRawMap,
   ProcessInfo,
   PortInfo,
+  X11EnvironmentProbe,
   DockerContainer,
   FileEntry,
   NetOverview,
@@ -61,6 +62,70 @@ import type {
   SshStateResult,
   ConnectionStateData,
 } from "@/services/ssh-connection-state";
+
+/** SSH 键盘交互式认证（RFC 4256 / 2FA / OTP）单项提示 */
+export interface AuthInteractionPrompt {
+  prompt: string;
+  echo: boolean;
+}
+
+/** SSH 键盘交互式认证事件载荷 */
+export interface AuthInteractionRequest {
+  requestId: string;
+  serverId: string;
+  generation: number;
+  title: string;
+  instructions: string;
+  prompts: AuthInteractionPrompt[];
+  timeoutSecs: number;
+}
+
+/** 批量编辑服务器请求体（`servers_batch_update`） */
+export interface ServerBatchPatch {
+  groupId?: string;
+  tagsMode?: "add" | "remove" | "replace";
+  tags?: string[];
+  connectionTimeout?: number;
+  forwardAgent?: boolean;
+  x11Forwarding?: boolean;
+  authProfileId?: string;
+  terminalType?: string;
+}
+
+/** 全局身份凭证（Auth Profile），可被多台服务器复用（P1-11） */
+export interface AuthProfile {
+  id: string;
+  name: string;
+  username: string;
+  authType: "password" | "privateKey" | "sshAgent" | "certificate" | "keyboardInteractive";
+  password?: string;
+  sshKeyId?: string;
+  privateKeyPath?: string;
+  privateKeyPassphrase?: string;
+  agentIdentity?: string;
+  certificatePath?: string;
+  forwardAgent: boolean;
+  notes?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AuthProfileInput {
+  id?: string;
+  name: string;
+  username?: string;
+  authType?: AuthProfile["authType"];
+  password?: string;
+  sshKeyId?: string;
+  privateKeyPath?: string;
+  privateKeyPassphrase?: string;
+  agentIdentity?: string;
+  certificatePath?: string;
+  forwardAgent?: boolean;
+  notes?: string;
+}
+
+export type AuthProfileUpdate = Partial<Omit<AuthProfileInput, "id">>;
 
 // ==================== 通用结果类型 ====================
 
@@ -181,6 +246,25 @@ export interface FileStatInfo {
   links: number;
   isSymlink: boolean;
   symlinkTarget?: string;
+}
+
+/** 分块读取文件结果（用于 P2-24 HexViewer 与大文件二进制对比） */
+export interface FileChunkResult {
+  dataBase64: string;
+  offset: number;
+  bytesRead: number;
+  totalSize: number;
+  eof: boolean;
+}
+
+/** SFTP 传输过滤/排除高级选项 */
+export interface ExclusionConfigOptions {
+  includePatterns?: string[];
+  minSizeBytes?: number | null;
+  maxSizeBytes?: number | null;
+  minMtimeMs?: number | null;
+  maxMtimeMs?: number | null;
+  fileKinds?: string[];
 }
 
 /** FTP / FTPS 连接测试参数 */
@@ -736,7 +820,7 @@ export interface TestConnectConfig {
   username: string;
   /** 编辑场景下传入以回填原凭据 */
   id?: string;
-  authType: "password" | "privateKey" | "sshAgent" | "certificate";
+  authType: "password" | "privateKey" | "sshAgent" | "certificate" | "keyboardInteractive";
   password?: string;
   privateKeyPath?: string;
   /** 私钥解密密码（passphrase），用于解密受密码保护的私钥文件 */
@@ -747,6 +831,8 @@ export interface TestConnectConfig {
   certificatePath?: string;
   /** 关联的全局密钥 ID；测试连接与正式连接保持同一 content-based 路线 */
   sshKeyId?: string;
+  /** 关联的全局身份凭证 ID */
+  authProfileId?: string;
   connectionTimeout?: number;
   /** 连接目标类型，缺省 linux */
   targetType?: string;
@@ -926,6 +1012,8 @@ export interface BackendAdapter {
     purgeBatch: (ids: string[]) => Promise<OperationResult>;
     /** 回收站：批量移入回收站 */
     deleteBatch: (ids: string[]) => Promise<OperationResult>;
+    /** 批量原子编辑多台服务器公共属性（分组/标签/超时/Agent转发/身份凭证） */
+    batchUpdate: (ids: string[], patch: ServerBatchPatch) => Promise<OperationResult>;
     /** 回收站：清理超过 retentionDays 天的待删除项，返回清理条数 */
     cleanupTrash: (retentionDays: number) => Promise<number>;
     /**
@@ -1018,6 +1106,15 @@ export interface BackendAdapter {
     onStateChanged: (
       callback: (data: ConnectionStateData) => void,
     ) => () => void;
+    /** 提交键盘交互式认证（OTP / MFA）响应；responses 为 null 表示用户取消 */
+    submitAuthInteraction: (
+      requestId: string,
+      responses: string[] | null,
+    ) => Promise<boolean>;
+    /** 订阅后端推送的键盘交互式认证挑战事件 */
+    onAuthInteractionRequired: (
+      callback: (data: AuthInteractionRequest) => void,
+    ) => () => void;
     /** 订阅服务器探测进度事件（每完成一台探测推送一次） */
     onProbeProgress: (
       callback: (data: ServerProbeProgress) => void,
@@ -1031,6 +1128,8 @@ export interface BackendAdapter {
       rows: number,
       /** shell 编码，缺省 utf-8（部分网络设备需 GBK 等） */
       encoding?: string,
+      /** 终端类型（TERM，如 xterm-256color / vt100） */
+      termType?: string,
     ) => Promise<CreateShellResult>;
     writeToShell: (sessionId: string, data: string) => Promise<void>;
     interruptShell: (sessionId: string) => Promise<number>;
@@ -1098,6 +1197,10 @@ export interface BackendAdapter {
       /** 列出 SSH Agent 中已加载的所有身份（公钥 + 指纹） */
       listAgentIdentities: () => Promise<SshAgentIdentity[]>;
     };
+    /** 探测本地 X11 Display / X Server 与离线 addons 环境 */
+    probeX11Environment?: () => Promise<X11EnvironmentProbe>;
+    /** 离线导入 X Server 插件包（.zip 或可执行文件）到 $APP_DATA/addons/xserver */
+    importX11Addon?: (archivePath: string) => Promise<X11EnvironmentProbe>;
   };
 
   // ==================== SSH 密钥库（持久化 + 加密存储） ====================
@@ -1124,6 +1227,15 @@ export interface BackendAdapter {
      * 但统一走后端 invoke 便于未来扩展（如大小限制、格式校验）。
      */
     readFileContent: (path: string) => Promise<string>;
+  };
+
+  // ==================== 全局身份凭证（跨主机复用，P1-11） ====================
+  authProfiles: {
+    list: () => Promise<AuthProfile[]>;
+    listForSync: () => Promise<AuthProfile[]>;
+    add: (input: AuthProfileInput) => Promise<OperationResult>;
+    update: (id: string, updates: AuthProfileUpdate) => Promise<OperationResult>;
+    delete: (id: string) => Promise<OperationResult>;
   };
 
   // ==================== 标签目录（独立存储，不依赖服务器） ====================
@@ -1286,6 +1398,13 @@ export interface BackendAdapter {
     read: (serverId: string, path: string) => Promise<CommandResult>;
     /** 读取文件原始字节，返回 base64（不带 ::base64:: 前缀），用于二进制预览/编码兜底重读 */
     readBinary: (serverId: string, path: string) => Promise<string>;
+    /** 分块读取远程文件原始字节（base64），支持大文件按需分页预览与对比 */
+    readFileChunk: (
+      serverId: string,
+      path: string,
+      offset: number,
+      len: number,
+    ) => Promise<FileChunkResult>;
     write: (
       serverId: string,
       path: string,
@@ -1317,6 +1436,7 @@ export interface BackendAdapter {
       serverId: string,
       remotePath: string,
       format: string,
+      transferId?: string,
     ) => Promise<FileDownloadResult>;
     extractArchive: (serverId: string | null, path: string, conflictAction?: "overwrite" | "keep") => Promise<OperationResult>;
     installExtractionTool: (serverId: string | null, path: string) => Promise<OperationResult>;
@@ -1396,6 +1516,7 @@ export interface BackendAdapter {
       enabled: boolean,
       patterns: string[],
       respectGitignore: boolean,
+      options?: ExclusionConfigOptions,
     ) => Promise<void>;
     /**
      * 设置 SFTP 传输符号链接（软链接）处理策略
@@ -1469,6 +1590,12 @@ export interface BackendAdapter {
      */
     diagnoseSftp: (serverId: string) => Promise<SftpDiagnostics>;
     /**
+     * 查询当前生效的远程文件系统后端（含 SFTP -> SCP 自动降级状态）
+     */
+    getBackendCapabilities: (
+      serverId: string,
+    ) => Promise<import("@/types").RemoteFsCapabilities>;
+    /**
      * 递归扫描本地或远程目录树，返回所有文件与子目录的相对路径元数据清单
      */
     scanDirectoryTree: (
@@ -1484,6 +1611,7 @@ export interface BackendAdapter {
       serverId: string,
       remotePath: string,
       editorCmd?: string,
+      maxSizeBytes?: number | null,
     ) => Promise<ExternalEditSession>;
     /**
      * 停止指定的外部编辑器监听并清理本地缓存
@@ -1788,6 +1916,8 @@ export interface BackendAdapter {
       fullscreen?: boolean;
       /** 颜色深度 16/24/32，默认 32 */
       colorDepth?: number;
+      /** RDP 高级重定向与安全参数 */
+      options?: import("@/types").RdpAdvancedOptions;
     }) => Promise<OperationResult>;
   };
 
@@ -1894,7 +2024,24 @@ export interface BackendAdapter {
       rows: number,
       timeoutSecs?: number,
       encoding?: string,
+      termType?: string,
     ) => Promise<CreateShellResult>;
+  };
+
+  // ==================== 本地 Shell / ConPTY（P0-02） ====================
+  local: {
+    listProfiles: () => Promise<import('@/types').LocalShellProfile[]>;
+    createShell: (
+      serverId: string,
+      options?: {
+        profileId?: string;
+        cwd?: string;
+        cols?: number;
+        rows?: number;
+        encoding?: string;
+        termType?: string;
+      },
+    ) => Promise<CreateShellResult & { shellLabel?: string; shellPath?: string }>;
   };
 
   // ==================== 串口 Serial / COM 协议（Xshell 级功能） ====================

@@ -9,6 +9,7 @@ import {
   type Session,
 } from '@/lib/supabase'
 import { isTauri } from '@/services/api'
+import { useTransferQueueStore } from '@/store/transfer-queue-store'
 
 export interface AuthState {
   user: User | null
@@ -387,18 +388,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   signOut: async () => {
     const client = getSupabaseClient()
     if (!client) {
+      useTransferQueueStore.getState().clearAll()
       set({ user: null, session: null })
       return {}
     }
     set({ isLoading: true })
     try {
       const { error } = await client.auth.signOut()
+      useTransferQueueStore.getState().clearAll()
       set({ user: null, session: null, isLoading: false })
       if (error) {
         return { error: formatAuthError(error) }
       }
       return {}
     } catch (err) {
+      useTransferQueueStore.getState().clearAll()
       set({ user: null, session: null, isLoading: false })
       return { error: formatAuthError(err) }
     }

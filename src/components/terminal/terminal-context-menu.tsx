@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useCallback, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
   Copy,
   Clipboard,
@@ -16,10 +16,17 @@ import {
   Zap,
   PenSquare,
   Braces,
+  Upload,
+  Download,
+  FolderOpen,
+  FolderUp,
+  ExternalLink,
+  Shield,
+  SlidersHorizontal,
 } from "lucide-react";
 import { useAppStore } from "@/store";
 import { cn } from "@/lib/utils";
-import { clampMenuToViewport } from "@/lib/menu-position";
+import { clampMenuToViewport, computeSubmenuVerticalClamp } from "@/lib/menu-position";
 import { useTranslation } from "@/i18n";
 import type { ContextMenuState } from "./terminal-types";
 
@@ -36,7 +43,18 @@ export interface TerminalContextMenuProps {
   onClearScreen: () => void;
   onClearScrollback: () => void;
   onClearAll: () => void;
+  /** 局部终端锁（仅锁定当前终端窗格，不影响其他标签或后台会话） */
+  onLockTerminal?: () => void;
+  /** 全局应用锁（锁定整个 Qshell 界面） */
   onLockSession?: () => void;
+  /** 传输与文件能力开关及回调（SSH 会话展示，串口/Local 自动隐藏） */
+  canTransferFiles?: boolean;
+  onUploadFiles?: () => void;
+  onUploadFolder?: () => void;
+  onOpenSftp?: () => void;
+  onOpenSftpTab?: () => void;
+  onSendZmodem?: () => void;
+  onReceiveZmodem?: () => void;
   onExportPlainLog?: () => void;
   onExportTimestampedLog?: () => void;
   showTimestamps?: boolean;
@@ -57,6 +75,88 @@ export interface TerminalContextMenuProps {
   isSplitPane?: boolean;
 }
 
+const SUBMENU_VIEWPORT_PAD = 6;
+
+interface TerminalSubmenuProps {
+  trigger: ReactNode;
+  panelMinWidthClass: string;
+  estimatedHeight: number;
+  isSubmenuLeft: boolean;
+  isLightTerminal: boolean;
+  children: ReactNode;
+}
+
+/**
+ * 二级悬停子菜单容器：
+ * 根据触发项屏幕 Y 坐标与子菜单真实高度自适应向上收拢，防止底部展开时被视口截断；
+ * 外层使用 pl-1/pr-1 充当无死区悬停桥接，避免跨缝隙闪烁。
+ */
+function TerminalSubmenu({
+  trigger,
+  panelMinWidthClass,
+  estimatedHeight,
+  isSubmenuLeft,
+  isLightTerminal,
+  children,
+}: TerminalSubmenuProps) {
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [offsetTop, setOffsetTop] = useState(-4);
+  const [maxHeight, setMaxHeight] = useState<number | undefined>(undefined);
+
+  const reposition = useCallback(() => {
+    const el = triggerRef.current;
+    if (!el || typeof window === "undefined" || window.innerHeight <= 0) return;
+    const rect = el.getBoundingClientRect();
+    const clamped = computeSubmenuVerticalClamp(
+      rect.top,
+      panelRef.current?.offsetHeight || estimatedHeight,
+      SUBMENU_VIEWPORT_PAD,
+      -4,
+    );
+    setOffsetTop((prev) => (prev === clamped.offsetTop ? prev : clamped.offsetTop));
+    setMaxHeight((prev) => (prev === clamped.maxHeight ? prev : clamped.maxHeight));
+  }, [estimatedHeight]);
+
+  useLayoutEffect(() => {
+    reposition();
+  }, [reposition]);
+
+  return (
+    <div
+      ref={triggerRef}
+      className="relative group"
+      onMouseEnter={reposition}
+      onFocus={reposition}
+    >
+      {trigger}
+      <div
+        data-testid="terminal-submenu-wrapper"
+        className={cn(
+          "hidden group-hover:block absolute z-popup",
+          isSubmenuLeft ? "right-full pr-1" : "left-full pl-1",
+        )}
+        style={{ top: offsetTop }}
+      >
+        <div
+          ref={panelRef}
+          className={cn(
+            panelMinWidthClass,
+            "rounded-xl overflow-y-auto overflow-x-hidden select-none transition-all duration-150 animate-in fade-in zoom-in-95 p-1",
+            isSubmenuLeft ? "origin-top-right" : "origin-top-left",
+            isLightTerminal
+              ? "bg-white/98 text-slate-900 border border-slate-200/90 shadow-[0_16px_36px_-6px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.9)] backdrop-blur-2xl"
+              : "bg-[#13141f]/98 text-slate-100 border border-white/15 shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)] backdrop-blur-2xl",
+          )}
+          style={{ maxHeight }}
+        >
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export const TerminalContextMenu = memo(function TerminalContextMenu({
   ctxMenu,
   isLightTerminal = false,
@@ -70,7 +170,15 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
   onClearScreen,
   onClearScrollback,
   onClearAll,
+  onLockTerminal,
   onLockSession,
+  canTransferFiles = false,
+  onUploadFiles,
+  onUploadFolder,
+  onOpenSftp,
+  onOpenSftpTab,
+  onSendZmodem,
+  onReceiveZmodem,
   onExportPlainLog,
   onExportTimestampedLog,
   showTimestamps,
@@ -94,10 +202,21 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
 
   if (!ctxMenu) return null;
 
-  // 边界检测：预估宽度 220（含右侧快捷键提示），高度 440（含 AI 项、清屏与录制子项，留足余量避免底部溢出）
-  const pos = clampMenuToViewport(ctxMenu.x, ctxMenu.y, 220, 440);
+  const hasTransferGroup =
+    canTransferFiles &&
+    Boolean(onUploadFiles || onUploadFolder || onOpenSftp || onOpenSftpTab || onSendZmodem || onReceiveZmodem);
+  const topItemCount =
+    8 + // 复制/全部复制/粘贴/粘贴选中/搜索/清屏/会话控制/日志
+    (onFormatJson ? 1 : 0) +
+    (ctxMenu.hasSelection && onAIDiagnosis ? 1 : 0) +
+    (ctxMenu.hasSelection && onAIExplainShell ? 1 : 0) +
+    (!ctxMenu.hasSelection && onAIDiagnoseRecent ? 1 : 0) +
+    (hasTransferGroup ? 1 : 0);
+  const estimatedHeight = Math.min(480, Math.max(240, topItemCount * 31 + 36));
+  // 动态估算菜单高度：保证小窗口不溢出的同时让展开项收拢进二级子菜单
+  const pos = clampMenuToViewport(ctxMenu.x, ctxMenu.y, 224, estimatedHeight);
   const isSubmenuLeft =
-    typeof window !== "undefined" && pos.left + 220 + 210 > window.innerWidth;
+    typeof window !== "undefined" && pos.left + 224 + 216 > window.innerWidth;
 
   return (
     <div
@@ -289,31 +408,168 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
 
       <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
 
+      {/* 传输与文件：SSH 会话二级子菜单（非 SSH 自动隐藏） */}
+      {hasTransferGroup && (
+        <>
+          <TerminalSubmenu
+            panelMinWidthClass="min-w-[232px]"
+            estimatedHeight={190}
+            isSubmenuLeft={isSubmenuLeft}
+            isLightTerminal={isLightTerminal}
+            trigger={
+              <button
+                type="button"
+                data-testid="terminal-menu-transfer-submenu"
+                className={cn(
+                  "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+                  isLightTerminal
+                    ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                    : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+                )}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Upload className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                <span className="truncate tracking-tight font-sans text-[11.5px]">
+                  {t("tm_transfer_and_files") || "传输与文件"}
+                </span>
+                <ChevronRight className="h-3.5 w-3.5 ml-auto opacity-60" />
+              </button>
+            }
+          >
+              {onUploadFiles && (
+                <button
+                  type="button"
+                  className={cn(
+                    "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+                    isLightTerminal
+                      ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                      : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+                  )}
+                  onClick={onUploadFiles}
+                >
+                  <Upload className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                  <span className="truncate tracking-tight font-sans text-[11.5px]">
+                    {t("tm_upload_files_sftp") || "上传文件到当前目录 (SFTP)"}
+                  </span>
+                </button>
+              )}
+              {onUploadFolder && (
+                <button
+                  type="button"
+                  className={cn(
+                    "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+                    isLightTerminal
+                      ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                      : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+                  )}
+                  onClick={onUploadFolder}
+                >
+                  <FolderUp className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                  <span className="truncate tracking-tight font-sans text-[11.5px]">
+                    {t("tm_upload_folder_sftp") || "上传文件夹到当前目录 (SFTP)"}
+                  </span>
+                </button>
+              )}
+              {onOpenSftp && (
+                <button
+                  type="button"
+                  className={cn(
+                    "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+                    isLightTerminal
+                      ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                      : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+                  )}
+                  onClick={onOpenSftp}
+                >
+                  <FolderOpen className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+                  <span className="truncate tracking-tight font-sans text-[11.5px]">
+                    {t("tm_open_files_panel") || "打开文件管理器 (工作台)"}
+                  </span>
+                </button>
+              )}
+              {onOpenSftpTab && (
+                <button
+                  type="button"
+                  data-testid="terminal-menu-open-sftp-tab"
+                  className={cn(
+                    "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+                    isLightTerminal
+                      ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                      : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+                  )}
+                  onClick={onOpenSftpTab}
+                >
+                  <ExternalLink className="h-3.5 w-3.5 text-cyan-400 shrink-0" />
+                  <span className="truncate tracking-tight font-sans text-[11.5px]">
+                    {t("tm_open_sftp_tab") || "打开 SFTP / FTP 标签页 (当前目录)"}
+                  </span>
+                </button>
+              )}
+              {(onSendZmodem || onReceiveZmodem) && (
+                <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
+              )}
+              {onSendZmodem && (
+                <button
+                  type="button"
+                  className={cn(
+                    "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+                    isLightTerminal
+                      ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                      : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+                  )}
+                  onClick={onSendZmodem}
+                >
+                  <Upload className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+                  <span className="truncate tracking-tight font-sans text-[11.5px]">
+                    {t("tm_zmodem_send") || "ZMODEM 发送 (rz)"}
+                  </span>
+                </button>
+              )}
+              {onReceiveZmodem && (
+                <button
+                  type="button"
+                  className={cn(
+                    "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+                    isLightTerminal
+                      ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                      : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+                  )}
+                  onClick={onReceiveZmodem}
+                >
+                  <Download className="h-3.5 w-3.5 text-violet-400 shrink-0" />
+                  <span className="truncate tracking-tight font-sans text-[11.5px]">
+                    {t("tm_zmodem_receive_hint") || "ZMODEM 接收准备"}
+                  </span>
+                </button>
+              )}
+          </TerminalSubmenu>
+          <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
+        </>
+      )}
+
       {/* 清屏：悬停展开子菜单 */}
-      <div className="relative group">
-        <button
-          type="button"
-          className={cn(
-            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
-            isLightTerminal
-              ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
-              : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
-          )}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <Trash2 className="h-3.5 w-3.5 text-rose-400 shrink-0" />
-          <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_clear")}</span>
-          <ChevronRight className="h-3.5 w-3.5 ml-auto opacity-60" />
-        </button>
-        <div
-          className={cn(
-            "hidden group-hover:block absolute top-0 -mt-1 min-w-[190px] rounded-xl overflow-hidden select-none transition-all duration-150 animate-in fade-in zoom-in-95 p-1 z-popup",
-            isSubmenuLeft ? "right-full mr-1 origin-top-right" : "left-full ml-1 origin-top-left",
-            isLightTerminal
-              ? "bg-white/98 text-slate-900 border border-slate-200/90 shadow-[0_16px_36px_-6px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.9)] backdrop-blur-2xl"
-              : "bg-[#13141f]/98 text-slate-100 border border-white/15 shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)] backdrop-blur-2xl",
-          )}
-        >
+      <TerminalSubmenu
+        panelMinWidthClass="min-w-[190px]"
+        estimatedHeight={116}
+        isSubmenuLeft={isSubmenuLeft}
+        isLightTerminal={isLightTerminal}
+        trigger={
+          <button
+            type="button"
+            className={cn(
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+              isLightTerminal
+                ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+            )}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Trash2 className="h-3.5 w-3.5 text-rose-400 shrink-0" />
+            <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_clear")}</span>
+            <ChevronRight className="h-3.5 w-3.5 ml-auto opacity-60" />
+          </button>
+        }
+      >
           <button
             type="button"
             className={cn(
@@ -359,102 +615,144 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
               N
             </span>
           </button>
-        </div>
-      </div>
+      </TerminalSubmenu>
 
       <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
 
-      {/* 锁定会话 */}
-      {onLockSession && (
-        <button
-          type="button"
-          className={cn(
-            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left text-amber-500/90 hover:text-amber-500",
-            isLightTerminal ? "hover:bg-amber-500/10" : "hover:bg-amber-500/15",
+      {/* 会话控制：收纳锁定、快捷命令、撰写栏，保持一级菜单简洁 */}
+      <TerminalSubmenu
+        panelMinWidthClass="min-w-[215px]"
+        estimatedHeight={155}
+        isSubmenuLeft={isSubmenuLeft}
+        isLightTerminal={isLightTerminal}
+        trigger={
+          <button
+            type="button"
+            data-testid="terminal-menu-session-control"
+            className={cn(
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+              isLightTerminal
+                ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+            )}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <SlidersHorizontal className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+            <span className="truncate tracking-tight font-sans text-[11.5px]">
+              {t("tm_session_controls") || "会话控制与工具"}
+            </span>
+            <ChevronRight className="h-3.5 w-3.5 ml-auto opacity-60" />
+          </button>
+        }
+      >
+          {onLockTerminal && (
+            <button
+              type="button"
+              data-testid="terminal-menu-lock-terminal"
+              className={cn(
+                "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left text-amber-500/95 hover:text-amber-500",
+                isLightTerminal ? "hover:bg-amber-500/10" : "hover:bg-amber-500/15",
+              )}
+              onClick={onLockTerminal}
+            >
+              <Lock className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+              <span className="truncate tracking-tight font-sans text-[11.5px]">
+                {t("tm_lock_this_terminal") || "锁定当前工作台"}
+              </span>
+            </button>
           )}
-          onClick={onLockSession}
-        >
-          <Lock className="h-3.5 w-3.5 text-amber-500 shrink-0" />
-          <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_lock_session") || "锁定会话"}</span>
-          <span className={cn("ml-auto text-[10px] font-mono tracking-tight", isLightTerminal ? "text-amber-600/70" : "text-amber-400/70")}>
-            Ctrl+Alt+L
-          </span>
-        </button>
-      )}
+          {onLockSession && (
+            <button
+              type="button"
+              className={cn(
+                "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+                isLightTerminal
+                  ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                  : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+              )}
+              onClick={onLockSession}
+            >
+              <Shield className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+              <span className="truncate tracking-tight font-sans text-[11.5px]">
+                {t("tm_lock_app") || "锁定全部应用"}
+              </span>
+              <span className={cn("ml-auto text-[10px] font-mono tracking-tight", isLightTerminal ? "text-slate-400" : "text-slate-400/70")}>
+                Ctrl+Alt+L
+              </span>
+            </button>
+          )}
+          {(onLockTerminal || onLockSession) && (
+            <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
+          )}
+          {/* 快捷命令中心 */}
+          <button
+            type="button"
+            className={cn(
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+              isLightTerminal
+                ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+            )}
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent("qshell:toggle-quick-commands"));
+              onClose();
+            }}
+          >
+            <Zap className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+            <span className="truncate tracking-tight font-sans text-[11.5px]">{t("quick_cmd_bar") || "快捷命令"}</span>
+            <span className={cn("ml-auto text-[10px] font-mono tracking-tight", isLightTerminal ? "text-slate-400" : "text-slate-400/70")}>
+              Alt+C
+            </span>
+          </button>
 
-      {onLockSession && (
-        <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
-      )}
-
-      {/* 快捷命令中心 */}
-      <button
-        type="button"
-        className={cn(
-          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
-          isLightTerminal
-            ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
-            : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
-        )}
-        onClick={() => {
-          window.dispatchEvent(new CustomEvent("qshell:toggle-quick-commands"));
-          onClose();
-        }}
-      >
-        <Zap className="h-3.5 w-3.5 text-amber-500 shrink-0" />
-        <span className="truncate tracking-tight font-sans text-[11.5px]">{t("quick_cmd_bar") || "快捷命令"}</span>
-        <span className={cn("ml-auto text-[10px] font-mono tracking-tight", isLightTerminal ? "text-slate-400" : "text-slate-400/70")}>
-          Alt+C
-        </span>
-      </button>
-
-      {/* 命令撰写与分发栏 */}
-      <button
-        type="button"
-        className={cn(
-          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
-          isLightTerminal
-            ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
-            : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
-        )}
-        onClick={() => {
-          window.dispatchEvent(new CustomEvent("qshell:toggle-compose-bar"));
-          onClose();
-        }}
-      >
-        <PenSquare className="h-3.5 w-3.5 text-sky-400 shrink-0" />
-        <span className="truncate tracking-tight font-sans text-[11.5px]">{t("compose_bar_title") || "撰写栏"}</span>
-        <span className={cn("ml-auto text-[10px] font-mono tracking-tight", isLightTerminal ? "text-slate-400" : "text-slate-400/70")}>
-          Ctrl+Shift+U
-        </span>
-      </button>
+          {/* 命令撰写与分发栏 */}
+          <button
+            type="button"
+            className={cn(
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+              isLightTerminal
+                ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+            )}
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent("qshell:toggle-compose-bar"));
+              onClose();
+            }}
+          >
+            <PenSquare className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+            <span className="truncate tracking-tight font-sans text-[11.5px]">{t("compose_bar_title") || "撰写栏"}</span>
+            <span className={cn("ml-auto text-[10px] font-mono tracking-tight", isLightTerminal ? "text-slate-400" : "text-slate-400/70")}>
+              Ctrl+Shift+U
+            </span>
+          </button>
+      </TerminalSubmenu>
 
       <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
 
       {/* 日志：悬停展开子菜单 */}
-      <div className="relative group">
-        <button
-          type="button"
-          className={cn(
-            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
-            isLightTerminal
-              ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
-              : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
-          )}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <FileText className="h-3.5 w-3.5 text-violet-400 shrink-0" />
-          <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_log")}</span>
-          <ChevronRight className="h-3.5 w-3.5 ml-auto opacity-60" />
-        </button>
-        <div
-          className={cn(
-            "hidden group-hover:block absolute top-0 -mt-1 min-w-[200px] rounded-xl overflow-hidden select-none transition-all duration-150 animate-in fade-in zoom-in-95 p-1 z-popup",
-            isSubmenuLeft ? "right-full mr-1 origin-top-right" : "left-full ml-1 origin-top-left",
-            isLightTerminal
-              ? "bg-white/98 text-slate-900 border border-slate-200/90 shadow-[0_16px_36px_-6px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.9)] backdrop-blur-2xl"
-              : "bg-[#13141f]/98 text-slate-100 border border-white/15 shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)] backdrop-blur-2xl",
-          )}
-        >
+      <TerminalSubmenu
+        panelMinWidthClass="min-w-[200px]"
+        estimatedHeight={320}
+        isSubmenuLeft={isSubmenuLeft}
+        isLightTerminal={isLightTerminal}
+        trigger={
+          <button
+            type="button"
+            data-testid="terminal-menu-log-submenu"
+            className={cn(
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+              isLightTerminal
+                ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+            )}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <FileText className="h-3.5 w-3.5 text-violet-400 shrink-0" />
+            <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_log")}</span>
+            <ChevronRight className="h-3.5 w-3.5 ml-auto opacity-60" />
+          </button>
+        }
+      >
           {/* 导出纯文本审计日志 */}
           {onExportPlainLog && (
             <button
@@ -610,8 +908,7 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
           >
             <span className="truncate tracking-tight font-sans text-[11.5px]">{t("recording_choose_dir")}</span>
           </button>
-        </div>
-      </div>
+      </TerminalSubmenu>
     </div>
   );
 });

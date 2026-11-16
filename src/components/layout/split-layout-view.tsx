@@ -9,7 +9,9 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useAppStore } from "@/store";
-import { getServerConnectionFlags } from "@/services/connection-targets";
+import { useTerminalLockStore } from "@/store/terminal-lock-store";
+import { TerminalLockOverlay } from "@/components/terminal/terminal-lock-overlay";
+import { getServerConnectionFlags, resolveServerForTab } from "@/services/connection-targets";
 import type {
   DropZone,
   SplitContainerNode,
@@ -18,6 +20,7 @@ import type {
 } from "@/types";
 import { WorkspacePage } from "@/pages/workspace";
 import { SftpPanel } from "@/components/layout/sftp-panel";
+import { AutomationPopover } from "@/components/workspace/automation-popover";
 import { cn } from "@/lib/utils";
 import { collectGroupIds, removeGroupNode } from "@/utils/split-layout";
 import { getTerminalTheme } from "@/utils/terminal-themes";
@@ -62,6 +65,8 @@ export function SplitLayoutView() {
   const terminalThemeId = useAppStore((s) => s.terminalThemeId);
   const customTerminalThemes = useAppStore((s) => s.customTerminalThemes);
   const terminalThemeOverrides = useAppStore((s) => s.terminalThemeOverrides);
+  const lockedByTermId = useTerminalLockStore((s) => s.lockedByTermId);
+  const unlockTerminal = useTerminalLockStore((s) => s.unlockTerminal);
   const terminalTheme = useMemo(
     () =>
       getTerminalTheme(
@@ -119,12 +124,15 @@ export function SplitLayoutView() {
         }
 
         const isSplit = collectGroupIds(displayLayout).length > 1;
+        const wsLockEntry = Object.values(lockedByTermId).find(
+          (entry) => entry.workspaceId === ws.id,
+        );
 
         return (
           <div
             key={ws.id}
             className={cn(
-              isVisible ? "h-full w-full" : "hidden",
+              isVisible ? "relative h-full w-full" : "hidden",
               isSplit ? "p-1" : "bg-background",
             )}
             style={{
@@ -132,6 +140,13 @@ export function SplitLayoutView() {
             }}
           >
             <LayoutNodeView node={displayLayout} isDarkTheme={isDarkTheme} />
+            {wsLockEntry && (
+              <TerminalLockOverlay
+                entry={wsLockEntry}
+                sessionTitle={ws.name}
+                onUnlock={unlockTerminal}
+              />
+            )}
           </div>
         );
       })}
@@ -571,7 +586,9 @@ function TabGroupView({ groupId }: { groupId: string }) {
   // 分屏窗格顶部标题：自定义 tempTitle 优先；若同时有 IP，将 IP 独立为可一键复制的胶囊组件。
   // 关闭/迁移 tab 的瞬间 servers 可能还没同步，短暂查不到对应服务器，
   // 此时退化为仅显示名称，避免出现 "name undefined"。
-  const paneHost = activeTab ? servers.find((s) => s.id === activeTab.serverId)?.host : undefined;
+  const paneServer = activeTab ? resolveServerForTab(servers, activeTab.serverId) : undefined;
+  const paneFlags = getServerConnectionFlags(paneServer?.targetType, paneServer?.protocol, paneServer?.osType);
+  const paneHost = paneServer?.targetType === "local" ? undefined : paneServer?.host;
   const serverTitle = activeTab?.tempTitle || activeTab?.serverName || "";
   const isHostSameAsTitle = Boolean(paneHost && paneHost === serverTitle);
 
@@ -668,8 +685,8 @@ function TabGroupView({ groupId }: { groupId: string }) {
         >
           <div className="flex items-center gap-1.5 min-w-0 mr-2">
             {(() => {
-              const srv = servers.find((s) => s.id === activeTab.serverId);
-              const srvFlags = getServerConnectionFlags(srv?.targetType, srv?.protocol, srv?.osType);
+              const srv = paneServer;
+              const srvFlags = paneFlags;
               const isBmc = srvFlags.isDeviceManagedServer;
               const isSerial = srvFlags.isSerialServer;
               // osType === "network" 是旧资产兜底，能力表不识别，必须显式保留
@@ -770,8 +787,17 @@ function TabGroupView({ groupId }: { groupId: string }) {
             )}
           </div>
 
-          <div className="flex items-center gap-1 shrink-0">
-            {/* 广播按钮：开启后键盘输入同步到所有开启广播的终端 */}
+          <div className="flex items-center gap-1 shrink-0" data-no-drag>
+            {activeTab.module === "terminal" && activeTab.serverId !== "sftp" && (
+              <AutomationPopover
+                tabId={activeTab.id}
+                serverId={paneServer?.id ?? activeTab.serverId}
+                compact
+                isDarkTheme={isDarkTheme}
+              />
+            )}
+            {/* 广播按钮：仅对支持广播的终端显示（串口/本地终端禁用） */}
+            {paneFlags.supportsBroadcast && (
             <div className="flex items-center">
               <button
                 className={cn(
@@ -884,6 +910,7 @@ function TabGroupView({ groupId }: { groupId: string }) {
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
+            )}
 
             {/* 将当前窗格恢复为顶部独立工作台 */}
             <button

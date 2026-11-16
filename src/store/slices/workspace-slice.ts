@@ -14,7 +14,12 @@ import {
   updateSplitRatio,
 } from "@/utils/split-layout";
 import { sshService } from "@/services/ssh-service";
-import { getServerConnectionFlags } from "@/services/connection-targets";
+import {
+  EPHEMERAL_LOCAL_SERVER_PREFIX,
+  getServerConnectionFlags,
+  isEphemeralLocalServerId,
+  resolveServerForTab,
+} from "@/services/connection-targets";
 import { playSound, SoundType } from "@/lib/sound";
 import { recordConnection } from "@/lib/recent-connections";
 import { clearRemotePathCache } from "@/lib/command-intelligence/remote-path-completion";
@@ -45,12 +50,25 @@ export const createWorkspaceSlice: StateCreator<
 
   // SFTP 批量打开联动
   sftpPendingOpenServerIds: [],
-  openSftpWithServers: (serverIds: string[]) => {
-    set({ sftpPendingOpenServerIds: serverIds });
+  sftpPendingOpenTargetDirs: {},
+  openSftpWithServers: (serverIds: string[], targetDirs?: Record<string, string>) => {
+    const normalizedDirs: Record<string, string> = {};
+    if (targetDirs) {
+      for (const [id, dir] of Object.entries(targetDirs)) {
+        const trimmed = typeof dir === 'string' ? dir.trim() : '';
+        if (trimmed) {
+          normalizedDirs[id] = trimmed;
+        }
+      }
+    }
+    set({
+      sftpPendingOpenServerIds: serverIds,
+      sftpPendingOpenTargetDirs: normalizedDirs,
+    });
     get().openTab("sftp", "SFTP / FTP", "files");
   },
   clearSftpPendingOpenServers: () => {
-    set({ sftpPendingOpenServerIds: [] });
+    set({ sftpPendingOpenServerIds: [], sftpPendingOpenTargetDirs: {} });
   },
 
   // Split layout
@@ -61,7 +79,9 @@ export const createWorkspaceSlice: StateCreator<
   splitDropTarget: null,
 
   openTab: (serverId, serverName, module, initialCommand) => {
-    recordConnection(serverId);
+    if (!isEphemeralLocalServerId(serverId)) {
+      recordConnection(serverId);
+    }
     // SFTP 是全局单例工作台：已存在则直接跳转，不新建
     const isSingleton = serverId === "sftp";
     // 物理串口通常由操作系统独占；同一串口连接重复双击时复用已有工作台，
@@ -134,6 +154,40 @@ export const createWorkspaceSlice: StateCreator<
         lastActiveGroupId: gid,
       };
     });
+  },
+
+  openLocalTab: (profileId, profileLabel, cwd) => {
+    const cleanProfileId = profileId?.trim() || undefined;
+    const serverId = `${EPHEMERAL_LOCAL_SERVER_PREFIX}${cleanProfileId || "default"}`;
+    const title = profileLabel?.trim() || "Local Shell";
+    const tabId = `${serverId}-terminal-${crypto.randomUUID()}`;
+    playSound(SoundType.Click);
+    set((state) => {
+      const gid = newGroupId();
+      const groups = {
+        ...state.groups,
+        [gid]: { id: gid, activeTabId: tabId },
+      };
+      const layout = createGroupLeaf(gid);
+      const tab: WorkspaceTab = {
+        id: tabId,
+        serverId,
+        serverName: title,
+        module: "terminal",
+        title,
+        groupId: gid,
+        ...(cleanProfileId ? { localProfileId: cleanProfileId } : {}),
+        ...(cwd?.trim() ? { localCwd: cwd.trim() } : {}),
+      };
+      return {
+        tabs: [...state.tabs, tab],
+        groups,
+        layout,
+        activeTabId: tabId,
+        lastActiveGroupId: gid,
+      };
+    });
+    return tabId;
   },
 
   openServersInSplit: (entries) => {
@@ -748,31 +802,48 @@ export const createWorkspaceSlice: StateCreator<
   broadcastTabIds: [],
   toggleBroadcastTab: (tabId) =>
     set((state) => {
+      const isAlready = state.broadcastTabIds.includes(tabId);
+      if (!isAlready) {
+        const targetTab = state.tabs.find((t) => t.id === tabId);
+        const sv = targetTab ? resolveServerForTab(state.servers, targetTab.serverId) : undefined;
+        if (sv) {
+          const flags = getServerConnectionFlags(sv.targetType, sv.protocol);
+          if (!flags.supportsBroadcast) {
+            return {};
+          }
+        }
+      }
       playSound(SoundType.Toggle);
       return {
-        broadcastTabIds: state.broadcastTabIds.includes(tabId)
+        broadcastTabIds: isAlready
           ? state.broadcastTabIds.filter((id) => id !== tabId)
           : [...state.broadcastTabIds, tabId],
       };
     }),
 
-  // 一键开启所有可广播终端（terminal 模块，排除串口 / RDP 目标）的广播
+  // 一键开启所有可广播终端（terminal 模块，排除串口 / 本地终端 / RDP 目标）的广播
   broadcastAllTabs: () => {
     const { tabs, servers } = get();
     const ids = tabs
       .filter((t) => t.module === "terminal")
       .filter((t) => {
-        const sv = servers.find((s) => s.id === t.serverId);
-        const flags = getServerConnectionFlags(sv?.targetType, sv?.protocol);
-        // 保留 protocol !== 'rdp' 的原始判断，确保广播范围与重构前一致
-        return sv && !flags.isSerialServer && !flags.isDeviceManagedServer && sv.protocol !== "rdp";
+        const sv = resolveServerForTab(servers, t.serverId);
+        if (!sv) return false;
+        const flags = getServerConnectionFlags(sv.targetType, sv.protocol);
+        return (
+          flags.supportsBroadcast &&
+          !flags.isSerialServer &&
+          !flags.isLocalServer &&
+          !flags.isDeviceManagedServer &&
+          sv.protocol !== "rdp"
+        );
       })
       .map((t) => t.id);
     playSound(SoundType.Toggle);
     set({ broadcastTabIds: ids });
   },
 
-  // 一键广播到指定 tab 所在工作台的全部终端（terminal 模块，排除串口 / RDP 目标）。
+  // 一键广播到指定 tab 所在工作台的全部终端（terminal 模块，排除串口 / 本地终端 / RDP 目标）。
   // 分屏后所有窗格同属一个 workspace，因此即"广播到当前所有分屏"；
   // 顶层独立 tab（无 workspaceId，未分屏）退化为仅广播当前 tab。
   broadcastToSplit: (tabId) => {
@@ -788,26 +859,33 @@ export const createWorkspaceSlice: StateCreator<
       .filter((t) => (wsId ? t.workspaceId === wsId : t.id === tabId))
       .filter((t) => t.module === "terminal")
       .filter((t) => {
-        const sv = servers.find((s) => s.id === t.serverId);
-        const flags = getServerConnectionFlags(sv?.targetType, sv?.protocol);
-        // 保留 protocol !== 'rdp' 的原始判断，确保广播范围与重构前一致
-        return sv && !flags.isSerialServer && !flags.isDeviceManagedServer && sv.protocol !== "rdp";
+        const sv = resolveServerForTab(servers, t.serverId);
+        if (!sv) return false;
+        const flags = getServerConnectionFlags(sv.targetType, sv.protocol);
+        return (
+          flags.supportsBroadcast &&
+          !flags.isSerialServer &&
+          !flags.isLocalServer &&
+          !flags.isDeviceManagedServer &&
+          sv.protocol !== "rdp"
+        );
       })
       .map((t) => t.id);
     playSound(SoundType.Toggle);
     set({ broadcastTabIds: ids });
   },
 
-  // 一键广播到指定标签颜色的全部终端（terminal 模块，排除串口 / RDP 目标）
+  // 一键广播到指定标签颜色的全部终端（terminal 模块，排除串口 / 本地终端 / RDP 目标）
   broadcastToColor: (color) => {
     const { tabs, servers, workspaces } = get();
     const colorLower = color.toLowerCase();
     const ids = tabs
       .filter((t) => {
         if (t.module !== "terminal") return false;
-        const sv = servers.find((s) => s.id === t.serverId);
-        const flags = getServerConnectionFlags(sv?.targetType, sv?.protocol);
-        if (!sv || flags.isSerialServer || sv.protocol === "rdp") return false;
+        const sv = resolveServerForTab(servers, t.serverId);
+        if (!sv) return false;
+        const flags = getServerConnectionFlags(sv.targetType, sv.protocol);
+        if (!flags.supportsBroadcast || flags.isSerialServer || flags.isLocalServer || sv.protocol === "rdp") return false;
         const effColor = t.color || (t.workspaceId ? workspaces[t.workspaceId]?.color : undefined);
         return effColor?.toLowerCase() === colorLower;
       })

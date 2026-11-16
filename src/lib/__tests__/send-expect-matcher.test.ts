@@ -7,6 +7,8 @@ import {
   interpolateMacros,
   parseSendSteps,
   mergeGlobalLogonConfig,
+  resolveScriptParameters,
+  redactSecretValues,
   ProgrammableScriptController,
 } from "../send-expect-matcher";
 import type { SendExpectRule, LogonScriptsConfig } from "@/types";
@@ -194,5 +196,97 @@ describe("Programmable Script Controller (JS Engine)", () => {
     await scriptPromise;
 
     expect(sent).toEqual(["root\r", "mypassword\r"]);
+  });
+
+  it("interpolates %P{name} script parameters, %%P{name} escape, and exposes session.params", async () => {
+    const ctx = {
+      username: "deploy",
+      host: "prod-1",
+      params: { env: "staging", token: "sec-12345" },
+    };
+
+    expect(interpolateMacros("ENV=%P{env} TOKEN=%P{token} ESC=%%P{env} MISS=%P{missing}", ctx)).toBe(
+      "ENV=staging TOKEN=sec-12345 ESC=%%P{env} MISS=".replace("%%", "%")
+    );
+
+    const resolved = resolveScriptParameters(
+      [
+        { name: "env", defaultValue: "dev" },
+        { name: "token", defaultValue: "sec-12345", secret: true },
+        { name: "region", required: true },
+      ],
+      { env: "staging" }
+    );
+    expect(resolved.params).toEqual({ env: "staging", token: "sec-12345", region: "" });
+    expect(resolved.secretValues).toEqual(["sec-12345"]);
+    expect(resolved.missingRequired.map((p) => p.name)).toEqual(["region"]);
+    expect(redactSecretValues("auth token=sec-12345 ok", resolved.secretValues)).toBe(
+      "auth token=****** ok"
+    );
+
+    const merged = mergeGlobalLogonConfig(
+      {
+        enabled: true,
+        inheritGlobal: true,
+        rules: [],
+        parameters: [{ name: "env", defaultValue: "prod" }],
+      },
+      {
+        enabled: true,
+        rules: [],
+        parameters: [
+          { name: "env", defaultValue: "dev" },
+          { name: "cluster", defaultValue: "ap-east" },
+        ],
+      }
+    );
+    expect(merged?.parameters).toEqual([
+      { name: "env", defaultValue: "prod" },
+      { name: "cluster", defaultValue: "ap-east" },
+    ]);
+
+    const sent: string[] = [];
+    const ctrl = new ProgrammableScriptController(async (text) => {
+      sent.push(text);
+    }, ctx);
+    await ctrl.runScript('await screen.send("deploy:" + session.params.env);');
+    expect(sent).toEqual(["deploy:staging\r"]);
+  });
+
+  it("initializes Send-Expect state from globalConfig alone when server config is empty", () => {
+    const globalCfg: LogonScriptsConfig = {
+      enabled: true,
+      rules: [
+        {
+          id: "global-1",
+          expect: "login:",
+          send: "%u",
+          sendEnter: true,
+          once: true,
+        },
+      ],
+      parameters: [{ name: "env", defaultValue: "prod" }],
+    };
+
+    const state = createSendExpectState(null, { username: "ops" }, undefined, globalCfg);
+    expect(state).not.toBeNull();
+    expect(state?.rules.length).toBe(1);
+
+    const triggers: Array<{ rule: SendExpectRule; steps: Array<{ type: string; text?: string }> }> = [];
+    processSendExpectChunk(state!, "login: ", (rule, steps) => {
+      triggers.push({ rule, steps });
+    });
+    expect(triggers.length).toBe(1);
+    // parseSendSteps appends a single trailing \r when sendEnter !== false (no double \r)
+    expect(triggers[0].steps).toEqual([{ type: "send", text: "ops\r" }]);
+  });
+
+  it("guards waitForString('') and invalid waitForRegex in ProgrammableScriptController", async () => {
+    const ctrl = new ProgrammableScriptController(async () => {});
+    const rt = ctrl.createRuntime();
+    await expect(rt.screen.waitForString("", 100)).resolves.toBe(false);
+    await expect(rt.screen.waitForStrings(["", ""], 100)).resolves.toBe(-1);
+    await expect(rt.screen.waitForRegex("[unclosed", 100)).resolves.toBeNull();
+    ctrl.abort();
   });
 });

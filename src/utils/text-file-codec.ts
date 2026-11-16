@@ -204,6 +204,44 @@ export function normalizeEol(text: string, eol: TextEol): string {
   return lf.replace(/\n/g, eol)
 }
 
+/** 判断原始字节是否为二进制内容（跳过 BOM 后检查 NUL 字节或过多非制表/换行控制字符；UTF-16 BOM 文件按 16 位码元判定为文本而非二进制） */
+export function isBinaryBytes(bytes: Uint8Array, sampleSize = 8192): boolean {
+  if (bytes.length === 0) return false
+  const bom = detectBom(bytes)
+  const start = bom?.offset ?? 0
+  if (start >= bytes.length) return false
+
+  const limit = Math.min(bytes.length, start + Math.max(1, sampleSize))
+
+  if (bom && (bom.encoding === 'utf-16le' || bom.encoding === 'utf-16be')) {
+    const isLe = bom.encoding === 'utf-16le'
+    let controlCount = 0
+    let unitCount = 0
+    for (let i = start; i + 1 < limit; i += 2) {
+      const codeUnit = isLe
+        ? bytes[i] | (bytes[i + 1] << 8)
+        : (bytes[i] << 8) | bytes[i + 1]
+      if (codeUnit === 0) return true
+      unitCount++
+      if (codeUnit < 0x20 && codeUnit !== 0x09 && codeUnit !== 0x0a && codeUnit !== 0x0d) {
+        controlCount++
+      }
+    }
+    return unitCount > 0 && controlCount / unitCount > 0.1
+  }
+
+  let controlCount = 0
+  const checkedLen = limit - start
+  for (let i = start; i < limit; i++) {
+    const b = bytes[i]
+    if (b === 0) return true
+    if (b < 0x20 && b !== 0x09 && b !== 0x0a && b !== 0x0d) {
+      controlCount++
+    }
+  }
+  return checkedLen > 0 && controlCount / checkedLen > 0.1
+}
+
 /** Uint8Array → base64（分块避免大文件栈溢出） */
 export function bytesToBase64(bytes: Uint8Array): string {
   let binary = ''

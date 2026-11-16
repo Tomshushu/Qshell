@@ -45,6 +45,8 @@ pub enum TargetType {
     Esxi,
     /// Kubernetes 集群：API Server + Bearer Token（Phase 2-C）
     Kubernetes,
+    /// 本地终端（ConPTY / POSIX PTY，Phase P0-02）
+    Local,
 }
 
 
@@ -84,6 +86,7 @@ impl TargetType {
             TargetType::Xinchuang => "xinchuang",
             TargetType::Esxi => "esxi",
             TargetType::Kubernetes => "kubernetes",
+            TargetType::Local => "local",
         }
     }
 
@@ -115,7 +118,7 @@ impl TargetType {
     pub fn os_detect_command(&self) -> String {
         match self {
             TargetType::Windows => crate::targets::windows::os_detect::os_detect_command(),
-            TargetType::Serial => String::new(),
+            TargetType::Serial | TargetType::Local => String::new(),
             _ => crate::targets::linux::os_detect::os_detect_command(),
         }
     }
@@ -153,6 +156,8 @@ pub enum ConnectionProtocol {
     Https,
     /// Kubernetes API Server（Bearer Token，Phase 2-C）
     K8s,
+    /// 本地终端 PTY
+    Local,
 }
 
 // ============================================================================
@@ -170,6 +175,7 @@ pub const ALL_PROTOCOLS: &[ConnectionProtocol] = &[
     ConnectionProtocol::Redfish,
     ConnectionProtocol::Https,
     ConnectionProtocol::K8s,
+    ConnectionProtocol::Local,
 ];
 
 /// 目标能力位：描述该类型可复用哪些通用能力。
@@ -248,6 +254,16 @@ const K8S_CAPS: CapabilityFlags = CapabilityFlags {
 };
 
 const SERIAL_CAPS: CapabilityFlags = CapabilityFlags {
+    ssh_backed: false,
+    terminal: true,
+    metrics: false,
+    files: false,
+    probe: false,
+    tls_cert_override: false,
+    requires_host: false,
+};
+
+const LOCAL_CAPS: CapabilityFlags = CapabilityFlags {
     ssh_backed: false,
     terminal: true,
     metrics: false,
@@ -342,6 +358,14 @@ pub const TARGET_SPECS: &[TargetSpec] = &[
         default_port: 6443,
         default_username: "",
         capabilities: K8S_CAPS,
+    },
+    TargetSpec {
+        target: TargetType::Local,
+        protocols: &[ConnectionProtocol::Local],
+        primary_protocol: ConnectionProtocol::Local,
+        default_port: 0,
+        default_username: "",
+        capabilities: LOCAL_CAPS,
     },
 ];
 
@@ -510,6 +534,7 @@ pub const PROTOCOL_AUTH: &[(ConnectionProtocol, &[&str])] = &[
     (ConnectionProtocol::Redfish, &["password"]),
     (ConnectionProtocol::Https, &["password", "credentialConfig"]),
     (ConnectionProtocol::K8s, &["password", "credentialConfig"]),
+    (ConnectionProtocol::Local, &["password"]),
 ];
 
 pub fn allowed_auth_types(protocol: ConnectionProtocol) -> &'static [&'static str] {
@@ -615,6 +640,7 @@ impl ConnectionProtocol {
             ConnectionProtocol::Redfish => "redfish",
             ConnectionProtocol::Https => "https",
             ConnectionProtocol::K8s => "k8s",
+            ConnectionProtocol::Local => "local",
         }
     }
 
@@ -630,6 +656,7 @@ impl ConnectionProtocol {
             ConnectionProtocol::Redfish => 443,
             ConnectionProtocol::Https => 443,
             ConnectionProtocol::K8s => 6443,
+            ConnectionProtocol::Local => 0,
         }
     }
 
@@ -684,6 +711,7 @@ mod tests {
         ("xinchuang", &["ssh", "vnc"], "ssh", 22, "root", [true, true, true, true, true, false, true]),
         ("esxi", &["https"], "https", 443, "root", [false, false, false, false, false, true, true]),
         ("kubernetes", &["k8s"], "k8s", 6443, "", [false, false, false, false, false, true, true]),
+        ("local", &["local"], "local", 0, "", [false, true, false, false, false, false, false]),
     ];
 
     #[test]
@@ -750,6 +778,7 @@ mod tests {
             TargetType::Xinchuang,
             TargetType::Esxi,
             TargetType::Kubernetes,
+            TargetType::Local,
         ];
         assert_eq!(TARGET_SPECS.len(), variants.len());
         for variant in variants {
@@ -760,7 +789,7 @@ mod tests {
                 variant.as_str()
             );
         }
-        assert_eq!(ALL_PROTOCOLS.len(), 9);
+        assert_eq!(ALL_PROTOCOLS.len(), 10);
     }
 
     #[test]

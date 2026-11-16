@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react'
 import {
   ArrowDown,
   ArrowUp,
@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { computeDropdownVerticalPosition } from '@/lib/menu-position'
 import { useMetricsStore, useMetricsSubscription } from '@/store/metrics-store'
 import type { ProcessInfo, DiskInfo } from '@/types'
 import { useWindowLayer } from '@/hooks/use-window-layer'
@@ -162,6 +163,11 @@ function FloatingMetricsHudInner({
     }
   })
   const [ifaceMenuOpen, setIfaceMenuOpen] = useState(false)
+  const ifaceBtnRef = useRef<HTMLButtonElement>(null)
+  const [ifaceMenuPlacement, setIfaceMenuPlacement] = useState<{
+    placeBelow: boolean
+    maxHeight: number
+  }>({ placeBelow: true, maxHeight: 240 })
   // 鼠标悬停在网络波形图上时查看特定点位的上传/下载速率（解决无标度问题）
   const [hoveredNet, setHoveredNet] = useState<{
     rxKbps: number
@@ -212,6 +218,20 @@ function FloatingMetricsHudInner({
       return aName.localeCompare(bName)
     })
   }, [metrics?.network])
+
+  useLayoutEffect(() => {
+    if (!ifaceMenuOpen || !ifaceBtnRef.current || typeof window === 'undefined') return
+    const rect = ifaceBtnRef.current.getBoundingClientRect()
+    const estimatedH = Math.min(240, 48 + (sortedNetwork.length + 1) * 30)
+    const { placeBelow } = computeDropdownVerticalPosition(rect, estimatedH, 6)
+    const available = placeBelow
+      ? window.innerHeight - rect.bottom - 14
+      : rect.top - 14
+    setIfaceMenuPlacement({
+      placeBelow,
+      maxHeight: Math.max(120, Math.min(240, available)),
+    })
+  }, [ifaceMenuOpen, sortedNetwork.length])
 
   // 网卡列表到达时，若未指定或所选特定网卡不存在，优先自动选中 eth0 或列表第一项（与 FinalShell 一致）
   useEffect(() => {
@@ -749,6 +769,7 @@ function FloatingMetricsHudInner({
             {/* 网卡选择下拉菜单 (FinalShell 样式: eth0 ▼, 更加小巧精致) */}
             <div className="relative z-30" data-no-drag>
               <button
+                ref={ifaceBtnRef}
                 type="button"
                 onClick={() => setIfaceMenuOpen((v) => !v)}
                 className="flex items-center gap-0.5 text-[9.5px] font-mono bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15 text-foreground border border-black/10 dark:border-white/15 rounded px-1.5 py-0.5 h-4.5 transition-colors cursor-pointer select-none"
@@ -760,14 +781,23 @@ function FloatingMetricsHudInner({
                 <ChevronDown className={cn("h-2.5 w-2.5 text-muted-foreground transition-transform duration-150", ifaceMenuOpen && "rotate-180")} />
               </button>
 
-              {/* 悬浮网卡切换菜单 (eth 置顶且固定不晃动) */}
+              {/* 悬浮网卡切换菜单 (eth 置顶且固定不晃动；底部空间不足时自动向上翻转) */}
               {ifaceMenuOpen && (
                 <>
                   <div
                     className="fixed inset-0 z-40"
                     onClick={() => setIfaceMenuOpen(false)}
                   />
-                  <div className="absolute right-0 top-full mt-1.5 z-popup min-w-[170px] max-w-[230px] max-h-60 overflow-y-auto bg-white dark:bg-zinc-950 border border-slate-200/90 dark:border-white/15 rounded-xl shadow-[0_16px_40px_-6px_rgba(0,0,0,0.3),0_0_0_1px_rgba(0,0,0,0.06)] dark:shadow-[0_20px_50px_-8px_rgba(0,0,0,0.9),0_0_0_1px_rgba(255,255,255,0.1)] p-1 text-xs animate-in fade-in-0 zoom-in-95 origin-top-right select-none">
+                  <div
+                    data-testid="hud-iface-menu"
+                    style={{ maxHeight: ifaceMenuPlacement.maxHeight }}
+                    className={cn(
+                      "absolute right-0 z-popup min-w-[170px] max-w-[230px] overflow-y-auto bg-white dark:bg-zinc-950 border border-slate-200/90 dark:border-white/15 rounded-xl shadow-[0_16px_40px_-6px_rgba(0,0,0,0.3),0_0_0_1px_rgba(0,0,0,0.06)] dark:shadow-[0_20px_50px_-8px_rgba(0,0,0,0.9),0_0_0_1px_rgba(255,255,255,0.1)] p-1 text-xs animate-in fade-in-0 zoom-in-95 select-none",
+                      ifaceMenuPlacement.placeBelow
+                        ? "top-full mt-1.5 origin-top-right"
+                        : "bottom-full mb-1.5 origin-bottom-right",
+                    )}
+                  >
                     <div className="px-2 py-1 text-[10px] font-medium text-slate-500 dark:text-slate-400 border-b border-black/5 dark:border-white/10 mb-1 flex items-center justify-between sticky top-0 bg-white dark:bg-zinc-950 z-10">
                       <span>选择监控网卡</span>
                       <span className="text-[9px] opacity-70">共 {sortedNetwork.length} 个</span>

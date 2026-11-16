@@ -454,7 +454,7 @@ export const ServerGroupTree = memo(function ServerGroupTree({
                 <FolderTree className="h-4 w-4" />
                 {t('group_move_to')}
               </ContextMenuSubTrigger>
-              <ContextMenuSubContent className="w-52 p-1">
+              <ContextMenuSubContent className="w-52 p-1 max-h-[min(360px,var(--radix-context-menu-content-available-height,60vh))] overflow-y-auto">
                 <GroupTreePicker
                   groups={serverGroups}
                   value={group.parentId || null}

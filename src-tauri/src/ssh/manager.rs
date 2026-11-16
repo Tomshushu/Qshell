@@ -74,6 +74,20 @@ pub async fn acquire_transfer_channel_with_cancel(
     }
 }
 
+/// 清理连接关联的全部资源：UID/GID、传输通道限流缓存、X11 会话与端口转发。
+/// 所有连接终止路径（心跳失败、主动断开、批量断开、连接错误）都必须经过此处，
+/// 避免本地监听端口 / accept 任务 / 全局转发表随断线残留。
+async fn cleanup_connection_caches(server_id: &str) {
+    UID_CACHE.write().await.remove(server_id);
+    GID_CACHE.write().await.remove(server_id);
+    TRANSFER_CHANNEL_LIMITERS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(server_id);
+    crate::ssh::x11_forward::X11ForwardRegistry::global().remove(server_id).await;
+    crate::ssh::port_forward::stop_all_for_server(server_id).await;
+}
+
 /// Set the global AppHandle (called once during app setup)
 pub fn set_app_handle(handle: AppHandle) {
     let _ = APP_HANDLE.set(handle);
@@ -86,8 +100,13 @@ fn emit_ssh_disconnected(server_id: &str) {
     }
 }
 
+/// 获取全局 AppHandle（供 auth_interaction 等子模块推送前端事件）
+pub(crate) fn app_handle() -> Option<&'static AppHandle> {
+    APP_HANDLE.get()
+}
+
 /// Emit ssh:state-changed event（前端订阅，用于驱动状态机）
-fn emit_state_changed(data: &ConnectionStateData) {
+pub(crate) fn emit_state_changed(data: &ConnectionStateData) {
     if let Some(handle) = APP_HANDLE.get() {
         let _ = handle.emit("ssh:state-changed", data);
     }
@@ -492,6 +511,9 @@ impl SshManager {
                     private_key_passphrase,
                 }
             }
+            "keyboardInteractive" | "keyboard_interactive" | "keyboard-interactive" => {
+                AuthMethod::KeyboardInteractive
+            }
             _ => {
                 let pass = password
                     .ok_or_else(|| SshError::AuthFailed("Missing password".into()))?;
@@ -500,7 +522,7 @@ impl SshManager {
         };
 
         self.do_connect_with_auth(
-            server_id, host, port, username, auth, connection_timeout, None, None,
+            server_id, host, port, username, auth, connection_timeout, None, None, false, false,
         ).await
     }
 
@@ -593,7 +615,7 @@ impl SshManager {
         };
 
         self.do_connect_with_auth(
-            &server_id, host, port, username, auth, connection_timeout, None, None,
+            &server_id, host, port, username, auth, connection_timeout, None, None, false, false,
         ).await
     }
 
@@ -646,6 +668,35 @@ impl SshManager {
         self.connect_routed(server_id, host, port, username, auth, connection_timeout, None, Some(proxy)).await
     }
 
+    /// 统一完整配置连接入口（支持直连 / 跳板 / 代理 + Agent Forwarding）
+    pub async fn connect_configured(
+        &self,
+        server_id: String,
+        host: String,
+        port: u16,
+        username: String,
+        auth: AuthMethod,
+        connection_timeout: u32,
+        jump_chain: Option<Vec<super::connection::ResolvedJumpHop>>,
+        proxy: Option<super::connection::ProxyTransportConfig>,
+        forward_agent: bool,
+        x11_forwarding: bool,
+    ) -> SshResult<()> {
+        self.connect_routed_with_options(
+            server_id,
+            host,
+            port,
+            username,
+            auth,
+            connection_timeout,
+            jump_chain,
+            proxy,
+            forward_agent,
+            x11_forwarding,
+        )
+        .await
+    }
+
     /// 统一路由入口（直连 / 链式跳板机 / SOCKS5·HTTP 代理共用）：防并发等待机制
     async fn connect_routed(
         &self,
@@ -657,6 +708,34 @@ impl SshManager {
         connection_timeout: u32,
         jump_chain: Option<Vec<super::connection::ResolvedJumpHop>>,
         proxy: Option<super::connection::ProxyTransportConfig>,
+    ) -> SshResult<()> {
+        self.connect_routed_with_options(
+            server_id,
+            host,
+            port,
+            username,
+            auth,
+            connection_timeout,
+            jump_chain,
+            proxy,
+            false,
+            false,
+        )
+        .await
+    }
+
+    async fn connect_routed_with_options(
+        &self,
+        server_id: String,
+        host: String,
+        port: u16,
+        username: String,
+        auth: AuthMethod,
+        connection_timeout: u32,
+        jump_chain: Option<Vec<super::connection::ResolvedJumpHop>>,
+        proxy: Option<super::connection::ProxyTransportConfig>,
+        forward_agent: bool,
+        x11_forwarding: bool,
     ) -> SshResult<()> {
         // 1) 已连接且 Ready → 验证健康度后短路返回 Ok，防止休眠后虚假 Ready
         if self.is_ready_and_alive(&server_id).await {
@@ -731,7 +810,7 @@ impl SshManager {
         };
 
         self.do_connect_with_auth(
-            &server_id, host, port, username, auth, connection_timeout, jump_chain, proxy,
+            &server_id, host, port, username, auth, connection_timeout, jump_chain, proxy, forward_agent, x11_forwarding,
         ).await
     }
 
@@ -749,6 +828,8 @@ impl SshManager {
         connection_timeout: u32,
         jump_chain: Option<Vec<super::connection::ResolvedJumpHop>>,
         proxy: Option<super::connection::ProxyTransportConfig>,
+        forward_agent: bool,
+        x11_forwarding: bool,
     ) -> SshResult<()> {
         let start = std::time::Instant::now();
         tracing::info!("[SSH Perf] {} do_connect_with_auth 开始", server_id);
@@ -777,15 +858,20 @@ impl SshManager {
 
         // 真正建立连接：失败时记录错误（供等待者读取），发射 Failed 事件
         let conn_start = start.elapsed();
+        let options = super::connection::ConnectOptions {
+            forward_agent,
+            x11_forwarding,
+            auth_generation: generation,
+        };
         let connect_result = match (jump_chain, proxy) {
-            (Some(chain), _) => SshConnection::connect_via_jump_chain(
-                server_id.to_string(), host.clone(), port, &username, &auth, connection_timeout, chain,
+            (Some(chain), _) => SshConnection::connect_via_jump_chain_with_options(
+                server_id.to_string(), host.clone(), port, &username, &auth, connection_timeout, chain, options,
             ).await,
-            (None, Some(p)) => SshConnection::connect_via_proxy(
-                server_id.to_string(), host.clone(), port, &username, &auth, connection_timeout, p,
+            (None, Some(p)) => SshConnection::connect_via_proxy_with_options(
+                server_id.to_string(), host.clone(), port, &username, &auth, connection_timeout, p, options,
             ).await,
-            (None, None) => SshConnection::connect(
-                server_id.to_string(), host.clone(), port, &username, &auth, connection_timeout,
+            (None, None) => SshConnection::connect_with_options(
+                server_id.to_string(), host.clone(), port, &username, &auth, connection_timeout, options,
             ).await,
         };
         let connection = match connect_result {
@@ -922,6 +1008,8 @@ impl SshManager {
             // 清理该连接拥有的所有 shell session（避免 zombie shell）
             // 直接从已移除的 entry 中取出 session_ids，避免重新查表拿不到 entry
             Self::close_sessions_from_entry(&entry).await;
+            cleanup_connection_caches(server_id).await;
+            crate::files::remote_fs::clear_protocol_cache(server_id).await;
             // 异步发送 SSH disconnect（不等待）
             let conn = entry.conn.clone();
             tokio::spawn(async move {
@@ -947,6 +1035,8 @@ impl SshManager {
 
     /// 断开服务器连接
     pub async fn disconnect(&self, server_id: &str) -> SshResult<()> {
+        crate::ssh::auth_interaction::AuthInteractionRegistry::global()
+            .cancel_for_server(server_id);
         let entries = {
             let mut conns = self.lock();
             let mut removed = Vec::new();
@@ -972,8 +1062,8 @@ impl SshManager {
         if !entries.is_empty() {
             for (id, entry) in entries {
                 let generation = entry.generation;
-                UID_CACHE.write().await.remove(&id);
-                GID_CACHE.write().await.remove(&id);
+                cleanup_connection_caches(&id).await;
+                crate::files::remote_fs::clear_protocol_cache(&id).await;
                 // 停止心跳
                 entry.heartbeat_cancel.store(true, Ordering::Relaxed);
                 // 清理该连接拥有的所有 shell session（避免 zombie shell）
@@ -1022,30 +1112,42 @@ impl SshManager {
     }
 
     /// Disconnect all (async — sends SSH disconnect messages).
+    /// 并发断开所有连接，避免退出时按 N×3 秒串行阻塞。整批额外设置总超时兜底。
     pub async fn disconnect_all(&self) {
         let entries: Vec<(String, ConnectionEntry)> = {
             let mut guard = self.lock();
             guard.drain().collect()
         };
-        for (id, entry) in entries {
-            let generation = entry.generation;
-            entry.heartbeat_cancel.store(true, Ordering::Relaxed);
-            // 清理该连接拥有的所有 shell session（直接从 entry 取，避免重新查表）
-            Self::close_sessions_from_entry(&entry).await;
-            // 带 3 秒超时（应用退出场景，不宜等待太久）
-            let _ = tokio::time::timeout(
-                Duration::from_secs(3),
-                entry.conn.disconnect(),
-            ).await;
-            let data = ConnectionStateData {
-                server_id: id.clone(),
-                state: ConnectionState::Disconnected,
-                error: None,
-                error_kind: None,
-                generation,
-            };
-            emit_state_changed(&data);
+        let total = entries.len();
+        if total == 0 {
+            return;
         }
+        let mut set = tokio::task::JoinSet::new();
+        for (id, entry) in entries {
+            set.spawn(async move {
+                let generation = entry.generation;
+                entry.heartbeat_cancel.store(true, Ordering::Relaxed);
+                Self::close_sessions_from_entry(&entry).await;
+                cleanup_connection_caches(&id).await;
+                crate::files::remote_fs::clear_protocol_cache(&id).await;
+                // 单连接 3 秒超时；整批由外层总超时兜底
+                let _ = tokio::time::timeout(
+                    Duration::from_secs(3),
+                    entry.conn.disconnect(),
+                ).await;
+                let data = ConnectionStateData {
+                    server_id: id,
+                    state: ConnectionState::Disconnected,
+                    error: None,
+                    error_kind: None,
+                    generation,
+                };
+                emit_state_changed(&data);
+            });
+        }
+        // 总超时封顶 10 秒（退出场景不宜久等），防止个别任务异常挂起拖死退出流程
+        let overall = Duration::from_secs(5).max(Duration::from_secs(total as u64).min(Duration::from_secs(10)));
+        let _ = tokio::time::timeout(overall, set.join_all()).await;
     }
 
     /// 取消正在进行的连接任务（用于用户手动取消 UI 上的"连接中"状态）
@@ -1208,6 +1310,12 @@ impl SshManager {
             if let Some(entry) = entry {
                 entry.heartbeat_cancel.store(true, Ordering::Relaxed);
                 Self::close_sessions_from_entry(&entry).await;
+                cleanup_connection_caches(server_id).await;
+                let base_id = crate::commands::extract_base_server_id(server_id);
+                if base_id != server_id {
+                    cleanup_connection_caches(base_id).await;
+                }
+                crate::files::remote_fs::clear_protocol_cache(server_id).await;
                 let data = ConnectionStateData {
                     server_id: server_id.to_string(),
                     state: ConnectionState::Disconnected,
@@ -1250,6 +1358,24 @@ impl SshManager {
         Self::resolve_entry(&conns, server_id)
             .map(|e| e.state == ConnectionState::Ready && e.conn.is_connected())
             .unwrap_or(false)
+    }
+
+    /// 检查指定基础服务器或其派生工作台/SFTP 子连接（`ws:{id}:*` / `sftp:{id}`）是否处于活跃/连接中状态。
+    pub fn has_server_or_child_connection_sync(&self, base_server_id: &str) -> bool {
+        let conns = self.lock();
+        let ws_prefix = format!("ws:{}:", base_server_id);
+        let sftp_key = format!("sftp:{}", base_server_id);
+        conns.iter().any(|(k, e)| {
+            let matches_key =
+                k == base_server_id || k.starts_with(&ws_prefix) || k == &sftp_key;
+            matches_key
+                && matches!(
+                    e.state,
+                    ConnectionState::Ready
+                        | ConnectionState::Connecting
+                        | ConnectionState::Authenticating
+                )
+        })
     }
 
     /// Get connected server IDs (SYNC — called without await from ipc.js).
@@ -2007,7 +2133,7 @@ pub async fn sftp_download_file_stream(
 /// 上传场景：用本地 mtime 设置远端文件；仅同步时间戳，不改变远端权限位。
 async fn apply_remote_mtime_from_local(sftp: &russh_sftp::client::SftpSession, remote_path: &str, local_path: &str) {
     use russh_sftp::protocol::FileAttributes;
-    let Ok(meta) = std::fs::metadata(local_path) else { return };
+    let Ok(meta) = tokio::fs::metadata(local_path).await else { return };
     let Some(mtime) = meta
         .modified()
         .ok()
@@ -2029,12 +2155,16 @@ async fn apply_remote_mtime_from_local(sftp: &russh_sftp::client::SftpSession, r
     let _ = sftp.set_metadata(remote_path, attrs).await;
 }
 
-/// 下载场景：用远端 mtime 设置本地文件修改时间（失败忽略）。
-fn apply_local_mtime_from_remote(remote_mtime: Option<u32>, local_path: &str) {
+/// 下载场景：用远端 mtime 设置本地文件修改时间（失败忽略，放到阻塞线程池避免阻塞 Tokio worker）。
+async fn apply_local_mtime_from_remote(remote_mtime: Option<u32>, local_path: &str) {
     let Some(mtime) = remote_mtime else { return };
-    let Ok(file) = std::fs::OpenOptions::new().write(true).open(local_path) else { return };
-    let timestamp = std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime as u64);
-    let _ = file.set_modified(timestamp);
+    let path_owned = local_path.to_string();
+    let _ = tokio::task::spawn_blocking(move || {
+        let Ok(file) = std::fs::OpenOptions::new().write(true).open(&path_owned) else { return };
+        let timestamp = std::time::UNIX_EPOCH + std::time::Duration::from_secs(mtime as u64);
+        let _ = file.set_modified(timestamp);
+    })
+    .await;
 }
 
 /// 流式上传本地文件到远程路径（使用已有的 SFTP 会话）。
@@ -2258,25 +2388,29 @@ pub async fn sftp_upload_file_with_session(
                                         ));
                                     }
                                     let written = (actual_size - transferred) as usize;
-                                    if written >= n {
-                                        // 报错但本 chunk 实际已完整落盘：视为成功，避免重复写入
-                                        write_ok = true;
-                                        break;
-                                    }
-                                    chunk_written = written;
                                     let reopen_result = timeout(
                                         Duration::from_secs(30),
                                         sftp.open_with_flags(&sftp_tmp_path, OpenFlags::WRITE | OpenFlags::APPEND),
                                     ).await;
-                                    match reopen_result {
-                                        Ok(Ok(f)) => { remote_file = f; }
+                                    let mut reopened = match reopen_result {
+                                        Ok(Ok(f)) => f,
                                         Ok(Err(e2)) => {
                                             return Err(format!("SFTP reopen failed after write error: {} (original: {})", e2, e));
                                         }
                                         Err(_) => {
                                             return Err(format!("SFTP reopen timed out after write error: {}", e));
                                         }
+                                    };
+                                    if let Err(se) = reopened.seek(std::io::SeekFrom::Start(actual_size)).await {
+                                        return Err(format!("SFTP seek failed after reopen: {} (original: {})", se, e));
                                     }
+                                    remote_file = reopened;
+                                    if written >= n {
+                                        // 报错但本 chunk 实际已完整落盘：已重新打开有效句柄并对齐偏移，安全退出重试循环
+                                        write_ok = true;
+                                        break;
+                                    }
+                                    chunk_written = written;
                                 } else {
                                     return Err(format!("SFTP write failed after 3 retries: {}", e));
                                 }
@@ -2693,7 +2827,7 @@ pub async fn sftp_download_file_with_session(
 
     // 元数据保留：同步本地文件修改时间（读取远端 mtime 失败时跳过）
     if let Ok(meta) = sftp.metadata(remote_path).await {
-        apply_local_mtime_from_remote(meta.mtime, local_path);
+        apply_local_mtime_from_remote(meta.mtime, local_path).await;
     }
 
     Ok(())
@@ -2999,8 +3133,13 @@ pub async fn sftp_canonicalize(server_id: &str, path: &str) -> Result<String, St
         .map_err(|e| format!("SFTP canonicalize failed: {}", e))
 }
 
-/// 通过 SFTP 读取远程文件全部内容为 Vec<u8>（小文件专用，大文件请用 sftp_download_file_stream）。
+/// 单次在线文本读取最大字节数（10MB，防止读取超大文件导致内存暴涨）
+pub const FILE_READ_MAX_BYTES: usize = 10 * 1024 * 1024;
+
+/// 通过 SFTP 读取远程文件全部内容为 Vec<u8>（小文件专用，受 `FILE_READ_MAX_BYTES` 上限保护；大文件请用 sftp_download_file_stream）。
 pub async fn sftp_read_file_bytes(server_id: &str, path: &str) -> Result<Vec<u8>, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
     let conn = SshManager::global()
         .get_connection(server_id)
         .map_err(|e| e.to_string())?;
@@ -3008,16 +3147,168 @@ pub async fn sftp_read_file_bytes(server_id: &str, path: &str) -> Result<Vec<u8>
         .create_sftp_session()
         .await
         .map_err(|e| format!("SFTP session failed: {}", e))?;
+    if let Ok(meta) = tokio::time::timeout(Duration::from_secs(30), sftp.metadata(path)).await {
+        if let Ok(m) = meta {
+            if m.len() > FILE_READ_MAX_BYTES as u64 {
+                return Err(format!(
+                    "File too large to read ({} bytes, max {} bytes)",
+                    m.len(),
+                    FILE_READ_MAX_BYTES
+                ));
+            }
+        }
+    }
+    let mut file = tokio::time::timeout(Duration::from_secs(30), sftp.open(path))
+        .await
+        .map_err(|_| "SFTP open timed out".to_string())?
+        .map_err(|e| format!("SFTP open failed: {}", e))?;
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 32 * 1024];
+    loop {
+        let n = tokio::time::timeout(Duration::from_secs(60), file.read(&mut chunk))
+            .await
+            .map_err(|_| "SFTP read timed out".to_string())?
+            .map_err(|e| format!("SFTP read failed: {}", e))?;
+        if n == 0 {
+            break;
+        }
+        if buf.len() + n > FILE_READ_MAX_BYTES {
+            let _ = file.shutdown().await;
+            return Err(format!(
+                "File too large to read (exceeds max {} bytes)",
+                FILE_READ_MAX_BYTES
+            ));
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    let _ = file.shutdown().await;
+    Ok(buf)
+}
+
+/// 通过 SFTP 读取远程文件最多 `max_bytes` 字节（如读取远程 `.gitignore`）
+pub async fn sftp_read_file_bytes_bounded(
+    server_id: &str,
+    path: &str,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    use tokio::io::AsyncReadExt;
+
+    let conn = SshManager::global()
+        .get_connection(server_id)
+        .map_err(|e| e.to_string())?;
+    let sftp = conn
+        .create_sftp_session()
+        .await
+        .map_err(|e| format!("SFTP session failed: {}", e))?;
+    let meta = sftp
+        .metadata(path)
+        .await
+        .map_err(|e| format!("SFTP stat failed: {}", e))?;
+    if meta.is_dir() {
+        return Err("Remote path is a directory".to_string());
+    }
+    let to_read = (meta.len() as usize).min(max_bytes);
     let mut file = sftp
         .open(path)
         .await
         .map_err(|e| format!("SFTP open failed: {}", e))?;
-    let mut buf = Vec::new();
-    use tokio::io::AsyncReadExt;
-    file.read_to_end(&mut buf)
-        .await
-        .map_err(|e| format!("SFTP read failed: {}", e))?;
+    let mut buf = vec![0u8; to_read];
+    let mut pos = 0usize;
+    while pos < to_read {
+        let n = file
+            .read(&mut buf[pos..])
+            .await
+            .map_err(|e| format!("SFTP read failed: {}", e))?;
+        if n == 0 {
+            break;
+        }
+        pos += n;
+    }
+    buf.truncate(pos);
     Ok(buf)
+}
+
+/// 通过 SFTP 分块读取远程文件指定字节区间（单次上限 4MB）
+pub async fn sftp_read_range(
+    server_id: &str,
+    remote_path: &str,
+    offset: u64,
+    len: u64,
+) -> Result<crate::files::remote_fs::FileChunkResult, String> {
+    use base64::Engine as _;
+    use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+
+    let conn = SshManager::global()
+        .get_connection(server_id)
+        .map_err(|e| e.to_string())?;
+    let sftp = conn
+        .create_sftp_session()
+        .await
+        .map_err(|e| format!("SFTP session failed: {}", e))?;
+
+    let meta = tokio::time::timeout(Duration::from_secs(30), sftp.metadata(remote_path))
+        .await
+        .map_err(|_| "SFTP stat timed out".to_string())?
+        .map_err(|e| format!("SFTP stat failed: {}", e))?;
+    if meta.is_dir() {
+        return Err("Remote path is a directory".to_string());
+    }
+    let total_size = meta.len();
+    let bounded_len = len.min(crate::files::remote_fs::MAX_READ_CHUNK_BYTES);
+
+    if offset >= total_size || bounded_len == 0 {
+        return Ok(crate::files::remote_fs::FileChunkResult {
+            data_base64: String::new(),
+            offset,
+            bytes_read: 0,
+            total_size,
+            eof: offset >= total_size,
+        });
+    }
+
+    let mut file = tokio::time::timeout(Duration::from_secs(30), sftp.open(remote_path))
+        .await
+        .map_err(|_| "SFTP open timed out".to_string())?
+        .map_err(|e| format!("SFTP open failed: {}", e))?;
+
+    if offset > 0 {
+        tokio::time::timeout(
+            Duration::from_secs(30),
+            file.seek(std::io::SeekFrom::Start(offset)),
+        )
+        .await
+        .map_err(|_| "SFTP seek timed out".to_string())?
+        .map_err(|e| format!("SFTP seek failed: {}", e))?;
+    }
+
+    let to_read = bounded_len.min(total_size - offset) as usize;
+    let mut buf = vec![0u8; to_read];
+    let mut pos = 0usize;
+    let mut hit_eof = false;
+    while pos < to_read {
+        let n = tokio::time::timeout(Duration::from_secs(60), file.read(&mut buf[pos..]))
+            .await
+            .map_err(|_| "SFTP read timed out".to_string())?
+            .map_err(|e| format!("SFTP read failed: {}", e))?;
+        if n == 0 {
+            hit_eof = true;
+            break;
+        }
+        pos += n;
+    }
+    let _ = file.shutdown().await;
+    buf.truncate(pos);
+
+    let bytes_read = pos as u64;
+    let eof = hit_eof || offset.saturating_add(bytes_read) >= total_size;
+
+    Ok(crate::files::remote_fs::FileChunkResult {
+        data_base64: base64::engine::general_purpose::STANDARD.encode(&buf),
+        offset,
+        bytes_read,
+        total_size,
+        eof,
+    })
 }
 
 

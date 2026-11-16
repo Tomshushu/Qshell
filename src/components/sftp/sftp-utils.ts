@@ -78,6 +78,7 @@ export const createEmptyRightTab = (
   syncBrowsing: false,
   syncPairRoot: null,
   compareActive: false,
+  remoteDrives: [],
   viewMode: defaultViewMode,
   showHidden: defaultShowHidden,
 });

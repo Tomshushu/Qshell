@@ -21,6 +21,7 @@ import {
   Palette,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useTerminalLockStore } from "@/store/terminal-lock-store";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -211,6 +212,13 @@ export function ComposeBar({
   // Global toggle listener: self-contained toggle & focus management
   useEffect(() => {
     const handleToggle = (e?: Event) => {
+      const currentActiveTabId = useAppStore.getState().activeTabId;
+      if (
+        currentActiveTabId &&
+        useTerminalLockStore.getState().isTabLocked(currentActiveTabId)
+      ) {
+        return;
+      }
       const customEvt = e as CustomEvent<{ forceToggle?: boolean }>;
       const isVisible = useAppStore.getState().terminalComposeBarVisible;
 
@@ -387,14 +395,12 @@ export function ComposeBar({
     // 规则与 workspace-slice 的 broadcastAllTabs / broadcastToSplit / broadcastToColor 一致。
     const isEligible = (tab: (typeof tabs)[number]): boolean => {
       if (tab.module !== "terminal") return false;
+      if (useTerminalLockStore.getState().isTabLocked(tab.id)) return false;
       const sv = servers.find((s) => s.id === tab.serverId);
       if (!sv) return false;
-      const flags = getServerConnectionFlags(sv.targetType, sv.protocol);
-      return (
-        !flags.isSerialServer &&
-        !flags.isDeviceManagedServer &&
-        sv.protocol !== "rdp"
-      );
+      // 统一复用连接能力判定：supportsBroadcast 已排除串口/本地终端/设备管理类/RDP，
+      // 与键盘广播（workspace-slice）保持同一策略，避免 Compose Bar 把命令误发到本机 Shell。
+      return getServerConnectionFlags(sv.targetType, sv.protocol).supportsBroadcast;
     };
 
     const toTarget = (tab: (typeof tabs)[number], sid: string): TargetInfo => {
@@ -408,6 +414,12 @@ export function ComposeBar({
     };
 
     if (target === "active") {
+      if (
+        effectiveTabId &&
+        useTerminalLockStore.getState().isTabLocked(effectiveTabId)
+      ) {
+        return [];
+      }
       const effSessionId = activeSessionId || (currentTab ? sshService.getTabActiveSessionId(currentTab.id) : undefined);
       if (effSessionId && sshService.isSessionAlive(effSessionId)) {
         return [
@@ -498,6 +510,7 @@ export function ComposeBar({
 
       for (const t of targets) {
         if (generation !== dispatchGenRef.current) return;
+        if (t.tabId && useTerminalLockStore.getState().isTabLocked(t.tabId)) continue;
         try {
           if (lineByLine && isMultiLine) {
             // 逐行延时发送

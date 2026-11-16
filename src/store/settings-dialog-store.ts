@@ -8,6 +8,7 @@ export type SettingsTab =
   | "ai"
   | "terminal"
   | "sftp"
+  | "auth_profiles"
   | "logs"
   | "shortcuts"
   | "known_hosts";

@@ -95,6 +95,14 @@ pub async fn servers_update(
                 || obj.contains_key("connectionTimeout")
                 || obj.contains_key("targetType")
                 || obj.contains_key("protocol")
+                || obj.contains_key("forwardAgent")
+                || obj.contains_key("x11Forwarding")
+                || obj.contains_key("authProfileId")
+                || obj.contains_key("sshKeyId")
+                || obj.contains_key("agentIdentity")
+                || obj.contains_key("certificatePath")
+                || obj.contains_key("proxyConfig")
+                || obj.contains_key("fileTransferConfig")
         })
         .unwrap_or(false);
 
@@ -106,14 +114,11 @@ pub async fn servers_update(
     .map_err(|e| format!("Task join error: {}", e))?;
     match result {
         Ok(()) => {
-            // 连接相关字段变更：断开旧连接，确保后续操作使用新配置重连
-            if connection_fields_changed
-                && crate::ssh::manager::SshManager::global()
-                    .is_connected_sync(&id_for_disconnect)
-            {
-                let _ = crate::ssh::manager::SshManager::global()
-                    .disconnect(&id_for_disconnect)
-                    .await;
+            crate::files::remote_fs::clear_protocol_cache(&id_for_disconnect).await;
+            // 连接相关字段变更：断开旧连接，确保后续操作使用新配置重连（含仅开启 SFTP 子连接的场景）
+            let mgr = crate::ssh::manager::SshManager::global();
+            if connection_fields_changed && mgr.has_server_or_child_connection_sync(&id_for_disconnect) {
+                let _ = mgr.disconnect(&id_for_disconnect).await;
             }
             Ok(OperationResult::ok())
         }
@@ -237,6 +242,43 @@ pub async fn servers_purge_batch(ids: Vec<String>) -> Result<OperationResult, St
     Ok(OperationResult::ok())
 }
 
+/// 批量原子编辑多台服务器的公共属性（分组/标签/超时/Agent转发/身份凭证）（P1-12）
+#[tauri::command]
+pub async fn servers_batch_update(
+    ids: Vec<String>,
+    patch: String,
+) -> Result<OperationResult, String> {
+    let parsed_patch: db::ServerBatchPatch = match serde_json::from_str(&patch) {
+        Ok(p) => p,
+        Err(e) => return Ok(OperationResult::fail(format!("Invalid batch patch: {}", e))),
+    };
+    let disconnect_on_auth_change =
+        parsed_patch.auth_profile_id.is_some()
+            || parsed_patch.forward_agent.is_some()
+            || parsed_patch.x11_forwarding.is_some()
+            || parsed_patch.connection_timeout.is_some();
+
+    let ids_clone = ids.clone();
+    let result = tokio::task::spawn_blocking(move || db::servers_batch_update(ids_clone, parsed_patch))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?;
+
+    match result {
+        Ok(updated_count) => {
+            if disconnect_on_auth_change {
+                let mgr = crate::ssh::manager::SshManager::global();
+                for id in &ids {
+                    if mgr.has_server_or_child_connection_sync(id) {
+                        let _ = mgr.disconnect(id).await;
+                    }
+                }
+            }
+            Ok(OperationResult::ok_with_message(format!("{}", updated_count)))
+        }
+        Err(e) => Ok(OperationResult::fail(e)),
+    }
+}
+
 /// 清理超过 retention_days 天的回收站项，返回清理条数
 #[tauri::command]
 pub async fn servers_cleanup_trash(retention_days: i64) -> Result<u64, String> {
@@ -270,6 +312,49 @@ struct ExportEnvelope {
     exported_at: i64,
     count: usize,
     crypto: crypto::ExportCryptData,
+}
+
+/// 导出 payload 中关联的全局身份凭证（明文 JSON，外层经 Argon2id + AES-256-GCM 加密）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportAuthProfile {
+    id: String,
+    name: String,
+    #[serde(default)]
+    username: String,
+    auth_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ssh_key_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    private_key_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    private_key_passphrase: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_identity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    certificate_path: Option<String>,
+    #[serde(default)]
+    forward_agent: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportBundle {
+    servers: Vec<ExportServer>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    auth_profiles: Vec<ExportAuthProfile>,
+}
+
+/// 同时兼容新版对象包（含 `authProfiles`）与历史纯数组导出格式
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+enum ExportPayload {
+    Bundle(ExportBundle),
+    LegacyServers(Vec<ExportServer>),
 }
 
 /// 导出 payload 中的单条服务器记录（明文 JSON）
@@ -341,6 +426,18 @@ struct ExportServer {
     /// 关联的密钥库记录 ID
     #[serde(skip_serializing_if = "Option::is_none")]
     ssh_key_id: Option<String>,
+    /// 关联的全局身份凭证 ID
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auth_profile_id: Option<String>,
+    /// 是否启用 SSH Agent 转发
+    #[serde(default)]
+    forward_agent: bool,
+    /// 是否启用 SSH X11 图形转发
+    #[serde(default)]
+    x11_forwarding: bool,
+    /// 单服务器终端 TERM 类型覆写
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    terminal_type: Option<String>,
     /// 私钥文件内容（明文）
     #[serde(skip_serializing_if = "Option::is_none")]
     private_key_content: Option<String>,
@@ -368,6 +465,10 @@ struct ExportServer {
     credentials_config: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     logon_scripts_config: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_logging_config: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rdp_config: Option<String>,
     /// 所属分组路径（从根到直接父分组的名称链，用于跨机器还原分组结构）
     #[serde(skip_serializing_if = "Option::is_none")]
     group_path: Option<Vec<String>>,
@@ -495,6 +596,10 @@ fn to_export_server(
         bmc_allow_invalid_certs: server.bmc_allow_invalid_certs,
         tls_allow_invalid_certs: Some(server.allow_invalid_tls_certs()),
         ssh_key_id: server.ssh_key_id.clone(),
+        auth_profile_id: server.auth_profile_id.clone(),
+        forward_agent: server.forward_agent,
+        x11_forwarding: server.x11_forwarding,
+        terminal_type: server.terminal_type.clone(),
         private_key_content: None,
         certificate_content: None,
         proxy_config: server.proxy_config.clone(),
@@ -504,6 +609,8 @@ fn to_export_server(
         file_transfer_config: server.file_transfer_config.clone(),
         credentials_config: server.credentials_config.clone(),
         logon_scripts_config: server.logon_scripts_config.clone(),
+        session_logging_config: server.session_logging_config.clone(),
+        rdp_config: server.rdp_config.clone(),
         group_path: server.group_id.as_ref().and_then(|gid| groups_paths.get(gid)).cloned(),
     })
 }
@@ -567,9 +674,43 @@ pub async fn servers_export(
             .map(|s| to_export_server(s, &groups_paths))
             .collect::<Result<_, _>>()?;
 
-        // 4. 序列化明文 payload
-        let payload = serde_json::to_string(&export_servers)
-            .map_err(|e| format!("Failed to serialize export data: {}", e))?;
+        // 3.5 收集关联的全局身份凭证（解密后随加密包一并导出，避免跨机器导入后凭证引用悬空）
+        let mut export_profiles = Vec::new();
+        let mut seen_profile_ids = HashSet::new();
+        for s in &export_servers {
+            if let Some(ref pid) = s.auth_profile_id {
+                let trimmed = pid.trim();
+                if !trimmed.is_empty() && seen_profile_ids.insert(trimmed.to_string()) {
+                    if let Ok(profile) = db::auth_profiles_get_raw(trimmed) {
+                        export_profiles.push(ExportAuthProfile {
+                            id: profile.id,
+                            name: profile.name,
+                            username: profile.username,
+                            auth_type: profile.auth_type,
+                            password: profile.password,
+                            ssh_key_id: profile.ssh_key_id,
+                            private_key_path: profile.private_key_path,
+                            private_key_passphrase: profile.private_key_passphrase,
+                            agent_identity: profile.agent_identity,
+                            certificate_path: profile.certificate_path,
+                            forward_agent: profile.forward_agent,
+                            notes: profile.notes,
+                        });
+                    }
+                }
+            }
+        }
+
+        // 4. 序列化明文 payload（无关联全局凭证时沿用历史数组格式以保持向后兼容）
+        let payload = if export_profiles.is_empty() {
+            serde_json::to_string(&export_servers)
+        } else {
+            serde_json::to_string(&ExportBundle {
+                servers: export_servers.clone(),
+                auth_profiles: export_profiles,
+            })
+        }
+        .map_err(|e| format!("Failed to serialize export data: {}", e))?;
 
         // 5. 加密 payload
         let crypt_data = crypto::encrypt_export(&payload, &password)
@@ -659,11 +800,36 @@ pub async fn servers_import(
             )));
         }
 
-        // 3. 解密 payload。
+        // 3. 解密 payload（同时兼容新版含 authProfiles 的对象包与历史数组格式）
         let plaintext = crypto::decrypt_export(&envelope.crypto, &password)
             .map_err(|e| format!("Failed to decrypt (incorrect password or corrupted file): {}", e))?;
-        let servers: Vec<ExportServer> = serde_json::from_str(&plaintext)
-            .map_err(|e| format!("Failed to parse server list: {}", e))?;
+        let (servers, auth_profiles) = match serde_json::from_str::<ExportPayload>(&plaintext)
+            .map_err(|e| format!("Failed to parse server list: {}", e))?
+        {
+            ExportPayload::Bundle(bundle) => (bundle.servers, bundle.auth_profiles),
+            ExportPayload::LegacyServers(list) => (list, Vec::new()),
+        };
+
+        // 4. 先还原随包导出的全局身份凭证（仅当本地不存在同 ID 凭证时写入，避免覆盖本地已有凭证）
+        for profile in auth_profiles {
+            if db::auth_profiles_exists(&profile.id).unwrap_or(false) {
+                continue;
+            }
+            let _ = db::auth_profiles_add(db::AuthProfileInput {
+                id: Some(profile.id),
+                name: profile.name,
+                username: Some(profile.username),
+                auth_type: Some(profile.auth_type),
+                password: profile.password,
+                ssh_key_id: profile.ssh_key_id,
+                private_key_path: profile.private_key_path,
+                private_key_passphrase: profile.private_key_passphrase,
+                agent_identity: profile.agent_identity,
+                certificate_path: profile.certificate_path,
+                forward_agent: Some(profile.forward_agent),
+                notes: profile.notes,
+            });
+        }
 
         let total = servers.len();
         let mut imported = 0;
@@ -672,7 +838,12 @@ pub async fn servers_import(
         let mut imported_ids = Vec::new();
 
         // 5. 逐条导入（Xshell/FinalShell 模式：密钥直接随服务器存储与内联关联）
-        for (idx, server) in servers.into_iter().enumerate() {
+        for (idx, mut server) in servers.into_iter().enumerate() {
+            if let Some(ref pid) = server.auth_profile_id {
+                if !db::auth_profiles_exists(pid).unwrap_or(false) {
+                    server.auth_profile_id = None;
+                }
+            }
             // 如果服务器自带 keys_config 则直接复用；若无但配置了私钥/证书，则自动构建该服务器下的 authKeys
             let keys_config = if let Some(ref kc) = server.keys_config {
                 if !kc.trim().is_empty() {
@@ -747,6 +918,10 @@ pub async fn servers_import(
                 "bmcAllowInvalidCerts": server.bmc_allow_invalid_certs,
                 "tlsAllowInvalidCerts": server.effective_tls_allow_invalid_certs(),
                 "sshKeyId": server.ssh_key_id,
+                "authProfileId": server.auth_profile_id,
+                "forwardAgent": server.forward_agent,
+                "x11Forwarding": server.x11_forwarding,
+                "terminalType": server.terminal_type,
                 "proxyConfig": server.proxy_config,
                 "tunnelsConfig": server.tunnels_config,
                 "keysConfig": keys_config,
@@ -754,6 +929,8 @@ pub async fn servers_import(
                 "fileTransferConfig": server.file_transfer_config,
                 "credentialsConfig": server.credentials_config,
                 "logonScriptsConfig": server.logon_scripts_config,
+                "sessionLoggingConfig": server.session_logging_config,
+                "rdpConfig": server.rdp_config,
                 "groupId": group_id,
             });
             let input_str = input.to_string();
@@ -944,5 +1121,52 @@ mod tests {
         }"#;
         let legacy: ExportServer = serde_json::from_str(legacy_json).expect("parse legacy export");
         assert!(legacy.credentials_config.is_none());
+    }
+
+    #[test]
+    fn export_payload_supports_bundle_and_legacy_array() {
+        let bundle_json = r#"{
+            "servers": [{
+                "name": "srv-bound",
+                "host": "10.0.0.5",
+                "port": 22,
+                "username": "",
+                "authType": "password",
+                "tags": [],
+                "connectionTimeout": 30,
+                "favorite": false,
+                "authProfileId": "auth-1"
+            }],
+            "authProfiles": [{
+                "id": "auth-1",
+                "name": "Ops Root",
+                "username": "ops",
+                "authType": "password",
+                "password": "secret"
+            }]
+        }"#;
+        let bundle_parsed: ExportPayload = serde_json::from_str(bundle_json).expect("parse bundle");
+        match bundle_parsed {
+            ExportPayload::Bundle(b) => {
+                assert_eq!(b.servers.len(), 1);
+                assert_eq!(b.auth_profiles.len(), 1);
+                assert_eq!(b.auth_profiles[0].id, "auth-1");
+            }
+            _ => panic!("expected bundle"),
+        }
+
+        let legacy_arr_json = r#"[{
+            "name": "srv-legacy",
+            "host": "10.0.0.6",
+            "port": 22,
+            "username": "root",
+            "authType": "password",
+            "tags": [],
+            "connectionTimeout": 30,
+            "favorite": false
+        }]"#;
+        let legacy_parsed: ExportPayload =
+            serde_json::from_str(legacy_arr_json).expect("parse legacy array");
+        assert!(matches!(legacy_parsed, ExportPayload::LegacyServers(v) if v.len() == 1));
     }
 }

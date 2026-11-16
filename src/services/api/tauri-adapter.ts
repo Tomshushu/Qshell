@@ -10,6 +10,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { useSessionTrafficStore } from "@/store/session-traffic-store";
 import type { BackendAdapter } from "./types";
 import type {
   CommandResult,
@@ -23,6 +24,8 @@ import type {
   FileDownloadResult,
   FileUploadResult,
   FileStatInfo,
+  FileChunkResult,
+  ExclusionConfigOptions,
   DockerImage,
   DockerNetwork,
   DockerVolume,
@@ -50,6 +53,7 @@ import type {
   TailHandle,
   SshStateResult,
   ConnectionStateData,
+  AuthInteractionRequest,
   ImportResult,
   AuditLog,
   GenerateKeyRequest,
@@ -74,6 +78,10 @@ import type {
   McpTestConnectionResult,
   ActiveMcpTool,
   McpToolCallResult,
+  ServerBatchPatch,
+  AuthProfile,
+  AuthProfileInput,
+  AuthProfileUpdate,
 } from "./types";
 import { ConnectionState } from "@/services/ssh-connection-state";
 import type {
@@ -89,6 +97,7 @@ import type {
   ServiceDependencies,
   ProcessInfo,
   PortInfo,
+  X11EnvironmentProbe,
   DockerContainer,
   FileEntry,
   NetOverview,
@@ -180,6 +189,7 @@ function ensureShellListener(): Promise<void> {
     // 串口模块额外携带 reason（如 device_disconnected），转发给上层决定是否自动重连
     await listen<ShellOutputData & { reason?: string }>("ssh:shell-closed", (event) => {
       const data = event.payload;
+      useSessionTrafficStore.getState().clearSessionTraffic(data.sessionId);
       notifySafely(shellClosedCallbacks, {
         sessionId: data.sessionId,
         reason: data.reason,
@@ -189,12 +199,23 @@ function ensureShellListener(): Promise<void> {
     // 串口模块额外携带 reason（device_disconnected），转发给上层决定是否自动重连
     await listen<ShellOutputData & { error?: string; reason?: string }>("ssh:shell-error", (event) => {
       const data = event.payload;
+      useSessionTrafficStore.getState().clearSessionTraffic(data.sessionId);
       notifySafely(shellErrorCallbacks, {
         sessionId: data.sessionId,
         error: data.error || data.data || "Shell error",
         reason: data.reason,
       });
     });
+    // session:traffic：终端会话实时 RX/TX 字节快照（500ms 节流推送）
+    await listen<{ sessionId: string; rxBytes: number; txBytes: number }>(
+      "session:traffic",
+      (event) => {
+        const data = event.payload;
+        useSessionTrafficStore
+          .getState()
+          .updateTraffic(data.sessionId, data.rxBytes, data.txBytes);
+      },
+    );
     // ssh:shell-zmodem-detected：后端检测到 Zmodem 起始序列，前端进入 Zmodem UI 模式
     await listen<{ sessionId: string; data?: string }>(
       "ssh:shell-zmodem-detected",
@@ -355,6 +376,7 @@ function ensureTransferListener(): Promise<void> {
 const sshConnectedCallbacks = new Set<(data: SshEventData) => void>();
 const sshDisconnectedCallbacks = new Set<(data: SshEventData) => void>();
 const sshStateChangedCallbacks = new Set<(data: ConnectionStateData) => void>();
+const sshAuthInteractionCallbacks = new Set<(data: AuthInteractionRequest) => void>();
 const serverOsDetectedCallbacks = new Set<
   (data: { serverId: string; osType: string; osInfo: string }) => void
 >();
@@ -384,6 +406,9 @@ function ensureSshConnectionListener(): Promise<void> {
     });
     await listen<ConnectionStateData>("ssh:state-changed", (event) => {
       sshStateChangedCallbacks.forEach((cb) => cb(event.payload));
+    });
+    await listen<AuthInteractionRequest>("ssh:auth-interaction-required", (event) => {
+      sshAuthInteractionCallbacks.forEach((cb) => cb(event.payload));
     });
     await listen<{ serverId: string; osType: string; osInfo: string }>(
       "server:os-detected",
@@ -534,6 +559,9 @@ function normalizeServer(raw: Record<string, unknown> | null): Server {
     agentIdentity: raw.agent_identity || raw.agentIdentity,
     certificatePath: raw.certificate_path || raw.certificatePath,
     sshKeyId: raw.ssh_key_id || raw.sshKeyId,
+    authProfileId: (raw.auth_profile_id || raw.authProfileId || null) as string | null,
+    forwardAgent: Boolean(raw.forward_agent ?? raw.forwardAgent),
+    x11Forwarding: Boolean(raw.x11_forwarding ?? raw.x11Forwarding),
     tags,
     protocols,
     targetType: raw.target_type || raw.targetType || "linux",
@@ -552,6 +580,8 @@ function normalizeServer(raw: Record<string, unknown> | null): Server {
     tunnelsConfig: raw.tunnels_config || raw.tunnelsConfig || null,
     keysConfig: raw.keys_config || raw.keysConfig || null,
     serialConfig: raw.serial_config || raw.serialConfig || null,
+    sessionLoggingConfig: raw.session_logging_config || raw.sessionLoggingConfig || null,
+    rdpConfig: raw.rdp_config || raw.rdpConfig || null,
     groupId: raw.group_id || raw.groupId || null,
     lastAccessedAt: raw.last_accessed_at || raw.lastAccessedAt,
     lastDisconnectedAt: raw.last_disconnected_at || raw.lastDisconnectedAt,
@@ -612,6 +642,12 @@ export const tauriAdapter: BackendAdapter = {
     },
     async deleteBatch(ids: string[]): Promise<OperationResult> {
       return safeInvoke<OperationResult>("servers_delete_batch", { ids });
+    },
+    async batchUpdate(ids: string[], patch: ServerBatchPatch): Promise<OperationResult> {
+      return safeInvoke<OperationResult>("servers_batch_update", {
+        ids,
+        patch: JSON.stringify(patch),
+      });
     },
     async restoreBatch(ids: string[]): Promise<OperationResult> {
       return safeInvoke<OperationResult>("servers_restore_batch", { ids });
@@ -791,6 +827,19 @@ export const tauriAdapter: BackendAdapter = {
         sshStateChangedCallbacks.delete(callback);
       };
     },
+    async submitAuthInteraction(requestId, responses): Promise<boolean> {
+      return safeInvoke<boolean>("ssh_submit_auth_interaction", {
+        requestId,
+        responses,
+      });
+    },
+    onAuthInteractionRequired(callback): () => void {
+      sshAuthInteractionCallbacks.add(callback);
+      void ensureSshConnectionListener();
+      return () => {
+        sshAuthInteractionCallbacks.delete(callback);
+      };
+    },
     onProbeProgress(callback): () => void {
       // 每次订阅独立注册 listener，探测事件仅在 checkAllServers 期间触发
       // 返回 unsubscribe 函数供调用方在探测结束后清理
@@ -814,6 +863,7 @@ export const tauriAdapter: BackendAdapter = {
       cols,
       rows,
       encoding = "utf-8",
+      termType,
     ): Promise<CreateShellResult> {
       // 先注册全局事件监听，避免通道建立后首批 output/error/closed 事件丢失
       await ensureShellListener();
@@ -822,6 +872,7 @@ export const tauriAdapter: BackendAdapter = {
         cols,
         rows,
         encoding,
+        ...(termType ? { termType } : {}),
       });
     },
     async writeToShell(sessionId, data): Promise<void> {
@@ -934,6 +985,12 @@ export const tauriAdapter: BackendAdapter = {
         return safeInvoke<SshAgentIdentity[]>("ssh_list_agent_identities");
       },
     },
+    async probeX11Environment(): Promise<X11EnvironmentProbe> {
+      return safeInvoke<X11EnvironmentProbe>("x11_probe_environment");
+    },
+    async importX11Addon(archivePath: string): Promise<X11EnvironmentProbe> {
+      return safeInvoke<X11EnvironmentProbe>("x11_import_addon", { archivePath });
+    },
   },
 
   // ==================== Telnet 协议（P0-5） ====================
@@ -949,7 +1006,9 @@ export const tauriAdapter: BackendAdapter = {
       rows: number,
       timeoutSecs?: number,
       encoding = "utf-8",
+      termType?: string,
     ): Promise<CreateShellResult> {
+      await ensureShellListener();
       return safeInvoke<CreateShellResult>("telnet_create_shell", {
         serverId,
         host,
@@ -958,6 +1017,36 @@ export const tauriAdapter: BackendAdapter = {
         rows,
         timeoutSecs: timeoutSecs ?? null,
         encoding,
+        ...(termType ? { termType } : {}),
+      });
+    },
+  },
+
+  // ==================== 本地 Shell / ConPTY（P0-02） ====================
+  local: {
+    async listProfiles(): Promise<import('@/types').LocalShellProfile[]> {
+      return safeInvoke<import('@/types').LocalShellProfile[]>("local_list_profiles");
+    },
+    async createShell(
+      serverId: string,
+      options?: {
+        profileId?: string;
+        cwd?: string;
+        cols?: number;
+        rows?: number;
+        encoding?: string;
+        termType?: string;
+      },
+    ): Promise<CreateShellResult & { shellLabel?: string; shellPath?: string }> {
+      await ensureShellListener();
+      return safeInvoke<CreateShellResult & { shellLabel?: string; shellPath?: string }>("local_create_shell", {
+        serverId,
+        profileId: options?.profileId ?? null,
+        cwd: options?.cwd ?? null,
+        cols: options?.cols ?? 80,
+        rows: options?.rows ?? 24,
+        encoding: options?.encoding ?? "utf-8",
+        ...(options?.termType ? { termType: options.termType } : {}),
       });
     },
   },
@@ -1110,6 +1199,30 @@ export const tauriAdapter: BackendAdapter = {
     },
     async readFileContent(path: string): Promise<string> {
       return safeInvoke<string>("ssh_keys_read_file_content", { path });
+    },
+  },
+
+  // ==================== 全局身份凭证（跨主机复用，P1-11） ====================
+  authProfiles: {
+    async list(): Promise<AuthProfile[]> {
+      return invokeJson<AuthProfile[]>("auth_profiles_list");
+    },
+    async listForSync(): Promise<AuthProfile[]> {
+      return invokeJson<AuthProfile[]>("auth_profiles_list_for_sync");
+    },
+    async add(input: AuthProfileInput): Promise<OperationResult> {
+      return safeInvoke<OperationResult>("auth_profiles_add", {
+        profile: JSON.stringify(input),
+      });
+    },
+    async update(id: string, updates: AuthProfileUpdate): Promise<OperationResult> {
+      return safeInvoke<OperationResult>("auth_profiles_update", {
+        id,
+        updates: JSON.stringify(updates),
+      });
+    },
+    async delete(id: string): Promise<OperationResult> {
+      return safeInvoke<OperationResult>("auth_profiles_delete", { id });
     },
   },
 
@@ -1500,6 +1613,19 @@ export const tauriAdapter: BackendAdapter = {
       // 返回纯 base64 字符串（无 ::base64:: 前缀）
       return safeInvoke<string>("files_read_binary", { serverId, path });
     },
+    async readFileChunk(
+      serverId,
+      path,
+      offset,
+      len,
+    ): Promise<FileChunkResult> {
+      return safeInvoke<FileChunkResult>("files_read_chunk", {
+        serverId,
+        path,
+        offset,
+        len,
+      });
+    },
     async write(serverId, path, content): Promise<CommandResult> {
       return safeInvoke<CommandResult>("files_write", {
         serverId,
@@ -1558,11 +1684,13 @@ export const tauriAdapter: BackendAdapter = {
       serverId,
       remotePath,
       format,
+      transferId,
     ): Promise<FileDownloadResult> {
       return safeInvoke<FileDownloadResult>("files_download_archive", {
         serverId,
         remotePath,
         format,
+        transferId: transferId ?? null,
       });
     },
     async extractArchive(serverId, path, conflictAction): Promise<OperationResult> {
@@ -1659,12 +1787,34 @@ export const tauriAdapter: BackendAdapter = {
       enabled: boolean,
       patterns: string[],
       respectGitignore: boolean,
+      options?: ExclusionConfigOptions,
     ): Promise<void> {
-      await safeInvoke<void>("files_set_exclusion_config", {
+      const payload: Record<string, unknown> = {
         enabled,
         patterns,
         respectGitignore,
-      });
+      };
+      if (options) {
+        if (options.includePatterns !== undefined) {
+          payload.includePatterns = options.includePatterns;
+        }
+        if (options.minSizeBytes !== undefined) {
+          payload.minSizeBytes = options.minSizeBytes;
+        }
+        if (options.maxSizeBytes !== undefined) {
+          payload.maxSizeBytes = options.maxSizeBytes;
+        }
+        if (options.minMtimeMs !== undefined) {
+          payload.minMtimeMs = options.minMtimeMs;
+        }
+        if (options.maxMtimeMs !== undefined) {
+          payload.maxMtimeMs = options.maxMtimeMs;
+        }
+        if (options.fileKinds !== undefined) {
+          payload.fileKinds = options.fileKinds;
+        }
+      }
+      await safeInvoke<void>("files_set_exclusion_config", payload);
     },
     async setSymlinkPolicy(policy: "skip" | "follow"): Promise<void> {
       await safeInvoke<void>("files_set_symlink_policy", {
@@ -1763,6 +1913,12 @@ export const tauriAdapter: BackendAdapter = {
     async diagnoseSftp(serverId): Promise<SftpDiagnostics> {
       return invokeJson<SftpDiagnostics>("files_diagnose_sftp", { serverId });
     },
+    async getBackendCapabilities(serverId) {
+      return safeInvoke<import("@/types").RemoteFsCapabilities>(
+        "files_get_backend_capabilities",
+        { serverId },
+      );
+    },
     async scanDirectoryTree(
       serverId,
       basePath,
@@ -1780,11 +1936,13 @@ export const tauriAdapter: BackendAdapter = {
       serverId: string,
       remotePath: string,
       editorCmd?: string,
+      maxSizeBytes?: number | null,
     ): Promise<ExternalEditSession> {
       return safeInvoke<ExternalEditSession>("files_start_external_edit", {
         serverId,
         remotePath,
         editorCmd: editorCmd ?? null,
+        maxSizeBytes: maxSizeBytes ?? null,
       });
     },
     async stopExternalEdit(sessionId: string): Promise<boolean> {
@@ -2314,16 +2472,27 @@ export const tauriAdapter: BackendAdapter = {
   // ==================== RDP 远程桌面 ====================
   rdp: {
     async launch(config): Promise<OperationResult> {
-      const { serverId, rdpPort, width, height, fullscreen, colorDepth } =
-        config;
-      return safeInvoke<OperationResult>("rdp_launch", {
+      const {
+        serverId,
+        rdpPort,
+        width,
+        height,
+        fullscreen,
+        colorDepth,
+        options,
+      } = config;
+      const payload: Record<string, unknown> = {
         serverId,
         rdpPort: rdpPort ?? null,
         width: width ?? null,
         height: height ?? null,
         fullscreen: fullscreen ?? null,
         colorDepth: colorDepth ?? null,
-      });
+      };
+      if (options !== undefined) {
+        payload.options = options;
+      }
+      return safeInvoke<OperationResult>("rdp_launch", payload);
     },
   },
 

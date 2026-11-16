@@ -14,6 +14,7 @@ import { Switch } from '@/components/ui/switch'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { useToast } from '@/components/ui/toast'
 import { useAppStore } from '@/store'
+import { useSettingsDialogStore } from '@/store/settings-dialog-store'
 import { HOST_GROUP_ID, HOST_GROUP_NAME } from '@/lib/server-groups'
 import { sshService } from '@/services/ssh-service'
 import { backend } from '@/services/api'
@@ -21,6 +22,7 @@ import { useTranslation } from '@/i18n'
 import { cn } from '@/lib/utils'
 import { playSound, SoundType } from '@/lib/sound'
 import {
+  AlertTriangle,
   Eye,
   EyeOff,
   Loader2,
@@ -37,6 +39,7 @@ import {
   getServerProtocols,
   inferServerProtocols,
   parseFileTransferConfig,
+  parseLocalShellConfig,
 } from '@/services/connection-targets'
 import { InlineProxyEditor, InlineTunnelEditor } from '@/components/server/inline-network-config'
 import { LogonScriptsTab } from './logon-scripts-tab'
@@ -49,10 +52,12 @@ import type {
   ServerKeyEntry,
   SerialPortInfo,
   SerialConfig,
+  LocalShellProfile,
   FileTransferConfig,
   SessionLogFormat,
+  X11EnvironmentProbe,
 } from '@/types'
-import type { SshAgentIdentity, SshAgentStatus } from '@/services/api/types'
+import type { AuthProfile, SshAgentIdentity, SshAgentStatus } from '@/services/api/types'
 
 export type FormCategory = 'connection' | 'fileTransfer' | 'proxy' | 'tunnels' | 'logonScripts' | 'advanced'
 
@@ -348,15 +353,22 @@ export function ServerFormDialog({
   const [host, setHost] = useState('')
   const [port, setPort] = useState(String(initialSpec.defaultPort))
   const [username, setUsername] = useState(initialSpec.defaultUsername)
-  const [authType, setAuthType] = useState<'password' | 'privateKey' | 'sshAgent' | 'certificate'>(
+  const [authType, setAuthType] = useState<'password' | 'privateKey' | 'sshAgent' | 'certificate' | 'keyboardInteractive'>(
     initialTargetType === 'linux' ? initialSpec.defaultAuthType : 'password'
   )
+  const [authProfileId, setAuthProfileId] = useState('')
+  const [authProfiles, setAuthProfiles] = useState<AuthProfile[]>([])
   const [password, setPassword] = useState('')
   const [privateKeyPath, setPrivateKeyPath] = useState('')
   const [privateKeyPassphrase, setPrivateKeyPassphrase] = useState('')
   const [agentIdentity, setAgentIdentity] = useState('')
   const [certificatePath, setCertificatePath] = useState('')
   const [sshKeyId, setSshKeyId] = useState('')
+  const [forwardAgent, setForwardAgent] = useState(false)
+  const [x11Forwarding, setX11Forwarding] = useState(false)
+  const [x11Probe, setX11Probe] = useState<X11EnvironmentProbe | null>(null)
+  const [probingX11, setProbingX11] = useState(false)
+  const [importingX11Addon, setImportingX11Addon] = useState(false)
   const [authKeys, setAuthKeys] = useState<ServerKeyEntry[]>([])
   // 打开弹窗时的 keys_config 快照：列表读取会脱敏 passphrase，未改动时不得回写覆盖库中的加密凭据
   const initialKeysConfigRef = useRef<string | null>(null)
@@ -367,6 +379,7 @@ export function ServerFormDialog({
   const [groupId, setGroupId] = useState('')
   const [notes, setNotes] = useState('')
   const [connectionTimeout, setConnectionTimeout] = useState('30')
+  const [terminalType, setTerminalType] = useState('')
   const [rdpPort, setRdpPort] = useState('3389')
   const [vncPort, setVncPort] = useState('')
   const [vncPassword, setVncPassword] = useState('')
@@ -395,7 +408,7 @@ export function ServerFormDialog({
   const [detectedOsInfo, setDetectedOsInfo] = useState<string | null>(null)
 
   // 文件传输设置（SFTP / FTP / FTPS）
-  const [ftProtocol, setFtProtocol] = useState<'sftp' | 'ftp' | 'ftps'>('sftp')
+  const [ftProtocol, setFtProtocol] = useState<'auto' | 'sftp' | 'scp' | 'ftp' | 'ftps'>('sftp')
   const [ftPort, setFtPort] = useState('21')
   const [ftTlsMode, setFtTlsMode] = useState<'explicit' | 'implicit'>('explicit')
   const [ftUseServerCredentials, setFtUseServerCredentials] = useState(true)
@@ -405,7 +418,12 @@ export function ServerFormDialog({
   const [showFtPassword, setShowFtPassword] = useState(false)
   const [ftTransferMode, setFtTransferMode] = useState<'passive' | 'active'>('passive')
   const [ftEncoding, setFtEncoding] = useState<'utf-8' | 'gbk'>('utf-8')
-  const [ftAllowInvalidCerts, setFtAllowInvalidCerts] = useState(true)
+  const [ftAllowInvalidCerts, setFtAllowInvalidCerts] = useState(false)
+
+  // 本地终端 (Local Shell) 参数状态
+  const [localProfileId, setLocalProfileId] = useState('')
+  const [localCwd, setLocalCwd] = useState('')
+  const [availableLocalProfiles, setAvailableLocalProfiles] = useState<LocalShellProfile[]>([])
 
   // 串口 (Serial / COM) 参数状态
   const [serialPortName, setSerialPortName] = useState('COM1')
@@ -522,6 +540,9 @@ export function ServerFormDialog({
           }
 
           const isPasswordOnlyTarget = isWindows ? !winSshPort : serverProtocol !== 'ssh'
+          const supportsAuthProfileOnLoad = isWindows
+            ? Boolean(winSshPort || winRdpPort)
+            : serverProtocol === 'ssh'
 
           // Phase 1-D：把已保存的协议声明回填成「用户取消的附加协议」，
           // 否则下次编辑保存会把用户的选择悄悄恢复成按端口推断的全集。
@@ -567,8 +588,9 @@ export function ServerFormDialog({
           setAuthType(
             (isPasswordOnlyTarget
               ? 'password'
-              : existingServer.authType || 'password') as 'password' | 'privateKey' | 'sshAgent' | 'certificate'
+              : existingServer.authType || 'password') as 'password' | 'privateKey' | 'sshAgent' | 'certificate' | 'keyboardInteractive'
           )
+          setAuthProfileId(supportsAuthProfileOnLoad ? existingServer.authProfileId || '' : '')
           setPassword('') // 编辑时不回显密码
           setVncPassword('') // 编辑时不回显 VNC 密码
           setPrivateKeyPath(isPasswordOnlyTarget ? '' : existingServer.privateKeyPath || '')
@@ -576,6 +598,9 @@ export function ServerFormDialog({
           setAgentIdentity(isPasswordOnlyTarget ? '' : existingServer.agentIdentity || '')
           setCertificatePath(isPasswordOnlyTarget ? '' : existingServer.certificatePath || '')
           setSshKeyId(isPasswordOnlyTarget ? '' : existingServer.sshKeyId || '')
+          setForwardAgent(existingServer.forwardAgent === true)
+          setX11Forwarding(existingServer.x11Forwarding === true)
+          setX11Probe(null)
 
           const parsedKeys = parseKeysConfig(existingServer.keysConfig, existingServer)
           setAuthKeys(parsedKeys)
@@ -609,6 +634,7 @@ export function ServerFormDialog({
           setDetectedOsInfo(existingServer.osInfo || null)
           setNotes(existingServer.notes || '')
           setConnectionTimeout(String(existingServer.connectionTimeout || 30))
+          setTerminalType(existingServer.terminalType || '')
           if (!isWindows) {
             setRdpPort(String(existingServer.rdpPort || 3389))
           }
@@ -626,6 +652,7 @@ export function ServerFormDialog({
             inheritGlobal: Boolean(lsc.inheritGlobal),
             timeoutPolicy: lsc.timeoutPolicy || 'ignore',
             rules: Array.isArray(lsc.rules) ? lsc.rules : [],
+            parameters: Array.isArray(lsc.parameters) ? lsc.parameters : [],
             customScript: typeof lsc.customScript === 'string' ? lsc.customScript : '',
           })
         } catch {
@@ -674,7 +701,7 @@ export function ServerFormDialog({
         setFtPassword('')
         setFtTransferMode(ftCfg.transferMode || 'passive')
         setFtEncoding(ftCfg.encoding || 'utf-8')
-        setFtAllowInvalidCerts(ftCfg.allowInvalidCerts ?? true)
+        setFtAllowInvalidCerts(ftCfg.allowInvalidCerts ?? false)
       } else {
         setFtProtocol('sftp')
         setFtPort('21')
@@ -685,7 +712,7 @@ export function ServerFormDialog({
         setFtPassword('')
         setFtTransferMode('passive')
         setFtEncoding('utf-8')
-        setFtAllowInvalidCerts(true)
+        setFtAllowInvalidCerts(false)
       }
 
       if (existingServer.targetType === 'serial' || existingServer.protocol === 'serial') {
@@ -705,6 +732,15 @@ export function ServerFormDialog({
         setSerialBreakDuration(String(sc.breakDurationMs ?? 250))
         setSerialLocalEcho(sc.localEcho === true)
       }
+
+      if (existingServer.targetType === 'local' || existingServer.protocol === 'local') {
+        const lc = parseLocalShellConfig(existingServer.credentialsConfig)
+        setLocalProfileId(lc.profileId || '')
+        setLocalCwd(lc.cwd || '')
+      } else {
+        setLocalProfileId('')
+        setLocalCwd('')
+      }
     }
   } else {
     // 新建模式
@@ -717,12 +753,16 @@ export function ServerFormDialog({
       setPort(isWin ? '' : String(spec.defaultPort))
       setUsername(spec.defaultUsername)
       setAuthType(initialTargetType === 'linux' ? spec.defaultAuthType : 'password')
+      setAuthProfileId('')
       setPassword('')
       setPrivateKeyPath('')
       setPrivateKeyPassphrase('')
       setAgentIdentity('')
       setCertificatePath('')
       setSshKeyId('')
+      setForwardAgent(false)
+      setX11Forwarding(false)
+      setX11Probe(null)
       setAuthKeys([])
       setActiveKeyId('')
       setSelectedKeyIdInModal('')
@@ -730,6 +770,7 @@ export function ServerFormDialog({
       setGroupId(initialGroupId ?? '')
       setNotes('')
       setConnectionTimeout('30')
+      setTerminalType('')
       setDisabledProtocols([])
       setRdpPort(isWin ? '3389' : '3389')
       setVncPort('')
@@ -751,7 +792,7 @@ export function ServerFormDialog({
       setFtPassword('')
       setFtTransferMode('passive')
       setFtEncoding('utf-8')
-      setFtAllowInvalidCerts(true)
+      setFtAllowInvalidCerts(false)
       setSerialPortName('COM1')
       setSerialBaudRate('115200')
       setSerialDataBits('8')
@@ -766,6 +807,8 @@ export function ServerFormDialog({
       setSerialNewlineMode('auto')
       setSerialBreakDuration('250')
       setSerialLocalEcho(false)
+      setLocalProfileId('')
+      setLocalCwd('')
     }
     }
   }
@@ -785,6 +828,25 @@ export function ServerFormDialog({
       setLoadingSerialPorts(false)
     }
   }, [])
+
+  // 打开表单或全局凭证变化时刷新可选全局身份凭证
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    const refreshProfiles = () => {
+      sshService.listAuthProfiles()
+        .then((list) => {
+          if (!cancelled) setAuthProfiles(list)
+        })
+        .catch(() => {})
+    }
+    refreshProfiles()
+    window.addEventListener('qshell:auth-profiles-changed', refreshProfiles)
+    return () => {
+      cancelled = true
+      window.removeEventListener('qshell:auth-profiles-changed', refreshProfiles)
+    }
+  }, [open])
 
   // 加载 SSH Agent 身份
   const loadAgentIdentities = useCallback(async () => {
@@ -812,6 +874,15 @@ export function ServerFormDialog({
     void loadSerialPorts()
   }, [open, sessionKey, targetType, loadSerialPorts])
 
+  // 弹窗打开且目标类型为本地终端时，探测系统可用 Shell 列表
+  useEffect(() => {
+    if (!open || targetType !== 'local') return
+    void sshService
+      .listLocalShellProfiles()
+      .then((profiles) => setAvailableLocalProfiles(profiles))
+      .catch(() => {})
+  }, [open, sessionKey, targetType])
+
   // 认证方式切到 SSH Agent 时自动拉取身份，无需手动点「刷新」
   useEffect(() => {
     if (!open || authType !== 'sshAgent') return
@@ -833,10 +904,19 @@ export function ServerFormDialog({
     if (!isEditMode || !username.trim() || ['root', 'Administrator', 'admin', 'serial', 'vnc'].includes(username.trim())) {
       setUsername(spec.defaultUsername)
     }
-    if (newType === 'windows' || newType === 'bmc' || newType === 'serial' || newType === 'esxi' || newType === 'kubernetes') {
+    // 保存时仅在协议含 ssh/rdp 时写入 authProfileId；切到不支持凭证的目标类型时必须清空，
+    // 否则残留的 authProfileId 会绕过用户名/密码必填校验，但保存时又被丢弃，存出无凭据配置。
+    const nextProtocols = spec.supportedProtocols || []
+    if (!nextProtocols.includes('ssh') && !nextProtocols.includes('rdp')) {
+      setAuthProfileId('')
+    }
+    if (newType === 'windows' || newType === 'bmc' || newType === 'serial' || newType === 'local' || newType === 'esxi' || newType === 'kubernetes') {
       setAuthType('password')
     } else if (!isEditMode) {
       setAuthType(spec.defaultAuthType)
+    }
+    if (isWin && ftProtocol === 'scp') {
+      setFtProtocol('sftp')
     }
     // 串口列表由上面的 useEffect 统一加载，避免切换时重复扫描
   }
@@ -857,6 +937,10 @@ export function ServerFormDialog({
     if (newProtocol === 'redfish') setBmcPort(String(nextPort))
     if (newProtocol !== 'ssh') {
       setAuthType('password')
+    }
+    // 协议切到既非 ssh 也非 rdp 时，凭证绑定不会被保存，同步清空避免校验绕过
+    if (newProtocol !== 'ssh' && newProtocol !== 'rdp') {
+      setAuthProfileId('')
     }
     if (newProtocol !== 'ssh' && (activeCategory === 'proxy' || activeCategory === 'tunnels')) {
       setActiveCategory('connection')
@@ -888,6 +972,11 @@ export function ServerFormDialog({
     if (now < testCooldownUntilRef.current) {
       const waitSeconds = Math.ceil((testCooldownUntilRef.current - now) / 1000)
       toast.info(tr(`请稍后再试（${waitSeconds} 秒后可重新测试）`, `Please try again later (${waitSeconds}s)`), 1800)
+      return
+    }
+
+    if (targetType === 'local') {
+      toast.info(tr('本地终端无需远程连接测试', 'Local terminal does not require a connection test'), 2200)
       return
     }
 
@@ -1078,6 +1167,7 @@ export function ServerFormDialog({
             targetType: 'windows',
             protocol: 'ssh',
             sshKeyId: sshKeyId || undefined,
+            authProfileId: authProfileId || undefined,
           }
           const result = await sshService.testConnectWithConfig(config)
           if (result.success !== false) {
@@ -1155,6 +1245,7 @@ export function ServerFormDialog({
         targetType,
         protocol,
         sshKeyId: sshKeyId || undefined,
+        authProfileId: authProfileId || undefined,
         proxyConfig: protocol === 'ssh' && proxyConfig
           ? JSON.stringify(proxyConfig)
           : undefined,
@@ -1212,6 +1303,103 @@ export function ServerFormDialog({
   const handleSave = async () => {
     setValidationError(null)
     setError(null)
+
+    if (targetType === 'local') {
+      if (!name.trim()) {
+        setValidationError(tr('请输入连接名称', 'Enter a connection name'))
+        setActiveCategory('connection')
+        return
+      }
+      if (name.trim().length > 100) {
+        setValidationError(tr('连接名称不能超过 100 个字符', 'Connection name cannot exceed 100 characters'))
+        setActiveCategory('connection')
+        return
+      }
+      if (notes.length > 1000) {
+        setValidationError(tr('备注不能超过 1000 个字符', 'Notes cannot exceed 1000 characters'))
+        setActiveCategory('connection')
+        return
+      }
+
+      const localCfgStr = JSON.stringify({
+        profileId: localProfileId.trim() || undefined,
+        cwd: localCwd.trim() || undefined,
+      })
+      const displayHost = localProfileId.trim() || 'localhost'
+
+      setSaving(true)
+      try {
+        if (isEditMode && serverId) {
+          const updates: Partial<ServerType> = {
+            name: name.trim(),
+            host: displayHost,
+            port: 0,
+            username: 'local',
+            authType: 'password',
+            tags,
+            notes: notes.trim() || undefined,
+            connectionTimeout: parseInt(connectionTimeout) || 30,
+            terminalType: terminalType.trim(),
+            targetType: 'local',
+            protocol: 'local',
+            protocols: ['local'],
+            credentialsConfig: localCfgStr,
+            groupId: groupId || HOST_GROUP_ID,
+          }
+          const result = await sshService.updateServer(serverId, updates)
+          if (!result.success) {
+            setError(result.error || tr('保存本地终端配置失败', 'Failed to save local shell'))
+            return
+          }
+          updateServer(serverId, updates)
+          toast.success(tr('保存成功', 'Saved successfully'))
+          if (onSaved) onSaved(serverId)
+        } else {
+          const newId = `server-${crypto.randomUUID()}`
+          const serverData = {
+            id: newId,
+            name: name.trim(),
+            host: displayHost,
+            port: 0,
+            username: 'local',
+            authType: 'password',
+            tags,
+            notes: notes.trim() || undefined,
+            connectionTimeout: parseInt(connectionTimeout) || 30,
+            terminalType: terminalType.trim() || undefined,
+            targetType: 'local',
+            protocol: 'local',
+            protocols: ['local'],
+            credentialsConfig: localCfgStr,
+            groupId: groupId || HOST_GROUP_ID,
+          }
+          type ServerInput = Parameters<typeof sshService.addServer>[0]
+          type StoreServer = Parameters<typeof addServer>[0]
+          const addRes = await sshService.addServer(serverData as unknown as ServerInput)
+          if (!addRes.success) {
+            setError(addRes.error || tr('保存本地终端配置失败', 'Failed to save local shell'))
+            return
+          }
+          addServer({
+            ...(serverData as unknown as StoreServer),
+            id: addRes.id || newId,
+            status: 'unknown',
+            favorite: false,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          })
+          toast.success(tr('添加成功', 'Added successfully'))
+          if (onSaved) onSaved(addRes.id || newId)
+        }
+        onClose()
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : '保存失败'
+        setError(message)
+      } finally {
+        setSaving(false)
+      }
+      return
+    }
 
     if (targetType === 'serial') {
       if (!name.trim()) {
@@ -1360,8 +1548,8 @@ export function ServerFormDialog({
       && (targetType !== 'windows' || !rdpPort.trim())
       && Boolean(vncPort.trim())
 
-    // Phase 2-C：K8s 用 Bearer Token（存在 password 字段），不需要用户名
-    if (!name.trim() || !host.trim() || (targetType !== 'kubernetes' && !isPureVnc && !username.trim())) {
+    // Phase 2-C：K8s 用 Bearer Token（存在 password 字段），不需要用户名；绑定了全局身份凭证时用户名从凭证继承
+    if (!name.trim() || !host.trim() || (targetType !== 'kubernetes' && !isPureVnc && !authProfileId && !username.trim())) {
       setValidationError(tr('名称、主机地址和用户名为必填项', 'Name, Host, and Username are required'))
       setActiveCategory('connection')
       return
@@ -1413,7 +1601,7 @@ export function ServerFormDialog({
       vncPortNum = vp
     }
 
-    if ((targetType === 'linux' || targetType === 'windows') && ftProtocol !== 'sftp') {
+    if ((targetType === 'linux' || targetType === 'windows') && (ftProtocol === 'ftp' || ftProtocol === 'ftps')) {
       const ftpPortNum = parseInt(ftPort.trim(), 10)
       if (isNaN(ftpPortNum) || ftpPortNum < 1 || ftpPortNum > 65535) {
         setValidationError(tr('文件传输端口必须在 1-65535 之间', 'File transfer port must be between 1 and 65535'))
@@ -1426,7 +1614,7 @@ export function ServerFormDialog({
       const sshTrim = port.trim()
       const rdpTrim = rdpPort.trim()
       const vncTrim = vncPort.trim()
-      const isPureFtp = ftProtocol !== 'sftp'
+      const isPureFtp = ftProtocol === 'ftp' || ftProtocol === 'ftps'
 
       if (!sshTrim && !rdpTrim && !vncTrim && !isPureFtp) {
         setValidationError(tr('请至少启用一个协议并填写端口（RDP / SSH / VNC / 文件传输）', 'Please enable at least one protocol and enter its port'))
@@ -1459,7 +1647,7 @@ export function ServerFormDialog({
     } else if (targetType === 'linux') {
       const sshTrim = port.trim()
       const vncTrim = vncPort.trim()
-      const isPureFtp = ftProtocol !== 'sftp'
+      const isPureFtp = ftProtocol === 'ftp' || ftProtocol === 'ftps'
       if (!sshTrim && !vncTrim && !isPureFtp) {
         setValidationError(tr('请至少启用 SSH 或 VNC 协议或文件传输并填写端口', 'Please enable SSH, VNC, or file transfer'))
         setActiveCategory('connection')
@@ -1500,28 +1688,30 @@ export function ServerFormDialog({
     const canReuseStoredPassword = isEditMode
       && existingServer?.authType === 'password'
       && Boolean(existingServer.password)
-    if (effectiveAuthType === 'password' && !isPureVnc && !password && !canReuseStoredPassword) {
-      setValidationError(targetType === 'kubernetes' ? tr('请输入 Bearer Token', 'Please enter Bearer Token') : tr('请输入密码', 'Please enter password'))
-      setActiveCategory('connection')
-      return
-    }
-
-    if (effectiveAuthType === 'privateKey' && !privateKeyPath) {
-      setValidationError(tr('请选择私钥', 'Please select private key'))
-      setActiveCategory('connection')
-      return
-    }
-
-    if (effectiveAuthType === 'certificate') {
-      if (!privateKeyPath) {
-        setValidationError(tr('证书认证需要选择私钥', 'Please select a private key for certificate auth'))
+    if (!authProfileId) {
+      if (effectiveAuthType === 'password' && !isPureVnc && !password && !canReuseStoredPassword) {
+        setValidationError(targetType === 'kubernetes' ? tr('请输入 Bearer Token', 'Please enter Bearer Token') : tr('请输入密码', 'Please enter password'))
         setActiveCategory('connection')
         return
       }
-      if (!certificatePath) {
-        setValidationError(tr('请选择证书文件', 'Please select a certificate file'))
+
+      if (effectiveAuthType === 'privateKey' && !privateKeyPath) {
+        setValidationError(tr('请选择私钥', 'Please select private key'))
         setActiveCategory('connection')
         return
+      }
+
+      if (effectiveAuthType === 'certificate') {
+        if (!privateKeyPath) {
+          setValidationError(tr('证书认证需要选择私钥', 'Please select a private key for certificate auth'))
+          setActiveCategory('connection')
+          return
+        }
+        if (!certificatePath) {
+          setValidationError(tr('请选择证书文件', 'Please select a certificate file'))
+          setActiveCategory('connection')
+          return
+        }
       }
     }
 
@@ -1537,6 +1727,7 @@ export function ServerFormDialog({
       const logonScriptsStr =
         logonScriptsConfig.enabled &&
         (logonScriptsConfig.rules.length > 0 ||
+          (logonScriptsConfig.parameters?.length ?? 0) > 0 ||
           Boolean(logonScriptsConfig.inheritGlobal) ||
           (logonScriptsConfig.mode === 'script' && Boolean(logonScriptsConfig.customScript?.trim())))
           ? JSON.stringify(logonScriptsConfig)
@@ -1551,49 +1742,71 @@ export function ServerFormDialog({
         : null
       let fileTransferConfigStr: string | null = null
       if (targetType === 'linux' || targetType === 'windows') {
+        const effectiveFtProtocol =
+          targetType === 'windows' && ftProtocol === 'scp' ? 'sftp' : ftProtocol
         const ftObj: FileTransferConfig = {
-          protocol: ftProtocol,
-          port: parseInt(ftPort) || (ftProtocol === 'ftps' && ftTlsMode === 'implicit' ? 990 : 21),
-          tlsMode: ftProtocol === 'ftps' ? ftTlsMode : undefined,
+          protocol: effectiveFtProtocol,
+          port: parseInt(ftPort) || (effectiveFtProtocol === 'ftps' && ftTlsMode === 'implicit' ? 990 : 21),
+          tlsMode: effectiveFtProtocol === 'ftps' ? ftTlsMode : undefined,
           useServerCredentials: ftUseServerCredentials,
           anonymous: ftAnonymous,
           username: ftUseServerCredentials ? undefined : (ftAnonymous ? undefined : ftUsername.trim()),
           password: ftUseServerCredentials ? undefined : (ftAnonymous ? undefined : (ftPassword || undefined)),
           transferMode: ftTransferMode,
           encoding: ftEncoding,
-          allowInvalidCerts: ftProtocol === 'ftps' ? ftAllowInvalidCerts : undefined,
+          allowInvalidCerts: effectiveFtProtocol === 'ftps' ? ftAllowInvalidCerts : undefined,
         }
         fileTransferConfigStr = JSON.stringify(ftObj)
       }
+
+      const selectedAuthProfile = authProfileId
+        ? authProfiles.find((p) => p.id === authProfileId)
+        : undefined
+      const resolvedUsername =
+        username.trim() ||
+        selectedAuthProfile?.username?.trim() ||
+        (isPureVnc ? 'vnc' : authProfileId ? 'root' : '')
+
+      const supportsAuthProfileOnSave =
+        finalProtocols.includes('ssh') || finalProtocols.includes('rdp')
+      const supportsTerminalTypeOnSave =
+        targetType === 'local' ||
+        finalProtocol === 'ssh' ||
+        finalProtocol === 'telnet' ||
+        finalProtocols.includes('ssh')
 
       if (isEditMode && serverId) {
         const updates: Partial<ServerType> = {
           name: name.trim(),
           host: host.trim(),
           port: portNum,
-          username: username.trim() || (isPureVnc ? 'vnc' : ''),
+          username: resolvedUsername,
           authType: effectiveAuthType,
+          authProfileId: supportsAuthProfileOnSave ? authProfileId : '',
           targetType,
           protocol: finalProtocol,
           protocols: finalProtocols,
           tags,
           notes: notes.trim() || undefined,
           connectionTimeout: parseInt(connectionTimeout) || 30,
+          terminalType: supportsTerminalTypeOnSave ? terminalType.trim() : '',
+          forwardAgent: finalProtocols.includes('ssh') ? forwardAgent : false,
+          x11Forwarding: finalProtocols.includes('ssh') ? x11Forwarding : false,
           rdpPort: targetType === 'windows' ? rdpPortNum : 3389,
           vncPort: vncPortNum,
           bmcPort: targetType === 'bmc' ? portNum : 443,
           bmcAllowInvalidCerts: getTargetCapabilities(targetType, protocol).tlsCertOverride ? bmcAllowInvalidCerts : false,
           tlsAllowInvalidCerts: getTargetCapabilities(targetType, protocol).tlsCertOverride ? bmcAllowInvalidCerts : false,
-          proxyConfig: proxyConfigStr || null,
-          tunnelsConfig: tunnelsConfigStr || null,
-          fileTransferConfig: fileTransferConfigStr,
-          logonScriptsConfig: logonScriptsStr,
-          sessionLoggingConfig: sessionLoggingStr,
+          proxyConfig: proxyConfigStr || '',
+          tunnelsConfig: tunnelsConfigStr || '',
+          fileTransferConfig: fileTransferConfigStr || '',
+          logonScriptsConfig: logonScriptsStr || '',
+          sessionLoggingConfig: sessionLoggingStr || '',
           groupId: groupId || HOST_GROUP_ID,
         }
         // 仅当密钥列表确实被改动时才回写，避免脱敏后的空 passphrase 覆盖库中已加密的凭据
         if (keysConfigChanged) {
-          updates.keysConfig = keysConfigStr
+          updates.keysConfig = keysConfigStr || ''
         }
 
         if (password) {
@@ -1647,8 +1860,9 @@ export function ServerFormDialog({
           name: name.trim(),
           host: host.trim(),
           port: portNum,
-          username: username.trim() || (isPureVnc ? 'vnc' : ''),
+          username: resolvedUsername,
           authType: effectiveAuthType,
+          authProfileId: supportsAuthProfileOnSave && authProfileId ? authProfileId : undefined,
           password: (effectiveAuthType === 'password' || (targetType === 'windows' && Boolean(rdpPort.trim()))) ? (password || undefined) : undefined,
           vncPassword: vncPassword || undefined,
           privateKeyPath:
@@ -1660,9 +1874,12 @@ export function ServerFormDialog({
           agentIdentity: effectiveAuthType === 'sshAgent' ? agentIdentity || undefined : undefined,
           certificatePath: effectiveAuthType === 'certificate' ? certificatePath : undefined,
           sshKeyId: sshKeyId || undefined,
+          forwardAgent: finalProtocols.includes('ssh') ? forwardAgent : false,
+          x11Forwarding: finalProtocols.includes('ssh') ? x11Forwarding : false,
           tags,
           notes: notes.trim() || undefined,
           connectionTimeout: parseInt(connectionTimeout) || 30,
+          terminalType: supportsTerminalTypeOnSave ? (terminalType.trim() || undefined) : undefined,
           favorite: false,
           status: 'unknown' as const,
           osType: detectedOsType || undefined,
@@ -1716,6 +1933,8 @@ export function ServerFormDialog({
       ? '设备连接'
       : targetType === 'serial'
       ? '串口连接'
+      : targetType === 'local'
+      ? t('ct_local')
       : (!port.trim() && Boolean(vncPort.trim()))
       ? 'VNC连接'
       : 'SSH连接'
@@ -1762,7 +1981,7 @@ export function ServerFormDialog({
           {/* 主体区：左侧列表 + 右侧 Fieldset 分组面板 */}
           <div className="flex-1 flex min-h-0 overflow-hidden">
             {/* 左侧列表框 (FinalShell 灰色边框列表) */}
-            {targetType !== 'serial' && <div className="w-36 shrink-0 border-r border-border/60 bg-muted/15 p-2 flex flex-col justify-between overflow-y-auto">
+            {targetType !== 'serial' && targetType !== 'local' && <div className="w-36 shrink-0 border-r border-border/60 bg-muted/15 p-2 flex flex-col justify-between overflow-y-auto">
               <div className="border border-input rounded bg-background p-1 space-y-0.5 shadow-2xs">
                 <button
                   type="button"
@@ -2192,8 +2411,117 @@ export function ServerFormDialog({
                 </>
               )}
 
+              {/* ======================= 本地终端 Local Shell 面板 ======================= */}
+              {activeCategory === 'connection' && targetType === 'local' && (
+                <>
+                  <fieldset className="border border-border/70 rounded-md p-3.5 pt-1 space-y-2.5 bg-card/20 shadow-2xs">
+                    <legend className="px-1.5 text-xs font-medium text-foreground">{tr('常规设置', 'General')}</legend>
+
+                    {/* 名称 */}
+                    <div className="flex items-center gap-3">
+                      <label className="text-xs font-normal text-foreground w-20 text-right shrink-0">
+                        {tr('名称:', 'Name:')}
+                      </label>
+                      <Input
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        maxLength={100}
+                        placeholder={tr('如：PowerShell / WSL', 'For example: PowerShell / Bash')}
+                        className="h-7 text-xs flex-1 bg-background"
+                        autoFocus={!isEditMode}
+                      />
+                    </div>
+
+                    {/* Shell 类型 */}
+                    <div className="flex items-center gap-3">
+                      <label className="text-xs font-normal text-foreground w-20 text-right shrink-0">
+                        {t('ls_profile_label')}:
+                      </label>
+                      <div className="flex-1">
+                        <SelectPopover
+                          value={localProfileId || '__auto__'}
+                          onChange={(v) => setLocalProfileId(!v || v === '__auto__' ? '' : v)}
+                          options={[
+                            { value: '__auto__', label: t('ls_default_auto') },
+                            ...availableLocalProfiles.map((p) => ({
+                              value: p.id,
+                              label: p.isDefault ? `${p.label} (${t('ls_default_auto')})` : p.label,
+                            })),
+                          ]}
+                          className="h-7 w-full"
+                          ariaLabel={t('ls_profile_label')}
+                        />
+                      </div>
+                    </div>
+
+                    {/* 起始工作目录 */}
+                    <div className="flex items-center gap-3">
+                      <label className="text-xs font-normal text-foreground w-20 text-right shrink-0">
+                        {t('ls_cwd_label')}:
+                      </label>
+                      <div className="flex-1 flex gap-1.5 items-center">
+                        <Input
+                          value={localCwd}
+                          onChange={(e) => setLocalCwd(e.target.value)}
+                          placeholder={t('ls_cwd_placeholder')}
+                          className="h-7 text-xs font-mono flex-1 bg-background"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-7 text-xs shrink-0 cursor-pointer"
+                          onClick={async () => {
+                            const selected = await openDialog({
+                              directory: true,
+                              multiple: false,
+                              title: t('ls_cwd_label'),
+                            })
+                            if (typeof selected === 'string' && selected) {
+                              setLocalCwd(selected)
+                            }
+                          }}
+                        >
+                          {tr('选择', 'Browse')}
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* 所属分组 */}
+                    <div className="flex items-center gap-3">
+                      <label className="text-xs font-normal text-foreground w-20 text-right shrink-0">
+                        {tr('所属分组:', 'Group:')}
+                      </label>
+                      <div className="flex-1">
+                        <GroupTreeSelect
+                          groups={serverGroups}
+                          value={groupId || null}
+                          onChange={(id) => setGroupId(id ?? '')}
+                          ungroupedLabel={tr(HOST_GROUP_NAME, 'Host')}
+                          className="w-full"
+                        />
+                      </div>
+                    </div>
+
+                    {/* 备注 */}
+                    <div className="flex items-start gap-3">
+                      <label className="text-xs font-normal text-foreground w-20 text-right shrink-0 pt-1">
+                        {tr('备注:', 'Notes:')}
+                      </label>
+                      <Input
+                        value={notes}
+                        onChange={(e) => setNotes(e.target.value)}
+                        maxLength={1000}
+                        placeholder={tr('可选备注', 'Optional notes')}
+                        className="h-7 text-xs flex-1 bg-background"
+                      />
+                    </div>
+                  </fieldset>
+                </>
+              )}
+
               {/* ======================= SSH 连接 / 常规面板 ======================= */}
-              {activeCategory === 'connection' && targetType !== 'serial' && (
+              {activeCategory === 'connection' && targetType !== 'serial' && targetType !== 'local' && (
                 <>
                   {/* 常规 GroupBox */}
                   <fieldset className="border border-border/70 rounded-md p-3.5 pt-1 space-y-2.5 bg-card/20 shadow-2xs">
@@ -2435,6 +2763,86 @@ export function ServerFormDialog({
                     {/* 仅当启用了 SSH / RDP（或非纯 VNC 目标）时才显示系统用户名与主认证方式；纯 VNC 无需用户名，仅需 VNC 密码 */}
                     {!((targetType === 'linux' || targetType === 'windows') && !port.trim() && (targetType !== 'windows' || !rdpPort.trim()) && Boolean(vncPort.trim())) && (
                       <>
+                        {/* 全局身份凭证绑定：支持 SSH 与 Windows RDP 连接 */}
+                        {((!isWindowsTarget && protocol === 'ssh') || (isWindowsTarget && (Boolean(port.trim()) || Boolean(rdpPort.trim())))) && (
+                          <div className="space-y-1.5">
+                            <div className="flex items-center gap-2">
+                              <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
+                                {tr('身份凭证:', 'Profile:')}
+                              </label>
+                              <SelectPopover
+                                value={authProfileId}
+                                onChange={(v) => setAuthProfileId(v ?? '')}
+                                options={[
+                                  { value: '', label: tr('独立认证配置（按当前表单填写）', 'Custom (Per-server credentials)') },
+                                  ...authProfiles.map((p) => ({
+                                    value: p.id,
+                                    label: `${p.name}${p.username ? ` (${p.username})` : ''}`,
+                                  })),
+                                ]}
+                                className="h-7 flex-1 min-w-0"
+                              />
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => useSettingsDialogStore.getState().openSettings('auth_profiles')}
+                                className="h-7 px-2 text-[11px] shrink-0"
+                              >
+                                {tr('管理凭证', 'Manage')}
+                              </Button>
+                            </div>
+                            {authProfileId && (() => {
+                              const bound = authProfiles.find((p) => p.id === authProfileId)
+                              const authTypeLabel =
+                                bound?.authType === 'password'
+                                  ? t('auth_type_password')
+                                  : bound?.authType === 'privateKey'
+                                    ? t('auth_type_private_key')
+                                    : bound?.authType === 'certificate'
+                                      ? t('auth_type_certificate')
+                                      : bound?.authType === 'sshAgent'
+                                        ? t('auth_type_ssh_agent')
+                                        : bound?.authType === 'keyboardInteractive'
+                                          ? t('auth_type_keyboard_interactive')
+                                          : bound?.authType || ''
+                              const isPureRdpWithKeyProfile =
+                                isWindowsTarget && !port.trim() && Boolean(rdpPort.trim()) && bound && bound.authType !== 'password'
+                              return (
+                                <div className="ml-[4.25rem] space-y-1">
+                                  <div className="rounded border border-primary/25 bg-primary/5 px-2.5 py-1.5 text-[11px] text-foreground flex items-center justify-between gap-2">
+                                    <span className="truncate">
+                                      {bound
+                                        ? tr(
+                                            `已绑定「${bound.name}」 · ${bound.username || '默认用户名'} · ${authTypeLabel}`,
+                                            `Bound to "${bound.name}" · ${bound.username || 'default user'} · ${authTypeLabel}`,
+                                          )
+                                        : tr(`已绑定身份凭证 (${authProfileId})`, `Bound to profile (${authProfileId})`)}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => setAuthProfileId('')}
+                                      className="text-[11px] text-primary hover:underline shrink-0 cursor-pointer"
+                                    >
+                                      {tr('解绑', 'Unlink')}
+                                    </button>
+                                  </div>
+                                  {isPureRdpWithKeyProfile && (
+                                    <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                                      {tr(
+                                        '提示：当前主机未启用 SSH 端口，纯 RDP 连接仅使用该凭证中的用户名与密码字段。',
+                                        'Note: Only RDP is configured; RDP login uses only username/password from this profile.',
+                                      )}
+                                    </p>
+                                  )}
+                                </div>
+                              )
+                            })()}
+                          </div>
+                        )}
+
+                        {!authProfileId && (
+                        <>
                         {/* 方法：单认证方式直接显示静态文本，多认证方式显示下拉选择 */}
                         <div className="flex items-center gap-3">
                           <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
@@ -2447,12 +2855,13 @@ export function ServerFormDialog({
                           ) : (
                             <SelectPopover
                               value={authType}
-                              onChange={(v) => setAuthType(v as 'password' | 'privateKey' | 'sshAgent' | 'certificate')}
+                              onChange={(v) => setAuthType(v as 'password' | 'privateKey' | 'sshAgent' | 'certificate' | 'keyboardInteractive')}
                               options={[
                                 { value: "password", label: "密码" },
                                 { value: "privateKey", label: "私钥" },
                                 { value: "certificate", label: "证书" },
                                 { value: "sshAgent", label: "SSH Agent" },
+                                { value: "keyboardInteractive", label: tr("键盘交互 (2FA/OTP)", "Keyboard-Interactive (2FA)") },
                               ]}
                               className="h-7 flex-1"
                             />
@@ -2513,6 +2922,8 @@ export function ServerFormDialog({
                             </div>
                           </div>
                         )}
+                        </>
+                        )}
                       </>
                     )}
 
@@ -2554,7 +2965,7 @@ export function ServerFormDialog({
                     )}
 
                     {/* 私钥选择 (FinalShell 样式: 展示私钥 + 浏览... 按钮打开选择私钥弹窗) */}
-                    {(authType === 'privateKey' || authType === 'certificate') && (
+                    {!authProfileId && (authType === 'privateKey' || authType === 'certificate') && (
                       <>
                         <div className="flex items-center gap-3">
                           <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
@@ -2593,7 +3004,7 @@ export function ServerFormDialog({
                     )}
 
                     {/* SSH Agent 身份选择 */}
-                    {authType === 'sshAgent' && (
+                    {!authProfileId && authType === 'sshAgent' && (
                       <div className="flex items-center gap-3">
                         <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
                           Agent:
@@ -2632,11 +3043,22 @@ export function ServerFormDialog({
                     <legend className="px-1.5 text-xs font-medium text-foreground">{tr('传输协议与端口', 'Protocol & Port')}</legend>
                     
                     {/* 协议选择 */}
-                    <div className="flex items-center gap-3">
-                      <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
+                    <div className="flex items-start gap-3">
+                      <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap pt-0.5">
                         {tr('协议:', 'Protocol:')}
                       </label>
-                      <div className="flex items-center gap-4 text-xs">
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+                        <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="ftProtocol"
+                            value="auto"
+                            checked={ftProtocol === 'auto'}
+                            onChange={() => setFtProtocol('auto')}
+                            className="rounded text-primary focus:ring-primary"
+                          />
+                          <span>{tr('自动：SFTP 优先，失败降级 SCP', 'Auto: SFTP first, fallback to SCP')}</span>
+                        </label>
                         <label className="inline-flex items-center gap-1.5 cursor-pointer">
                           <input
                             type="radio"
@@ -2646,7 +3068,34 @@ export function ServerFormDialog({
                             onChange={() => setFtProtocol('sftp')}
                             className="rounded text-primary focus:ring-primary"
                           />
-                          <span>SFTP ({tr('复用 SSH 通道', 'Reuses SSH')})</span>
+                          <span>{tr('仅 SFTP', 'SFTP only')}</span>
+                        </label>
+                        <label
+                          className={cn(
+                            'inline-flex items-center gap-1.5',
+                            targetType === 'windows' ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
+                          )}
+                          title={
+                            targetType === 'windows'
+                              ? tr(
+                                  'Windows 主机通常缺少 SCP 所需的 POSIX Shell 命令，已禁用 SCP',
+                                  'Windows hosts typically lack POSIX shell commands required by SCP',
+                                )
+                              : undefined
+                          }
+                        >
+                          <input
+                            type="radio"
+                            name="ftProtocol"
+                            value="scp"
+                            checked={ftProtocol === 'scp'}
+                            disabled={targetType === 'windows'}
+                            onChange={() => {
+                              if (targetType !== 'windows') setFtProtocol('scp')
+                            }}
+                            className="rounded text-primary focus:ring-primary"
+                          />
+                          <span>SCP ({tr('纯 SSH exec 传输，精简镜像适用', 'Pure SSH exec / BusyBox friendly')})</span>
                         </label>
                         <label className="inline-flex items-center gap-1.5 cursor-pointer">
                           <input
@@ -2660,7 +3109,7 @@ export function ServerFormDialog({
                             }}
                             className="rounded text-primary focus:ring-primary"
                           />
-                          <span>FTP (标准/明文)</span>
+                          <span>FTP ({tr('标准/明文', 'Standard / Plain')})</span>
                         </label>
                         <label className="inline-flex items-center gap-1.5 cursor-pointer">
                           <input
@@ -2674,23 +3123,51 @@ export function ServerFormDialog({
                             }}
                             className="rounded text-primary focus:ring-primary"
                           />
-                          <span>FTPS (SSL/TLS 安全加密)</span>
+                          <span>FTPS ({tr('SSL/TLS 安全加密', 'SSL/TLS Encrypted')})</span>
                         </label>
                       </div>
                     </div>
 
-                    {/* SFTP 模式提示 */}
-                    {ftProtocol === 'sftp' && (
+                    {/* Windows 主机禁用 SCP 显式提示 */}
+                    {targetType === 'windows' && (
+                      <div className="flex items-start gap-2 text-xs text-amber-600 dark:text-amber-400 bg-amber-500/10 p-2.5 rounded border border-amber-500/30">
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                        <span>
+                          {ftProtocol === 'scp'
+                            ? tr(
+                                'Windows 主机通常缺少 SCP 所需的 POSIX Shell 命令（ls/stat/scp），保存时将自动回退为 SFTP。',
+                                'Windows hosts typically lack POSIX shell commands required by SCP; saving will fall back to SFTP.',
+                              )
+                            : tr(
+                                'Windows 主机通常缺少 SCP 所需的 POSIX Shell 命令，已禁用纯 SCP 模式；请使用 SFTP 或 FTP/FTPS。',
+                                'SCP is disabled on Windows targets because Windows hosts typically lack the POSIX shell commands required by SCP; use SFTP or FTP/FTPS.',
+                              )}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* SFTP / SCP 模式提示 */}
+                    {(ftProtocol === 'sftp' || ftProtocol === 'auto' || ftProtocol === 'scp') && (
                       <div className="text-xs text-muted-foreground bg-muted/40 p-2.5 rounded border border-border/40">
-                        {tr(
-                          '当前配置为 SFTP 模式。文件模块与文件传输面板将自动复用上述 SSH 端口、用户及私钥/密码认证凭据，无需额外配置。',
-                          'SFTP mode is active. File manager and transfer panels will reuse SSH credentials and port automatically.'
-                        )}
+                        {ftProtocol === 'scp'
+                          ? tr(
+                              '当前强制使用 SCP 模式：目录浏览、预览与文件传输将通过 SSH exec 与 scp -t/-f 完成，适用于未开启 sftp-server 的受限/嵌入式主机。',
+                              'SCP mode active: directory listing and file transfers run over SSH exec & scp -t/-f without requiring sftp-server.',
+                            )
+                          : ftProtocol === 'auto'
+                            ? tr(
+                                '当前配置为自动模式：优先复用 SSH 建立 SFTP 通道；若 Linux/嵌入式目标机未开启 sftp-server，将自动降级到 SCP 通道。',
+                                'Auto mode active: prefers SFTP over SSH and automatically falls back to SCP if sftp-server is unavailable.',
+                              )
+                            : tr(
+                                '当前配置为仅 SFTP 模式：文件管理复用 SSH 通道与凭据（标准主机与 Windows OpenSSH 推荐）。',
+                                'SFTP-only mode active: reuses SSH port and credentials (recommended for standard hosts and Windows OpenSSH).',
+                              )}
                       </div>
                     )}
 
                     {/* FTP / FTPS 独立配置 */}
-                    {ftProtocol !== 'sftp' && (
+                    {(ftProtocol === 'ftp' || ftProtocol === 'ftps') && (
                       <>
                         <div className="flex items-center gap-3">
                           <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
@@ -2922,6 +3399,190 @@ export function ServerFormDialog({
                         <span className="text-xs text-muted-foreground">秒</span>
                       </div>
                     </div>
+
+                    {/* 终端类型 (TERM) */}
+                    {(targetType === 'local' || protocol === 'ssh' || protocol === 'telnet' || inferredProtocols.includes('ssh')) && (
+                      <div className="flex items-center gap-3 pt-1">
+                        <label className="text-xs font-normal text-foreground shrink-0">
+                          {tr('终端类型 (TERM):', 'Terminal Type (TERM):')}
+                        </label>
+                        <SelectPopover
+                          value={terminalType}
+                          onChange={(v) => setTerminalType(v ?? '')}
+                          options={[
+                            { value: '', label: tr('继承全局设置（默认 xterm-256color）', 'Inherit global setting') },
+                            { value: 'xterm-256color', label: 'xterm-256color' },
+                            { value: 'xterm', label: 'xterm' },
+                            { value: 'vt100', label: 'vt100' },
+                            { value: 'vt220', label: 'vt220' },
+                            { value: 'vt320', label: 'vt320' },
+                            { value: 'linux', label: 'linux' },
+                            { value: 'ansi', label: 'ansi' },
+                            { value: 'scoansi', label: 'scoansi' },
+                          ]}
+                          className="h-7 w-60"
+                        />
+                      </div>
+                    )}
+
+                    {/* SSH Agent Forwarding */}
+                    {targetType !== 'local' && (protocol === 'ssh' || inferredProtocols.includes('ssh')) && (() => {
+                      const boundProfile = authProfileId ? authProfiles.find((p) => p.id === authProfileId) : undefined
+                      const effectiveForwardAgent = boundProfile ? boundProfile.forwardAgent : forwardAgent
+                      return (
+                        <div className="pt-2 border-t border-border/40 space-y-1.5">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="space-y-0.5">
+                              <span className="text-xs font-medium text-foreground">
+                                {tr('SSH Agent 转发 (Agent Forwarding)', 'SSH Agent Forwarding')}
+                              </span>
+                              <p className="text-[11px] text-muted-foreground">
+                                {boundProfile
+                                  ? tr(
+                                      `当前由全局身份凭证「${boundProfile.name}」统一控制（${boundProfile.forwardAgent ? '已开启' : '未开启'}）。`,
+                                      `Controlled by bound Auth Profile "${boundProfile.name}" (${boundProfile.forwardAgent ? 'enabled' : 'disabled'}).`,
+                                    )
+                                  : tr(
+                                      '允许远端主机通过本地 SSH Agent 访问私钥签名（如 git clone、二次 SSH 跳转）。',
+                                      'Allows the remote host to forward SSH agent signing requests to your local agent.'
+                                    )}
+                              </p>
+                            </div>
+                            <Switch
+                              checked={effectiveForwardAgent}
+                              disabled={Boolean(authProfileId)}
+                              onCheckedChange={setForwardAgent}
+                            />
+                          </div>
+                          {effectiveForwardAgent && (
+                            <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                              {tr(
+                                '安全提示：仅对完全信任的主机开启，目标服务器上的 root 用户可能滥用转发的 Agent 进行身份认证。',
+                                'Security warning: Only enable on trusted hosts; root users on the remote host can access the forwarded agent socket.'
+                              )}
+                            </p>
+                          )}
+                        </div>
+                      )
+                    })()}
+
+                    {/* SSH X11 图形转发 (X11 Forwarding) */}
+                    {targetType !== 'local' && (protocol === 'ssh' || inferredProtocols.includes('ssh')) && (
+                      <div className="pt-2 border-t border-border/40 space-y-2">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="space-y-0.5">
+                            <span className="text-xs font-medium text-foreground">
+                              {tr('SSH X11 图形转发 (X11 Forwarding)', 'SSH X11 Forwarding')}
+                            </span>
+                            <p className="text-[11px] text-muted-foreground">
+                              {tr(
+                                '在 Shell 会话中自动协商 MIT-MAGIC-COOKIE-1 并桥接至本地 X Server（VcXsrv / XQuartz / Xorg），支持远端 GUI 应用回显。',
+                                'Requests X11 forwarding with MIT-MAGIC-COOKIE-1 and bridges remote GUI traffic to your local X Server.'
+                              )}
+                            </p>
+                          </div>
+                          <Switch
+                            checked={x11Forwarding}
+                            onCheckedChange={async (checked) => {
+                              setX11Forwarding(checked)
+                              if (checked && !x11Probe && backend?.ssh?.probeX11Environment) {
+                                setProbingX11(true)
+                                try {
+                                  const res = await backend.ssh.probeX11Environment()
+                                  setX11Probe(res)
+                                } catch {
+                                  // ignore probe errors
+                                } finally {
+                                  setProbingX11(false)
+                                }
+                              }
+                            }}
+                          />
+                        </div>
+                        {x11Forwarding && (
+                          <div className="rounded border border-border/50 bg-muted/20 p-2 space-y-1.5 text-[11px]">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-6 px-2 text-[11px]"
+                                disabled={probingX11}
+                                onClick={async () => {
+                                  const probeFn = backend?.ssh?.probeX11Environment
+                                  if (!probeFn) return
+                                  setProbingX11(true)
+                                  try {
+                                    const res = await probeFn()
+                                    setX11Probe(res)
+                                  } catch (err) {
+                                    toast.error(err instanceof Error ? err.message : String(err))
+                                  } finally {
+                                    setProbingX11(false)
+                                  }
+                                }}
+                              >
+                                {probingX11 ? (
+                                  <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                                ) : (
+                                  <RefreshCw className="h-3 w-3 mr-1" />
+                                )}
+                                {tr('检测本地 X Server', 'Probe X Server')}
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-6 px-2 text-[11px]"
+                                disabled={importingX11Addon}
+                                onClick={async () => {
+                                  const importFn = backend?.ssh?.importX11Addon
+                                  if (!importFn) return
+                                  const selected = await openDialog({
+                                    multiple: false,
+                                    filters: [
+                                      {
+                                        name: tr('X Server 插件包', 'X Server Addon'),
+                                        extensions: ['zip', 'exe'],
+                                      },
+                                    ],
+                                  })
+                                  if (!selected || typeof selected !== 'string') return
+                                  setImportingX11Addon(true)
+                                  try {
+                                    const res = await importFn(selected)
+                                    setX11Probe(res)
+                                    toast.success(tr('已导入离线 X Server 插件包', 'X Server addon imported'))
+                                  } catch (err) {
+                                    toast.error(err instanceof Error ? err.message : String(err))
+                                  } finally {
+                                    setImportingX11Addon(false)
+                                  }
+                                }}
+                              >
+                                {importingX11Addon && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
+                                {tr('导入离线 X Server 包 (.zip)', 'Import Addon (.zip)')}
+                              </Button>
+                            </div>
+                            {x11Probe && (
+                              <div className="space-y-0.5 text-muted-foreground">
+                                <p className={x11Probe.reachabilityOk ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>
+                                  {x11Probe.message}
+                                </p>
+                                {x11Probe.executablePath && (
+                                  <p className="font-mono text-[10px] truncate" title={x11Probe.executablePath}>
+                                    {x11Probe.detectedServer}: {x11Probe.executablePath}
+                                  </p>
+                                )}
+                                <p className="font-mono text-[10px] truncate text-muted-foreground/70" title={x11Probe.addonDir}>
+                                  {tr('插件目录', 'Addon Dir')}: {x11Probe.addonDir}
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </fieldset>
 
                   {/* 会话日志自动落盘 */}
@@ -3051,11 +3712,17 @@ export function ServerFormDialog({
               onClick={handleTestConnection}
               disabled={
                 testing ||
+                targetType === 'local' ||
                 (targetType === 'serial'
                   ? !serialPortName.trim()
                   : activeCategory === 'fileTransfer' && (ftProtocol === 'ftp' || ftProtocol === 'ftps')
                   ? !host.trim()
-                  : (!host.trim() || (targetType !== 'kubernetes' && !username.trim())))
+                  : (!host.trim() || (
+                    !authProfileId
+                    && targetType !== 'kubernetes'
+                    && !((targetType === 'linux' || targetType === 'windows') && !port.trim() && (targetType !== 'windows' || !rdpPort.trim()) && Boolean(vncPort.trim()))
+                    && !username.trim()
+                  )))
               }
               className="h-7 gap-1 px-3 text-xs cursor-pointer"
             >
@@ -3072,7 +3739,16 @@ export function ServerFormDialog({
                 disabled={
                   saving ||
                   !name.trim() ||
-                  (targetType === 'serial' ? !serialPortName.trim() : (!host.trim() || (targetType !== 'kubernetes' && !username.trim())))
+                  (targetType === 'local'
+                    ? false
+                    : targetType === 'serial'
+                    ? !serialPortName.trim()
+                    : (!host.trim() || (
+                      !authProfileId
+                      && targetType !== 'kubernetes'
+                      && !((targetType === 'linux' || targetType === 'windows') && !port.trim() && (targetType !== 'windows' || !rdpPort.trim()) && Boolean(vncPort.trim()))
+                      && !username.trim()
+                    )))
                 }
                 className="h-7 px-5 text-xs font-semibold cursor-pointer"
               >

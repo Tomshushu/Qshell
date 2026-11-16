@@ -29,6 +29,31 @@ pub struct RdpLaunchConfig {
     pub fullscreen: bool,
     /// 颜色深度 16/24/32
     pub color_depth: u32,
+    /// 是否启用多显示器支持
+    #[serde(default)]
+    pub use_multimon: bool,
+    /// 剪贴板重定向（默认开启）
+    #[serde(default = "default_true")]
+    pub redirect_clipboard: bool,
+    /// 本地磁盘驱动器重定向
+    #[serde(default)]
+    pub redirect_drives: bool,
+    /// 本地打印机重定向
+    #[serde(default)]
+    pub redirect_printers: bool,
+    /// 自适应缩放（默认开启）
+    #[serde(default = "default_true")]
+    pub smart_sizing: bool,
+    /// CredSSP / NLA 网络级身份验证（默认开启）
+    #[serde(default = "default_true")]
+    pub enable_credssp: bool,
+    /// 音频模式：0=本地播放，1=远程播放，2=禁用
+    #[serde(default)]
+    pub audio_mode: u8,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for RdpLaunchConfig {
@@ -43,6 +68,13 @@ impl Default for RdpLaunchConfig {
             height: 1080,
             fullscreen: false,
             color_depth: 32,
+            use_multimon: false,
+            redirect_clipboard: true,
+            redirect_drives: false,
+            redirect_printers: false,
+            smart_sizing: true,
+            enable_credssp: true,
+            audio_mode: 0,
         }
     }
 }
@@ -73,26 +105,49 @@ fn build_rdp_file_content(config: &RdpLaunchConfig) -> String {
 
     // screen mode: 2=全屏, 1=窗口
     let screen_mode = if config.fullscreen { 2 } else { 1 };
+    let multimon = if config.use_multimon { 1 } else { 0 };
+    let clipboard = if config.redirect_clipboard { 1 } else { 0 };
+    let printers = if config.redirect_printers { 1 } else { 0 };
+    let smart_sizing = if config.smart_sizing { 1 } else { 0 };
+    let credssp = if config.enable_credssp { 1 } else { 0 };
+    let audio_mode = config.audio_mode.min(2);
+    let drives_line = if config.redirect_drives {
+        "redirectdrives:i:1\ndrivestoredirect:s:*\n"
+    } else {
+        "redirectdrives:i:0\n"
+    };
 
     format!(
         "full address:s:{addr}\n\
          {user}\
          screen mode id:i:{sm}\n\
+         use multimon:i:{multimon}\n\
          desktopwidth:i:{w}\n\
          desktopheight:i:{h}\n\
          session bpp:i:{bpp}\n\
+         smart sizing:i:{smart_sizing}\n\
          prompt for credentials:i:1\n\
          authentication level:i:0\n\
-         redirectclipboard:i:1\n\
-         redirectprinters:i:0\n\
+         enablecredsspsupport:i:{credssp}\n\
+         redirectclipboard:i:{clipboard}\n\
+         {drives}\
+         redirectprinters:i:{printers}\n\
+         audiomode:i:{audio_mode}\n\
          keyboardhook:i:2\n\
          disable themes:i:0\n",
         addr = full_address,
         user = username_line,
         sm = screen_mode,
+        multimon = multimon,
         w = config.width,
         h = config.height,
         bpp = config.color_depth,
+        smart_sizing = smart_sizing,
+        credssp = credssp,
+        clipboard = clipboard,
+        drives = drives_line,
+        printers = printers,
+        audio_mode = audio_mode,
     )
 }
 
@@ -205,6 +260,39 @@ fn launch_linux(config: &RdpLaunchConfig) -> Result<(), String> {
     }
     if config.fullscreen {
         xfreerdp.arg("/f");
+    }
+    if config.use_multimon {
+        xfreerdp.arg("/multimon");
+    }
+    if config.redirect_clipboard {
+        xfreerdp.arg("+clipboard");
+    } else {
+        xfreerdp.arg("-clipboard");
+    }
+    if config.redirect_drives {
+        xfreerdp.arg("+drives");
+    }
+    if config.redirect_printers {
+        xfreerdp.arg("/printer");
+    }
+    if config.smart_sizing {
+        xfreerdp.arg("/smart-sizing");
+    }
+    if config.enable_credssp {
+        xfreerdp.arg("/sec:nla");
+    } else {
+        xfreerdp.arg("-sec-nla");
+    }
+    match config.audio_mode {
+        0 => {
+            xfreerdp.arg("/sound");
+        }
+        1 => {
+            xfreerdp.arg("/audio-mode:1");
+        }
+        _ => {
+            xfreerdp.arg("/audio-mode:2");
+        }
     }
     match xfreerdp.spawn() {
         Ok(_) => return Ok(()),
@@ -337,5 +425,31 @@ mod tests {
         };
         let content = build_rdp_file_content(&config);
         assert!(!content.contains("username:s:"));
+    }
+
+    #[test]
+    fn test_build_rdp_file_content_advanced_redirection_and_security() {
+        let config = RdpLaunchConfig {
+            host: "10.0.0.8".to_string(),
+            port: 3389,
+            username: "ops".to_string(),
+            use_multimon: true,
+            redirect_clipboard: false,
+            redirect_drives: true,
+            redirect_printers: true,
+            smart_sizing: false,
+            enable_credssp: false,
+            audio_mode: 2,
+            ..Default::default()
+        };
+        let content = build_rdp_file_content(&config);
+        assert!(content.contains("use multimon:i:1\n"));
+        assert!(content.contains("redirectclipboard:i:0\n"));
+        assert!(content.contains("redirectdrives:i:1\n"));
+        assert!(content.contains("drivestoredirect:s:*\n"));
+        assert!(content.contains("redirectprinters:i:1\n"));
+        assert!(content.contains("smart sizing:i:0\n"));
+        assert!(content.contains("enablecredsspsupport:i:0\n"));
+        assert!(content.contains("audiomode:i:2\n"));
     }
 }

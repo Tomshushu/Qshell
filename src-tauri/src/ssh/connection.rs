@@ -214,18 +214,30 @@ pub enum AuthMethod {
         certificate_content: String,
         private_key_passphrase: Option<String>,
     },
+    /// 键盘交互式认证（RFC 4256：2FA / OTP / PAM Challenge-Response）。
+    KeyboardInteractive,
+}
+
+/// 建立 SSH 传输与认证时的附加连接选项。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ConnectOptions {
+    pub forward_agent: bool,
+    pub x11_forwarding: bool,
+    pub auth_generation: u64,
 }
 
 /// russh client handler that verifies server host keys against SQLite database.
 ///
 /// 字段说明：
 /// - `host` / `port`：用于 known_hosts 校验
-/// - `server_id`：用于 Remote 端口转发时把入站 channel 路由到对应的消费任务
+/// - `server_id`：用于 Remote 端口转发、Agent 转发及 X11 转发通道日志与路由
 #[derive(Clone)]
 struct ClientHandler {
     host: String,
     port: u16,
     server_id: String,
+    forward_agent: bool,
+    x11_forwarding: bool,
     banner: Arc<std::sync::Mutex<Option<String>>>,
 }
 
@@ -310,6 +322,74 @@ impl russh::client::Handler for ClientHandler {
                 originator_address, originator_port
             );
         }
+        Ok(())
+    }
+
+    /// 服务端请求打开 `auth-agent@openssh.com` Agent 转发通道。
+    async fn server_channel_open_agent_forward(
+        &mut self,
+        channel: russh::Channel<russh::client::Msg>,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        if !crate::ssh::agent_forward::should_accept_agent_forward_channel(self.forward_agent) {
+            tracing::warn!(
+                "[AgentForward] 拒绝未启用 Agent Forwarding 的连接打开 auth-agent 通道: server={}",
+                self.server_id
+            );
+            reply
+                .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
+        }
+        reply.accept().await;
+        let server_id = self.server_id.clone();
+        tokio::spawn(async move {
+            crate::ssh::agent_forward::bridge_agent_channel(channel, &server_id).await;
+        });
+        Ok(())
+    }
+
+    /// 服务端请求打开 X11 图形转发通道。
+    async fn server_channel_open_x11(
+        &mut self,
+        channel: russh::Channel<russh::client::Msg>,
+        originator_address: &str,
+        originator_port: u32,
+        reply: russh::client::ChannelOpenHandle,
+        _session: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        if !crate::ssh::x11_forward::should_accept_x11_channel(self.x11_forwarding) {
+            tracing::warn!(
+                "[X11Forward] 拒绝未启用 X11 Forwarding 的连接打开 x11 通道: server={}",
+                self.server_id
+            );
+            reply
+                .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
+        }
+        reply.accept().await;
+        let server_id = self.server_id.clone();
+        let orig_addr = originator_address.to_string();
+        tokio::spawn(async move {
+            if let Err(err) = crate::ssh::x11_forward::bridge_x11_channel(
+                channel,
+                &server_id,
+                &orig_addr,
+                originator_port,
+            )
+            .await
+            {
+                tracing::warn!(
+                    "[X11Forward] X11 转发通道失败 ({} <- {}:{}): {} (提示：Windows 请确认已启动 VcXsrv/Xming，macOS 请确认已启动 XQuartz，Linux 请确认 $DISPLAY 可达)",
+                    server_id,
+                    orig_addr,
+                    originator_port,
+                    err
+                );
+            }
+        });
         Ok(())
     }
 }
@@ -584,6 +664,8 @@ pub(crate) async fn connect_tcp_with_buffer_tuning(
 /// 4. 返回包装了全部中间 Handle 的 ChainedJumpStream，当外层断开时 RAII 自动逆序释放全部跳板连接。
 pub async fn connect_via_chained_jump(
     _config: &russh::client::Config,
+    server_id: &str,
+    generation: u64,
     target_host: &str,
     target_port: u16,
     deadline: &std::time::Instant,
@@ -627,7 +709,9 @@ pub async fn connect_via_chained_jump(
             ClientHandler {
                 host: hop0.host.clone(),
                 port: hop0.port,
-                server_id: String::new(),
+                server_id: server_id.to_string(),
+                forward_agent: false,
+                x11_forwarding: false,
                 banner: Arc::new(std::sync::Mutex::new(None)),
             },
         ),
@@ -636,17 +720,8 @@ pub async fn connect_via_chained_jump(
     .map_err(|_| SshError::ConnectionFailed("第 1 级跳板机 SSH 握手超时".into()))?
     .map_err(|e| SshError::ConnectionFailed(format!("第 1 级跳板机 SSH 握手失败: {}", e)))?;
 
-    let auth_timeout = deadline.saturating_duration_since(std::time::Instant::now());
-    let auth_res = timeout(
-        auth_timeout,
-        SshTransport::authenticate(&mut handle_0, &hop0.username, &hop0.auth),
-    )
-    .await;
-    match auth_res {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => return Err(e),
-        Err(_) => return Err(SshError::AuthFailed("第 1 级跳板机认证超时".into())),
-    }
+    let auth_timeout = deadline.saturating_duration_since(std::time::Instant::now()).max(Duration::from_secs(5));
+    SshTransport::authenticate(&mut handle_0, server_id, generation, &hop0.username, &hop0.auth, auth_timeout).await?;
     jump_handles.push(handle_0);
 
     // 2. 中间跳：在上一跳 channel 内 open_direct_tcpip 穿透并在其上握手
@@ -678,7 +753,9 @@ pub async fn connect_via_chained_jump(
                 ClientHandler {
                     host: hop.host.clone(),
                     port: hop.port,
-                    server_id: String::new(),
+                    server_id: server_id.to_string(),
+                    forward_agent: false,
+                    x11_forwarding: false,
                     banner: Arc::new(std::sync::Mutex::new(None)),
                 },
             ),
@@ -687,17 +764,8 @@ pub async fn connect_via_chained_jump(
         .map_err(|_| SshError::ConnectionFailed(format!("第 {} 级跳板机 SSH 握手超时", i + 1)))?
         .map_err(|e| SshError::ConnectionFailed(format!("第 {} 级跳板机 SSH 握手失败: {}", i + 1, e)))?;
 
-        let auth_timeout = deadline.saturating_duration_since(std::time::Instant::now());
-        let auth_res = timeout(
-            auth_timeout,
-            SshTransport::authenticate(&mut handle_i, &hop.username, &hop.auth),
-        )
-        .await;
-        match auth_res {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(e),
-            Err(_) => return Err(SshError::AuthFailed(format!("第 {} 级跳板机认证超时", i + 1))),
-        }
+        let auth_timeout = deadline.saturating_duration_since(std::time::Instant::now()).max(Duration::from_secs(5));
+        SshTransport::authenticate(&mut handle_i, server_id, generation, &hop.username, &hop.auth, auth_timeout).await?;
         jump_handles.push(handle_i);
     }
 
@@ -742,7 +810,7 @@ async fn connect_via_jump(
         auth: jump.auth.clone(),
         timeout_secs: jump.timeout_secs,
     };
-    connect_via_chained_jump(config, target_host, target_port, deadline, &[hop]).await
+    connect_via_chained_jump(config, "", 0, target_host, target_port, deadline, &[hop]).await
 }
 
 /// 通过 SOCKS5 / HTTP 代理建立到 (target_host, target_port) 的 TCP 隧道
@@ -966,6 +1034,33 @@ impl SshTransport {
         proxy: Option<ProxyTransportConfig>,
         window_size: u32,
     ) -> SshResult<Self> {
+        Self::connect_routed_with_options(
+            server_id,
+            host,
+            port,
+            username,
+            auth,
+            connection_timeout,
+            jump_chain,
+            proxy,
+            window_size,
+            ConnectOptions::default(),
+        )
+        .await
+    }
+
+    pub async fn connect_routed_with_options(
+        server_id: String,
+        host: String,
+        port: u16,
+        username: &str,
+        auth: &AuthMethod,
+        connection_timeout: u32,
+        jump_chain: Option<Vec<ResolvedJumpHop>>,
+        proxy: Option<ProxyTransportConfig>,
+        window_size: u32,
+        options: ConnectOptions,
+    ) -> SshResult<Self> {
         let start = std::time::Instant::now();
         tracing::info!("[SSH Perf] {} 开始连接 {}:{}{}",
             server_id, host, port,
@@ -1002,7 +1097,16 @@ impl SshTransport {
         // C) 经 SOCKS5/HTTP 代理：与代理握手建立 TCP 隧道后，直接把流喂给 SSH 握手
         let (stream, tcp_elapsed) = if let Some(ref chain) = jump_chain {
             let t0 = std::time::Instant::now();
-            let stream = connect_via_chained_jump(&config, &host, port, &deadline, chain).await?;
+            let stream = connect_via_chained_jump(
+                &config,
+                &server_id,
+                options.auth_generation,
+                &host,
+                port,
+                &deadline,
+                chain,
+            )
+            .await?;
             (stream, t0.elapsed())
         } else if let Some(ref p) = proxy {
             let t0 = std::time::Instant::now();
@@ -1046,6 +1150,8 @@ impl SshTransport {
                 host: host.clone(),
                 port,
                 server_id: server_id.clone(),
+                forward_agent: options.forward_agent,
+                x11_forwarding: options.x11_forwarding,
                 banner: banner.clone(),
             },
         ))
@@ -1056,19 +1162,30 @@ impl SshTransport {
         tracing::info!("[SSH Perf] {} SSH handshake 完成: {:?}",
             server_id, handshake_elapsed);
 
-        // Authenticate（使用剩余时间作为 Auth 超时）
-        let auth_start = start.elapsed();
-        let auth_timeout = deadline.saturating_duration_since(std::time::Instant::now());
-        let auth_res = timeout(auth_timeout, async {
-            Self::authenticate(&mut handle, username, auth).await
-        })
-        .await;
-
-        match auth_res {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(e),
-            Err(_) => return Err(SshError::AuthFailed(format!("Authentication timed out after {}s", connection_timeout))),
+        if options.auth_generation > 0 {
+            crate::ssh::manager::emit_state_changed(&crate::ssh::state::ConnectionStateData {
+                server_id: server_id.clone(),
+                state: crate::ssh::state::ConnectionState::Authenticating,
+                error: None,
+                error_kind: None,
+                generation: options.auth_generation,
+            });
         }
+
+        // Authenticate（非交互步骤使用剩余 deadline，交互式 OTP/MFA 每轮单独允许 90 秒等待用户）
+        let auth_start = start.elapsed();
+        let step_timeout = deadline
+            .saturating_duration_since(std::time::Instant::now())
+            .max(Duration::from_secs(5));
+        Self::authenticate(
+            &mut handle,
+            &server_id,
+            options.auth_generation,
+            username,
+            auth,
+            step_timeout,
+        )
+        .await?;
         let auth_elapsed = start.elapsed();
         tracing::info!("[SSH Perf] {} Auth: {:?} (累计 {:?})",
             server_id,
@@ -1088,19 +1205,206 @@ impl SshTransport {
         handle.best_supported_rsa_hash().await.ok().flatten().flatten()
     }
 
+    fn should_continue_with_kbdint(
+        result: &russh::client::AuthResult,
+        allow_non_partial: bool,
+    ) -> Option<bool> {
+        match result {
+            russh::client::AuthResult::Failure {
+                remaining_methods,
+                partial_success,
+            } if remaining_methods.contains(&russh::MethodKind::KeyboardInteractive)
+                && (*partial_success || allow_non_partial) =>
+            {
+                Some(*partial_success)
+            }
+            _ => None,
+        }
+    }
+
+    fn is_plain_password_prompt(prompt: &str, echo: bool) -> bool {
+        if echo {
+            return false;
+        }
+        let lower = prompt.to_ascii_lowercase();
+        lower.contains("password")
+            && !lower.contains("one-time")
+            && !lower.contains("otp")
+            && !lower.contains("token")
+            && !lower.contains("verification")
+            && !lower.contains("code")
+    }
+
+    async fn authenticate_keyboard_interactive_loop(
+        handle: &mut russh::client::Handle<ClientHandler>,
+        server_id: &str,
+        generation: u64,
+        username: &str,
+        step_timeout: Duration,
+        fallback_password: Option<&str>,
+        partial_success_seen: bool,
+    ) -> SshResult<()> {
+        use crate::ssh::auth_interaction::{
+            sanitize_auth_text, AuthInteractionRegistry, AuthInteractionRequest, AuthPrompt,
+            AUTH_INTERACTION_TIMEOUT_SECS, MAX_AUTH_ROUNDS,
+        };
+        use tauri::Emitter;
+
+        let mut resp = timeout(
+            step_timeout,
+            handle.authenticate_keyboard_interactive_start(username, None::<String>),
+        )
+        .await
+        .map_err(|_| SshError::AuthFailed("启动键盘交互式认证超时".into()))?
+        .map_err(|e| SshError::AuthFailed(format!("Keyboard-interactive auth start failed: {}", e)))?;
+
+        for round in 0..MAX_AUTH_ROUNDS {
+            match resp {
+                russh::client::KeyboardInteractiveAuthResponse::Success => return Ok(()),
+                russh::client::KeyboardInteractiveAuthResponse::Failure { .. } => {
+                    return Err(SshError::AuthFailed(
+                        "键盘交互式认证（MFA/OTP）失败或被服务器拒绝".into(),
+                    ));
+                }
+                russh::client::KeyboardInteractiveAuthResponse::InfoRequest {
+                    name,
+                    instructions,
+                    prompts,
+                } => {
+                    let responses = if prompts.is_empty() {
+                        Vec::new()
+                    } else if !partial_success_seen
+                        && round == 0
+                        && prompts.len() == 1
+                        && fallback_password.is_some_and(|pw| !pw.is_empty())
+                        && Self::is_plain_password_prompt(&prompts[0].prompt, prompts[0].echo)
+                    {
+                        vec![fallback_password.unwrap_or_default().to_string()]
+                    } else {
+                        let app = crate::ssh::manager::app_handle().ok_or_else(|| {
+                            SshError::AuthFailed(
+                                "需要交互式认证（OTP/MFA），但应用界面句柄尚未就绪".into(),
+                            )
+                        })?;
+                        if generation > 0 {
+                            crate::ssh::manager::emit_state_changed(
+                                &crate::ssh::state::ConnectionStateData {
+                                    server_id: server_id.to_string(),
+                                    state: crate::ssh::state::ConnectionState::Authenticating,
+                                    error: None,
+                                    error_kind: None,
+                                    generation,
+                                },
+                            );
+                        }
+                        let (guard, rx) = AuthInteractionRegistry::global().register(server_id);
+                        let req = AuthInteractionRequest {
+                            request_id: guard.request_id().to_string(),
+                            server_id: server_id.to_string(),
+                            generation,
+                            title: sanitize_auth_text(&name),
+                            instructions: sanitize_auth_text(&instructions),
+                            prompts: prompts
+                                .iter()
+                                .map(|p| AuthPrompt {
+                                    prompt: sanitize_auth_text(&p.prompt),
+                                    echo: p.echo,
+                                })
+                                .collect(),
+                            timeout_secs: AUTH_INTERACTION_TIMEOUT_SECS,
+                        };
+                        let _ = app.emit("ssh:auth-interaction-required", &req);
+
+                        let user_res = timeout(
+                            Duration::from_secs(AUTH_INTERACTION_TIMEOUT_SECS),
+                            rx,
+                        )
+                        .await;
+                        guard.disarm();
+
+                        match user_res {
+                            Ok(Ok(Some(mut answers))) => {
+                                answers.resize(prompts.len(), String::new());
+                                answers
+                            }
+                            Ok(Ok(None)) => {
+                                return Err(SshError::AuthFailed("用户已取消交互式认证".into()));
+                            }
+                            Ok(Err(_)) => {
+                                return Err(SshError::AuthFailed("交互式认证通道已关闭".into()));
+                            }
+                            Err(_) => {
+                                return Err(SshError::AuthFailed(format!(
+                                    "交互式认证超时（{} 秒内未响应）",
+                                    AUTH_INTERACTION_TIMEOUT_SECS
+                                )));
+                            }
+                        }
+                    };
+
+                    resp = timeout(
+                        step_timeout,
+                        handle.authenticate_keyboard_interactive_respond(responses),
+                    )
+                    .await
+                    .map_err(|_| SshError::AuthFailed("提交键盘交互式认证响应超时".into()))?
+                    .map_err(|e| {
+                        SshError::AuthFailed(format!("Keyboard-interactive respond failed: {}", e))
+                    })?;
+                }
+            }
+        }
+
+        if matches!(resp, russh::client::KeyboardInteractiveAuthResponse::Success) {
+            Ok(())
+        } else {
+            Err(SshError::AuthFailed("交互式认证往返次数超出上限".into()))
+        }
+    }
+
     /// 认证逻辑（从 connect 抽出，避免与 jump 分支耦合）
     async fn authenticate(
         handle: &mut russh::client::Handle<ClientHandler>,
+        server_id: &str,
+        generation: u64,
         username: &str,
         auth: &AuthMethod,
+        step_timeout: Duration,
     ) -> SshResult<()> {
         match auth {
+            AuthMethod::KeyboardInteractive => {
+                Self::authenticate_keyboard_interactive_loop(
+                    handle,
+                    server_id,
+                    generation,
+                    username,
+                    step_timeout,
+                    None,
+                    false,
+                )
+                .await?;
+            }
             AuthMethod::Password { password } => {
-                let result = handle
-                    .authenticate_password(username, password)
-                    .await
-                    .map_err(|e| SshError::AuthFailed(format!("Password auth failed: {}", e)))?;
+                let result = timeout(
+                    step_timeout,
+                    handle.authenticate_password(username, password),
+                )
+                .await
+                .map_err(|_| SshError::AuthFailed("密码认证请求超时".into()))?
+                .map_err(|e| SshError::AuthFailed(format!("Password auth failed: {}", e)))?;
                 if !result.success() {
+                    if let Some(partial) = Self::should_continue_with_kbdint(&result, true) {
+                        return Self::authenticate_keyboard_interactive_loop(
+                            handle,
+                            server_id,
+                            generation,
+                            username,
+                            step_timeout,
+                            Some(password.as_str()),
+                            partial,
+                        )
+                        .await;
+                    }
                     return Err(SshError::AuthFailed("Password authentication rejected".into()));
                 }
             }
@@ -1117,25 +1421,46 @@ impl SshTransport {
                     None
                 };
                 let key = Arc::new(key_pair);
-                let mut result = handle
-                    .authenticate_publickey(
+                let mut result = timeout(
+                    step_timeout,
+                    handle.authenticate_publickey(
                         username,
                         russh::keys::PrivateKeyWithHashAlg::new(Arc::clone(&key), hash_alg),
-                    )
-                    .await
-                    .map_err(|e| SshError::AuthFailed(format!("Public key auth failed: {}", e)))?;
+                    ),
+                )
+                .await
+                .map_err(|_| SshError::AuthFailed("公钥认证超时".into()))?
+                .map_err(|e| SshError::AuthFailed(format!("Public key auth failed: {}", e)))?;
                 // 协商到 SHA-2 却被拒绝时，回退到改动前的 ssh-rsa 再试一次，
                 // 兼容「通告了 rsa-sha2-* 却实际不接受」的服务端。
-                if !result.success() && hash_alg.is_some() {
-                    result = handle
-                        .authenticate_publickey(
+                if !result.success()
+                    && hash_alg.is_some()
+                    && Self::should_continue_with_kbdint(&result, false).is_none()
+                {
+                    result = timeout(
+                        step_timeout,
+                        handle.authenticate_publickey(
                             username,
                             russh::keys::PrivateKeyWithHashAlg::new(Arc::clone(&key), None),
-                        )
-                        .await
-                        .map_err(|e| SshError::AuthFailed(format!("Public key auth failed: {}", e)))?;
+                        ),
+                    )
+                    .await
+                    .map_err(|_| SshError::AuthFailed("公钥认证超时".into()))?
+                    .map_err(|e| SshError::AuthFailed(format!("Public key auth failed: {}", e)))?;
                 }
                 if !result.success() {
+                    if let Some(partial) = Self::should_continue_with_kbdint(&result, false) {
+                        return Self::authenticate_keyboard_interactive_loop(
+                            handle,
+                            server_id,
+                            generation,
+                            username,
+                            step_timeout,
+                            None,
+                            partial,
+                        )
+                        .await;
+                    }
                     return Err(SshError::AuthFailed("Public key authentication rejected".into()));
                 }
             }
@@ -1165,6 +1490,7 @@ impl SshTransport {
                 let mut signer = AgentSigner::new(agent_conn);
                 let mut last_error = None;
                 let mut authenticated = false;
+                let mut kbdint_partial: Option<bool> = None;
                 // 仅当候选里存在 RSA 身份时才协商，避免 Ed25519 场景白白等待 1 秒 EXT_INFO
                 let negotiated = if candidates.iter().any(|pk| {
                     matches!(pk.algorithm(), russh::keys::Algorithm::Rsa { .. })
@@ -1198,12 +1524,29 @@ impl SshTransport {
                                 authenticated = true;
                                 break 'auth;
                             }
-                            Ok(_) => {}
+                            Ok(result) => {
+                                if let Some(partial) = Self::should_continue_with_kbdint(&result, false) {
+                                    kbdint_partial = Some(partial);
+                                    break 'auth;
+                                }
+                            }
                             Err(e) => last_error = Some(e.to_string()),
                         }
                     }
                 }
                 drop(signer);
+                if let Some(partial) = kbdint_partial {
+                    return Self::authenticate_keyboard_interactive_loop(
+                        handle,
+                        server_id,
+                        generation,
+                        username,
+                        step_timeout,
+                        None,
+                        partial,
+                    )
+                    .await;
+                }
                 if !authenticated {
                     return Err(SshError::AuthFailed(last_error
                         .map(|e| format!("SSH Agent 认证失败: {}", e))
@@ -1232,11 +1575,26 @@ impl SshTransport {
                     certificate.valid_principals(),
                     username,
                 )?;
-                let result = handle
-                    .authenticate_openssh_cert(username, Arc::new(key_pair), certificate)
-                    .await
-                    .map_err(|e| SshError::AuthFailed(format!("Certificate auth failed: {}", e)))?;
+                let result = timeout(
+                    step_timeout,
+                    handle.authenticate_openssh_cert(username, Arc::new(key_pair), certificate),
+                )
+                .await
+                .map_err(|_| SshError::AuthFailed("证书认证超时".into()))?
+                .map_err(|e| SshError::AuthFailed(format!("Certificate auth failed: {}", e)))?;
                 if !result.success() {
+                    if let Some(partial) = Self::should_continue_with_kbdint(&result, false) {
+                        return Self::authenticate_keyboard_interactive_loop(
+                            handle,
+                            server_id,
+                            generation,
+                            username,
+                            step_timeout,
+                            None,
+                            partial,
+                        )
+                        .await;
+                    }
                     return Err(SshError::AuthFailed(
                         "证书认证被服务器拒绝，请确认证书未过期且 CA 已被服务器信任".into()
                     ));
@@ -1257,25 +1615,46 @@ impl SshTransport {
                     None
                 };
                 let key = Arc::new(key_pair);
-                let mut result = handle
-                    .authenticate_publickey(
+                let mut result = timeout(
+                    step_timeout,
+                    handle.authenticate_publickey(
                         username,
                         russh::keys::PrivateKeyWithHashAlg::new(Arc::clone(&key), hash_alg),
-                    )
-                    .await
-                    .map_err(|e| SshError::AuthFailed(format!("Public key auth failed: {}", e)))?;
+                    ),
+                )
+                .await
+                .map_err(|_| SshError::AuthFailed("公钥认证超时".into()))?
+                .map_err(|e| SshError::AuthFailed(format!("Public key auth failed: {}", e)))?;
                 // 协商到 SHA-2 却被拒绝时，回退到改动前的 ssh-rsa 再试一次，
                 // 兼容「通告了 rsa-sha2-* 却实际不接受」的服务端。
-                if !result.success() && hash_alg.is_some() {
-                    result = handle
-                        .authenticate_publickey(
+                if !result.success()
+                    && hash_alg.is_some()
+                    && Self::should_continue_with_kbdint(&result, false).is_none()
+                {
+                    result = timeout(
+                        step_timeout,
+                        handle.authenticate_publickey(
                             username,
                             russh::keys::PrivateKeyWithHashAlg::new(Arc::clone(&key), None),
-                        )
-                        .await
-                        .map_err(|e| SshError::AuthFailed(format!("Public key auth failed: {}", e)))?;
+                        ),
+                    )
+                    .await
+                    .map_err(|_| SshError::AuthFailed("公钥认证超时".into()))?
+                    .map_err(|e| SshError::AuthFailed(format!("Public key auth failed: {}", e)))?;
                 }
                 if !result.success() {
+                    if let Some(partial) = Self::should_continue_with_kbdint(&result, false) {
+                        return Self::authenticate_keyboard_interactive_loop(
+                            handle,
+                            server_id,
+                            generation,
+                            username,
+                            step_timeout,
+                            None,
+                            partial,
+                        )
+                        .await;
+                    }
                     return Err(SshError::AuthFailed("Public key authentication rejected".into()));
                 }
             }
@@ -1338,11 +1717,26 @@ impl SshTransport {
                     username,
                 )?;
 
-                let result = handle
-                    .authenticate_openssh_cert(username, Arc::new(key_pair), certificate)
-                    .await
-                    .map_err(|e| SshError::AuthFailed(format!("Certificate auth failed: {}", e)))?;
+                let result = timeout(
+                    step_timeout,
+                    handle.authenticate_openssh_cert(username, Arc::new(key_pair), certificate),
+                )
+                .await
+                .map_err(|_| SshError::AuthFailed("证书认证超时".into()))?
+                .map_err(|e| SshError::AuthFailed(format!("Certificate auth failed: {}", e)))?;
                 if !result.success() {
+                    if let Some(partial) = Self::should_continue_with_kbdint(&result, false) {
+                        return Self::authenticate_keyboard_interactive_loop(
+                            handle,
+                            server_id,
+                            generation,
+                            username,
+                            step_timeout,
+                            None,
+                            partial,
+                        )
+                        .await;
+                    }
                     return Err(SshError::AuthFailed(
                         "证书认证被服务器拒绝，请确认证书未过期且 CA 已被服务器信任".into()
                     ));
@@ -1989,6 +2383,8 @@ struct ConnectParams {
     connection_timeout: u32,
     jump_chain: Option<Vec<ResolvedJumpHop>>,
     proxy: Option<ProxyTransportConfig>,
+    forward_agent: bool,
+    x11_forwarding: bool,
 }
 
 pub struct SshConnection {
@@ -2008,9 +2404,41 @@ pub struct SshConnection {
     connect_params: Arc<ConnectParams>,
     /// SFTP 专用的独立传输层（大窗口）：懒创建，避免终端小窗口拖累文件传输。
     sftp_transport: tokio::sync::Mutex<Option<Arc<SshTransport>>>,
+    /// 断开连接时取消正在进行的 SFTP 专用连接建连（避免 disconnect 死等 sftp_transport 锁）
+    sftp_connect_cancelled: Arc<AtomicBool>,
+    sftp_connect_cancel_notify: Arc<tokio::sync::Notify>,
 }
 
 impl SshConnection {
+    fn from_parts(transport: SshTransport, connect_params: ConnectParams) -> Self {
+        Self {
+            transport,
+            heartbeat_cancel: Arc::new(AtomicBool::new(false)),
+            sftp_cache: tokio::sync::Mutex::new(None),
+            first_shell_ready: Arc::new(AtomicBool::new(false)),
+            first_shell_notify: Arc::new(tokio::sync::Notify::new()),
+            connect_params: Arc::new(connect_params),
+            sftp_transport: tokio::sync::Mutex::new(None),
+            sftp_connect_cancelled: Arc::new(AtomicBool::new(false)),
+            sftp_connect_cancel_notify: Arc::new(tokio::sync::Notify::new()),
+        }
+    }
+
+    async fn wait_sftp_connect_cancelled(&self) {
+        if self.sftp_connect_cancelled.load(Ordering::SeqCst) {
+            return;
+        }
+        loop {
+            let notified = self.sftp_connect_cancel_notify.notified();
+            if self.sftp_connect_cancelled.load(Ordering::SeqCst) {
+                return;
+            }
+            notified.await;
+            if self.sftp_connect_cancelled.load(Ordering::SeqCst) {
+                return;
+            }
+        }
+    }
     /// Connect to a remote SSH server (async).
     pub async fn connect(
         server_id: String,
@@ -2019,6 +2447,27 @@ impl SshConnection {
         username: &str,
         auth: &AuthMethod,
         connection_timeout: u32,
+    ) -> SshResult<Self> {
+        Self::connect_with_options(
+            server_id,
+            host,
+            port,
+            username,
+            auth,
+            connection_timeout,
+            ConnectOptions::default(),
+        )
+        .await
+    }
+
+    pub async fn connect_with_options(
+        server_id: String,
+        host: String,
+        port: u16,
+        username: &str,
+        auth: &AuthMethod,
+        connection_timeout: u32,
+        options: ConnectOptions,
     ) -> SshResult<Self> {
         let connect_params = ConnectParams {
             server_id: server_id.clone(),
@@ -2029,19 +2478,13 @@ impl SshConnection {
             connection_timeout,
             jump_chain: None,
             proxy: None,
+            forward_agent: options.forward_agent,
+            x11_forwarding: options.x11_forwarding,
         };
-        let transport = SshTransport::connect(
-            server_id, host, port, username, auth, connection_timeout, None, None, terminal_window_size_bytes(),
+        let transport = SshTransport::connect_routed_with_options(
+            server_id, host, port, username, auth, connection_timeout, None, None, terminal_window_size_bytes(), options,
         ).await?;
-        Ok(Self {
-            transport,
-            heartbeat_cancel: Arc::new(AtomicBool::new(false)),
-            sftp_cache: tokio::sync::Mutex::new(None),
-            first_shell_ready: Arc::new(AtomicBool::new(false)),
-            first_shell_notify: Arc::new(tokio::sync::Notify::new()),
-            connect_params: Arc::new(connect_params),
-            sftp_transport: tokio::sync::Mutex::new(None),
-        })
+        Ok(Self::from_parts(transport, connect_params))
     }
 
     /// Connect via a jump host (async).
@@ -2071,19 +2514,13 @@ impl SshConnection {
             connection_timeout,
             jump_chain: Some(jump_chain),
             proxy: None,
+            forward_agent: false,
+            x11_forwarding: false,
         };
         let transport = SshTransport::connect(
             server_id, host, port, username, auth, connection_timeout, Some(jump), None, terminal_window_size_bytes(),
         ).await?;
-        Ok(Self {
-            transport,
-            heartbeat_cancel: Arc::new(AtomicBool::new(false)),
-            sftp_cache: tokio::sync::Mutex::new(None),
-            first_shell_ready: Arc::new(AtomicBool::new(false)),
-            first_shell_notify: Arc::new(tokio::sync::Notify::new()),
-            connect_params: Arc::new(connect_params),
-            sftp_transport: tokio::sync::Mutex::new(None),
-        })
+        Ok(Self::from_parts(transport, connect_params))
     }
 
     /// Connect via a multi-hop chained jump host (async).
@@ -2096,6 +2533,29 @@ impl SshConnection {
         connection_timeout: u32,
         hops: Vec<ResolvedJumpHop>,
     ) -> SshResult<Self> {
+        Self::connect_via_jump_chain_with_options(
+            server_id,
+            host,
+            port,
+            username,
+            auth,
+            connection_timeout,
+            hops,
+            ConnectOptions::default(),
+        )
+        .await
+    }
+
+    pub async fn connect_via_jump_chain_with_options(
+        server_id: String,
+        host: String,
+        port: u16,
+        username: &str,
+        auth: &AuthMethod,
+        connection_timeout: u32,
+        hops: Vec<ResolvedJumpHop>,
+        options: ConnectOptions,
+    ) -> SshResult<Self> {
         let connect_params = ConnectParams {
             server_id: server_id.clone(),
             host: host.clone(),
@@ -2105,19 +2565,13 @@ impl SshConnection {
             connection_timeout,
             jump_chain: Some(hops.clone()),
             proxy: None,
+            forward_agent: options.forward_agent,
+            x11_forwarding: options.x11_forwarding,
         };
-        let transport = SshTransport::connect_routed(
-            server_id, host, port, username, auth, connection_timeout, Some(hops), None, terminal_window_size_bytes(),
+        let transport = SshTransport::connect_routed_with_options(
+            server_id, host, port, username, auth, connection_timeout, Some(hops), None, terminal_window_size_bytes(), options,
         ).await?;
-        Ok(Self {
-            transport,
-            heartbeat_cancel: Arc::new(AtomicBool::new(false)),
-            sftp_cache: tokio::sync::Mutex::new(None),
-            first_shell_ready: Arc::new(AtomicBool::new(false)),
-            first_shell_notify: Arc::new(tokio::sync::Notify::new()),
-            connect_params: Arc::new(connect_params),
-            sftp_transport: tokio::sync::Mutex::new(None),
-        })
+        Ok(Self::from_parts(transport, connect_params))
     }
 
     /// Connect via a SOCKS5 / HTTP proxy (async).
@@ -2130,6 +2584,29 @@ impl SshConnection {
         connection_timeout: u32,
         proxy: ProxyTransportConfig,
     ) -> SshResult<Self> {
+        Self::connect_via_proxy_with_options(
+            server_id,
+            host,
+            port,
+            username,
+            auth,
+            connection_timeout,
+            proxy,
+            ConnectOptions::default(),
+        )
+        .await
+    }
+
+    pub async fn connect_via_proxy_with_options(
+        server_id: String,
+        host: String,
+        port: u16,
+        username: &str,
+        auth: &AuthMethod,
+        connection_timeout: u32,
+        proxy: ProxyTransportConfig,
+        options: ConnectOptions,
+    ) -> SshResult<Self> {
         let connect_params = ConnectParams {
             server_id: server_id.clone(),
             host: host.clone(),
@@ -2139,19 +2616,23 @@ impl SshConnection {
             connection_timeout,
             jump_chain: None,
             proxy: Some(proxy.clone()),
+            forward_agent: options.forward_agent,
+            x11_forwarding: options.x11_forwarding,
         };
-        let transport = SshTransport::connect(
-            server_id, host, port, username, auth, connection_timeout, None, Some(proxy), terminal_window_size_bytes(),
+        let transport = SshTransport::connect_routed_with_options(
+            server_id, host, port, username, auth, connection_timeout, None, Some(proxy), terminal_window_size_bytes(), options,
         ).await?;
-        Ok(Self {
-            transport,
-            heartbeat_cancel: Arc::new(AtomicBool::new(false)),
-            sftp_cache: tokio::sync::Mutex::new(None),
-            first_shell_ready: Arc::new(AtomicBool::new(false)),
-            first_shell_notify: Arc::new(tokio::sync::Notify::new()),
-            connect_params: Arc::new(connect_params),
-            sftp_transport: tokio::sync::Mutex::new(None),
-        })
+        Ok(Self::from_parts(transport, connect_params))
+    }
+
+    /// 当前会话是否允许向远端开放 SSH Agent Forwarding。
+    pub fn forward_agent_enabled(&self) -> bool {
+        self.connect_params.forward_agent
+    }
+
+    /// 当前会话是否启用了 SSH X11 图形转发。
+    pub fn x11_forwarding_enabled(&self) -> bool {
+        self.connect_params.x11_forwarding
     }
 
     /// 确保终端交互式 PTY Shell 优先建立，避免后台通道（SFTP / exec）抢占首个会话通道导致服务端的 PAM MOTD 欢迎词被提前清空。
@@ -2226,7 +2707,13 @@ impl SshConnection {
     /// russh 的 window_size 是连接级配置、无法按 channel 区分，所以为 SFTP 单独建一条
     /// 复用同一 host / 认证 / 跳板 / 代理的 SSH 连接，两者互不拖累。
     async fn get_or_create_sftp_transport(&self) -> SshResult<Arc<SshTransport>> {
+        if self.sftp_connect_cancelled.load(Ordering::SeqCst) {
+            return Err(SshError::ConnectionLost("Connection disconnected".into()));
+        }
         let mut guard = self.sftp_transport.lock().await;
+        if self.sftp_connect_cancelled.load(Ordering::SeqCst) {
+            return Err(SshError::ConnectionLost("Connection disconnected".into()));
+        }
         if let Some(t) = guard.as_ref() {
             if t.is_alive() {
                 return Ok(t.clone());
@@ -2234,17 +2721,29 @@ impl SshConnection {
             *guard = None;
         }
         let p = &*self.connect_params;
-        let transport = SshTransport::connect_routed(
-            p.server_id.clone(),
-            p.host.clone(),
-            p.port,
-            &p.username,
-            &p.auth,
-            p.connection_timeout,
-            p.jump_chain.clone(),
-            p.proxy.clone(),
-            TRANSFER_WINDOW_SIZE,
-        ).await?;
+        let transport = tokio::select! {
+            biased;
+            _ = self.wait_sftp_connect_cancelled() => {
+                return Err(SshError::ConnectionLost(
+                    "SFTP transport creation cancelled on disconnect".into(),
+                ));
+            }
+            res = SshTransport::connect_routed(
+                p.server_id.clone(),
+                p.host.clone(),
+                p.port,
+                &p.username,
+                &p.auth,
+                p.connection_timeout,
+                p.jump_chain.clone(),
+                p.proxy.clone(),
+                TRANSFER_WINDOW_SIZE,
+            ) => res?,
+        };
+        if self.sftp_connect_cancelled.load(Ordering::SeqCst) {
+            let _ = tokio::time::timeout(Duration::from_secs(1), transport.disconnect()).await;
+            return Err(SshError::ConnectionLost("Connection disconnected".into()));
+        }
         let transport = Arc::new(transport);
         *guard = Some(transport.clone());
         Ok(transport)
@@ -2365,10 +2864,17 @@ impl SshConnection {
     /// 注意：本方法只在「连接丢失（心跳）/ 用户主动断开 / 应用退出」时调用，
     /// 正常 SFTP 传输期间不会触发，因此不会打断进行中的文件传输。
     pub async fn disconnect(&self) {
+        // 先广播取消正在进行的 SFTP 专用连接建连（如慢握手/2FA），避免下方加锁永久挂起
+        self.sftp_connect_cancelled.store(true, Ordering::SeqCst);
+        self.sftp_connect_cancel_notify.notify_waiters();
+        crate::ssh::auth_interaction::AuthInteractionRegistry::global()
+            .cancel_for_server(self.server_id());
+
         // 一并断开 SFTP 专用连接（独立连接，避免泄漏）。
-        // 加 3 秒超时保护：SFTP 连接无响应时不让断开流程永久挂起。
+        // 加超时保护：即使建连或断开无响应，也不让断开流程永久挂起。
+        if let Ok(mut guard) =
+            tokio::time::timeout(Duration::from_millis(500), self.sftp_transport.lock()).await
         {
-            let mut guard = self.sftp_transport.lock().await;
             if let Some(t) = guard.take() {
                 let _ = tokio::time::timeout(Duration::from_secs(3), t.disconnect()).await;
             }
@@ -2607,4 +3113,40 @@ mod key_path_tests {
     }
 }
 
+#[cfg(test)]
+mod kbdint_tests {
+    use super::SshTransport;
+    use russh::client::AuthResult;
+    use russh::{MethodKind, MethodSet};
+
+    #[test]
+    fn test_should_continue_with_kbdint_on_partial_success() {
+        let partial = AuthResult::Failure {
+            remaining_methods: MethodSet::from(&[MethodKind::KeyboardInteractive][..]),
+            partial_success: true,
+        };
+        assert_eq!(SshTransport::should_continue_with_kbdint(&partial, false), Some(true));
+        assert_eq!(SshTransport::should_continue_with_kbdint(&partial, true), Some(true));
+    }
+
+    #[test]
+    fn test_should_not_continue_kbdint_for_key_without_partial_success() {
+        let rejected = AuthResult::Failure {
+            remaining_methods: MethodSet::from(
+                &[MethodKind::KeyboardInteractive, MethodKind::Password][..],
+            ),
+            partial_success: false,
+        };
+        assert_eq!(SshTransport::should_continue_with_kbdint(&rejected, false), None);
+        assert_eq!(SshTransport::should_continue_with_kbdint(&rejected, true), Some(false));
+    }
+
+    #[test]
+    fn test_is_plain_password_prompt_rejects_otp_prompts() {
+        assert!(SshTransport::is_plain_password_prompt("Password:", false));
+        assert!(!SshTransport::is_plain_password_prompt("Password:", true));
+        assert!(!SshTransport::is_plain_password_prompt("One-time password (OTP):", false));
+        assert!(!SshTransport::is_plain_password_prompt("Verification code:", false));
+    }
+}
 

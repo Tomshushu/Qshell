@@ -4,6 +4,7 @@ import type { SftpViewMode } from "@/types";
 import { setSoundEnabled } from "@/lib/sound";
 import { sshService } from "@/services/ssh-service";
 import { FONT_PRESETS } from "@/lib/font-presets";
+import { useTransferQueueStore } from "./transfer-queue-store";
 import {
   SIDEBAR_WIDTH_MIN,
   SIDEBAR_WIDTH_MAX,
@@ -67,6 +68,8 @@ export const useAppStore = create<AppState>()(
         terminalWindowSizeKb: state.terminalWindowSizeKb,
         terminalRecordingDirectory: state.terminalRecordingDirectory,
         terminalEncoding: state.terminalEncoding,
+        terminalType: state.terminalType,
+        terminalBracketedPaste: state.terminalBracketedPaste,
         terminalRecordingMaxSizeMb: state.terminalRecordingMaxSizeMb,
         terminalQuickCommandBarVisible: state.terminalQuickCommandBarVisible,
         terminalQuickCommandBarCollapsed: state.terminalQuickCommandBarCollapsed,
@@ -85,6 +88,7 @@ export const useAppStore = create<AppState>()(
         sftpDefaultViewMode: state.sftpDefaultViewMode,
         sftpLocalViewMode: state.sftpLocalViewMode,
         sftpRemoteViewMode: state.sftpRemoteViewMode,
+        sftpShowHidden: state.sftpShowHidden,
         sftpLocalShowHidden: state.sftpLocalShowHidden,
         sftpRemoteShowHidden: state.sftpRemoteShowHidden,
         sftpLocalSortField: state.sftpLocalSortField,
@@ -102,6 +106,12 @@ export const useAppStore = create<AppState>()(
         sftpExclusionPatterns: state.sftpExclusionPatterns,
         sftpRespectGitignore: state.sftpRespectGitignore,
         sftpSymlinkPolicy: state.sftpSymlinkPolicy,
+        sftpPaneMode: state.sftpPaneMode,
+        sftpShowDirectoryTree: state.sftpShowDirectoryTree,
+        externalEditMaxSizeMb: state.externalEditMaxSizeMb,
+        sftpIncludePatterns: state.sftpIncludePatterns,
+        sftpMinSizeKb: state.sftpMinSizeKb,
+        sftpMaxSizeKb: state.sftpMaxSizeKb,
         sidebarWidth: state.sidebarWidth,
         language: state.language,
         // Application Lock 持久化（冷启动永不锁定，仅在运行时根据空闲或手动锁定生效）
@@ -205,32 +215,31 @@ export const useAppStore = create<AppState>()(
           delete (
             state as Partial<AppState> & { terminalMaxSessions?: unknown }
           ).terminalMaxSessions;
-          // 确保 sftpDefaultViewMode 处于有效选项范围
+          // 确保 sftpDefaultViewMode 处于有效选项范围并统一同步至旧字段
           const validViewModes: SftpViewMode[] = ["list", "large", "medium", "small"];
-          if (
-            !state.sftpDefaultViewMode ||
-            !validViewModes.includes(state.sftpDefaultViewMode)
-          ) {
-            state.sftpDefaultViewMode = "list";
-          }
-          if (
-            !state.sftpLocalViewMode ||
-            !validViewModes.includes(state.sftpLocalViewMode)
-          ) {
-            state.sftpLocalViewMode = state.sftpDefaultViewMode || "list";
-          }
-          if (
-            !state.sftpRemoteViewMode ||
-            !validViewModes.includes(state.sftpRemoteViewMode)
-          ) {
-            state.sftpRemoteViewMode = state.sftpDefaultViewMode || "list";
-          }
-          if (typeof state.sftpLocalShowHidden !== "boolean") {
-            state.sftpLocalShowHidden = false;
-          }
-          if (typeof state.sftpRemoteShowHidden !== "boolean") {
-            state.sftpRemoteShowHidden = true;
-          }
+          const resolvedViewMode = validViewModes.includes(state.sftpDefaultViewMode as SftpViewMode)
+            ? state.sftpDefaultViewMode
+            : validViewModes.includes(state.sftpRemoteViewMode as SftpViewMode)
+              ? state.sftpRemoteViewMode
+              : validViewModes.includes(state.sftpLocalViewMode as SftpViewMode)
+                ? state.sftpLocalViewMode
+                : "list";
+          state.sftpDefaultViewMode = resolvedViewMode;
+          state.sftpLocalViewMode = resolvedViewMode;
+          state.sftpRemoteViewMode = resolvedViewMode;
+
+          const resolvedShowHidden =
+            typeof state.sftpShowHidden === "boolean"
+              ? state.sftpShowHidden
+              : typeof state.sftpRemoteShowHidden === "boolean"
+                ? state.sftpRemoteShowHidden
+                : typeof state.workspaceFileShowHidden === "boolean"
+                  ? state.workspaceFileShowHidden
+                  : true;
+          state.sftpShowHidden = resolvedShowHidden;
+          state.sftpLocalShowHidden = resolvedShowHidden;
+          state.sftpRemoteShowHidden = resolvedShowHidden;
+          state.workspaceFileShowHidden = resolvedShowHidden;
           const validSortFields: Array<"name" | "size" | "modified"> = ["name", "size", "modified"];
           const validSortOrders: Array<"asc" | "desc"> = ["asc", "desc"];
           if (!state.sftpLocalSortField || !validSortFields.includes(state.sftpLocalSortField)) {
@@ -284,16 +293,110 @@ export const useAppStore = create<AppState>()(
           if (state.sftpSymlinkPolicy !== "follow" && state.sftpSymlinkPolicy !== "skip") {
             state.sftpSymlinkPolicy = "skip";
           }
-          // 重新激活或启动时，同步传输排除规则给后端
-          sshService
-            .setExclusionConfig(
-              state.sftpExclusionEnabled,
-              state.sftpExclusionPatterns,
-              state.sftpRespectGitignore,
-            )
-            .catch((err) => {
-              console.error("Failed to sync exclusion config on rehydrate:", err);
-            });
+          if (
+            state.sftpPaneMode !== "dual" &&
+            state.sftpPaneMode !== "left" &&
+            state.sftpPaneMode !== "right"
+          ) {
+            state.sftpPaneMode = "dual";
+          }
+          if (typeof state.sftpShowDirectoryTree !== "boolean") {
+            state.sftpShowDirectoryTree = false;
+          }
+          if (
+            typeof state.externalEditMaxSizeMb !== "number" ||
+            !Number.isFinite(state.externalEditMaxSizeMb) ||
+            state.externalEditMaxSizeMb < 0
+          ) {
+            state.externalEditMaxSizeMb = 10;
+          } else {
+            state.externalEditMaxSizeMb = Math.floor(state.externalEditMaxSizeMb);
+          }
+          if (!Array.isArray(state.sftpIncludePatterns)) {
+            state.sftpIncludePatterns = [];
+          }
+          if (
+            state.sftpMinSizeKb !== null &&
+            (typeof state.sftpMinSizeKb !== "number" ||
+              !Number.isFinite(state.sftpMinSizeKb) ||
+              state.sftpMinSizeKb < 0)
+          ) {
+            state.sftpMinSizeKb = null;
+          } else if (state.sftpMinSizeKb !== null) {
+            state.sftpMinSizeKb = Math.floor(state.sftpMinSizeKb);
+          }
+          if (
+            state.sftpMaxSizeKb !== null &&
+            (typeof state.sftpMaxSizeKb !== "number" ||
+              !Number.isFinite(state.sftpMaxSizeKb) ||
+              state.sftpMaxSizeKb < 0)
+          ) {
+            state.sftpMaxSizeKb = null;
+          } else if (state.sftpMaxSizeKb !== null) {
+            state.sftpMaxSizeKb = Math.floor(state.sftpMaxSizeKb);
+          }
+          if (
+            typeof state.transferRateLimit !== "number" ||
+            !Number.isFinite(state.transferRateLimit) ||
+            state.transferRateLimit < 0
+          ) {
+            state.transferRateLimit = 0;
+          } else {
+            state.transferRateLimit = Math.floor(state.transferRateLimit);
+          }
+          // 重新激活或启动时，同步传输限速与排除/过滤规则给后端
+          if (typeof sshService.setTransferRateLimit === "function") {
+            sshService
+              .setTransferRateLimit(state.transferRateLimit)
+              .catch((err) => {
+                try {
+                  if (sshService.isAvailable()) {
+                    console.error("Failed to sync transfer rate limit on rehydrate:", err);
+                  }
+                } catch {}
+              });
+          }
+          if (typeof sshService.setExclusionConfig === "function") {
+            sshService
+              .setExclusionConfig(
+                state.sftpExclusionEnabled,
+                state.sftpExclusionPatterns,
+                state.sftpRespectGitignore,
+                {
+                  includePatterns: state.sftpIncludePatterns,
+                  minSizeBytes:
+                    state.sftpMinSizeKb !== null
+                      ? state.sftpMinSizeKb * 1024
+                      : null,
+                  maxSizeBytes:
+                    state.sftpMaxSizeKb !== null
+                      ? state.sftpMaxSizeKb * 1024
+                      : null,
+                },
+              )
+              .catch((err) => {
+                try {
+                  if (sshService.isAvailable()) {
+                    console.error("Failed to sync exclusion config on rehydrate:", err);
+                  }
+                } catch {}
+              });
+          }
+          if (typeof sshService.setSymlinkPolicy === "function") {
+            sshService
+              .setSymlinkPolicy(state.sftpSymlinkPolicy)
+              .catch((err) => {
+                try {
+                  if (sshService.isAvailable()) {
+                    console.error("Failed to sync symlink policy on rehydrate:", err);
+                  }
+                } catch {}
+              });
+          }
+          const rawConcurrency = state.sftpTransferConcurrency;
+          if (typeof rawConcurrency === "number" && Number.isFinite(rawConcurrency)) {
+            useTransferQueueStore.getState().setMaxConcurrent(rawConcurrency);
+          }
         }
       },
     },

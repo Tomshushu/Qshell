@@ -21,6 +21,8 @@ import {
   Loader2,
   UploadCloud,
   Braces,
+  ExternalLink,
+  Code,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { QshellLoader } from '@/components/ui/qshell-loader'
@@ -42,20 +44,42 @@ import {
 } from './local-file-picker-utils'
 import { UniversalFileViewer } from '@/components/ui/universal-file-viewer'
 import { ResizablePreviewDialog } from '@/components/ui/resizable-preview-dialog'
+import { Z_LAYER } from '@/lib/z-layer'
 import { useShortcutStore } from '@/store/shortcut-store'
 import { CodeEditor } from '@/components/ui/code-editor'
 import { sshService } from '@/services/ssh-service'
+import { backend } from '@/services/api'
 import { FilePermissionsModal } from './file-permissions-modal'
 import { ErrorDialog } from '@/components/ui/error-dialog'
 import { formatSftpError, isSftpConnectionError } from '@/lib/sftp-error'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { PackProgressDialog } from '@/components/ui/pack-progress-dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import {
+  BatchRenameDialog,
+  type BatchRenameResult,
+  type BatchRenameTarget,
+} from '@/components/sftp/batch-rename-dialog'
+import { FileDiffDialog, type FileDiffCandidate } from '@/components/sftp/file-diff-dialog'
+import type { BinaryChunkedSourceInput } from '@/components/terminal/tools/diff/SideBySideDiffViewer'
+import { readClipboardPath } from '@/lib/clipboard-path'
 import type { FileEntry } from '@/types'
 import type { FileStatInfo } from '@/services/api'
 import { useTranslation } from '@/i18n'
 import { useFileExplorerPreferences } from '@/hooks/use-file-explorer-preferences'
 import { useToast } from '@/components/ui/toast'
 import { useAppStore } from '@/store'
+import {
+  useTransferQueueStore,
+  acquireTransferQueueListeners,
+  registerTransferMeta,
+  type RegisteredTransferMeta,
+} from '@/store/transfer-queue-store'
 import { extractBaseServerId } from '@/services/ssh-connection-state'
 import type { FilesModuleProps, TreeNode, SortField, SortDirection } from './files/types'
 import { isAbsolutePath, resolveRelativePath } from '@/utils/terminal-path-utils'
@@ -76,7 +100,7 @@ import { FileContextMenu } from './files/file-context-menu'
 import { FileDirectoryTree } from './files/file-directory-tree'
 import { FileToolbar } from './files/file-toolbar'
 import { InlineRenameInput } from '@/components/sftp/inline-rename-input'
-import { validateFileName } from '@/components/sftp/sftp-utils'
+import { validateFileName, getIconSizeClass } from '@/components/sftp/sftp-utils'
 
 function findTreeNode(root: TreeNode, path: string): TreeNode | null {
   if (root.path === path) return root
@@ -179,11 +203,14 @@ const isUserCanceledError = (error?: string | null): boolean => {
 // 文件图标统一使用 local-file-picker-utils 中的 renderFileIcon/getFileIconMeta
 // 与 SFTP 模块共用同一套图标和配色（图片/视频/音频/代码/表格/归档/文档/文件夹）
 
-/** 判断文件预览类型：text 进文本编辑器，universal 进通用预览器，其余不支持 */
+const INLINE_EDIT_MAX_BYTES = 5 * 1024 * 1024 // 5MB
+const CHUNKED_HEX_THRESHOLD_BYTES = 10 * 1024 * 1024 // 10MB
+
+/** 判断文件预览类型：text 进文本编辑器，universal 进通用预览器，binary 进 Hex / 分块十六进制查看器 */
 function getFileKind(name: string):
   | 'text'
   | 'universal'
-  | 'unsupported' {
+  | 'binary' {
   if (isLogFileName(name)) return 'text'
   const ext = name.split('.').pop()?.toLowerCase() || ''
   if (TEXT_EXT_SET.has(ext)) return 'text'
@@ -196,7 +223,7 @@ function getFileKind(name: string):
   ) {
     return 'universal'
   }
-  return 'unsupported'
+  return 'binary'
 }
 
 
@@ -218,13 +245,42 @@ export function FilesModule({
   const server = useAppStore((s) => s.servers.find((sv) => sv.id === baseServerId))
   // 用户设置里的 SFTP 并发数（1-8）：本模块此前写死 3，导致设置不生效且内外层并发相乘
   const sftpTransferConcurrency = useAppStore((s) => Number(s.sftpTransferConcurrency) || 3)
+  const externalEditMaxSizeMb = useAppStore((s) => s.externalEditMaxSizeMb)
+  const sftpExclusionEnabled = useAppStore((s) => s.sftpExclusionEnabled)
+  const sftpExclusionPatterns = useAppStore((s) => s.sftpExclusionPatterns)
+  const sftpRespectGitignore = useAppStore((s) => s.sftpRespectGitignore)
+  const sftpIncludePatterns = useAppStore((s) => s.sftpIncludePatterns)
+  const sftpMinSizeKb = useAppStore((s) => s.sftpMinSizeKb)
+  const sftpMaxSizeKb = useAppStore((s) => s.sftpMaxSizeKb)
+  useEffect(() => {
+    useTransferQueueStore.getState().setMaxConcurrent(sftpTransferConcurrency)
+  }, [sftpTransferConcurrency])
   const serverFlags = getServerConnectionFlags(server?.targetType, server?.protocol)
   const isWindows = serverFlags.isWindowsServer
   const isTelnet = serverFlags.isTelnetServer
   const isNetwork = serverFlags.isNetworkServer
   const isFtpBackend = hasFtpFileTransfer(server)
   const effectiveConnected = isConnected || isFtpBackend
-  const ftProtocolName = getServerFileTransferProtocol(server).toUpperCase()
+  const transferProtocol = getServerFileTransferProtocol(server)
+  const ftProtocolName = transferProtocol.toUpperCase()
+  const queueProtocol: 'sftp' | 'ftp' | 'scp' =
+    transferProtocol === 'ftp' || transferProtocol === 'ftps'
+      ? 'ftp'
+      : transferProtocol === 'scp'
+        ? 'scp'
+        : 'sftp'
+  const serverDisplayName = server?.name || server?.host || baseServerId
+  const transferFilterSummary = useMemo(() => {
+    const parts: string[] = []
+    if (sftpExclusionEnabled && sftpExclusionPatterns.length > 0) {
+      parts.push(`exclude:${sftpExclusionPatterns.length}`)
+    }
+    if (sftpRespectGitignore) parts.push('.gitignore')
+    if (sftpIncludePatterns.length > 0) parts.push(`include:${sftpIncludePatterns.length}`)
+    if (sftpMinSizeKb != null && sftpMinSizeKb > 0) parts.push(`>=${sftpMinSizeKb}KB`)
+    if (sftpMaxSizeKb != null && sftpMaxSizeKb > 0) parts.push(`<=${sftpMaxSizeKb}KB`)
+    return parts.length > 0 ? parts.join(', ') : undefined
+  }, [sftpExclusionEnabled, sftpExclusionPatterns, sftpRespectGitignore, sftpIncludePatterns, sftpMinSizeKb, sftpMaxSizeKb])
   const [currentPath, setCurrentPath] = useState('')
   const [files, setFiles] = useState<FileEntry[]>([])
   const [selectedFiles, setSelectedFiles] = useState<string[]>([])
@@ -247,6 +303,13 @@ export function FilesModule({
   const editFileHasBomRef = useRef(false)
   // 编辑器内容是否被用户修改过：切换编码重读磁盘前据此提示，避免未保存内容静默丢失
   const editDirtyRef = useRef(false)
+  const [editDirty, setEditDirty] = useState(false)
+  const initialEditContentRef = useRef('')
+  const lastSelectedIndexRef = useRef(-1)
+  const isActiveRef = useRef(isActive)
+  isActiveRef.current = isActive
+  const pendingTransferMetaRef = useRef<Map<string, Array<RegisteredTransferMeta & { ts: number }>>>(new Map())
+  const registeredTransferIdsRef = useRef<Set<string>>(new Set())
   // 待确认的编码切换（dirty 时先弹确认框）
   const [pendingEncodingChange, setPendingEncodingChange] = useState<string | null>(null)
   // 预览/编辑链路请求序号：快速连续打开多个文件时丢弃过期响应，
@@ -280,6 +343,7 @@ export function FilesModule({
   const [transferLoading, setTransferLoading] = useState<string | null>(null)
   const [extractingFile, setExtractingFile] = useState<string | null>(null)
   const [packingTarget, setPackingTarget] = useState<{ name: string; fileCount: number } | null>(null)
+  const activeArchivePackingCountRef = useRef(0)
   const [treeRoot, setTreeRoot] = useState<TreeNode>({
     path: '/',
     name: '/',
@@ -356,6 +420,8 @@ export function FilesModule({
   const sortField = filePrefs.sortField as SortField
   const sortDirection = filePrefs.sortOrder as SortDirection
   const toggleSort = filePrefs.handleSort as (field: SortField) => void
+  const viewMode = filePrefs.viewMode
+  const setViewMode = filePrefs.setViewMode
   const showHidden = filePrefs.showHidden
   const toggleShowHidden = filePrefs.toggleShowHidden
   const bookmarks = filePrefs.bookmarks
@@ -364,11 +430,17 @@ export function FilesModule({
   const [propertiesFile, setPropertiesFile] = useState<FileEntry | null>(null)
   const [statInfo, setStatInfo] = useState<FileStatInfo | null>(null)
   const [statLoading, setStatLoading] = useState(false)
-  // 文件预览（文本编辑 / 图片/PDF/视频/音频/DOCX/表格/压缩包，编辑在弹框内进行）
+  // 文件预览（文本编辑 / 图片/PDF/视频/音频/DOCX/表格/压缩包 / Hex，编辑在弹框内进行）
   const [previewFile, setPreviewFile] = useState<FileEntry | null>(null)
   const [previewRawBytes, setPreviewRawBytes] = useState<Uint8Array | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
+  const [previewChunked, setPreviewChunked] = useState(false)
+  const [previewInitialMode, setPreviewInitialMode] = useState<'auto' | 'preview' | 'hex'>('auto')
+  // 批量重命名 & 文件对比 (P2-17 / P2-15)
+  const [batchRenameItems, setBatchRenameItems] = useState<BatchRenameTarget[] | null>(null)
+  const [diffPair, setDiffPair] = useState<{ left: FileEntry; right: FileEntry; candidates: FileEntry[] } | null>(null)
+  const [activeExternalEdits, setActiveExternalEdits] = useState<Array<{ sessionId: string; fileName: string; remotePath: string }>>([])
   // 目录树宽度（可调整）
   const [treeWidth, setTreeWidth] = useState(240)
   const resizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
@@ -517,6 +589,7 @@ export function FilesModule({
     // 切换目录必须清空选中集：否则在 A 目录选中的文件会残留到 B 目录，
     // 按 Delete / 右键删除时会删掉上一目录的文件（误删远端数据的直接来源）
     setSelectedFiles([])
+    lastSelectedIndexRef.current = -1
     // 切换目录后回到顶部：否则新目录会保留上一目录的滚动偏移
     // （旧内容此刻仍在 DOM 中，scrollTo 能产生 scroll 事件同步 virtualizer 内部状态）
     resetListScroll()
@@ -690,25 +763,27 @@ export function FilesModule({
         // 根目录加载失败时，仍然尝试解析 home 并设置 currentPath
       }
 
-      // 2. 解析用户主目录(15s 超时,防止 SSH execute hang 导致 init 卡死)
+      // 2. 解析用户主目录(15s 超时,防止 SSH execute hang 导致 init 卡死；FTP 直接使用 '/')
       let home = '/'
-      let homeTimeoutId: ReturnType<typeof setTimeout> | undefined
-      try {
-        const homePromise = sshService.getHomeDirectory(serverId)
-        const resolved = await Promise.race([
-          homePromise,
-          new Promise<string>((_, reject) =>
-            { homeTimeoutId = setTimeout(() => reject(new Error('timeout')), 15_000) }
-          ),
-        ])
-        if (cancelled) return
-        if (resolved && resolved !== '/') {
-          home = resolved
+      if (!isFtpBackend) {
+        let homeTimeoutId: ReturnType<typeof setTimeout> | undefined
+        try {
+          const homePromise = sshService.getHomeDirectory(serverId)
+          const resolved = await Promise.race([
+            homePromise,
+            new Promise<string>((_, reject) =>
+              { homeTimeoutId = setTimeout(() => reject(new Error('timeout')), 15_000) }
+            ),
+          ])
+          if (cancelled) return
+          if (resolved && resolved !== '/') {
+            home = resolved
+          }
+        } catch {
+          // 解析失败/超时则使用 /
+        } finally {
+          if (homeTimeoutId) clearTimeout(homeTimeoutId)
         }
-      } catch {
-        // 解析失败/超时则使用 /
-      } finally {
-        if (homeTimeoutId) clearTimeout(homeTimeoutId)
       }
 
       if (cancelled) return
@@ -851,15 +926,50 @@ export function FilesModule({
     }
   }, [currentPath, loadNodeChildren, treeRoot.loaded])
 
-  // 监听传输进度
+  const recordPendingTransferMeta = useCallback((fileName: string, meta: RegisteredTransferMeta) => {
+    if (!fileName) return
+    const now = Date.now()
+    const map = pendingTransferMetaRef.current
+    if (map.size > 64) {
+      for (const [key, items] of map) {
+        const fresh = items.filter((i) => now - i.ts < 60_000)
+        if (fresh.length === 0) map.delete(key)
+        else if (fresh.length !== items.length) map.set(key, fresh)
+      }
+    }
+    const list = map.get(fileName) || []
+    list.push({ ...meta, ts: now })
+    map.set(fileName, list)
+  }, [])
+
+  // 监听传输进度与统一队列同步
   useEffect(() => {
     if (!isActive) {
       setPackingTarget(null)
-      return
     }
+  }, [isActive])
+
+  useEffect(() => {
+    const releaseQueue = acquireTransferQueueListeners(sshService)
+    const registeredIds = registeredTransferIdsRef.current
     const unsub = sshService.onTransferProgress((data) => {
-      // 文件页只消费归档下载阶段；普通上传/SFTP 面板的进度由各自 UI 处理。
+      if (data.phase !== 'packing' && data.phase !== 'packed' && data.totalType !== 'manifest') {
+        if (!registeredIds.has(data.transferId)) {
+          const map = pendingTransferMetaRef.current
+          const list = map.get(data.fileName)
+          if (list && list.length > 0) {
+            const meta = list.shift()!
+            if (list.length === 0) map.delete(data.fileName)
+            registeredIds.add(data.transferId)
+            const { ts: _ts, ...cleanMeta } = meta
+            registerTransferMeta(data.transferId, cleanMeta)
+          }
+        }
+      }
+      // 文件页只消费当前模块发起归档下载的打包阶段；避免跨标签误弹弹窗。
+      if (!isActiveRef.current) return
       if (data.type !== 'download') return
+      if (activeArchivePackingCountRef.current <= 0) return
       if (data.phase === 'packing') {
         setPackingTarget({ name: data.fileName || '', fileCount: data.total || 0 })
         return
@@ -875,7 +985,7 @@ export function FilesModule({
     })
     // 目录传输部分成功：按 serverId 过滤，避免把 SFTP 面板的传输提示到本模块
     const unsubFailures = sshService.onTransferFailures((data) => {
-      if (data.serverId !== serverId) return
+      if (!isActiveRef.current || data.serverId !== serverId) return
       if (!data.failures || data.failures.length === 0) return
       const first = data.failures[0]
       toastRef.current.warning(
@@ -883,14 +993,32 @@ export function FilesModule({
         5000,
       )
     })
-    return () => { unsub?.(); unsubFailures?.() }
-  }, [isActive, serverId])
+    return () => {
+      releaseQueue()
+      unsub?.()
+      unsubFailures?.()
+    }
+  }, [serverId])
 
   // === 拖拽上传 ===
   const handleUpload = useCallback(async (selectedPaths: string[]) => {
     setTransferLoading('upload')
     // 本模块拿不到后端 transferId，用进出计数让「关闭窗口」能拦截正在进行的传输
     sshService.beginBusyOperation()
+    const baseDir = currentPath === '/' ? '' : currentPath.replace(/\/+$/, '')
+    for (const localPath of selectedPaths) {
+      const name = localPath.split(/[/\\]/).pop() || ''
+      if (!name) continue
+      recordPendingTransferMeta(name, {
+        serverId,
+        serverName: serverDisplayName,
+        localPath,
+        remotePath: `${baseDir}/${name}`,
+        protocol: queueProtocol,
+        filterSummary: transferFilterSummary,
+        fileName: name,
+      })
+    }
     try {
       const result = await sshService.uploadFromPaths(
         serverId,
@@ -924,7 +1052,7 @@ export function FilesModule({
       sshService.endBusyOperation()
       setTransferLoading(null)
     }
-  }, [serverId, currentPath, fetchFiles, loadNodeChildren, expandedPaths, t, sftpTransferConcurrency])
+  }, [serverId, serverDisplayName, queueProtocol, transferFilterSummary, recordPendingTransferMeta, currentPath, fetchFiles, loadNodeChildren, expandedPaths, t, sftpTransferConcurrency])
 
   // === 原生文件选择器上传（调用系统自带资源管理器）===
   const handleNativeUpload = useCallback(async (directory: boolean = false) => {
@@ -990,7 +1118,7 @@ export function FilesModule({
   const deferredSearch = useDeferredValue(searchQuery)
   const sortedFiles = useMemo(() => {
     const filtered = files.filter(f => {
-      if (!showHidden && f.name.startsWith('.')) return false
+      if (!showHidden && f.name !== '..' && f.name !== '.' && f.name.startsWith('.')) return false
       if (deferredSearch && !f.name.toLowerCase().includes(deferredSearch.toLowerCase())) return false
       return true
     })
@@ -1006,6 +1134,19 @@ export function FilesModule({
       return sortDirection === 'asc' ? cmp : -cmp
     })
   }, [files, deferredSearch, sortField, sortDirection, showHidden])
+
+  // 关闭显示隐藏文件时，立即剔除选中的隐藏条目（保留 '..' 豁免规则）
+  useEffect(() => {
+    if (showHidden) return
+    setSelectedFiles((prev) => {
+      if (prev.length === 0) return prev
+      const filtered = prev.filter((p) => {
+        const name = p.split('/').pop() || ''
+        return name === '..' || name === '.' || !name.startsWith('.')
+      })
+      return filtered.length === prev.length ? prev : filtered
+    })
+  }, [showHidden])
 
 // toggleSort provided by useFileExplorerPreferences
 
@@ -1024,7 +1165,7 @@ export function FilesModule({
     onMouseDown: handleFileMarqueeMouseDown,
     consumeMarqueeClick: consumeFileMarqueeClick,
   } = useMarqueeSelection({
-    itemSelector: 'tr[data-file-path]',
+    itemSelector: '[data-file-path]',
     getItemId: (el) => el.dataset.filePath!,
     getSelection: () => new Set(selectedFiles),
     setSelection: (ids) => setSelectedFiles(Array.from(ids)),
@@ -1105,12 +1246,23 @@ export function FilesModule({
 
   const permissionBadge = (perm?: string) => <PermissionBadge perm={perm} />
 
-  // 判断文件是否可在预览弹框内编辑：文本类扩展名且不超 2MB（二进制扩展名拦截，避免加载乱码）
+  // 判断文件是否可在预览弹框内编辑：文本类扩展名且不超 5MB（二进制扩展名拦截，避免加载乱码）
   const isEditableFile = (file: FileEntry): boolean => {
     const ext = file.name.split('.').pop()?.toLowerCase() || ''
     if (BINARY_EXT_SET.has(ext) && !TEXT_EXT_SET.has(ext)) return false
-    return file.size <= 2 * 1024 * 1024
+    return file.size <= INLINE_EDIT_MAX_BYTES
   }
+
+  // 分块十六进制按需加载回调（保持引用稳定以保留 HexViewer 页缓存）
+  const previewPath = previewFile?.path
+  const handleLoadPreviewRange = useCallback(
+    async (offset: number, len: number): Promise<Uint8Array> => {
+      if (!previewPath) return new Uint8Array(0)
+      const chunk = await sshService.readFileChunk(serverId, previewPath, offset, len)
+      return base64ToBytes(chunk.dataBase64)
+    },
+    [serverId, previewPath],
+  )
 
   // 应用解码结果到编辑器状态（refs 供异步保存逻辑读取最新值）
   const applyDecodedText = (text: string, encoding: string, eol: TextEol, hasBom: boolean, autoDetected = false) => {
@@ -1123,28 +1275,27 @@ export function FilesModule({
     setEditFileEncoding(encoding)
     setEditFileEol(eol)
     setEditFileHasBom(hasBom)
+    initialEditContentRef.current = text
     editDirtyRef.current = false
+    setEditDirty(false)
     setEditContent(text)
   }
 
-  // 统一的文件查看器：预览 + 编辑一体（与 SFTP 面板一致），编辑在弹框内进行。
+  // 统一的文件查看器：预览 + 编辑一体（与 SFTP 面板一致），支持 Hex / 10MB+ 分块 Hex。
   // mode='edit' 直接进入编辑态（双击/F4/右键编辑）；'preview' 进入预览态（右键预览/大文件降级）。
   const openViewer = async (file: FileEntry, mode: 'preview' | 'edit') => {
     // 请求序号：连续快速打开多个文件时，只允许最后一次请求写入编辑器状态
     const reqId = ++viewerReqIdRef.current
     const kind = getFileKind(file.name)
-    if (kind === 'unsupported') {
-      toastRef.current.warning(t('fs_preview_unsupported'))
-      return
-    }
-    const maxSize = 100 * 1024 * 1024
-    if (file.size > maxSize) {
+    const useChunkedHex = kind === 'binary' && file.size > CHUNKED_HEX_THRESHOLD_BYTES
+    const maxSize = isFtpBackend || transferProtocol === 'scp' ? 10 * 1024 * 1024 : 100 * 1024 * 1024
+    if (!useChunkedHex && file.size > maxSize) {
       toastRef.current.warning(`${t('fs_preview_too_large')} (${t('fs_preview_download_hint')})`)
       return
     }
     // B7: 符号链接的 size 字段并不可信(可能为 0 或指向目标大小),
     // 且编辑符号链接会破坏链接关系,这里直接禁止编辑符号链接
-    let editable = isEditableFile(file)
+    let editable = kind === 'text' && isEditableFile(file)
     if (file.permissions?.startsWith('l')) {
       if (mode === 'edit') {
         toastRef.current.warning('不支持编辑符号链接')
@@ -1155,13 +1306,30 @@ export function FilesModule({
     if (mode === 'edit' && !editable) {
       // 大文件/二进制扩展名：编辑降级为只读预览
       toastRef.current.warning(
-        file.size > 2 * 1024 * 1024
+        file.size > INLINE_EDIT_MAX_BYTES
           ? `${t('fs_err_file_too_large')} (${formatSize(file.size)})`
           : '不支持编辑此类型文件',
       )
       mode = 'preview'
     }
+    initialEditContentRef.current = ''
+    editDirtyRef.current = false
+    setEditDirty(false)
+    setEditContent('')
+    if (useChunkedHex) {
+      setPreviewFile(file)
+      setPreviewChunked(true)
+      setPreviewInitialMode('hex')
+      setPreviewRawBytes(null)
+      setPreviewError(null)
+      setPreviewLoading(false)
+      setViewerMode('preview')
+      setViewerEditable(false)
+      return
+    }
     setPreviewFile(file)
+    setPreviewChunked(false)
+    setPreviewInitialMode(kind === 'binary' ? 'hex' : 'auto')
     setPreviewLoading(true)
     setPreviewError(null)
     setPreviewRawBytes(null)
@@ -1177,17 +1345,24 @@ export function FilesModule({
         // 解码 + 编码检测（自动检测不准时可在弹框内手动切换编码重新打开）
         const decoded = decodeTextFile(bytes)
         if (isBinaryContent(decoded.text)) {
-          // 文本扩展名但实际是二进制内容：降级为预览态
+          // 文本扩展名但实际是二进制内容：降级为预览态并切入 Hex 视图
           if (mode === 'edit') {
             toastRef.current.warning('检测到文件包含二进制内容，仅支持预览')
           }
           setViewerEditable(false)
           setViewerMode('preview')
+          setPreviewInitialMode('hex')
         } else {
           // 仅 GB18030 兜底属于“自动检测猜测”，保存前需用户确认
           applyDecodedText(decoded.text, decoded.encoding, decoded.eol, decoded.hasBom, decoded.encoding === 'gb18030')
           setViewerEditable(true)
           setViewerMode(mode)
+          setPreviewInitialMode('auto')
+        }
+      } else if (kind === 'text') {
+        const sample = new TextDecoder('utf-8', { fatal: false }).decode(bytes.subarray(0, 4096))
+        if (isBinaryContent(sample)) {
+          setPreviewInitialMode('hex')
         }
       }
     } catch (e) {
@@ -1208,6 +1383,303 @@ export function FilesModule({
   const openEditor = (file: FileEntry) => {
     void openViewer(file, 'edit')
   }
+
+  // 使用外部编辑器打开远程文件并自动回传同步 (P2-25)
+  const handleStartExternalEdit = useCallback(
+    async (file: FileEntry, editorCmd: string = 'default') => {
+      const maxBytes = externalEditMaxSizeMb === 0 ? 0 : externalEditMaxSizeMb * 1024 * 1024
+      if (maxBytes > 0 && typeof file.size === 'number' && file.size > maxBytes) {
+        const sizeMb = (file.size / (1024 * 1024)).toFixed(2)
+        toastRef.current.warning(
+          `文件过大（${sizeMb} MB），外部编辑器仅支持打开不超过 ${externalEditMaxSizeMb} MB 的远程文件`,
+        )
+        return
+      }
+      try {
+        toastRef.current.info('正在启动外部程序...')
+        const session = await sshService.startExternalEdit(
+          serverId,
+          file.path,
+          editorCmd,
+          maxBytes,
+        )
+        toastRef.current.success(
+          `已在外部编辑器打开 ${session.fileName}，正在监听保存并自动回传`,
+        )
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        toastRef.current.error(`启动外部编辑失败: ${msg}`)
+      }
+    },
+    [serverId, externalEditMaxSizeMb],
+  )
+
+  // 监听外部编辑器保存同步事件：自动刷新当前目录
+  useEffect(() => {
+    if (!isActive || !backend?.files?.onExternalFileSynced) return
+    const unlisten = backend.files.onExternalFileSynced((payload) => {
+      if (payload.serverId !== serverId) return
+      toastRef.current.success(`✨ 文件 ${payload.fileName} 已自动同步保存至服务器`)
+      const activeDir = currentPathRef.current
+      if (activeDir) {
+        void fetchFiles(activeDir, { isRefresh: true })
+      }
+    })
+    return () => {
+      unlisten?.()
+    }
+  }, [isActive, serverId, fetchFiles])
+
+  // 活跃外部编辑会话：监听后端广播的启动/停止事件，支持在本模块内停止 watcher。
+  // 这样即便未打开 SFTP 面板，从 Files 启动的外部编辑也不会成为无人管理的孤儿会话。
+  useEffect(() => {
+    let disposed = false
+    let unlistenStarted: (() => void) | undefined
+    let unlistenStopped: (() => void) | undefined
+    // 初始加载当前服务器的活跃会话
+    void backend?.files?.listActiveExternalEdits?.().then((list) => {
+      if (disposed || !Array.isArray(list)) return
+      setActiveExternalEdits(
+        list
+          .filter((s) => s.serverId === serverId)
+          .map((s) => ({ sessionId: s.sessionId, fileName: s.fileName, remotePath: s.remotePath })),
+      )
+    }).catch(() => {})
+    void import('@tauri-apps/api/event').then(({ listen }) => {
+      if (disposed) return
+      void listen<{ sessionId: string; fileName: string; remotePath: string; serverId: string }>(
+        'files:external-file-started',
+        (ev) => {
+          if (disposed || ev.payload.serverId !== serverId) return
+          setActiveExternalEdits((prev) => [
+            ...prev.filter((s) => s.sessionId !== ev.payload.sessionId),
+            { sessionId: ev.payload.sessionId, fileName: ev.payload.fileName, remotePath: ev.payload.remotePath },
+          ])
+        },
+      ).then((un) => { if (disposed) un(); else unlistenStarted = un })
+      void listen<{ sessionId: string }>('files:external-file-stopped', (ev) => {
+        if (disposed) return
+        setActiveExternalEdits((prev) => prev.filter((s) => s.sessionId !== ev.payload.sessionId))
+      }).then((un) => { if (disposed) un(); else unlistenStopped = un })
+    })
+    return () => {
+      disposed = true
+      unlistenStarted?.()
+      unlistenStopped?.()
+    }
+  }, [serverId])
+
+  const handleStopExternalEdit = useCallback(async (sessionId: string) => {
+    try {
+      await backend?.files?.stopExternalEdit(sessionId)
+      setActiveExternalEdits((prev) => prev.filter((s) => s.sessionId !== sessionId))
+      toastRef.current.info('已停止外部编辑监听')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      toastRef.current.error(`停止外部编辑失败: ${msg}`)
+    }
+  }, [])
+
+  // 批量重命名 (P2-17)
+  const selectedBatchRenameTargets = useMemo<BatchRenameTarget[]>(
+    () =>
+      files
+        .filter((f) => selectedFiles.includes(f.path) && f.name !== '..')
+        .map((f) => ({
+          path: f.path,
+          name: f.name,
+          isDirectory: f.isDirectory,
+        })),
+    [files, selectedFiles],
+  )
+
+  const handleOpenBatchRename = useCallback(() => {
+    if (selectedBatchRenameTargets.length < 2) return
+    setBatchRenameItems(selectedBatchRenameTargets)
+  }, [selectedBatchRenameTargets])
+
+  const handleExecuteBatchRename = useCallback(
+    async (renames: Array<{ oldPath: string; newPath: string }>): Promise<BatchRenameResult> => {
+      let succeeded = 0
+      const failed: Array<{ path: string; error: string }> = []
+      for (const { oldPath, newPath } of renames) {
+        try {
+          const res = await sshService.renameFile(serverId, oldPath, newPath)
+          if (res.exitCode === 0) {
+            succeeded += 1
+          } else {
+            failed.push({ path: oldPath, error: res.stderr || t('common_unknown_error') })
+          }
+        } catch (err) {
+          failed.push({ path: oldPath, error: err instanceof Error ? err.message : String(err) })
+        }
+      }
+      if (succeeded > 0) {
+        await fetchFiles(currentPathRef.current, { isRefresh: true })
+        if (expandedPaths.has(currentPathRef.current)) {
+          void loadNodeChildren(currentPathRef.current, true)
+        }
+        setSelectedFiles([])
+      }
+      return { succeeded, failed }
+    },
+    [serverId, fetchFiles, expandedPaths, loadNodeChildren, t],
+  )
+
+  // 文件对比 (P2-15)
+  const selectedCompareFiles = useMemo(() => {
+    const byPath = new Map(files.map((f) => [f.path, f]))
+    return selectedFiles
+      .map((p) => byPath.get(p))
+      .filter((f): f is FileEntry => !!f && !f.isDirectory && f.name !== '..')
+  }, [files, selectedFiles])
+
+  const canCompareFiles = selectedCompareFiles.length >= 2
+
+  const handleCompareSelected = useCallback(() => {
+    if (selectedCompareFiles.length < 2) return
+    setDiffPair({
+      left: selectedCompareFiles[0],
+      right: selectedCompareFiles[1],
+      candidates: selectedCompareFiles,
+    })
+  }, [selectedCompareFiles])
+
+  const useChunkedDiff = Boolean(
+    diffPair &&
+      (diffPair.left.size > CHUNKED_HEX_THRESHOLD_BYTES ||
+        diffPair.right.size > CHUNKED_HEX_THRESHOLD_BYTES),
+  )
+
+  const diffLoadTextPair = useMemo(() => {
+    if (!diffPair || useChunkedDiff) return undefined
+    const { left, right } = diffPair
+    return async () => {
+      const [leftB64, rightB64] = await Promise.all([
+        sshService.readBinaryFile(serverId, left.path),
+        sshService.readBinaryFile(serverId, right.path),
+      ])
+      return {
+        leftText: decodeTextFile(base64ToBytes(leftB64)).text,
+        rightText: decodeTextFile(base64ToBytes(rightB64)).text,
+      }
+    }
+  }, [diffPair, useChunkedDiff, serverId])
+
+  const diffLoadBytesPair = useMemo(() => {
+    if (!diffPair || useChunkedDiff) return undefined
+    const { left, right } = diffPair
+    return async () => {
+      const [leftB64, rightB64] = await Promise.all([
+        sshService.readBinaryFile(serverId, left.path),
+        sshService.readBinaryFile(serverId, right.path),
+      ])
+      return {
+        leftBytes: base64ToBytes(leftB64),
+        rightBytes: base64ToBytes(rightB64),
+      }
+    }
+  }, [diffPair, useChunkedDiff, serverId])
+
+  const diffLeftBinaryChunked = useMemo<BinaryChunkedSourceInput | undefined>(() => {
+    if (!diffPair || !useChunkedDiff) return undefined
+    const leftPath = diffPair.left.path
+    return {
+      totalSize: diffPair.left.size,
+      loadRange: async (offset, len) => {
+        const res = await sshService.readFileChunk(serverId, leftPath, offset, len)
+        return base64ToBytes(res.dataBase64)
+      },
+    }
+  }, [diffPair, useChunkedDiff, serverId])
+
+  const diffRightBinaryChunked = useMemo<BinaryChunkedSourceInput | undefined>(() => {
+    if (!diffPair || !useChunkedDiff) return undefined
+    const rightPath = diffPair.right.path
+    return {
+      totalSize: diffPair.right.size,
+      loadRange: async (offset, len) => {
+        const res = await sshService.readFileChunk(serverId, rightPath, offset, len)
+        return base64ToBytes(res.dataBase64)
+      },
+    }
+  }, [diffPair, useChunkedDiff, serverId])
+
+  const diffCandidates = useMemo<FileDiffCandidate[] | undefined>(() => {
+    if (!diffPair || diffPair.candidates.length < 2) return undefined
+    const sourceTag = t('sftp_remote') || '远程'
+    return diffPair.candidates.map((file) => {
+      const exceedChunked = file.size > CHUNKED_HEX_THRESHOLD_BYTES
+      return {
+        id: file.path,
+        label: file.name,
+        fileName: file.name,
+        sourceTag,
+        path: file.path,
+        size: file.size,
+        loadText: exceedChunked
+          ? undefined
+          : async () => {
+              const b64 = await sshService.readBinaryFile(serverId, file.path)
+              return decodeTextFile(base64ToBytes(b64)).text
+            },
+        loadBytes: exceedChunked
+          ? undefined
+          : async () => {
+              const b64 = await sshService.readBinaryFile(serverId, file.path)
+              return base64ToBytes(b64)
+            },
+        binaryChunked: {
+          totalSize: file.size,
+          loadRange: async (offset, len) => {
+            const res = await sshService.readFileChunk(serverId, file.path, offset, len)
+            return base64ToBytes(res.dataBase64)
+          },
+        },
+      }
+    })
+  }, [diffPair, serverId, t])
+
+  // 剪贴板路径直达 (P2-27)
+  const handleClipboardPathJump = useCallback(async () => {
+    const rawPath = await readClipboardPath('posix')
+    if (!rawPath) {
+      toastRef.current.info(t('sftp_clipboard_path_empty'))
+      return
+    }
+    let resolvedPath = rawPath
+    if (resolvedPath === '~' || resolvedPath.startsWith('~/')) {
+      if (isFtpBackend) {
+        resolvedPath = resolvedPath === '~' ? '/' : `/${resolvedPath.slice(2)}`
+      } else {
+        try {
+          const home = await sshService.getHomeDirectory(serverId)
+          if (home) {
+            resolvedPath =
+              resolvedPath === '~'
+                ? home
+                : `${home.replace(/\/+$/, '')}/${resolvedPath.slice(2)}`
+          }
+        } catch {
+          // 无法获取 home 时保留原始路径
+        }
+      }
+    }
+    if (resolvedPath.length > 1 && resolvedPath.endsWith('/')) {
+      resolvedPath = resolvedPath.replace(/\/+$/, '')
+    }
+    let targetDir = resolvedPath
+    try {
+      const info = await sshService.statInfo(serverId, resolvedPath)
+      if (info && info.type !== 'directory' && info.type !== 'symbolic link') {
+        targetDir = resolvedPath.slice(0, resolvedPath.lastIndexOf('/')) || '/'
+      }
+    } catch {
+      // stat 失败时直接尝试跳转解析出的路径
+    }
+    toastRef.current.info(t('sftp_clipboard_path_detected').replace('{path}', targetDir))
+    navigateTo(targetDir)
+  }, [serverId, navigateTo, t])
 
   // 手动切换编码重新打开（Notepad++ 式「以 XX 编码打开」）：自动检测不准时的兜底。
   // dirty 时由确认框把关（pendingEncodingChange），此处直接执行重读
@@ -1241,12 +1713,29 @@ export function FilesModule({
 
   // 编辑器内容变更入口：除标记 dirty 外与 setEditContent 等价
   const handleEditContentChange = (val: string) => {
-    editDirtyRef.current = true
+    const dirty = val !== initialEditContentRef.current
+    editDirtyRef.current = dirty
+    setEditDirty(dirty)
     setEditContent(val)
   }
 
+  const handleClosePreview = useCallback(() => {
+    viewerReqIdRef.current += 1
+    setPreviewFile(null)
+    setPreviewRawBytes(null)
+    setPreviewError(null)
+    setPreviewChunked(false)
+    setPreviewInitialMode('auto')
+    setViewerMode('preview')
+    setViewerEditable(false)
+    setEditContent('')
+    initialEditContentRef.current = ''
+    editDirtyRef.current = false
+    setEditDirty(false)
+  }, [])
+
   const handleSave = async () => {
-    if (!previewFile) return
+    if (!previewFile || !editDirtyRef.current) return
     const encoding = editFileEncodingRef.current
     // 自动检测兜底编码（GB18030 等）不可靠：首次保存必须显式确认，
     // 否则“打开 → 保存”一次就会把原文件按错误编码不可逆转码
@@ -1275,14 +1764,19 @@ export function FilesModule({
         toastRef.current.error(`${t('fs_err_save')}: ${result.stderr || t('common_unknown_error')}`, 1500)
       } else {
         toastRef.current.success(t('fs_save_success'), 1500)
+        initialEditContentRef.current = editContent
         editDirtyRef.current = false
+        setEditDirty(false)
         // 刷新文件所在父目录（而非 currentPath）：树状视图编辑深层文件时，
         // currentPath 可能与编辑文件不在同一层级，备份文件需在父目录才能看到
         const parentPath = previewFile.path.includes('/')
           ? previewFile.path.substring(0, previewFile.path.lastIndexOf('/')) || '/'
           : '/'
-        fetchFiles(parentPath)
-        if (expandedPaths.has(parentPath) && parentPath !== currentPath) {
+        // 仅当编辑文件所在目录即当前主列表目录时刷新主列表，避免树状编辑深层文件覆盖主列表状态
+        if (parentPath === currentPath) {
+          fetchFiles(parentPath)
+        }
+        if (expandedPaths.has(parentPath)) {
           loadNodeChildren(parentPath, true)
         }
       }
@@ -1533,6 +2027,16 @@ export function FilesModule({
     // E6: 下载开始 toast 提示
     toastRef.current.info(`开始下载 ${file.name}...`)
     sshService.beginBusyOperation()
+    recordPendingTransferMeta(file.name, {
+      serverId,
+      serverName: serverDisplayName,
+      remotePath: file.path,
+      protocol: queueProtocol,
+      filterSummary: transferFilterSummary,
+      isDirectory: file.isDirectory,
+      totalType: file.isDirectory ? 'count' : 'bytes',
+      fileName: file.name,
+    })
     try {
       const result = await sshService.downloadFile(serverId, file.path, undefined, sftpTransferConcurrency)
       if (!result.success && !isUserCanceledError(result.error)) {
@@ -1573,6 +2077,21 @@ export function FilesModule({
         return
       }
 
+      const normalizedDest = destFolder.replace(/[\\/]+$/, '')
+      for (const file of selectedFileEntries) {
+        recordPendingTransferMeta(file.name, {
+          serverId,
+          serverName: serverDisplayName,
+          localPath: `${normalizedDest}/${file.name}`,
+          remotePath: file.path,
+          protocol: queueProtocol,
+          filterSummary: transferFilterSummary,
+          isDirectory: file.isDirectory,
+          totalType: file.isDirectory ? 'count' : 'bytes',
+          fileName: file.name,
+        })
+      }
+
       // E7: 用并发数控制替代 Promise.all，避免批量下载时 SSH 通道拥堵
       const downloadTasks = selectedFileEntries.map((file) => async () => {
         try {
@@ -1604,11 +2123,25 @@ export function FilesModule({
   }
 
   const handleDownloadArchive = async (file: FileEntry, format: string = 'tar.gz') => {
+    if (isFtpBackend) {
+      toastRef.current.warning('FTP/FTPS 不支持打包下载')
+      return
+    }
+    const archiveTransferId = `dl-archive-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    registerTransferMeta(archiveTransferId, {
+      serverId,
+      serverName: serverDisplayName,
+      remotePath: file.path,
+      protocol: queueProtocol,
+      filterSummary: transferFilterSummary,
+      fileName: `${file.name}.${format}`,
+    })
+    activeArchivePackingCountRef.current += 1
     setTransferLoading(file.path)
     // E6: 打包下载开始 toast 提示
     toastRef.current.info(`开始打包下载 ${file.name} (${format})...`)
     try {
-      const result = await sshService.downloadArchive(serverId, file.path, format)
+      const result = await sshService.downloadArchive(serverId, file.path, format, archiveTransferId)
       if (!result.success && !isUserCanceledError(result.error)) {
         setError(`${t('fs_err_pack')}: ${result.error || t('common_unknown_error')}`)
       } else if (result.success) {
@@ -1618,6 +2151,7 @@ export function FilesModule({
     } catch (err) {
       setError(err instanceof Error ? err.message : t('fs_err_pack'))
     } finally {
+      activeArchivePackingCountRef.current = Math.max(0, activeArchivePackingCountRef.current - 1)
       setTransferLoading(null)
       setPackingTarget(null)
     }
@@ -1625,6 +2159,10 @@ export function FilesModule({
 
   // 解压归档文件并自动刷新目录
   const handleExtractArchive = async (file: FileEntry) => {
+    if (isFtpBackend) {
+      toastRef.current.warning('FTP/FTPS 不支持远程解压')
+      return
+    }
     if (extractingFile) return
     setExtractingFile(file.path)
     toastRef.current.info(`${t('fs_extract_archive') || t('sftp_extract_archive') || '解压'}: ${file.name}...`)
@@ -1706,8 +2244,32 @@ export function FilesModule({
       // 防止用户在终端/监控页按 F2、Delete 时误操作远程文件。
       if (!isActive) return
       // 在输入框中不触发快捷键
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
-      if (previewFile) return
+      const target = e.target as HTMLElement | null
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        target?.isContentEditable
+      ) {
+        return
+      }
+      if (previewFile || batchRenameItems || diffPair || pendingDelete) return
+
+      // Ctrl+A：全选当前列表（排除 '..'）
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'a') {
+        e.preventDefault()
+        setSelectedFiles(sortedFiles.filter((f) => f.name !== '..').map((f) => f.path))
+        return
+      }
+
+      // Ctrl+Shift+N：新建文件夹
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault()
+        setNewItemType('dir')
+        setNewItemName('')
+        setShowNewItem(true)
+        return
+      }
 
       const { matchesAction } = useShortcutStore.getState()
 
@@ -1718,19 +2280,25 @@ export function FilesModule({
       // F2 重命名:仅单选时生效,多选时不触发
       if (matchesAction(e, 'sftp.rename') && selectedFiles.length === 1) {
         e.preventDefault()
-        const file = files.find(f => f.path === selectedFiles[0])
+        const file = files.find(f => f.path === selectedFiles[0] && f.name !== '..')
         if (file) {
           startRename(file)
         }
       }
       if (matchesAction(e, 'sftp.delete') && selectedFiles.length > 0) {
-        e.preventDefault()
-        handleDelete(selectedFiles)
+        const valid = selectedFiles.filter((p) => {
+          const entry = files.find((f) => f.path === p)
+          return entry ? entry.name !== '..' : !p.endsWith('/..') && p !== '..'
+        })
+        if (valid.length > 0) {
+          e.preventDefault()
+          handleDelete(valid)
+        }
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedFiles, files, previewFile, handleRefresh, handleDelete, isActive])
+  }, [selectedFiles, files, sortedFiles, previewFile, batchRenameItems, diffPair, pendingDelete, handleRefresh, handleDelete, startRename, isActive])
 
   // D1: 扁平化目录树,限制最大显示节点数,避免深目录展开后 DOM 节点激增
   const flattenedTree = useMemo(
@@ -1806,12 +2374,16 @@ export function FilesModule({
           onAddBookmark={handleAddBookmark}
           onRemoveBookmark={handleRemoveBookmark}
           onToggleBookmark={toggleBookmark}
+          viewMode={viewMode}
+          onViewModeChange={setViewMode}
           showHidden={showHidden}
           onToggleShowHidden={toggleShowHidden}
           onRefresh={handleRefresh}
           loading={loading}
           transferLoading={transferLoading}
           onNativeUpload={handleNativeUpload}
+          onClipboardPathJump={handleClipboardPathJump}
+          showTransferPolicy
           searchQuery={searchQuery}
           setSearchQuery={setSearchQuery}
           showNewItem={showNewItem}
@@ -1823,6 +2395,8 @@ export function FilesModule({
             setShowNewItem(false)
             setNewItemName('')
           }}
+          activeExternalEdits={activeExternalEdits}
+          onStopExternalEdit={handleStopExternalEdit}
           t={t}
         />
 
@@ -1839,14 +2413,14 @@ export function FilesModule({
           className="flex-1 overflow-auto relative"
           onMouseDown={handleFileMarqueeMouseDown}
           onClick={(e) => {
-            // 点击空白清空选中；框选刚结束的 click 与点击行（行自身处理选择）不清空
+            // 点击空白清空选中；框选刚结束的 click 与点击文件项（列表行/卡片自身处理选择）不清空
             if (consumeFileMarqueeClick()) return
-            if ((e.target as HTMLElement).closest('tr[data-file-path]')) return
+            if ((e.target as HTMLElement).closest('[data-file-path]')) return
             setSelectedFiles([])
           }}
           onContextMenu={(e) => {
             const target = e.target as HTMLElement
-            if (target.closest('tr[data-file-path]')) return
+            if (target.closest('[data-file-path]')) return
             e.preventDefault()
             setSelectedFiles([]) // 右键空白处清空选中
             setCtxMenu({ x: e.clientX, y: e.clientY, file: null })
@@ -1860,7 +2434,7 @@ export function FilesModule({
             </div>
           ) : loading && files.length === 0 ? (
             <div className="p-3">
-              <FileSkeletonList viewMode="list" count={8} />
+              <FileSkeletonList viewMode={viewMode} count={8} />
             </div>
           ) : files.length === 0 && !error ? (
             <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
@@ -1886,6 +2460,130 @@ export function FilesModule({
             <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
               <Search className="h-8 w-8 mb-2 opacity-30" />
               <p className="text-sm">{t('fs_no_match')}</p>
+            </div>
+          ) : viewMode !== 'list' ? (
+            <div className="m-2 rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden relative p-1">
+              {loading && (
+                <div className="absolute top-0 left-0 right-0 z-10 h-0.5 bg-primary/20 overflow-hidden">
+                  <div className="h-full bg-primary animate-pulse w-full" />
+                </div>
+              )}
+              <div className={cn('sftp-icon-grid', `view-${viewMode}`)}>
+                {sortedFiles.map((file, index) => {
+                  const isSelected = selectedFiles.includes(file.path)
+                  const isParent = file.name === '..'
+                  const iconSize = getIconSizeClass(viewMode)
+                  return (
+                    <div
+                      key={file.path}
+                      data-file-path={isParent ? undefined : file.path}
+                      className={cn('sftp-icon-card', isSelected && 'is-selected')}
+                      onMouseDown={(e) => {
+                        if (e.button === 0) rowDblClickedRef.current = false
+                        if (renamingFile === file.path) return
+                        if (e.button !== 0) return
+                        const wasSelected = selectedFiles.includes(file.path)
+                        if (e.shiftKey && !isParent && lastSelectedIndexRef.current >= 0) {
+                          const start = Math.min(lastSelectedIndexRef.current, index)
+                          const end = Math.max(lastSelectedIndexRef.current, index)
+                          const rangePaths: string[] = []
+                          for (let i = start; i <= end; i++) {
+                            const f = sortedFiles[i]
+                            if (f && f.name !== '..') rangePaths.push(f.path)
+                          }
+                          setSelectedFiles((prev) => Array.from(new Set([...prev, ...rangePaths])))
+                        } else if (e.ctrlKey || e.metaKey) {
+                          if (isParent) return
+                          setSelectedFiles((prev) =>
+                            prev.includes(file.path)
+                              ? prev.filter((p) => p !== file.path)
+                              : [...prev, file.path],
+                          )
+                          lastSelectedIndexRef.current = index
+                        } else if (isParent) {
+                          setSelectedFiles([])
+                        } else {
+                          setSelectedFiles([file.path])
+                          lastSelectedIndexRef.current = index
+                        }
+                        if (!isParent && !e.ctrlKey && !e.metaKey && !e.shiftKey && wasSelected) {
+                          pendingRenameRef.current = file.path
+                        }
+                      }}
+                      onClick={() => {
+                        if (renamingFile === file.path) return
+                        const pending = pendingRenameRef.current
+                        pendingRenameRef.current = null
+                        if (!pending || pending !== file.path) return
+                        if (pendingRenameTimerRef.current !== null) {
+                          window.clearTimeout(pendingRenameTimerRef.current)
+                        }
+                        pendingRenameTimerRef.current = window.setTimeout(() => {
+                          pendingRenameTimerRef.current = null
+                          if (rowDblClickedRef.current) return
+                          startRename(file)
+                        }, 250)
+                      }}
+                      onDoubleClick={() => {
+                        rowDblClickedRef.current = true
+                        pendingRenameRef.current = null
+                        if (renamingFile === file.path) return
+                        if (file.isDirectory) {
+                          navigateTo(file.path)
+                        } else {
+                          const kind = getFileKind(file.name)
+                          if (kind === 'text') {
+                            if (file.size > INLINE_EDIT_MAX_BYTES) openPreview(file)
+                            else openEditor(file)
+                          } else {
+                            openPreview(file)
+                          }
+                        }
+                      }}
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        if (!selectedFiles.includes(file.path)) {
+                          setSelectedFiles([file.path])
+                        }
+                        setCtxMenu({ x: e.clientX, y: e.clientY, file })
+                      }}
+                    >
+                      <div className={cn('flex items-center justify-center shrink-0 relative mt-1', iconSize)}>
+                        {openingPath === file.path ? (
+                          <Loader2 className="h-6 w-6 animate-spin text-primary shrink-0" />
+                        ) : (
+                          renderFileIcon(toIconFile(file), iconSize)
+                        )}
+                      </div>
+                      {renamingFile === file.path ? (
+                        <div className="w-full mt-1.5 px-1">
+                          <InlineRenameInput
+                            value={renameValue}
+                            onChange={setRenameValue}
+                            onCommit={() => void handleRename(file.path, renameValue)}
+                            onCancel={() => {
+                              setRenamingFile(null)
+                              setRenameValue('')
+                            }}
+                          />
+                        </div>
+                      ) : (
+                        <span
+                          className={cn(
+                            'sftp-icon-card-name',
+                            isSelected && 'font-semibold text-foreground',
+                            openingPath === file.path && 'text-primary font-medium',
+                          )}
+                          title={`${file.name}${file.isDirectory ? '' : ` · ${formatSize(file.size)}`}`}
+                        >
+                          {file.name}
+                        </span>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
             </div>
           ) : (
             <div className="m-2 rounded-xl border border-border/60 bg-card shadow-sm overflow-hidden relative">
@@ -1949,12 +2647,13 @@ export function FilesModule({
                 )}
                 {rowVirtualizer.getVirtualItems().map((virtualRow) => {
                   const file = sortedFiles[virtualRow.index]
+                  const isParent = file.name === '..'
                   return (
                     <tr
                       key={virtualRow.key}
                       data-index={virtualRow.index}
                       ref={rowVirtualizer.measureElement}
-                      data-file-path={file.path}
+                      data-file-path={isParent ? undefined : file.path}
                       className={cn(
                         'workspace-table-row border-b border-border/40 cursor-pointer select-none h-9',
                         selectedFiles.includes(file.path) && 'is-selected'
@@ -1968,19 +2667,34 @@ export function FilesModule({
                         if (e.button !== 0) return
                         // 记录点击前是否已选中：用于「再次点击重命名」（仅点击前已选中时触发）
                         const wasSelected = selectedFiles.includes(file.path)
+                        const currentIndex = virtualRow.index
                         // D4: 移除 flushSync,改为普通 setState,避免阻塞主线程
-                        if (e.ctrlKey || e.metaKey) {
+                        if (e.shiftKey && !isParent && lastSelectedIndexRef.current >= 0) {
+                          const start = Math.min(lastSelectedIndexRef.current, currentIndex)
+                          const end = Math.max(lastSelectedIndexRef.current, currentIndex)
+                          const rangePaths: string[] = []
+                          for (let i = start; i <= end; i++) {
+                            const f = sortedFiles[i]
+                            if (f && f.name !== '..') rangePaths.push(f.path)
+                          }
+                          setSelectedFiles((prev) => Array.from(new Set([...prev, ...rangePaths])))
+                        } else if (e.ctrlKey || e.metaKey) {
+                          if (isParent) return
                           // Ctrl/Cmd+click: 切换选中状态
                           setSelectedFiles(prev =>
                             prev.includes(file.path)
                               ? prev.filter(p => p !== file.path)
                               : [...prev, file.path]
                           )
+                          lastSelectedIndexRef.current = currentIndex
+                        } else if (isParent) {
+                          setSelectedFiles([])
                         } else {
                           setSelectedFiles([file.path])
+                          lastSelectedIndexRef.current = currentIndex
                         }
                         // 点击前已选中且无修饰键 → 标记待重命名；由 onClick 延时触发，避让双击进入目录/打开文件
-                        if (!e.ctrlKey && !e.metaKey && !e.shiftKey && wasSelected) {
+                        if (!isParent && !e.ctrlKey && !e.metaKey && !e.shiftKey && wasSelected) {
                           pendingRenameRef.current = file.path
                         }
                       }}
@@ -2011,16 +2725,14 @@ export function FilesModule({
                         } else {
                           const kind = getFileKind(file.name)
                           if (kind === 'text') {
-                            // 文本文件：如果超过 2MB（如大 log 文件），自动降级为只读预览，避免编辑器崩溃/报错
-                            if (file.size > 2 * 1024 * 1024) {
+                            // 文本文件：如果超过 5MB（如大 log 文件），自动降级为只读预览，避免编辑器崩溃/报错
+                            if (file.size > INLINE_EDIT_MAX_BYTES) {
                               openPreview(file)
                             } else {
                               openEditor(file)
                             }
-                          } else if (kind === 'universal') {
-                            openPreview(file)
                           } else {
-                            toastRef.current.warning(t('fs_preview_unsupported'))
+                            openPreview(file)
                           }
                         }
                       }}
@@ -2116,7 +2828,14 @@ export function FilesModule({
       {/* 文件属性对话框 */}
       <FilePropertiesDialog
         open={!!propertiesFile}
-        onOpenChange={(open) => !open && setPropertiesFile(null)}
+        onOpenChange={(open) => {
+          if (!open) {
+            statReqIdRef.current += 1
+            setPropertiesFile(null)
+            setStatInfo(null)
+            setStatLoading(false)
+          }
+        }}
         propertiesFile={propertiesFile}
         statInfo={statInfo}
         statLoading={statLoading}
@@ -2192,12 +2911,7 @@ export function FilesModule({
         open={!!previewFile}
         onOpenChange={(open) => {
           if (!open) {
-            setPreviewFile(null)
-            setPreviewRawBytes(null)
-            setPreviewError(null)
-            setViewerMode('preview')
-            setViewerEditable(false)
-            editDirtyRef.current = false
+            handleClosePreview()
           }
         }}
         title={previewFile?.name || ''}
@@ -2288,6 +3002,32 @@ export function FilesModule({
                   <span>格式化</span>
                 </Button>
               )}
+              {/* 使用外部编辑器打开 */}
+              {previewFile && !previewFile.isDirectory && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 text-xs gap-1"
+                      title="使用外部编辑器打开"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      <span>外部编辑</span>
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" style={{ zIndex: Z_LAYER.POPUP }}>
+                    <DropdownMenuItem onClick={() => handleStartExternalEdit(previewFile, 'default')}>
+                      <ExternalLink className="h-3.5 w-3.5 mr-2" />
+                      <span>系统默认关联程序</span>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => handleStartExternalEdit(previewFile, 'code')}>
+                      <Code className="h-3.5 w-3.5 mr-2" />
+                      <span>Visual Studio Code</span>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
               {/* 编辑/预览切换 */}
               {viewerEditable && ready && viewerMode === 'preview' && (
                 <Button
@@ -2329,7 +3069,7 @@ export function FilesModule({
                     variant="default"
                     size="sm"
                     className="h-7 px-2 text-xs"
-                    disabled={editLoading}
+                    disabled={editLoading || !editDirty}
                     onClick={handleSave}
                     title={t('fs_save')}
                   >
@@ -2370,9 +3110,13 @@ export function FilesModule({
           ) : (
             <div className="w-full h-full flex flex-col overflow-hidden">
               <UniversalFileViewer
-                data={previewRawBytes}
+                data={previewChunked ? null : previewRawBytes}
                 fileName={previewFile.name}
                 className="h-full"
+                initialMode={previewInitialMode}
+                totalSize={previewChunked ? previewFile.size : undefined}
+                onLoadRange={previewChunked ? handleLoadPreviewRange : undefined}
+                hideModeSwitcher={false}
                 onError={(err) => setPreviewError(err.message)}
               />
             </div>
@@ -2393,6 +3137,7 @@ export function FilesModule({
         onToggleShowHidden={toggleShowHidden}
         transferLoading={transferLoading}
         isWindows={isWindows}
+        isFtp={isFtpBackend}
         onClose={() => setCtxMenu(null)}
         onRefresh={handleRefresh}
         onNewItem={(type) => {
@@ -2401,6 +3146,17 @@ export function FilesModule({
         }}
         onNativeUpload={handleNativeUpload}
         onDownloadMultiple={handleDownloadMultiple}
+        batchRenameCount={selectedBatchRenameTargets.length}
+        canCompareFiles={canCompareFiles}
+        compareFileCount={selectedCompareFiles.length}
+        comparePairLabel={
+          selectedCompareFiles.length === 2
+            ? `${selectedCompareFiles[0].name} ↔ ${selectedCompareFiles[1].name}`
+            : undefined
+        }
+        onBatchRename={handleOpenBatchRename}
+        onCompareSelected={handleCompareSelected}
+        onStartExternalEdit={handleStartExternalEdit}
         onPreview={openPreview}
         onNavigateTo={navigateTo}
         onOpenEditor={openEditor}
@@ -2413,6 +3169,36 @@ export function FilesModule({
         onShowProperties={handleShowProperties}
         onDelete={(paths) => handleDelete(paths)}
         t={t}
+      />
+
+      {/* 批量重命名弹窗 */}
+      <BatchRenameDialog
+        open={Boolean(batchRenameItems)}
+        onClose={() => setBatchRenameItems(null)}
+        items={batchRenameItems ?? []}
+        existingNames={files.filter((f) => f.name !== '..').map((f) => f.name)}
+        targetPlatform={isWindows ? 'windows' : 'posix'}
+        onExecuteRename={handleExecuteBatchRename}
+        title={t('batch_rename_title')}
+      />
+
+      {/* 文件对比 / 二进制 Diff 弹窗 */}
+      <FileDiffDialog
+        open={Boolean(diffPair)}
+        onClose={() => setDiffPair(null)}
+        leftTitle={diffPair?.left.name ?? ''}
+        rightTitle={diffPair?.right.name ?? ''}
+        leftSize={diffPair?.left.size}
+        rightSize={diffPair?.right.size}
+        loadTextPair={diffLoadTextPair}
+        loadBytesPair={diffLoadBytesPair}
+        leftBinaryChunked={diffLeftBinaryChunked}
+        rightBinaryChunked={diffRightBinaryChunked}
+        initialMode={diffPair && useChunkedDiff ? 'binary' : 'auto'}
+        candidates={diffCandidates}
+        initialLeftId={diffPair?.left.path}
+        initialRightId={diffPair?.right.path}
+        chunkedThresholdBytes={CHUNKED_HEX_THRESHOLD_BYTES}
       />
     </div>
   )

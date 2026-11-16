@@ -7,13 +7,25 @@
 // - 居中卡片布局，显示服务器信息 + 分辨率/端口/颜色深度配置
 // - 启动后系统 RDP 客户端弹窗，由用户输入密码（凭据安全）
 
-import { useState } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useAppStore } from '@/store'
 import { backend } from '@/services/api'
+import { sshService } from '@/services/ssh-service'
 import { useTranslation } from '@/i18n'
+import type { RdpAdvancedOptions } from '@/types'
 import { Button } from '@/components/ui/button'
 import { QshellLoader } from '@/components/ui/qshell-loader'
-import { Monitor, Loader2, Play, AlertCircle, CheckCircle2, Maximize2, Globe } from 'lucide-react'
+import {
+  Monitor,
+  Play,
+  AlertCircle,
+  CheckCircle2,
+  Maximize2,
+  Globe,
+  SlidersHorizontal,
+  ChevronDown,
+  Save,
+} from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { SelectPopover } from '@/components/ui/select-popover'
 import { playSound, SoundType } from '@/lib/sound'
@@ -32,34 +44,141 @@ const PRESET_RESOLUTIONS = [
 
 const COLOR_DEPTHS = [16, 24, 32]
 
+function parseRdpConfig(raw?: string | null): RdpAdvancedOptions {
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? (parsed as RdpAdvancedOptions) : {}
+  } catch {
+    return {}
+  }
+}
+
 export function RdpViewerModule({ serverId }: RdpViewerModuleProps) {
   const { t } = useTranslation()
   const server = useAppStore((s) => s.servers.find((sv) => sv.id === serverId))
+  const updateServer = useAppStore((s) => s.updateServer)
+
+  const parsedSaved = useMemo(() => parseRdpConfig(server?.rdpConfig), [server?.rdpConfig])
+
+  const savedEffectivePort =
+    parsedSaved.rdpPort && parsedSaved.rdpPort > 0 && parsedSaved.rdpPort <= 65535
+      ? parsedSaved.rdpPort
+      : server?.rdpPort && server.rdpPort > 0 && server.rdpPort <= 65535
+        ? server.rdpPort
+        : 0
 
   const [resolutionIdx, setResolutionIdx] = useState(1) // 默认 1920×1080
   const [fullscreen, setFullscreen] = useState(false)
-  const [rdpPort, setRdpPort] = useState(server?.rdpPort || 3389)
+  const [rdpPortInput, setRdpPortInput] = useState<string>(() =>
+    String(savedEffectivePort > 0 ? savedEffectivePort : 3389),
+  )
   const [colorDepth, setColorDepth] = useState(32)
+  const [useMultimon, setUseMultimon] = useState(false)
+  const [redirectClipboard, setRedirectClipboard] = useState(true)
+  const [redirectDrives, setRedirectDrives] = useState(false)
+  const [redirectPrinters, setRedirectPrinters] = useState(false)
+  const [smartSizing, setSmartSizing] = useState(true)
+  const [enableCredssp, setEnableCredssp] = useState(true)
+  const [audioMode, setAudioMode] = useState<0 | 1 | 2>(0)
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [launching, setLaunching] = useState(false)
   const [launchMsg, setLaunchMsg] = useState<{ ok: boolean; msg: string } | null>(null)
 
+  useEffect(() => {
+    const matchIdx = PRESET_RESOLUTIONS.findIndex(
+      (r) => r.w === parsedSaved.width && r.h === parsedSaved.height
+    )
+    setResolutionIdx(matchIdx >= 0 ? matchIdx : 1)
+    setFullscreen(Boolean(parsedSaved.fullscreen))
+    setRdpPortInput(String(savedEffectivePort > 0 ? savedEffectivePort : 3389))
+    setColorDepth(parsedSaved.colorDepth || 32)
+    setUseMultimon(Boolean(parsedSaved.useMultimon))
+    setRedirectClipboard(parsedSaved.redirectClipboard ?? true)
+    setRedirectDrives(Boolean(parsedSaved.redirectDrives))
+    setRedirectPrinters(Boolean(parsedSaved.redirectPrinters))
+    setSmartSizing(parsedSaved.smartSizing ?? true)
+    setEnableCredssp(parsedSaved.enableCredssp ?? true)
+    setAudioMode(
+      parsedSaved.audioMode === 1 || parsedSaved.audioMode === 2 ? parsedSaved.audioMode : 0
+    )
+  }, [serverId, savedEffectivePort, parsedSaved])
+
+  const trimmedPortInput = rdpPortInput.trim()
+  const parsedDraftPort = trimmedPortInput === '' ? 3389 : Number(trimmedPortInput)
+  const isPortValid =
+    Number.isInteger(parsedDraftPort) && parsedDraftPort >= 1 && parsedDraftPort <= 65535
+  const effectivePort = isPortValid ? parsedDraftPort : 3389
+
+  const buildCurrentOptions = (portOverride = effectivePort): RdpAdvancedOptions => {
+    const preset = PRESET_RESOLUTIONS[resolutionIdx]
+    return {
+      rdpPort: portOverride,
+      width: preset.w,
+      height: preset.h,
+      fullscreen,
+      colorDepth,
+      useMultimon,
+      redirectClipboard,
+      redirectDrives,
+      redirectPrinters,
+      smartSizing,
+      enableCredssp,
+      audioMode,
+    }
+  }
+
+  const handleSaveConfig = async () => {
+    if (!server || !isPortValid) return
+    if (trimmedPortInput === '') {
+      setRdpPortInput('3389')
+    }
+    setSaving(true)
+    try {
+      const serialized = JSON.stringify(buildCurrentOptions(effectivePort))
+      const res = await sshService.updateServer(server.id, {
+        rdpPort: effectivePort,
+        rdpConfig: serialized,
+      })
+      if (res.success) {
+        updateServer(server.id, {
+          rdpPort: effectivePort,
+          rdpConfig: serialized,
+        })
+        setLaunchMsg({ ok: true, msg: t('rdp_config_saved') })
+      } else {
+        setLaunchMsg({ ok: false, msg: res.error || t('rdp_launch_failed') })
+      }
+    } catch (e) {
+      setLaunchMsg({ ok: false, msg: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const handleLaunch = async () => {
     if (!backend) return
-    if (!rdpPort || rdpPort <= 0) {
+    if (!isPortValid || effectivePort <= 0) {
       setLaunchMsg({ ok: false, msg: t('server_no_rdp_port') || '未配置 RDP 端口' })
       return
+    }
+    if (trimmedPortInput === '') {
+      setRdpPortInput('3389')
     }
     setLaunching(true)
     setLaunchMsg(null)
     try {
+      const currentOptions = buildCurrentOptions(effectivePort)
       const preset = PRESET_RESOLUTIONS[resolutionIdx]
       const result = await backend.rdp.launch({
         serverId,
-        rdpPort,
+        rdpPort: effectivePort,
         width: fullscreen ? undefined : preset.w,
         height: fullscreen ? undefined : preset.h,
         fullscreen,
         colorDepth,
+        options: currentOptions,
       })
       if (result?.success) {
         setLaunchMsg({ ok: true, msg: t('rdp_launched') })
@@ -88,7 +207,7 @@ export function RdpViewerModule({ serverId }: RdpViewerModuleProps) {
         </div>
 
         {/* 未配置 RDP 端口提示 */}
-        {(!server.rdpPort || server.rdpPort <= 0) && (
+        {savedEffectivePort <= 0 && (
           <div className="flex items-center gap-2 rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 p-2.5 mb-4 text-xs">
             <AlertCircle className="h-4 w-4 flex-shrink-0" />
             <span>{t('rdp_port_not_configured_hint')}</span>
@@ -107,8 +226,13 @@ export function RdpViewerModule({ serverId }: RdpViewerModuleProps) {
               type="number"
               min={1}
               max={65535}
-              value={rdpPort}
-              onChange={(e) => setRdpPort(Number(e.target.value) || 3389)}
+              value={rdpPortInput}
+              onChange={(e) => setRdpPortInput(e.target.value)}
+              onBlur={() => {
+                if (!rdpPortInput.trim()) {
+                  setRdpPortInput('3389')
+                }
+              }}
               className="w-24 rounded-md border border-border/60 bg-background px-2 py-1 text-sm font-mono text-right focus:outline-none focus:ring-1 focus:ring-primary"
             />
           </div>
@@ -144,7 +268,7 @@ export function RdpViewerModule({ serverId }: RdpViewerModuleProps) {
         </div>
 
         {/* 全屏 + 颜色深度 */}
-        <div className="flex items-center gap-4 mb-6">
+        <div className="flex items-center gap-4 mb-4">
           <button
             type="button"
             onClick={() => { setFullscreen((v) => !v); playSound(SoundType.Toggle) }}
@@ -171,19 +295,97 @@ export function RdpViewerModule({ serverId }: RdpViewerModuleProps) {
           </div>
         </div>
 
-        {/* 启动按钮 */}
-        <Button
-          onClick={handleLaunch}
-          disabled={launching || rdpPort < 1 || rdpPort > 65535}
-          className="w-full h-11 gap-2 text-sm"
-          size="lg"
-        >
-          {launching ? (
-            <><QshellLoader size="xs" /> {t('rdp_launching')}</>
-          ) : (
-            <><Play className="h-4 w-4" /> {t('rdp_btn_launch')}</>
+        {/* 高级重定向与安全折叠区 */}
+        <div className="mb-5 rounded-xl border border-border/60 bg-card/40 overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setShowAdvanced((v) => !v)}
+            className="w-full flex items-center justify-between px-3.5 py-2.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent/30 transition-colors"
+          >
+            <span className="flex items-center gap-2">
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+              {t('rdp_advanced_options')}
+            </span>
+            <ChevronDown
+              className={cn('h-3.5 w-3.5 transition-transform', showAdvanced && 'rotate-180')}
+            />
+          </button>
+
+          {showAdvanced && (
+            <div className="px-3.5 pb-3.5 pt-2 border-t border-border/50 space-y-2.5">
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { key: 'clipboard', label: t('rdp_redirect_clipboard'), value: redirectClipboard, set: setRedirectClipboard },
+                  { key: 'drives', label: t('rdp_redirect_drives'), value: redirectDrives, set: setRedirectDrives },
+                  { key: 'printers', label: t('rdp_redirect_printers'), value: redirectPrinters, set: setRedirectPrinters },
+                  { key: 'multimon', label: t('rdp_use_multimon'), value: useMultimon, set: setUseMultimon },
+                  { key: 'smartSizing', label: t('rdp_smart_sizing'), value: smartSizing, set: setSmartSizing },
+                  { key: 'credssp', label: t('rdp_enable_credssp'), value: enableCredssp, set: setEnableCredssp },
+                ].map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => {
+                      item.set((v) => !v)
+                      playSound(SoundType.Toggle)
+                    }}
+                    className={cn(
+                      'flex items-center justify-between rounded-lg border px-2.5 py-1.5 text-[11px] transition-all text-left',
+                      item.value
+                        ? 'border-primary/60 bg-primary/10 text-primary font-medium'
+                        : 'border-border/50 text-muted-foreground hover:border-border'
+                    )}
+                  >
+                    <span className="truncate pr-2">{item.label}</span>
+                    <span className="text-[10px] opacity-80">{item.value ? 'ON' : 'OFF'}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center justify-between gap-3 pt-1">
+                <span className="text-xs text-muted-foreground">{t('rdp_audio_mode')}</span>
+                <SelectPopover
+                  value={String(audioMode)}
+                  onChange={(v) => setAudioMode(Number(v) as 0 | 1 | 2)}
+                  options={[
+                    { value: '0', label: t('rdp_audio_local') },
+                    { value: '1', label: t('rdp_audio_remote') },
+                    { value: '2', label: t('rdp_audio_disabled') },
+                  ]}
+                  className="w-40"
+                  ariaLabel={t('rdp_audio_mode')}
+                />
+              </div>
+            </div>
           )}
-        </Button>
+        </div>
+
+        {/* 启动与保存按钮 */}
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleSaveConfig}
+            disabled={saving || !isPortValid}
+            className="h-11 gap-1.5 px-4 text-xs"
+            title={t('rdp_save_config')}
+          >
+            <Save className="h-3.5 w-3.5" />
+            {saving ? '...' : t('rdp_save_config')}
+          </Button>
+          <Button
+            onClick={handleLaunch}
+            disabled={launching || !isPortValid}
+            className="flex-1 h-11 gap-2 text-sm"
+            size="lg"
+          >
+            {launching ? (
+              <><QshellLoader size="xs" /> {t('rdp_launching')}</>
+            ) : (
+              <><Play className="h-4 w-4" /> {t('rdp_btn_launch')}</>
+            )}
+          </Button>
+        </div>
 
         {/* 启动结果提示 */}
         {launchMsg && (

@@ -3,7 +3,7 @@ import { useAppStore } from "@/store";
 import type { WorkspaceModule } from "@/types";
 import { useTranslation } from "@/i18n";
 import { collectGroupIds } from "@/utils/split-layout";
-import { deviceModuleLabelKey, getServerConnectionFlags, isModuleVisibleForServer, isPureVncServer } from "@/services/connection-targets";
+import { deviceModuleLabelKey, getServerConnectionFlags, isModuleVisibleForServer, isPureVncServer, resolveServerForTab } from "@/services/connection-targets";
 import {
   Terminal,
   Wrench,
@@ -49,6 +49,7 @@ import {
 import { PRESET_TAB_COLORS } from "@/utils/tab-colors";
 import { TransferPanel } from "@/components/workspace/transfer-panel";
 import { TerminalThemeDialog } from "@/components/workspace/modules/terminal-theme-dialog";
+import { AutomationPopover } from "@/components/workspace/automation-popover";
 import { playSound, SoundType } from "@/lib/sound";
 import { useTextFormatterStore } from "@/store/text-formatter-store";
 
@@ -171,9 +172,19 @@ export function ModuleTabs({
   const [customBreakInput, setCustomBreakInput] = useState("");
   const [breakDropdownOpen, setBreakDropdownOpen] = useState(false);
   // 按连接目标类型过滤可见的工作区模块（linux 保持全部，其余类型按注册表声明）
-  const server = useAppStore((s) => s.servers.find((sv) => sv.id === serverId));
+  const persistedServer = useAppStore((s) =>
+    serverId ? s.servers.find((sv) => sv.id === serverId) : undefined,
+  );
   const broadcastTabIds = useAppStore((s) => s.broadcastTabIds);
   const tabs = useAppStore((s) => s.tabs);
+  const tabMeta = useMemo(
+    () => tabs.find((t) => t.id === tabId),
+    [tabs, tabId],
+  );
+  const server = useMemo(
+    () => persistedServer ?? resolveServerForTab([], serverId, tabMeta),
+    [persistedServer, serverId, tabMeta],
+  );
   const layout = useAppStore((s) => s.layout);
   const workspaces = useAppStore((s) => s.workspaces);
   const toggleBroadcastTab = useAppStore((s) => s.toggleBroadcastTab);
@@ -428,8 +439,8 @@ export function ModuleTabs({
             : "items-center px-2 border-l border-border/40",
         )}
       >
-        {/* 终端广播按钮：仅在终端模块显示，开启后输入同步到所有开启广播的终端 */}
-        {activeModule === "terminal" && (
+        {/* 终端广播按钮：仅在支持广播的终端模块显示（串口 / 本地终端禁用广播，防误操宿主机） */}
+        {activeModule === "terminal" && flags.supportsBroadcast && (
           <div className={cn("flex items-stretch", vertical ? "w-full" : "items-center")}>
             <button
               className={cn(
@@ -530,7 +541,7 @@ export function ModuleTabs({
             </DropdownMenu>
           </div>
         )}
-        {activeModule !== "bmc" && activeModule !== "vnc" && !flags.isSerialServer && server?.protocol !== "rdp" && (
+        {activeModule !== "bmc" && activeModule !== "vnc" && !flags.isSerialServer && !flags.isLocalServer && server?.protocol !== "rdp" && (
           <>
             {!isConnected ? (
               <Button
@@ -573,6 +584,13 @@ export function ModuleTabs({
               <Camera className="h-3 w-3" />
             </Button>
           </>
+        )}
+        {activeModule === "terminal" && (
+          <AutomationPopover
+            tabId={tabId}
+            serverId={serverId}
+            disabled={!isConnected && !flags.isLocalServer && !flags.isSerialServer}
+          />
         )}
         {activeModule === "terminal" && (
           <Button

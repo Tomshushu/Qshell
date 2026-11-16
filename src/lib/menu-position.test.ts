@@ -3,6 +3,8 @@ import {
   clampMenuToViewport,
   computeSubMenuPosition,
   computeDropdownVerticalPosition,
+  computeSubmenuVerticalClamp,
+  computeFloatingPopoverPosition,
 } from './menu-position'
 
 describe('menu-position utility', () => {
@@ -90,6 +92,46 @@ describe('menu-position utility', () => {
       expect(pos.placeBelow).toBe(false)
       // top - panelH - gap = 700 - 200 - 4 = 496
       expect(pos.top).toBe(496)
+    })
+  })
+
+  describe('computeSubmenuVerticalClamp', () => {
+    it('keeps default -4 offset when submenu fits comfortably', () => {
+      window.innerHeight = 800
+      const res = computeSubmenuVerticalClamp(200, 180)
+      expect(res.offsetTop).toBe(-4)
+      expect(res.maxHeight).toBe(788)
+    })
+
+    it('shifts submenu upward when trigger sits near bottom edge', () => {
+      window.innerHeight = 600
+      const res = computeSubmenuVerticalClamp(520, 320, 6, -4)
+      // clampedTop = 600 - 320 - 6 = 274 => offsetTop = 274 - 520 = -246
+      expect(res.offsetTop).toBe(-246)
+      expect(520 + res.offsetTop + 320).toBeLessThanOrEqual(600 - 6)
+    })
+  })
+
+  describe('computeFloatingPopoverPosition', () => {
+    it('flips upward and clamps horizontal position when trigger is near bottom-right', () => {
+      window.innerWidth = 1000
+      window.innerHeight = 600
+      const rect = {
+        top: 520,
+        bottom: 552,
+        left: 900,
+        right: 990,
+        width: 90,
+        height: 32,
+        x: 900,
+        y: 520,
+        toJSON: () => {},
+      } as DOMRect
+      const pos = computeFloatingPopoverPosition(rect, 208, 280, 8, 4)
+      expect(pos.placeBelow).toBe(false)
+      expect(pos.left).toBe(1000 - 208 - 8)
+      expect(pos.top).toBe(520 - 280 - 4)
+      expect(pos.maxHeight).toBe(280)
     })
   })
 })

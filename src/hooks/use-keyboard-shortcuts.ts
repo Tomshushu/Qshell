@@ -1,10 +1,27 @@
 import { useEffect } from 'react'
 import { useAppStore } from '@/store'
 import { useShortcutStore } from '@/store/shortcut-store'
+import { useTerminalLockStore } from '@/store/terminal-lock-store'
+
+function isEditableOrPopoverTarget(target: EventTarget | null): boolean {
+  if (typeof Element === 'undefined' || !(target instanceof Element)) return false
+  if (target.closest('[data-automation-popover="true"], [data-automation-dialog="true"]')) {
+    return true
+  }
+  const tag = target.tagName?.toLowerCase()
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') {
+    if (target.classList?.contains('xterm-helper-textarea')) return false
+    return true
+  }
+  if ((target as HTMLElement).isContentEditable) return true
+  return false
+}
 
 export function useKeyboardShortcuts() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return
+
       const {
         openTab,
         setActiveTab,
@@ -31,6 +48,13 @@ export function useKeyboardShortcuts() {
             new CustomEvent('open-app-lock-setup', { detail: { lockImmediately: true } }),
           )
         }
+        return
+      }
+
+      if (
+        isEditableOrPopoverTarget(e.target) ||
+        isEditableOrPopoverTarget(document.activeElement)
+      ) {
         return
       }
 
@@ -80,17 +104,25 @@ export function useKeyboardShortcuts() {
         return
       }
 
+      const isLockedTab = Boolean(
+        activeTabId && useTerminalLockStore.getState().isTabLocked(activeTabId),
+      )
+
       // 快捷命令中心（默认 Alt+C）
       if (matchesAction(e, 'terminal.quickCommand')) {
         e.preventDefault()
-        window.dispatchEvent(new CustomEvent('qshell:toggle-quick-commands'))
+        if (!isLockedTab) {
+          window.dispatchEvent(new CustomEvent('qshell:toggle-quick-commands'))
+        }
         return
       }
 
       // 命令撰写栏与分发窗口（默认 Mod+Shift+U）
       if (matchesAction(e, 'terminal.composeBar')) {
         e.preventDefault()
-        window.dispatchEvent(new CustomEvent('qshell:toggle-compose-bar'))
+        if (!isLockedTab) {
+          window.dispatchEvent(new CustomEvent('qshell:toggle-compose-bar'))
+        }
         return
       }
     }

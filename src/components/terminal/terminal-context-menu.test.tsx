@@ -19,6 +19,12 @@ vi.mock("@/i18n", () => ({
         tm_ai_diagnosis_recent: "AI 诊断终端报错/输出",
         tm_ai_explain_shell: "拆解并解释指令 (Explain)",
         tm_search: "搜索",
+        tm_upload_files_sftp: "上传文件到当前目录 (SFTP)",
+        tm_upload_folder_sftp: "上传文件夹到当前目录 (SFTP)",
+        tm_open_files_panel: "打开文件管理器 (工作台)",
+        tm_open_sftp_tab: "打开 SFTP / FTP 标签页 (当前目录)",
+        tm_zmodem_send: "ZMODEM 发送 (rz)",
+        tm_zmodem_receive_hint: "ZMODEM 接收准备",
       };
       return map[key] || key;
     },
@@ -120,5 +126,121 @@ describe("TerminalContextMenu", () => {
 
     fireEvent.click(explainBtn);
     expect(onAIExplainShell).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides 传输与文件 submenu when canTransferFiles is false and invokes all transfer actions when enabled", () => {
+    const onUploadFiles = vi.fn();
+    const onUploadFolder = vi.fn();
+    const onOpenSftp = vi.fn();
+    const onOpenSftpTab = vi.fn();
+    const onSendZmodem = vi.fn();
+    const onReceiveZmodem = vi.fn();
+
+    const { rerender } = render(
+      <TerminalContextMenu
+        {...baseProps}
+        ctxMenu={{ x: 100, y: 100, hasSelection: false }}
+        canTransferFiles={false}
+        onUploadFiles={onUploadFiles}
+        onUploadFolder={onUploadFolder}
+        onOpenSftp={onOpenSftp}
+        onOpenSftpTab={onOpenSftpTab}
+        onSendZmodem={onSendZmodem}
+        onReceiveZmodem={onReceiveZmodem}
+      />,
+    );
+
+    expect(screen.queryByTestId("terminal-menu-transfer-submenu")).toBeNull();
+
+    rerender(
+      <TerminalContextMenu
+        {...baseProps}
+        ctxMenu={{ x: 100, y: 100, hasSelection: false }}
+        canTransferFiles={true}
+        onUploadFiles={onUploadFiles}
+        onUploadFolder={onUploadFolder}
+        onOpenSftp={onOpenSftp}
+        onOpenSftpTab={onOpenSftpTab}
+        onSendZmodem={onSendZmodem}
+        onReceiveZmodem={onReceiveZmodem}
+      />,
+    );
+
+    expect(screen.getByTestId("terminal-menu-transfer-submenu")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("上传文件到当前目录 (SFTP)"));
+    expect(onUploadFiles).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByText("上传文件夹到当前目录 (SFTP)"));
+    expect(onUploadFolder).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByText("打开文件管理器 (工作台)"));
+    expect(onOpenSftp).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByTestId("terminal-menu-open-sftp-tab"));
+    expect(onOpenSftpTab).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByText("ZMODEM 发送 (rz)"));
+    expect(onSendZmodem).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByText("ZMODEM 接收准备"));
+    expect(onReceiveZmodem).toHaveBeenCalledTimes(1);
+  });
+
+  it("clamps bottom submenu upward when trigger sits near bottom of viewport", () => {
+    const origInnerHeight = window.innerHeight;
+    Object.defineProperty(window, "innerHeight", {
+      value: 600,
+      configurable: true,
+      writable: true,
+    });
+
+    try {
+      const { container } = render(
+        <TerminalContextMenu
+          {...baseProps}
+          ctxMenu={{ x: 100, y: 200, hasSelection: false }}
+        />,
+      );
+
+      const logTriggerBtn = screen.getByTestId("terminal-menu-log-submenu");
+      const groupContainer = logTriggerBtn.closest(".relative.group") as HTMLElement | null;
+      expect(groupContainer).not.toBeNull();
+
+      vi.spyOn(groupContainer!, "getBoundingClientRect").mockReturnValue({
+        x: 100,
+        y: 520,
+        top: 520,
+        left: 100,
+        bottom: 556,
+        right: 340,
+        width: 240,
+        height: 36,
+        toJSON: () => ({}),
+      });
+
+      fireEvent.mouseEnter(groupContainer!);
+
+      const submenuWrappers = Array.from(
+        container.querySelectorAll('[data-testid="terminal-submenu-wrapper"]'),
+      ) as HTMLElement[];
+      const logWrapper = groupContainer!.querySelector(
+        '[data-testid="terminal-submenu-wrapper"]',
+      ) as HTMLElement | null;
+
+      expect(submenuWrappers.length).toBeGreaterThan(0);
+      expect(logWrapper).not.toBeNull();
+      const topPx = parseFloat(logWrapper!.style.top);
+      expect(Number.isFinite(topPx)).toBe(true);
+      expect(topPx).toBeLessThan(-4);
+      // With trigger top=520, estimatedHeight=320, vh=600, pad=6: clampedTop = 600 - 320 - 6 = 274, offsetTop = -246
+      expect(520 + topPx + 320).toBeLessThanOrEqual(600 - 6);
+    } finally {
+      Object.defineProperty(window, "innerHeight", {
+        value: origInnerHeight,
+        configurable: true,
+        writable: true,
+      });
+    }
   });
 });

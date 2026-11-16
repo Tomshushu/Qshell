@@ -5,6 +5,7 @@ import { useTranslation } from '@/i18n'
 import { useAppStore } from '@/store'
 import { getEnabledTargetTypes } from '@/services/connection-targets'
 import { cn } from '@/lib/utils'
+import { computeFloatingPopoverPosition } from '@/lib/menu-position'
 
 interface DeviceTypeFilterPopoverProps {
   value: string | null
@@ -22,7 +23,7 @@ export function DeviceTypeFilterPopover({ value, onChange }: DeviceTypeFilterPop
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
-  const [pos, setPos] = useState({ left: 0, top: 0 })
+  const [pos, setPos] = useState({ left: 0, top: 0, placeBelow: true, maxHeight: 360 })
 
   // 点击外部关闭下拉（面板已 Portal 到 body，需同时排除按钮与面板内部的点击）
   useEffect(() => {
@@ -46,8 +47,8 @@ export function DeviceTypeFilterPopover({ value, onChange }: DeviceTypeFilterPop
     const update = () => {
       const rect = wrapRef.current?.getBoundingClientRect()
       if (!rect) return
-      const left = Math.max(8, Math.min(rect.left, window.innerWidth - 208 - 8))
-      setPos({ left, top: rect.bottom + 4 })
+      const estimatedH = panelRef.current?.offsetHeight || 280
+      setPos(computeFloatingPopoverPosition(rect, 208, estimatedH, 8, 4))
     }
     update()
     window.addEventListener('resize', update)
@@ -89,9 +90,10 @@ export function DeviceTypeFilterPopover({ value, onChange }: DeviceTypeFilterPop
       {open && createPortal(
         <div
           ref={panelRef}
-          style={{ left: pos.left, top: pos.top }}
+          style={{ left: pos.left, top: pos.top, maxHeight: pos.maxHeight }}
           className={cn(
-            'fixed z-popup w-52 rounded-xl border border-slate-200/90 dark:border-white/15 bg-white/98 dark:bg-zinc-950/98 backdrop-blur-2xl shadow-xl p-1.5 space-y-0.5 animate-in fade-in-0 zoom-in-95 origin-top duration-150',
+            'fixed z-popup w-52 overflow-y-auto rounded-xl border border-slate-200/90 dark:border-white/15 bg-white/98 dark:bg-zinc-950/98 backdrop-blur-2xl shadow-xl p-1.5 space-y-0.5 animate-in fade-in-0 zoom-in-95 duration-150',
+            pos.placeBelow ? 'origin-top' : 'origin-bottom',
             isAnime && 'border-pink-300/60 shadow-[0_8px_28px_rgba(255,107,161,0.18)]',
           )}
         >

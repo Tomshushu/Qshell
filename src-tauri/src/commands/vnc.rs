@@ -52,6 +52,23 @@ pub async fn vnc_start_session(
         .or_else(|| server["vnc_password"].as_str())
         .unwrap_or("");
     let main_password_enc = server["password"].as_str().unwrap_or("");
+    let mut profile_password: Option<String> = None;
+    if let Some(pid) = server
+        .get("authProfileId")
+        .and_then(|v| v.as_str())
+        .or_else(|| server.get("auth_profile_id").and_then(|v| v.as_str()))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+    {
+        profile_password = tokio::task::spawn_blocking(move || db::auth_profiles_get_raw(&pid))
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .and_then(|p| p.password)
+            .filter(|s| !s.is_empty());
+    }
+
     let password = if !vnc_password_enc.is_empty() {
         crate::crypto::decrypt_password(vnc_password_enc, db::master_key())
             .ok()
@@ -59,6 +76,7 @@ pub async fn vnc_start_session(
     } else {
         None
     }
+    .or(profile_password)
     .or_else(|| {
         if !main_password_enc.is_empty() {
             crate::crypto::decrypt_password(main_password_enc, db::master_key())

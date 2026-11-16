@@ -409,24 +409,24 @@ const MAX_RECURSION_DEPTH: u32 = 64;
 /// 目录传输中单个子文件的失败记录（部分成功语义：单个失败不中止整体传输）
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct TransferFailure {
-    path: String,
-    error: String,
+pub(crate) struct TransferFailure {
+    pub path: String,
+    pub error: String,
 }
 
 /// 目录递归传输的汇总结果
 #[derive(Default)]
-struct TransferSummary {
-    succeeded: u64,
-    skipped: u64,
-    failed: Vec<TransferFailure>,
+pub(crate) struct TransferSummary {
+    pub succeeded: u64,
+    pub skipped: u64,
+    pub failed: Vec<TransferFailure>,
     /// 致命错误（会话/连接级失败，或连续失败触发熔断）。
     /// 调用方据此把整条传输记录置为 failed；为 None 时即使有 failed 明细也算「部分成功」。
-    fatal: Option<String>,
+    pub fatal: Option<String>,
 }
 
 /// 熔断阈值：连续失败达到该数量即停止派发，避免磁盘满/权限异常时产生海量失败记录
-const MAX_CONSECUTIVE_FAILURES: u64 = 20;
+pub(crate) const MAX_CONSECUTIVE_FAILURES: u64 = 20;
 
 /// 发送目录传输失败明细事件（前端据此把记录标为「部分成功」并展示失败清单）
 fn send_transfer_failures(
@@ -461,11 +461,6 @@ fn send_transfer_failures(
         },
     );
 }
-
-// 全局限速（KB/s）：0 表示不限速
-// 由前端 files_set_rate_limit 命令设置，sftp_upload_*/sftp_download_* 的 chunk 循环读取此值
-// 用 AtomicU64 + Relaxed ordering：限速不需要强一致性，各 chunk 读取最新值即可
-pub(crate) static RATE_LIMIT_KBPS: AtomicU64 = AtomicU64::new(0);
 
 // 全局注册表：transfer_id -> cancel flag
 // 传输开始时 register，SFTP 函数在 chunk 循环中检查 flag，用户点取消时 cancel_transfer 设 flag
@@ -579,21 +574,173 @@ pub async fn files_cancel_all_transfers() -> Result<usize, String> {
 #[tauri::command]
 pub async fn files_set_rate_limit(kbps: u64) -> Result<(), String> {
     crate::ssh::rate_limiter::GLOBAL_RATE_LIMITER.set_limit(kbps);
-    RATE_LIMIT_KBPS.store(kbps, Ordering::Relaxed);
     Ok(())
 }
 
-/// 设置 SFTP 传输排除过滤规则（包含预设、自定义模式以及是否遵循本地 .gitignore）
+pub(crate) fn local_mtime_ms(meta: &std::fs::Metadata) -> Option<i64> {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+}
+
+/// 将无时区信息的远程时间字符串按「客户端本地时区」解释为毫秒时间戳。
+/// 注意：远程 ls / FTP 列表常不带时区，若服务端与客户端跨时区，mtime 比较可能有数小时偏差；
+/// 带时区的 RFC3339 字符串在 parse_modified_time_ms 中已优先按自身时区解析，不走此处。
+/// 彻底修需要服务端时区协商，故此处保持既有行为并在文档标注限制。
+fn naive_to_local_ms(naive: chrono::NaiveDateTime) -> i64 {
+    use chrono::TimeZone as _;
+    if let Some(local_dt) = chrono::Local.from_local_datetime(&naive).single() {
+        local_dt.timestamp_millis()
+    } else {
+        naive.and_utc().timestamp_millis()
+    }
+}
+
+pub(crate) fn parse_modified_time_ms(raw: &str) -> Option<i64> {
+    use chrono::{Datelike as _, NaiveDate, NaiveDateTime};
+
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(trimmed) {
+        return Some(dt.timestamp_millis());
+    }
+    for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"] {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(trimmed, fmt) {
+            return Some(naive_to_local_ms(naive));
+        }
+    }
+
+    // 折叠连续空白，兼容 BSD/BusyBox `ls -lA` 与 Windows IIS FTP 列表时间格式
+    let collapsed: String = trimmed.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    // Windows IIS / DOS FTP: "MM-DD-YY HH:MMAM/PM" 或 "MM-DD-YYYY HH:MMAM/PM"
+    for fmt in ["%m-%d-%y %I:%M%p", "%m-%d-%Y %I:%M%p"] {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(&collapsed, fmt) {
+            return Some(naive_to_local_ms(naive));
+        }
+    }
+
+    // BSD / BusyBox `ls -lA`: "Mon DD YYYY" (e.g. "Nov 15 2025")
+    if let Ok(date) = NaiveDate::parse_from_str(&collapsed, "%b %e %Y") {
+        if let Some(naive) = date.and_hms_opt(0, 0, 0) {
+            return Some(naive_to_local_ms(naive));
+        }
+    }
+
+    // BSD / BusyBox `ls -lA`: "Mon DD HH:MM" (无年份，按 ls 规则推算当年或上一年)
+    let now = chrono::Local::now();
+    let current_year = now.year();
+    let with_curr_year = format!("{} {}", current_year, collapsed);
+    if let Ok(mut naive) = NaiveDateTime::parse_from_str(&with_curr_year, "%Y %b %e %H:%M") {
+        let mut ts = naive_to_local_ms(naive);
+        let one_day_ms = 24 * 3600 * 1000;
+        if ts > now.timestamp_millis() + one_day_ms {
+            let with_prev_year = format!("{} {}", current_year - 1, collapsed);
+            if let Ok(prev_naive) = NaiveDateTime::parse_from_str(&with_prev_year, "%Y %b %e %H:%M") {
+                naive = prev_naive;
+                ts = naive_to_local_ms(naive);
+            }
+        }
+        return Some(ts);
+    }
+
+    None
+}
+
+async fn read_remote_gitignore_rules_from_fs(
+    resolved_fs: &crate::files::remote_fs::ResolvedRemoteFs,
+    entries: &[crate::parsers::FileEntry],
+    rel_prefix: &str,
+) -> Vec<String> {
+    if !crate::validators::should_respect_gitignore() {
+        return Vec::new();
+    }
+    const MAX_GITIGNORE_BYTES: usize = 64 * 1024;
+    let Some(gi) = entries.iter().find(|e| !e.is_directory && e.name == ".gitignore") else {
+        return Vec::new();
+    };
+    if gi.size > MAX_GITIGNORE_BYTES as i64 {
+        return Vec::new();
+    }
+    match resolved_fs.read_bytes(&gi.path, MAX_GITIGNORE_BYTES).await {
+        Ok(bytes) => {
+            let content = String::from_utf8_lossy(&bytes);
+            crate::validators::parse_gitignore_content_scoped(&content, rel_prefix)
+        }
+        Err(_) => Vec::new(),
+    }
+}
+
+async fn read_remote_gitignore_rules(
+    server_id: &str,
+    entries: &[crate::parsers::FileEntry],
+    rel_prefix: &str,
+) -> Vec<String> {
+    if !crate::validators::should_respect_gitignore() {
+        return Vec::new();
+    }
+    if !entries.iter().any(|e| !e.is_directory && e.name == ".gitignore") {
+        return Vec::new();
+    }
+    match crate::files::remote_fs::resolve_backend(server_id).await {
+        Ok(fs) => read_remote_gitignore_rules_from_fs(&fs, entries, rel_prefix).await,
+        Err(_) => Vec::new(),
+    }
+}
+
+async fn resolve_server_audit_label(server_id: &str) -> String {
+    match crate::commands::ssh::load_server_config(server_id).await {
+        Ok(s) if !s.name.trim().is_empty() => s.name,
+        _ => server_id.to_string(),
+    }
+}
+
+async fn record_transfer_audit(
+    server_name: Option<String>,
+    event: &str,
+    status: &str,
+    details: Option<String>,
+) {
+    let ev = event.to_string();
+    let st = status.to_string();
+    let _ = tokio::task::spawn_blocking(move || {
+        let _ = crate::db::add_audit_log(
+            "transfer",
+            server_name.as_deref(),
+            &ev,
+            &st,
+            details.as_deref(),
+        );
+    })
+    .await;
+}
+
+/// 设置 SFTP 传输排除过滤规则（包含预设、自定义模式、包含白名单、大小/修改时间/类型范围以及是否遵循 .gitignore）
 #[tauri::command]
 pub async fn files_set_exclusion_config(
     enabled: bool,
     patterns: Vec<String>,
     respect_gitignore: bool,
+    include_patterns: Option<Vec<String>>,
+    min_size_bytes: Option<u64>,
+    max_size_bytes: Option<u64>,
+    min_mtime_ms: Option<i64>,
+    max_mtime_ms: Option<i64>,
+    file_kinds: Option<Vec<String>>,
 ) -> Result<(), String> {
     crate::validators::update_exclusion_config(crate::validators::ExclusionConfig {
         enabled,
         patterns,
         respect_gitignore,
+        include_patterns: include_patterns.unwrap_or_default(),
+        min_size_bytes,
+        max_size_bytes,
+        min_mtime_ms,
+        max_mtime_ms,
+        file_kinds: file_kinds.unwrap_or_default(),
     });
     Ok(())
 }
@@ -757,15 +904,32 @@ pub async fn files_test_ftp_connection(config: FtpTestConfigInput) -> Result<Ope
         };
         (user, pass)
     } else {
-        let user = config.username.trim().to_string();
-        let pass = if !config.password.is_empty() {
-            config.password.clone()
+        let user = if !config.username.trim().is_empty() {
+            config.username.trim().to_string()
+        } else if !config.server_username.trim().is_empty() {
+            config.server_username.trim().to_string()
         } else {
             saved_server
                 .as_ref()
-                .and_then(|s| s.file_transfer_config.as_deref())
-                .and_then(crate::ftp::parse_file_transfer_config)
-                .map(|c| c.password)
+                .map(|s| s.username.clone())
+                .unwrap_or_default()
+        };
+        let saved_ft_pass = saved_server
+            .as_ref()
+            .and_then(|s| s.file_transfer_config.as_deref())
+            .and_then(crate::ftp::parse_file_transfer_config)
+            .map(|c| c.password)
+            .filter(|p| !p.is_empty());
+        let pass = if !config.password.is_empty() {
+            config.password.clone()
+        } else if let Some(p) = saved_ft_pass {
+            p
+        } else if !config.server_password.is_empty() {
+            config.server_password.clone()
+        } else {
+            saved_server
+                .as_ref()
+                .and_then(|s| s.password.clone())
                 .unwrap_or_default()
         };
         (user, pass)
@@ -820,48 +984,21 @@ pub async fn files_test_ftp_connection(config: FtpTestConfigInput) -> Result<Ope
     }
 }
 
+/// 查询目标服务器当前生效的远程文件系统后端能力（SFTP / SCP 自动降级 / FTP / FTPS）
+#[tauri::command]
+pub async fn files_get_backend_capabilities(
+    server_id: String,
+) -> Result<crate::files::remote_fs::RemoteFsCapabilities, String> {
+    let fs = crate::files::remote_fs::resolve_backend(&server_id).await?;
+    Ok(fs.capabilities())
+}
+
 /// 列出远程目录内容
 /// 返回 JSON 字符串（FileEntry[]）
 #[tauri::command]
 pub async fn files_list(server_id: String, dir_path: String) -> Result<String, String> {
-    if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(&server_id).await {
-        let entries = crate::ftp::ftp_list_dir(ftp_cfg, &dir_path).await?;
-        return serde_json::to_string(&entries).map_err(|e| format!("Serialize error: {}", e));
-    }
-    let target_type = load_target_type(&server_id).await;
-    let entries = if target_type.eq_ignore_ascii_case("windows") {
-        if dir_path == "/" {
-            // 返回所有磁盘盘符，作为虚拟根下的子文件夹
-            let drives = crate::targets::windows::files::files_list_drives(server_id.clone()).await?;
-            let mut drive_entries = Vec::new();
-            for drive in drives {
-                let name = drive.trim_end_matches('\\').to_string(); // "C:"
-                drive_entries.push(crate::parsers::FileEntry {
-                    name: name.clone(),
-                    path: format!("/{}/", name), // "/C:/"
-                    is_directory: true,
-                    is_symlink: false,
-                    size: 0,
-                    modified_time: String::new(),
-                    permissions: "---".to_string(),
-                    owner: String::new(),
-                    group: String::new(),
-                    uid: None,
-                    gid: None,
-                });
-            }
-            drive_entries
-        } else {
-            let win_path = crate::targets::windows::validators::posix_to_windows_path(&dir_path);
-            let mut list = crate::targets::windows::files::files_list(server_id, win_path).await?;
-            for entry in &mut list {
-                entry.path = crate::targets::windows::validators::windows_to_posix_path(&entry.path);
-            }
-            list
-        }
-    } else {
-        crate::targets::linux::files::files_list(server_id, dir_path).await?
-    };
+    let fs = crate::files::remote_fs::resolve_backend(&server_id).await?;
+    let entries = fs.list_dir(&dir_path).await?;
     serde_json::to_string(&entries).map_err(|e| format!("Serialize error: {}", e))
 }
 
@@ -902,62 +1039,77 @@ pub async fn files_diagnose_sftp(server_id: String) -> Result<String, String> {
 /// 读取远程文件内容
 #[tauri::command]
 pub async fn files_read(server_id: String, path: String) -> Result<CommandResult, String> {
-    if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(&server_id).await {
-        return match crate::ftp::ftp_read_bytes(ftp_cfg, &path, 5 * 1024 * 1024).await {
-            Ok(bytes) => {
-                let text = String::from_utf8_lossy(&bytes).into_owned();
-                Ok(CommandResult::ok(text))
+    let fs = crate::files::remote_fs::resolve_backend(&server_id).await?;
+    match &fs {
+        crate::files::remote_fs::ResolvedRemoteFs::Ftp { .. }
+        | crate::files::remote_fs::ResolvedRemoteFs::Scp { .. } => {
+            return match fs.read_bytes(&path, 5 * 1024 * 1024).await {
+                Ok(bytes) => match String::from_utf8(bytes) {
+                    Ok(s) => Ok(CommandResult::ok(s)),
+                    Err(err) => {
+                        use base64::Engine as _;
+                        let raw = err.into_bytes();
+                        Ok(CommandResult::ok(format!(
+                            "::base64::{}",
+                            base64::engine::general_purpose::STANDARD.encode(&raw)
+                        )))
+                    }
+                },
+                Err(e) => Ok(CommandResult::err(e)),
+            };
+        }
+        crate::files::remote_fs::ResolvedRemoteFs::Sftp { target_type, .. } => {
+            let content_result = if target_type.eq_ignore_ascii_case("windows") {
+                let win_path = crate::targets::windows::validators::posix_to_windows_path(&path);
+                crate::targets::windows::files::files_read(server_id, win_path).await
+            } else {
+                crate::targets::linux::files::files_read(server_id, path).await
+            };
+            match content_result {
+                Ok(content) => Ok(CommandResult::ok(content)),
+                Err(e) => Ok(CommandResult::err(e)),
             }
-            Err(e) => Ok(CommandResult::err(e)),
-        };
-    }
-    let target_type = load_target_type(&server_id).await;
-    let content_result = if target_type.eq_ignore_ascii_case("windows") {
-        let win_path = crate::targets::windows::validators::posix_to_windows_path(&path);
-        crate::targets::windows::files::files_read(server_id, win_path).await
-    } else {
-        crate::targets::linux::files::files_read(server_id, path).await
-    };
-    match content_result {
-        Ok(content) => Ok(CommandResult {
-            stdout: content,
-            stderr: String::new(),
-            exit_code: 0,
-        }),
-        Err(e) => Ok(CommandResult::err(e)),
+        }
     }
 }
 
 /// 读取远程二进制文件为 base64 字符串
-///
-/// 用于图片预览等需要读取二进制文件的场景。
-/// 与 `files_read`（基于 cat）不同，此函数通过 SFTP 协议读取原始字节，
-/// 保证二进制文件（图片、PDF 等）的数据完整性。
-/// 限制：10MB（防止内存爆炸）
-///
-/// 路径校验按目标类型分发：Windows 允许盘符路径，其余沿用 POSIX。
 #[tauri::command]
 pub async fn files_read_binary(server_id: String, path: String) -> Result<String, String> {
-    if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(&server_id).await {
-        use base64::Engine as _;
-        let bytes = crate::ftp::ftp_read_bytes(ftp_cfg, &path, 10 * 1024 * 1024).await?;
-        return Ok(base64::engine::general_purpose::STANDARD.encode(&bytes));
+    let fs = crate::files::remote_fs::resolve_backend(&server_id).await?;
+    match &fs {
+        crate::files::remote_fs::ResolvedRemoteFs::Ftp { .. }
+        | crate::files::remote_fs::ResolvedRemoteFs::Scp { .. } => {
+            use base64::Engine as _;
+            let bytes = fs.read_bytes(&path, 10 * 1024 * 1024).await?;
+            Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+        }
+        crate::files::remote_fs::ResolvedRemoteFs::Sftp { target_type, .. } => {
+            let final_path = if target_type.eq_ignore_ascii_case("windows") {
+                crate::targets::windows::validators::posix_to_windows_path(&path)
+            } else {
+                path.clone()
+            };
+            let path_validation =
+                crate::validators::validate_path_for_target(final_path.clone(), false, target_type);
+            if !path_validation.valid {
+                return Err(path_validation.error.unwrap_or_default());
+            }
+            crate::ssh::manager::sftp_read_file_base64(&server_id, &final_path).await
+        }
     }
-    // 按目标类型校验路径
-    let target_type = crate::commands::ssh::load_server_config(&server_id)
-        .await
-        .map(|s| s.target_type)
-        .unwrap_or_else(|_| "linux".to_string());
-    let final_path = if target_type.eq_ignore_ascii_case("windows") {
-        crate::targets::windows::validators::posix_to_windows_path(&path)
-    } else {
-        path.clone()
-    };
-    let path_validation = crate::validators::validate_path_for_target(final_path.clone(), false, &target_type);
-    if !path_validation.valid {
-        return Err(path_validation.error.unwrap_or_default());
-    }
-    crate::ssh::manager::sftp_read_file_base64(&server_id, &final_path).await
+}
+
+/// 分块流式读取远程文件指定字节区间（单次上限 4MB）
+#[tauri::command]
+pub async fn files_read_chunk(
+    server_id: String,
+    path: String,
+    offset: u64,
+    len: u64,
+) -> Result<crate::files::remote_fs::FileChunkResult, String> {
+    let fs = crate::files::remote_fs::resolve_backend(&server_id).await?;
+    fs.read_range(&path, offset, len).await
 }
 
 /// 写入远程文件
@@ -968,76 +1120,65 @@ pub async fn files_write(
     path: String,
     content: String,
 ) -> Result<CommandResult, String> {
-    if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(&server_id).await {
-        use base64::Engine as _;
-        let bytes = if let Some(b64) = content.strip_prefix("::base64::") {
-            match base64::engine::general_purpose::STANDARD.decode(b64.trim()) {
-                Ok(b) => b,
-                Err(e) => return Ok(CommandResult::err(format!("Base64 decode failed: {}", e))),
-            }
-        } else {
-            content.into_bytes()
-        };
-        return match crate::ftp::ftp_write_bytes(ftp_cfg, &path, &bytes).await {
-            Ok(()) => Ok(CommandResult::ok("File written successfully")),
-            Err(e) => Ok(CommandResult::err(e)),
-        };
-    }
-    let target_type = load_target_type(&server_id).await;
-    let result = if target_type.eq_ignore_ascii_case("windows") {
-        let win_path = crate::targets::windows::validators::posix_to_windows_path(&path);
-        crate::targets::windows::files::files_write(server_id, win_path, content).await
-    } else {
-        crate::targets::linux::files::files_write(server_id, path, content).await
-    };
-    match result {
-        Ok(()) => Ok(CommandResult::ok("File written successfully")),
-        Err(e) => Ok(CommandResult::err(e)),
-    }
+    let fs = crate::files::remote_fs::resolve_backend(&server_id).await?;
+    fs.write_text_or_base64(&path, content).await
 }
 
 /// 创建远程目录
 #[tauri::command]
 pub async fn files_mkdir(server_id: String, path: String) -> Result<CommandResult, String> {
-    if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(&server_id).await {
-        return match crate::ftp::ftp_mkdir(ftp_cfg, &path).await {
-            Ok(()) => Ok(CommandResult::ok("Directory created")),
-            Err(e) => Ok(CommandResult::err(e)),
-        };
-    }
-    let target_type = load_target_type(&server_id).await;
-    let result = if target_type.eq_ignore_ascii_case("windows") {
-        let win_path = crate::targets::windows::validators::posix_to_windows_path(&path);
-        crate::targets::windows::files::files_mkdir(server_id, win_path).await
-    } else {
-        crate::targets::linux::files::files_mkdir(server_id, path).await
-    };
-    match result {
-        Ok(msg) => Ok(CommandResult::ok(msg)),
-        Err(e) => Ok(CommandResult::err(e)),
-    }
+    let fs = crate::files::remote_fs::resolve_backend(&server_id).await?;
+    fs.mkdir(&path).await
 }
 
 /// 删除远程文件或目录
 #[tauri::command]
 pub async fn files_delete(server_id: String, path: String) -> Result<CommandResult, String> {
-    if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(&server_id).await {
-        return match crate::ftp::ftp_delete(ftp_cfg, &path).await {
-            Ok(()) => Ok(CommandResult::ok("Deleted")),
-            Err(e) => Ok(CommandResult::err(e)),
-        };
-    }
-    let target_type = load_target_type(&server_id).await;
-    let result = if target_type.eq_ignore_ascii_case("windows") {
-        let win_path = crate::targets::windows::validators::posix_to_windows_path(&path);
-        crate::targets::windows::files::files_delete(server_id, win_path).await
-    } else {
-        crate::targets::linux::files::files_delete(server_id, path).await
+    let server_label = resolve_server_audit_label(&server_id).await;
+    let fs = match crate::files::remote_fs::resolve_backend(&server_id).await {
+        Ok(fs) => fs,
+        Err(e) => {
+            record_transfer_audit(
+                Some(server_label),
+                "删除文件",
+                "failed",
+                Some(format!("path={}, error={}", path, e)),
+            )
+            .await;
+            return Err(e);
+        }
     };
-    match result {
-        Ok(msg) => Ok(CommandResult::ok(msg)),
-        Err(e) => Ok(CommandResult::err(e)),
+    let res = fs.delete(&path).await;
+    match &res {
+        Ok(cmd) if cmd.exit_code == 0 => {
+            record_transfer_audit(
+                Some(server_label),
+                "删除文件",
+                "success",
+                Some(format!("path={}", path)),
+            )
+            .await;
+        }
+        Ok(cmd) => {
+            record_transfer_audit(
+                Some(server_label),
+                "删除文件",
+                "failed",
+                Some(format!("path={}, error={}", path, cmd.stderr)),
+            )
+            .await;
+        }
+        Err(e) => {
+            record_transfer_audit(
+                Some(server_label),
+                "删除文件",
+                "failed",
+                Some(format!("path={}, error={}", path, e)),
+            )
+            .await;
+        }
     }
+    res
 }
 
 /// 重命名/移动远程文件
@@ -1047,24 +1188,51 @@ pub async fn files_rename(
     old_path: String,
     new_path: String,
 ) -> Result<CommandResult, String> {
-    if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(&server_id).await {
-        return match crate::ftp::ftp_rename(ftp_cfg, &old_path, &new_path).await {
-            Ok(()) => Ok(CommandResult::ok("Renamed")),
-            Err(e) => Ok(CommandResult::err(e)),
-        };
-    }
-    let target_type = load_target_type(&server_id).await;
-    let result = if target_type.eq_ignore_ascii_case("windows") {
-        let win_old = crate::targets::windows::validators::posix_to_windows_path(&old_path);
-        let win_new = crate::targets::windows::validators::posix_to_windows_path(&new_path);
-        crate::targets::windows::files::files_rename(server_id, win_old, win_new).await
-    } else {
-        crate::targets::linux::files::files_rename(server_id, old_path, new_path).await
+    let server_label = resolve_server_audit_label(&server_id).await;
+    let fs = match crate::files::remote_fs::resolve_backend(&server_id).await {
+        Ok(fs) => fs,
+        Err(e) => {
+            record_transfer_audit(
+                Some(server_label),
+                "重命名/移动文件",
+                "failed",
+                Some(format!("{} -> {}, error={}", old_path, new_path, e)),
+            )
+            .await;
+            return Err(e);
+        }
     };
-    match result {
-        Ok(msg) => Ok(CommandResult::ok(msg)),
-        Err(e) => Ok(CommandResult::err(e)),
+    let res = fs.rename(&old_path, &new_path).await;
+    match &res {
+        Ok(cmd) if cmd.exit_code == 0 => {
+            record_transfer_audit(
+                Some(server_label),
+                "重命名/移动文件",
+                "success",
+                Some(format!("{} -> {}", old_path, new_path)),
+            )
+            .await;
+        }
+        Ok(cmd) => {
+            record_transfer_audit(
+                Some(server_label),
+                "重命名/移动文件",
+                "failed",
+                Some(format!("{} -> {}, error={}", old_path, new_path, cmd.stderr)),
+            )
+            .await;
+        }
+        Err(e) => {
+            record_transfer_audit(
+                Some(server_label),
+                "重命名/移动文件",
+                "failed",
+                Some(format!("{} -> {}, error={}", old_path, new_path, e)),
+            )
+            .await;
+        }
     }
+    res
 }
 
 /// 获取远程文件权限
@@ -1073,8 +1241,21 @@ pub async fn files_get_permissions(
     server_id: String,
     path: String,
 ) -> Result<CommandResult, String> {
-    if crate::ftp::is_ftp_backed_server(&server_id).await {
-        return Ok(CommandResult::ok("755"));
+    match crate::files::remote_fs::resolve_backend(&server_id).await? {
+        crate::files::remote_fs::ResolvedRemoteFs::Ftp { .. } => return Ok(CommandResult::ok("755")),
+        crate::files::remote_fs::ResolvedRemoteFs::Scp { .. } => {
+            let scp_target_type = load_target_type(&server_id).await;
+            let validation =
+                crate::validators::validate_path_for_target(path.clone(), false, &scp_target_type);
+            if !validation.valid {
+                return Ok(CommandResult::err(validation.error.unwrap_or_else(|| "Invalid path".into())));
+            }
+            return match crate::files::scp::scp_get_permissions(&server_id, &path).await {
+                Ok(msg) => Ok(CommandResult::ok(msg)),
+                Err(e) => Ok(CommandResult::err(e)),
+            };
+        }
+        crate::files::remote_fs::ResolvedRemoteFs::Sftp { .. } => {}
     }
     let target_type = load_target_type(&server_id).await;
     let result = if target_type.eq_ignore_ascii_case("windows") {
@@ -1097,51 +1278,15 @@ pub async fn files_set_permissions(
     mode: String,
     recursive: Option<bool>,
 ) -> Result<CommandResult, String> {
-    if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(&server_id).await {
-        return match crate::ftp::ftp_set_permissions(ftp_cfg, &path, &mode).await {
-            Ok(msg) => Ok(CommandResult::ok(msg)),
-            Err(e) => Ok(CommandResult::err(e)),
-        };
-    }
-    let recursive = recursive.unwrap_or(false);
-    let target_type = load_target_type(&server_id).await;
-    let result = if target_type.eq_ignore_ascii_case("windows") {
-        let win_path = crate::targets::windows::validators::posix_to_windows_path(&path);
-        crate::targets::windows::files::files_set_permissions(server_id, win_path, mode, recursive).await
-    } else {
-        crate::targets::linux::files::files_set_permissions(server_id, path, mode, recursive).await
-    };
-    match result {
-        Ok(msg) => Ok(CommandResult::ok(msg)),
-        Err(e) => Ok(CommandResult::err(e)),
-    }
+    let fs = crate::files::remote_fs::resolve_backend(&server_id).await?;
+    fs.set_permissions(&path, &mode, recursive.unwrap_or(false)).await
 }
 
 /// 备份远程文件（创建 .bak 副本）
 #[tauri::command]
 pub async fn files_backup(server_id: String, path: String) -> Result<CommandResult, String> {
-    if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(&server_id).await {
-        let bytes = match crate::ftp::ftp_read_bytes(ftp_cfg.clone(), &path, 20 * 1024 * 1024).await {
-            Ok(b) => b,
-            Err(e) => return Ok(CommandResult::err(e)),
-        };
-        let bak_path = format!("{}.bak", path);
-        return match crate::ftp::ftp_write_bytes(ftp_cfg, &bak_path, &bytes).await {
-            Ok(()) => Ok(CommandResult::ok(format!("Backed up to {}", bak_path))),
-            Err(e) => Ok(CommandResult::err(e)),
-        };
-    }
-    let target_type = load_target_type(&server_id).await;
-    let result = if target_type.eq_ignore_ascii_case("windows") {
-        let win_path = crate::targets::windows::validators::posix_to_windows_path(&path);
-        crate::targets::windows::files::files_backup(server_id, win_path).await
-    } else {
-        crate::targets::linux::files::files_backup(server_id, path).await
-    };
-    match result {
-        Ok(msg) => Ok(CommandResult::ok(msg)),
-        Err(e) => Ok(CommandResult::err(e)),
-    }
+    let fs = crate::files::remote_fs::resolve_backend(&server_id).await?;
+    fs.backup(&path).await
 }
 
 /// 修改文件属主/属组 (chown)
@@ -1173,6 +1318,23 @@ pub async fn files_create_symlink(
     target: String,
     link_path: String,
 ) -> Result<CommandResult, String> {
+    match crate::files::remote_fs::resolve_backend(&server_id).await? {
+        crate::files::remote_fs::ResolvedRemoteFs::Ftp { .. } => {
+            return Ok(CommandResult::err("FTP/FTPS does not support symbolic links"));
+        }
+        crate::files::remote_fs::ResolvedRemoteFs::Scp { .. } => {
+            let scp_target_type = load_target_type(&server_id).await;
+            // link_path 是实际写入点，必须与 SFTP 分支同样拒绝穿越与非法字符；
+            // target 允许相对路径（ln -s 标准用法），且 scp 模块已用 escape_shell_arg 防注入。
+            let link_validation =
+                crate::validators::validate_path_for_target(link_path.clone(), false, &scp_target_type);
+            if !link_validation.valid {
+                return Ok(CommandResult::err(link_validation.error.unwrap_or_else(|| "Invalid link path".into())));
+            }
+            return crate::files::scp::scp_create_symlink(&server_id, &target, &link_path).await;
+        }
+        crate::files::remote_fs::ResolvedRemoteFs::Sftp { .. } => {}
+    }
     let target_type = load_target_type(&server_id).await;
     let result = if target_type.eq_ignore_ascii_case("windows") {
         let win_target = crate::targets::windows::validators::posix_to_windows_path(&target);
@@ -1191,16 +1353,8 @@ pub async fn files_create_symlink(
 /// 返回 JSON 字符串
 #[tauri::command]
 pub async fn files_stat_info(server_id: String, path: String) -> Result<String, String> {
-    if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(&server_id).await {
-        return crate::ftp::ftp_stat_info(ftp_cfg, &path).await;
-    }
-    let target_type = load_target_type(&server_id).await;
-    if target_type.eq_ignore_ascii_case("windows") {
-        let win_path = crate::targets::windows::validators::posix_to_windows_path(&path);
-        crate::targets::windows::files::files_stat_info(server_id, win_path).await
-    } else {
-        crate::targets::linux::files::files_stat_info(server_id, path).await
-    }
+    let fs = crate::files::remote_fs::resolve_backend(&server_id).await?;
+    fs.stat_info(&path).await
 }
 
 // ============================================================
@@ -1210,19 +1364,25 @@ pub async fn files_stat_info(server_id: String, path: String) -> Result<String, 
 /// 获取系统根目录（用于本地文件选择器）
 #[tauri::command]
 pub async fn files_get_system_roots() -> Result<Vec<String>, String> {
-    files::local::get_system_roots()
+    tokio::task::spawn_blocking(files::local::get_system_roots)
+        .await
+        .map_err(|e| format!("Failed to get system roots: {}", e))?
 }
 
 /// 获取快捷访问目录（桌面、下载、文档等）
 #[tauri::command]
 pub async fn files_get_quick_access() -> Result<String, String> {
-    files::local::get_quick_access()
+    tokio::task::spawn_blocking(files::local::get_quick_access)
+        .await
+        .map_err(|e| format!("Failed to get quick access: {}", e))?
 }
 
 /// 列出本地目录内容
 #[tauri::command]
 pub async fn files_list_local_directory(path: String) -> Result<String, String> {
-    files::local::list_local_directory(path)
+    tokio::task::spawn_blocking(move || files::local::list_local_directory(path))
+        .await
+        .map_err(|e| format!("Failed to list local directory: {}", e))?
 }
 
 /// 目录树扫描条目（用于目录差异比对与一键同步向导）
@@ -1256,10 +1416,15 @@ fn scan_local_tree_inner(
         return Err(format!("Local path does not exist: {}", base_path));
     }
     let norm_base = base_path.trim_end_matches(['/', '\\']).replace('\\', "/");
+    let mut visited_dirs = std::collections::HashSet::new();
+    if let Ok(canon) = std::fs::canonicalize(root) {
+        visited_dirs.insert(canon);
+    }
+    let symlink_policy = SYMLINK_POLICY.load(Ordering::Relaxed);
     let mut queue = std::collections::VecDeque::new();
-    queue.push_back((root.to_path_buf(), 0u32));
+    queue.push_back((root.to_path_buf(), 0u32, Vec::<String>::new(), String::new()));
 
-    while let Some((dir_path, depth)) = queue.pop_front() {
+    while let Some((dir_path, depth, extra_rules, rel_prefix)) = queue.pop_front() {
         let _ = app.emit("files:scan-tree-progress", SyncScanTreeProgress {
             server_id: None,
             current_path: dir_path.to_string_lossy().to_string(),
@@ -1274,24 +1439,46 @@ fn scan_local_tree_inner(
                 max_depth, max_files
             ));
         }
+        let dir_rules = crate::validators::parse_gitignore_in_dir_scoped(&dir_path, &rel_prefix);
+        let mut current_rules = extra_rules;
+        if !dir_rules.is_empty() {
+            current_rules.extend(dir_rules);
+        }
         let read_dir = match std::fs::read_dir(&dir_path) {
             Ok(rd) => rd,
-            Err(_) => continue,
+            Err(err) => {
+                if depth == 0 {
+                    return Err(format!("Failed to list directory '{}': {}", base_path, err));
+                }
+                continue;
+            }
         };
         for entry in read_dir.flatten() {
             let file_name = entry.file_name().to_string_lossy().to_string();
-            if file_name == "." || file_name == ".." || crate::validators::is_ignored(&file_name) {
+            if file_name == "." || file_name == ".." {
                 continue;
             }
             let path_buf = entry.path();
+            // 先检查 entry.file_type()（不跟随符号链接），避免 .metadata() 在悬空软链或 skip 策略下误跟随/报错
+            let ft = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+            if ft.is_symlink() && symlink_policy == 0 {
+                continue;
+            }
             let meta = match entry.metadata() {
                 Ok(m) => m,
                 Err(_) => continue,
             };
-            if meta.file_type().is_symlink() {
-                continue;
-            }
             let is_dir = meta.is_dir();
+            if is_dir {
+                if let Ok(canon) = std::fs::canonicalize(&path_buf) {
+                    if !visited_dirs.insert(canon) {
+                        continue;
+                    }
+                }
+            }
             let full_str = path_buf.to_string_lossy().replace('\\', "/");
             let rel = if full_str.starts_with(&norm_base) {
                 full_str[norm_base.len()..].trim_start_matches('/').to_string()
@@ -1301,6 +1488,37 @@ fn scan_local_tree_inner(
             if rel.is_empty() {
                 continue;
             }
+            let mtime_ms = local_mtime_ms(&meta);
+            let size_u64 = if is_dir { None } else { Some(meta.len()) };
+
+            if is_dir {
+                if crate::validators::is_ignored_entry(&file_name, &rel, true, &current_rules) {
+                    continue;
+                }
+                if depth + 1 <= max_depth && results.len() < max_files {
+                    queue.push_back((path_buf, depth + 1, current_rules.clone(), rel.clone()));
+                }
+                if !crate::validators::should_transfer_entry(
+                    &file_name,
+                    &rel,
+                    true,
+                    None,
+                    mtime_ms,
+                    &current_rules,
+                ) {
+                    continue;
+                }
+            } else if !crate::validators::should_transfer_entry(
+                &file_name,
+                &rel,
+                false,
+                size_u64,
+                mtime_ms,
+                &current_rules,
+            ) {
+                continue;
+            }
+
             let size = if is_dir { 0 } else { meta.len() as i64 };
             let modified = meta.modified().ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
@@ -1321,14 +1539,72 @@ fn scan_local_tree_inner(
                 size,
                 modified_time: modified_str,
             });
-
-            if is_dir && depth + 1 <= max_depth && results.len() < max_files {
-                queue.push_back((path_buf, depth + 1));
-            }
         }
     }
 
     Ok(results)
+}
+
+async fn resolve_remote_canonical_dir(
+    resolved_fs: &crate::files::remote_fs::ResolvedRemoteFs,
+    server_id: &str,
+    dir_path: &str,
+) -> String {
+    match resolved_fs {
+        crate::files::remote_fs::ResolvedRemoteFs::Sftp { target_type, .. } => {
+            let sftp_path = if target_type.eq_ignore_ascii_case("windows") {
+                crate::targets::windows::path_resolver::PathResolver::to_sftp(dir_path)
+            } else {
+                dir_path.to_string()
+            };
+            crate::ssh::manager::sftp_canonicalize(server_id, &sftp_path)
+                .await
+                .unwrap_or_else(|_| dir_path.trim_end_matches('/').replace('\\', "/"))
+        }
+        crate::files::remote_fs::ResolvedRemoteFs::Scp { .. } => {
+            let escaped = crate::validators::escape_shell_arg(dir_path.to_string());
+            let cmd = format!("realpath -- {0} 2>/dev/null || readlink -f -- {0} 2>/dev/null", escaped);
+            let res = ssh_execute_command(server_id, &cmd).await;
+            let trimmed = res.stdout.trim();
+            if res.exit_code == 0 && !trimmed.is_empty() {
+                trimmed.to_string()
+            } else {
+                dir_path.trim_end_matches('/').replace('\\', "/")
+            }
+        }
+        crate::files::remote_fs::ResolvedRemoteFs::Ftp { .. } => {
+            // FTP 的 PWD 规范化需要独立连接（ftp_list_dir_with_canonical 内部已用于自身递归），
+            // 此处仅做字符串规范化。FTP 服务端软链接行为各异且 files_create_symlink 在 FTP 上
+            // 本来就不支持，循环环检测对 FTP 为尽力而为；S2S/同步向导已对 FTP 能力做降级说明。
+            dir_path.trim_end_matches('/').replace('\\', "/")
+        }
+    }
+}
+
+async fn resolve_remote_symlink_target(
+    resolved_fs: &crate::files::remote_fs::ResolvedRemoteFs,
+    server_id: &str,
+    path: &str,
+) -> Option<(bool, i64)> {
+    match resolved_fs {
+        crate::files::remote_fs::ResolvedRemoteFs::Sftp { target_type, .. } => {
+            let sftp_path = if target_type.eq_ignore_ascii_case("windows") {
+                crate::targets::windows::path_resolver::PathResolver::to_sftp(path)
+            } else {
+                path.to_string()
+            };
+            let meta = crate::ssh::manager::sftp_stat(server_id, &sftp_path).await.ok()?;
+            Some((meta.is_dir(), meta.len().min(i64::MAX as u64) as i64))
+        }
+        crate::files::remote_fs::ResolvedRemoteFs::Scp { .. } => {
+            let (is_dir, sz) = crate::files::scp::scp_stat_basic(server_id, path).await.ok()?;
+            Some((is_dir, sz.min(i64::MAX as u64) as i64))
+        }
+        crate::files::remote_fs::ResolvedRemoteFs::Ftp { cfg, .. } => {
+            let (is_dir, sz) = crate::ftp::ftp_stat_basic(cfg, path).await.ok()?;
+            Some((is_dir, sz.min(i64::MAX as u64) as i64))
+        }
+    }
 }
 
 async fn scan_remote_tree_inner(
@@ -1340,13 +1616,15 @@ async fn scan_remote_tree_inner(
 ) -> Result<Vec<SyncFileItem>, String> {
     let mut results = Vec::new();
     let norm_base = base_path.trim_end_matches(['/', '\\']).replace('\\', "/");
-    let target_type = load_target_type(server_id).await;
-    let is_ftp = crate::ftp::resolve_ftp_config_for_server(server_id).await.ok().flatten();
+    let resolved_fs = crate::files::remote_fs::resolve_backend(server_id).await?;
+    let symlink_policy = SYMLINK_POLICY.load(Ordering::Relaxed);
+    let mut visited_dirs = std::collections::HashSet::new();
+    visited_dirs.insert(resolve_remote_canonical_dir(&resolved_fs, server_id, base_path).await);
 
     let mut queue = std::collections::VecDeque::new();
-    queue.push_back((base_path.to_string(), 0u32));
+    queue.push_back((base_path.to_string(), 0u32, Vec::<String>::new(), String::new()));
 
-    while let Some((dir_path, depth)) = queue.pop_front() {
+    while let Some((dir_path, depth, extra_rules, rel_prefix)) = queue.pop_front() {
         let _ = app.emit("files:scan-tree-progress", SyncScanTreeProgress {
             server_id: Some(server_id.to_string()),
             current_path: dir_path.clone(),
@@ -1362,30 +1640,40 @@ async fn scan_remote_tree_inner(
             ));
         }
 
-        let entries = if let Some(ref ftp_cfg) = is_ftp {
-            match crate::ftp::ftp_list_dir(ftp_cfg.clone(), &dir_path).await {
-                Ok(e) => e,
-                Err(_) => continue,
-            }
-        } else {
-            match crate::files::remote::files_list_with_target(
-                server_id.to_string(),
-                dir_path.clone(),
-                &target_type,
-            )
-            .await
-            {
-                Ok(e) => e,
-                Err(_) => continue,
+        let entries = match resolved_fs.list_dir(&dir_path).await {
+            Ok(e) => e,
+            Err(err) => {
+                if depth == 0 {
+                    return Err(format!("Failed to list directory '{}': {}", dir_path, err));
+                }
+                continue;
             }
         };
 
-        for entry in entries {
-            if entry.name == "." || entry.name == ".." || crate::validators::is_ignored(&entry.name) {
+        let dir_rules = read_remote_gitignore_rules_from_fs(&resolved_fs, &entries, &rel_prefix).await;
+        let mut current_rules = extra_rules;
+        if !dir_rules.is_empty() {
+            current_rules.extend(dir_rules);
+        }
+
+        for mut entry in entries {
+            if entry.name == "." || entry.name == ".." {
                 continue;
             }
-            if entry.is_symlink && SYMLINK_POLICY.load(Ordering::Relaxed) == 0 {
-                continue;
+            if entry.is_symlink {
+                if symlink_policy == 0 {
+                    continue;
+                }
+                if let Some((is_dir, sz)) =
+                    resolve_remote_symlink_target(&resolved_fs, server_id, &entry.path).await
+                {
+                    entry.is_directory = is_dir;
+                    if !is_dir && sz > 0 {
+                        entry.size = sz;
+                    }
+                } else {
+                    continue;
+                }
             }
             let full_str = entry.path.trim_end_matches(['/', '\\']).replace('\\', "/");
             let rel = if full_str.starts_with(&norm_base) {
@@ -1396,6 +1684,44 @@ async fn scan_remote_tree_inner(
             if rel.is_empty() {
                 continue;
             }
+            let mtime_ms = parse_modified_time_ms(&entry.modified_time);
+            let size_u64 = if entry.is_directory {
+                None
+            } else {
+                Some(entry.size.max(0) as u64)
+            };
+
+            if entry.is_directory {
+                if crate::validators::is_ignored_entry(&entry.name, &rel, true, &current_rules) {
+                    continue;
+                }
+                let canon_sub = resolve_remote_canonical_dir(&resolved_fs, server_id, &entry.path).await;
+                if !visited_dirs.insert(canon_sub) {
+                    continue;
+                }
+                if depth + 1 <= max_depth && results.len() < max_files {
+                    queue.push_back((entry.path, depth + 1, current_rules.clone(), rel.clone()));
+                }
+                if !crate::validators::should_transfer_entry(
+                    &entry.name,
+                    &rel,
+                    true,
+                    None,
+                    mtime_ms,
+                    &current_rules,
+                ) {
+                    continue;
+                }
+            } else if !crate::validators::should_transfer_entry(
+                &entry.name,
+                &rel,
+                false,
+                size_u64,
+                mtime_ms,
+                &current_rules,
+            ) {
+                continue;
+            }
 
             results.push(SyncFileItem {
                 relative_path: rel,
@@ -1404,10 +1730,6 @@ async fn scan_remote_tree_inner(
                 size: entry.size,
                 modified_time: entry.modified_time,
             });
-
-            if entry.is_directory && depth + 1 <= max_depth && results.len() < max_files {
-                queue.push_back((entry.path, depth + 1));
-            }
         }
     }
 
@@ -1457,23 +1779,61 @@ pub async fn files_extract_archive(app: AppHandle, server_id: Option<String>, pa
             return Ok(OperationResult::fail(validation.error.unwrap_or_else(|| "Invalid archive path".to_string())));
         }
 
-        // 读取文件头，确保扩展名与实际格式一致。
-        let conn = crate::ssh::manager::SshManager::global().get_connection(&server_id).map_err(|e| e.to_string())?;
-        let sftp = conn.create_sftp_session().await.map_err(|e| format!("SFTP session failed: {}", e))?;
-        let mut file = sftp.open(&path.replace('\\', "/")).await.map_err(|e| format!("Cannot open archive: {}", e))?;
-        let mut header = vec![0u8; 512];
-        let read = file.read(&mut header).await.map_err(|e| format!("Cannot read archive header: {}", e))?;
-        let _ = file.shutdown().await;
-        header.truncate(read);
-        if !archive_magic_matches(kind, &header) {
-            return Ok(OperationResult::fail("Archive extension does not match the actual file format"));
-        }
+        let resolved_fs = crate::files::remote_fs::resolve_backend(&server_id).await?;
+        let is_scp = match resolved_fs {
+            crate::files::remote_fs::ResolvedRemoteFs::Ftp { .. } => {
+                return Ok(OperationResult::fail("Archive extraction is not supported over FTP/FTPS"));
+            }
+            crate::files::remote_fs::ResolvedRemoteFs::Scp { .. } => true,
+            crate::files::remote_fs::ResolvedRemoteFs::Sftp { .. } => false,
+        };
 
+        // 读取文件头，确保扩展名与实际格式一致。
+        let normalized_archive = path.replace('\\', "/");
+        let sftp_opt: Option<Arc<russh_sftp::client::SftpSession>> = if is_scp {
+            let header = crate::files::scp::scp_read_prefix_bytes(&server_id, &normalized_archive, 512)
+                .await
+                .map_err(|e| format!("Cannot read archive header: {}", e))?;
+            if !archive_magic_matches(kind, &header) {
+                return Ok(OperationResult::fail("Archive extension does not match the actual file format"));
+            }
+            None
+        } else {
+            let conn = crate::ssh::manager::SshManager::global().get_connection(&server_id).map_err(|e| e.to_string())?;
+            let sftp = conn.create_sftp_session().await.map_err(|e| format!("SFTP session failed: {}", e))?;
+            let mut file = sftp.open(&normalized_archive).await.map_err(|e| format!("Cannot open archive: {}", e))?;
+            let mut header = vec![0u8; 512];
+            let read = file.read(&mut header).await.map_err(|e| format!("Cannot read archive header: {}", e))?;
+            let _ = file.shutdown().await;
+            header.truncate(read);
+            if !archive_magic_matches(kind, &header) {
+                return Ok(OperationResult::fail("Archive extension does not match the actual file format"));
+            }
+            Some(sftp)
+        };
+
+        let is_windows = target_type.eq_ignore_ascii_case("windows");
         let mut destination = base_destination.clone();
         let exists = |candidate: &str| {
-            let session = sftp.clone();
+            let session_opt = sftp_opt.clone();
+            let srv = server_id.clone();
+            let raw_candidate = candidate.to_string();
             let normalized = candidate.replace('\\', "/");
-            async move { session.metadata(&normalized).await.is_ok() }
+            async move {
+                if let Some(session) = session_opt {
+                    session.metadata(&normalized).await.is_ok()
+                } else if is_windows {
+                    let win_cand = crate::targets::windows::validators::posix_to_windows_path(&raw_candidate);
+                    let ps_script = format!(
+                        "if (Test-Path -LiteralPath '{}') {{ exit 0 }} else {{ exit 1 }}",
+                        win_cand.replace('\'', "''")
+                    );
+                    ssh_execute_command(&srv, &crate::validators::build_powershell_command(&ps_script)).await.exit_code == 0
+                } else {
+                    let cmd = format!("test -e -- {}", crate::validators::escape_shell_arg(normalized));
+                    ssh_execute_command(&srv, &cmd).await.exit_code == 0
+                }
+            }
         };
         if exists(&destination).await {
             match conflict_action.as_deref() {
@@ -1498,7 +1858,6 @@ pub async fn files_extract_archive(app: AppHandle, server_id: Option<String>, pa
             }
         }
 
-        let is_windows = target_type.eq_ignore_ascii_case("windows");
         // 远程 Windows 上定位 7z：优先 PATH，其次官方默认安装目录（7-Zip 安装器默认不写 PATH）。
         // 定位结果存入 $tool，供后续列表/解压脚本复用（& $tool ...）。
         let win_7z_locator = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$tool=$null;$cmd=Get-Command 7z -ErrorAction SilentlyContinue;if($cmd){$tool=$cmd.Source}else{$cand=Join-Path $env:ProgramFiles '7-Zip\\7z.exe';if(Test-Path $cand){$tool=$cand}};if(-not $tool){throw '7-Zip is required for this archive format'}";
@@ -1692,7 +2051,11 @@ pub async fn files_extract_archive(app: AppHandle, server_id: Option<String>, pa
             #[cfg(target_os = "windows")]
             if !is_container {
                 let parent = StdPath::new(&destination_for_task).parent().unwrap_or_else(|| StdPath::new(".")).to_path_buf();
-                let tmp_dir = parent.join(format!(".__sw_ext_tmp_{}", std::process::id()));
+                let tmp_dir = parent.join(format!(
+                    ".__sw_ext_tmp_{}_{}",
+                    std::process::id(),
+                    uuid::Uuid::new_v4().simple()
+                ));
                 std::fs::create_dir_all(&tmp_dir).map_err(|e| format!("Cannot create temp directory: {}", e))?;
                 let result = (|| -> Result<std::process::Output, String> {
                     let mut command = local_extract_command(kind, &path_for_task, tmp_dir.to_string_lossy().as_ref());
@@ -1902,32 +2265,101 @@ pub struct LocalUploadStats {
 }
 
 fn calculate_local_upload_stats(paths: &[String]) -> LocalUploadStats {
-    fn scan(path: &StdPath, stats: &mut LocalUploadStats, extra_rules: &[String]) {
+    fn scan(
+        path: &StdPath,
+        rel_path: &str,
+        is_root: bool,
+        stats: &mut LocalUploadStats,
+        extra_rules: &[String],
+        symlink_policy: u8,
+        visited_dirs: &mut std::collections::HashSet<std::path::PathBuf>,
+        depth: u32,
+    ) {
+        if depth > MAX_RECURSION_DEPTH {
+            return;
+        }
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if crate::validators::is_ignored_with_extra(name, extra_rules) { return; }
-        let metadata = match std::fs::symlink_metadata(path) {
+        let sym_meta = match std::fs::symlink_metadata(path) {
             Ok(value) => value,
             Err(_) => return,
         };
-        if metadata.file_type().is_symlink() { return; }
+        if sym_meta.file_type().is_symlink() && symlink_policy == 0 {
+            return;
+        }
+        let metadata = if sym_meta.file_type().is_symlink() {
+            match std::fs::metadata(path) {
+                Ok(m) => m,
+                Err(_) => return,
+            }
+        } else {
+            sym_meta
+        };
+        let mtime_ms = local_mtime_ms(&metadata);
         if metadata.is_file() {
+            let eff_rel = if rel_path.is_empty() { name } else { rel_path };
+            if !crate::validators::should_transfer_entry(
+                name,
+                eff_rel,
+                false,
+                Some(metadata.len()),
+                mtime_ms,
+                extra_rules,
+            ) {
+                return;
+            }
             stats.total_files = stats.total_files.saturating_add(1);
             stats.total_bytes = stats.total_bytes.saturating_add(metadata.len());
         } else if metadata.is_dir() {
+            if !is_root && crate::validators::is_ignored_entry(name, rel_path, true, extra_rules) {
+                return;
+            }
+            if let Ok(canon) = std::fs::canonicalize(path) {
+                if !visited_dirs.insert(canon) {
+                    return;
+                }
+            }
             stats.has_directories = true;
-            let dir_rules = crate::validators::parse_gitignore_in_dir(path);
+            let dir_rules = crate::validators::parse_gitignore_in_dir_scoped(path, rel_path);
             let mut current_rules = extra_rules.to_vec();
             if !dir_rules.is_empty() {
                 current_rules.extend(dir_rules);
             }
             if let Ok(entries) = std::fs::read_dir(path) {
-                for entry in entries.flatten() { scan(&entry.path(), stats, &current_rules); }
+                for entry in entries.flatten() {
+                    let child_path = entry.path();
+                    let child_name = entry.file_name().to_string_lossy().to_string();
+                    let child_rel = if rel_path.is_empty() {
+                        child_name
+                    } else {
+                        format!("{}/{}", rel_path, child_name)
+                    };
+                    scan(
+                        &child_path,
+                        &child_rel,
+                        false,
+                        stats,
+                        &current_rules,
+                        symlink_policy,
+                        visited_dirs,
+                        depth + 1,
+                    );
+                }
             }
         }
     }
 
+    let symlink_policy = SYMLINK_POLICY.load(Ordering::Relaxed);
+    let mut visited_dirs = std::collections::HashSet::new();
     let mut stats = LocalUploadStats { total_files: 0, total_bytes: 0, has_directories: false };
-    for path in paths { scan(StdPath::new(path), &mut stats, &[]); }
+    for path in paths {
+        let p = StdPath::new(path);
+        let root_rel = if p.is_dir() {
+            ""
+        } else {
+            p.file_name().and_then(|n| n.to_str()).unwrap_or("")
+        };
+        scan(p, root_rel, true, &mut stats, &[], symlink_policy, &mut visited_dirs, 0);
+    }
     stats
 }
 
@@ -2102,34 +2534,59 @@ async fn get_remote_available_space(server_id: &str, remote_dir: &str) -> Option
         .map(|kb| kb.saturating_mul(1024))
 }
 
-/// 递归统计本地路径集合的总字节数（跳过符号链接，避免环路）。
+/// 递归统计本地路径集合的总字节数（遵循 SYMLINK_POLICY 并在跟随模式下做规范路径环路防护）。
 /// 在 `spawn_blocking` 中调用，供上传前的远端空间预检使用。
 fn local_paths_total_size(paths: &[String]) -> u64 {
-    fn sum_path(path: &str, depth: u32) -> u64 {
+    fn sum_path(
+        path: &str,
+        depth: u32,
+        symlink_policy: u8,
+        visited_dirs: &mut std::collections::HashSet<std::path::PathBuf>,
+    ) -> u64 {
         if depth > MAX_RECURSION_DEPTH {
             return 0;
         }
-        let meta = match std::fs::symlink_metadata(path) {
+        let sym_meta = match std::fs::symlink_metadata(path) {
             Ok(m) => m,
             Err(_) => return 0,
         };
-        if meta.file_type().is_symlink() {
+        if sym_meta.file_type().is_symlink() && symlink_policy == 0 {
             return 0;
         }
+        let meta = if sym_meta.file_type().is_symlink() {
+            match std::fs::metadata(path) {
+                Ok(m) => m,
+                Err(_) => return 0,
+            }
+        } else {
+            sym_meta
+        };
         if !meta.is_dir() {
             return meta.len();
+        }
+        if let Ok(canon) = std::fs::canonicalize(path) {
+            if !visited_dirs.insert(canon) {
+                return 0;
+            }
         }
         let mut total: u64 = 0;
         if let Ok(entries) = std::fs::read_dir(path) {
             for entry in entries.flatten() {
-                total = total.saturating_add(sum_path(&entry.path().to_string_lossy(), depth + 1));
+                total = total.saturating_add(sum_path(
+                    &entry.path().to_string_lossy(),
+                    depth + 1,
+                    symlink_policy,
+                    visited_dirs,
+                ));
             }
         }
         total
     }
+    let symlink_policy = SYMLINK_POLICY.load(Ordering::Relaxed);
+    let mut visited_dirs = std::collections::HashSet::new();
     paths
         .iter()
-        .map(|p| sum_path(p, 0))
+        .map(|p| sum_path(p, 0, symlink_policy, &mut visited_dirs))
         .fold(0u64, |acc, v| acc.saturating_add(v))
 }
 
@@ -2215,17 +2672,32 @@ pub async fn files_download(
     // 校验路径（按目标类型分发，Windows 允许盘符路径 /C:/... 或 C:\...）
     let path_validation = crate::validators::validate_path_for_target(remote_path.clone(), false, &target_type);
     if !path_validation.valid {
+        let err_msg = format!(
+            "Invalid path: {}",
+            path_validation.error.unwrap_or_default()
+        );
+        let server_label = resolve_server_audit_label(&server_id).await;
+        record_transfer_audit(
+            Some(server_label),
+            "下载文件",
+            "failed",
+            Some(format!("remote={}, error={}", remote_path, err_msg)),
+        )
+        .await;
         return Ok(FileDownloadResult {
             success: false,
-            error: Some(format!(
-                "Invalid path: {}",
-                path_validation.error.unwrap_or_default()
-            )),
+            error: Some(err_msg),
             local_path: None,
         });
     }
 
-    let ftp_cfg = crate::ftp::resolve_ftp_config_for_server(&server_id).await.ok().flatten();
+    let resolved_fs = crate::files::remote_fs::resolve_backend(&server_id).await?;
+    let supports_resume = resolved_fs.capabilities().supports_resume;
+    let is_scp = matches!(resolved_fs, crate::files::remote_fs::ResolvedRemoteFs::Scp { .. });
+    let ftp_cfg = match resolved_fs {
+        crate::files::remote_fs::ResolvedRemoteFs::Ftp { cfg, .. } => Some(cfg),
+        _ => None,
+    };
 
     let target_remote_path = if ftp_cfg.is_some() {
         remote_path.replace('\\', "/")
@@ -2244,10 +2716,24 @@ pub async fn files_download(
         .to_string();
 
     // 先做快速 stat 判断是文件还是目录，确保预检阶段就能正确下发 total_type（目录=count，单文件=bytes）
-    let (is_remote_dir, ftp_size_opt) = if let Some(ref fcfg) = ftp_cfg {
+    let (is_remote_dir, stat_size_opt) = if let Some(ref fcfg) = ftp_cfg {
         match crate::ftp::ftp_stat_basic(fcfg, &target_remote_path).await {
             Ok((is_dir, sz)) => (is_dir, if !is_dir && sz > 0 { Some(sz) } else { None }),
             Err(_) => (false, None),
+        }
+    } else if is_scp {
+        match crate::files::scp::scp_stat_basic(&server_id, &target_remote_path).await {
+            Ok((is_dir, sz)) => (is_dir, if !is_dir && sz > 0 { Some(sz) } else { None }),
+            Err(_) => {
+                if target_type.eq_ignore_ascii_case("windows") {
+                    (false, None)
+                } else {
+                    let escaped_path = crate::validators::escape_shell_arg(target_remote_path.clone());
+                    let stat_cmd = format!("test -d {} && echo \"dir\" || echo \"file\"", escaped_path);
+                    let stat_res = ssh_execute_command(&server_id, &stat_cmd).await;
+                    (stat_res.stdout.trim() == "dir", None)
+                }
+            }
         }
     } else {
         let is_dir = match crate::ssh::manager::sftp_stat(&server_id, &target_remote_path).await {
@@ -2308,12 +2794,17 @@ pub async fn files_download(
             dest
         }
     } else if is_remote_dir {
-        // 目录：选择目标文件夹
-        let folder = app
-            .dialog()
-            .file()
-            .set_title("Download to Folder")
-            .blocking_pick_folder();
+        // 目录：选择目标文件夹（放到阻塞线程池，避免阻塞 Tokio worker）
+        let app_dlg = app.clone();
+        let folder = tokio::task::spawn_blocking(move || {
+            app_dlg
+                .dialog()
+                .file()
+                .set_title("Download to Folder")
+                .blocking_pick_folder()
+        })
+        .await
+        .map_err(|e| format!("Dialog task failed: {}", e))?;
         match folder {
             Some(p) => std::path::Path::new(&p.to_string()).join(&file_name).to_string_lossy().to_string(),
             None => {
@@ -2338,13 +2829,19 @@ pub async fn files_download(
             }
         }
     } else {
-        // 文件：选择保存位置
-        let file = app
-            .dialog()
-            .file()
-            .set_title("Save File")
-            .set_file_name(&file_name)
-            .blocking_save_file();
+        // 文件：选择保存位置（放到阻塞线程池，避免阻塞 Tokio worker）
+        let app_dlg = app.clone();
+        let fname_dlg = file_name.clone();
+        let file = tokio::task::spawn_blocking(move || {
+            app_dlg
+                .dialog()
+                .file()
+                .set_title("Save File")
+                .set_file_name(&fname_dlg)
+                .blocking_save_file()
+        })
+        .await
+        .map_err(|e| format!("Dialog task failed: {}", e))?;
         match file {
             Some(p) => p.to_string(),
             None => {
@@ -2372,8 +2869,8 @@ pub async fn files_download(
 
     // 磁盘空间预检：查询远程文件/目录大小，与本地可用空间对比
     // 失败（查询不到大小、超时或磁盘空间查询失败）时跳过预检，不阻塞下载
-    let remote_size_hint = if ftp_cfg.is_some() {
-        ftp_size_opt
+    let remote_size_hint = if ftp_cfg.is_some() || is_scp {
+        stat_size_opt
     } else if is_remote_dir {
         // 目录用 du -sb（3s 超时）；超时返回 None 直接跳过，避免阻塞下载启动
         get_remote_dir_size(&server_id, &target_remote_path).await
@@ -2381,7 +2878,11 @@ pub async fn files_download(
         get_remote_size(&server_id, &target_remote_path, false).await
     };
     if let Some(remote_size) = remote_size_hint {
-        match get_local_available_space(&local_path) {
+        let lp_space = local_path.clone();
+        let space_res = tokio::task::spawn_blocking(move || get_local_available_space(&lp_space))
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()));
+        match space_res {
             Ok(available) => {
                 // 5% 安全余量：文件系统元数据、簇对齐等开销
                 let needed = remote_size + remote_size / 20;
@@ -2403,6 +2904,14 @@ pub async fn files_download(
                         error: Some(msg.clone()),
                     });
                     unregister_transfer(&transfer_id);
+                    let server_label = resolve_server_audit_label(&server_id).await;
+                    record_transfer_audit(
+                        Some(server_label),
+                        "下载文件",
+                        "failed",
+                        Some(format!("remote={}, local={}, error={}", remote_path, local_path, msg)),
+                    )
+                    .await;
                     return Ok(FileDownloadResult {
                         success: false,
                         error: Some(msg),
@@ -2462,22 +2971,27 @@ pub async fn files_download(
         // 递归下载目录
         let local_base = local_path.clone();
         if let Some(ref fcfg) = ftp_cfg {
-            let send_clone = send.clone();
-            let on_file_done: Arc<dyn Fn(u64, u64, &str) + Send + Sync> =
-                Arc::new(move |done, total, name| {
-                    send_clone(done, total, name, "count", None);
-                });
             let completed = Arc::new(AtomicU64::new(0));
-            crate::ftp::ftp_download_dir_recursive(
+            match crate::ftp::ftp_download_dir_recursive(
                 fcfg,
                 &target_remote_path,
                 &local_base,
-                &on_file_done,
+                &send,
                 &completed,
+                skip_existing.unwrap_or(false),
                 cancel_ref,
-                0,
             )
             .await
+            {
+                Ok(summary) => {
+                    send_transfer_failures(&app, &transfer_id, "download", &server_id, &summary);
+                    match summary.fatal {
+                        Some(fatal) => Err(fatal),
+                        None => Ok(()),
+                    }
+                }
+                Err(e) => Err(e),
+            }
         } else {
             match download_dir_recursive(
                 &app,
@@ -2505,8 +3019,7 @@ pub async fn files_download(
             }
         }
     } else {
-        // 单文件下载：生成临时文件路径，发送携带 tmp_path 的初始事件（前端用于断点续传）
-        // 统一使用 .sw-dl-tmp-{uuid} 命名，满足 validators.rs 格式校验并支持断点续传
+        // 单文件下载：生成临时文件路径，仅在支持断点续传的后端（SFTP）下发 tmp_path
         let tmp_local_path = format!("{}.sw-dl-tmp-{}", local_path, uuid::Uuid::new_v4());
         send_progress(
             &app,
@@ -2519,7 +3032,7 @@ pub async fn files_download(
                 done: None,
                 phase: None,
                 total_type: Some("bytes".to_string()),
-                tmp_path: Some(tmp_local_path.clone()),
+                tmp_path: if supports_resume { Some(tmp_local_path.clone()) } else { None },
                 error: None,
             },
         );
@@ -2546,11 +3059,19 @@ pub async fn files_download(
     // 无论成功/失败/取消都注销，避免内存泄漏和过期取消
     unregister_transfer(&transfer_id);
 
+    let server_label = resolve_server_audit_label(&server_id).await;
     match result {
         Ok(()) => {
             // current/total 设为 0 表示不更新进度值，只标记完成
             let finish_total_type = if is_remote_dir { "count" } else { "bytes" };
             send(0, 0, &file_name, finish_total_type, Some(true));
+            record_transfer_audit(
+                Some(server_label),
+                "下载文件",
+                "success",
+                Some(format!("remote={} -> local={}", remote_path, local_path)),
+            )
+            .await;
             Ok(FileDownloadResult {
                 success: true,
                 error: None,
@@ -2576,6 +3097,13 @@ pub async fn files_download(
                     error: Some(e.clone()),
                 },
             );
+            record_transfer_audit(
+                Some(server_label),
+                "下载文件",
+                "failed",
+                Some(format!("remote={}, local={}, error={}", remote_path, local_path, e)),
+            )
+            .await;
             Ok(FileDownloadResult {
                 success: false,
                 error: Some(e),
@@ -2875,24 +3403,29 @@ async fn upload_file_with_auto_retry(
                     return Err(format!("SFTP session failed: {}", e));
                 }
             };
-            let tmp_size = session
-                .metadata(&sftp_tmp_posix)
-                .await
-                .ok()
-                .map(|m| m.len())
-                .unwrap_or(0);
-            // 零推进预算在重试轮开始时判定（远端 tmp 大小此刻才可查）
-            if !budget.register_offset(tmp_size) {
-                if !keep_tmp_on_final_failure {
-                    cleanup_remote_tmp(Some(&session)).await;
+            let mut tmp_size_opt = None;
+            if retry_no > 0 {
+                let tmp_size = session
+                    .metadata(&sftp_tmp_posix)
+                    .await
+                    .ok()
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                // 零推进预算在重试轮开始时判定（远端 tmp 大小此刻才可查）
+                if !budget.register_offset(tmp_size) {
+                    if !keep_tmp_on_final_failure {
+                        cleanup_remote_tmp(Some(&session)).await;
+                    }
+                    return Err("SFTP upload failed after repeated retries".to_string());
                 }
-                return Err("SFTP upload failed after repeated retries".to_string());
+                resume_offset = if tmp_size > 0 { Some(tmp_size) } else { None };
+                tmp_size_opt = Some(tmp_size);
+                eprintln!(
+                    "[Transfer] upload retry from {} bytes (server tmp)",
+                    tmp_size
+                );
             }
-            resume_offset = if tmp_size > 0 { Some(tmp_size) } else { None };
-            eprintln!(
-                "[Transfer] upload retry from {} bytes (server tmp)",
-                tmp_size
-            );
+            let _ = tmp_size_opt;
             let res = crate::ssh::manager::sftp_upload_file_with_session(
                 &session,
                 local_path,
@@ -2920,6 +3453,21 @@ async fn upload_file_with_auto_retry(
                 // 共享会话模式下若遇底层会话断开，立即返回由外层连接池回收，绝不在重试时盲目新建无配额通道
                 if shared_sftp.is_some() && is_session_fatal_error(&e) {
                     return Err(e);
+                }
+                if let Some(sftp) = shared_sftp {
+                    let tmp_size = sftp
+                        .metadata(&sftp_tmp_posix)
+                        .await
+                        .ok()
+                        .map(|m| m.len())
+                        .unwrap_or(0);
+                    if !budget.register_offset(tmp_size) {
+                        if !keep_tmp_on_final_failure {
+                            cleanup_remote_tmp(Some(sftp)).await;
+                        }
+                        return Err(e);
+                    }
+                    resume_offset = if tmp_size > 0 { Some(tmp_size) } else { None };
                 }
                 if let Err(re) = ensure_transfer_connection(server_id, &e).await {
                     if !keep_tmp_on_final_failure {
@@ -2961,11 +3509,29 @@ async fn download_single_file(
         .map_err(|e| format!("Failed to create local directory: {}", e))?;
 
     let file_name = remote_path.rsplit(['/', '\\']).next().unwrap_or("file");
+    if let Some(scp_res) = crate::files::remote_fs::try_scp_download_single(
+        server_id,
+        remote_path,
+        local_path,
+        tmp_local_path,
+        |transferred, total| send(transferred, total, file_name, "bytes", None),
+        cancel,
+    )
+    .await
+    {
+        return scp_res;
+    }
     // 统一使用 manager.rs 成熟的 SFTP 流式传输（具备超时、取消、TOCTOU 续传校验和 Windows 路径兼容）
     // keep_tmp_on_failure=true：失败/暂停保留临时文件供断点续传
     // （download_single_file 传入的 tmp_local_path 会通过初始进度事件发给
     // 前端，前端据此展示续传入口）；取消时由前端显式清理。
     // 断连（含服务端 1GiB rekey 崩溃）时自动重连并从本地 tmp 实际大小续传
+    let _permit = crate::ssh::manager::acquire_transfer_channel_with_cancel(
+        server_id,
+        cancel.map(|c| c.as_ref()),
+    )
+    .await
+    .ok_or_else(|| "Transfer canceled or channel unavailable".to_string())?;
     let sftp_result = download_file_with_auto_retry(
         server_id,
         remote_path,
@@ -3002,10 +3568,14 @@ async fn walk_remote_dir_to_channel(
     tx: &tokio::sync::mpsc::Sender<RemoteDownloadItem>,
     cancel: Option<&Arc<AtomicBool>>,
     target_type: &str,
+    is_scp: bool,
     // 目录续传：目标已存在且大小一致时跳过
     skip_existing: bool,
     skipped: &Arc<AtomicU64>,
     depth: u32,
+    rel_base: &str,
+    extra_rules: &[String],
+    visited_dirs: &mut std::collections::HashSet<String>,
     send: &Arc<dyn Fn(u64, u64, &str, &str, Option<bool>) + Send + Sync + 'static>,
 ) -> Result<(), String> {
     if depth > MAX_RECURSION_DEPTH {
@@ -3018,6 +3588,31 @@ async fn walk_remote_dir_to_channel(
         if flag.load(Ordering::Relaxed) {
             return Ok(());
         }
+    }
+
+    // 符号链接循环防护：按远端规范路径去重
+    let canonical_dir = if is_scp {
+        let escaped = crate::validators::escape_shell_arg(remote_path.to_string());
+        let cmd = format!("realpath -- {0} 2>/dev/null || readlink -f -- {0} 2>/dev/null", escaped);
+        let res = ssh_execute_command(server_id, &cmd).await;
+        let t = res.stdout.trim();
+        if res.exit_code == 0 && !t.is_empty() {
+            t.to_string()
+        } else {
+            remote_path.trim_end_matches('/').replace('\\', "/")
+        }
+    } else {
+        let sftp_path = if target_type.eq_ignore_ascii_case("windows") {
+            crate::targets::windows::path_resolver::PathResolver::to_sftp(remote_path)
+        } else {
+            remote_path.to_string()
+        };
+        crate::ssh::manager::sftp_canonicalize(server_id, &sftp_path)
+            .await
+            .unwrap_or_else(|_| remote_path.trim_end_matches('/').replace('\\', "/"))
+    };
+    if !visited_dirs.insert(canonical_dir) {
+        return Ok(());
     }
 
     // 顶层（depth == 1）的 local_base 已是完整目标目录（调用方 files_download 已把顶层目录名拼好，
@@ -3033,35 +3628,80 @@ async fn walk_remote_dir_to_channel(
         .await
         .map_err(|e| format!("Failed to create local directory: {}", e))?;
 
-    let entries = match crate::files::remote::files_list_with_target(
-        server_id.to_string(),
-        remote_path.to_string(),
-        target_type,
-    )
-    .await
-    {
-        Ok(e) => e,
-        Err(err) => return Err(err),
+    let entries = if is_scp {
+        crate::files::scp::scp_list_dir(server_id, remote_path).await?
+    } else {
+        crate::files::remote::files_list_with_target(
+            server_id.to_string(),
+            remote_path.to_string(),
+            target_type,
+        )
+        .await?
     };
 
-    for entry in entries {
+    let dir_rules = read_remote_gitignore_rules(server_id, &entries, rel_base).await;
+    let mut current_rules = extra_rules.to_vec();
+    if !dir_rules.is_empty() {
+        current_rules.extend(dir_rules);
+    }
+
+    let symlink_policy = SYMLINK_POLICY.load(Ordering::Relaxed);
+
+    for mut entry in entries {
         if let Some(flag) = cancel {
             if flag.load(Ordering::Relaxed) {
                 return Ok(());
             }
         }
-        if entry.name == "." || entry.name == ".." || crate::validators::is_ignored(&entry.name) {
+        if entry.name == "." || entry.name == ".." {
             continue;
         }
-        // 符号链接处理策略：0=Skip(跳过并记入 skipped), 1=Follow(跟随下载真实目标)
+        // 符号链接处理策略：0=Skip(跳过并记入 skipped), 1=Follow(跟随解析真实目标类型与大小)
         if entry.is_symlink {
-            if SYMLINK_POLICY.load(Ordering::Relaxed) == 0 {
+            if symlink_policy == 0 {
                 skipped.fetch_add(1, Ordering::Relaxed);
                 continue;
             }
+            let resolved_stat = if is_scp {
+                crate::files::scp::scp_stat_basic(server_id, &entry.path)
+                    .await
+                    .ok()
+            } else {
+                let sftp_path = if target_type.eq_ignore_ascii_case("windows") {
+                    crate::targets::windows::path_resolver::PathResolver::to_sftp(&entry.path)
+                } else {
+                    entry.path.clone()
+                };
+                crate::ssh::manager::sftp_stat(server_id, &sftp_path)
+                    .await
+                    .ok()
+                    .map(|m| (m.is_dir(), m.len()))
+            };
+            match resolved_stat {
+                Some((is_dir, sz)) => {
+                    entry.is_directory = is_dir;
+                    if !is_dir && sz > 0 {
+                        entry.size = sz.min(i64::MAX as u64) as i64;
+                    }
+                }
+                None => {
+                    skipped.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
+            }
         }
 
+        let item_rel = if rel_base.is_empty() {
+            entry.name.clone()
+        } else {
+            format!("{}/{}", rel_base, entry.name)
+        };
+        let mtime_ms = parse_modified_time_ms(&entry.modified_time);
+
         if entry.is_directory {
+            if crate::validators::is_ignored_entry(&entry.name, &item_rel, true, &current_rules) {
+                continue;
+            }
             Box::pin(walk_remote_dir_to_channel(
                 server_id,
                 &entry.path,
@@ -3069,13 +3709,27 @@ async fn walk_remote_dir_to_channel(
                 tx,
                 cancel,
                 target_type,
+                is_scp,
                 skip_existing,
                 skipped,
                 depth + 1,
+                &item_rel,
+                &current_rules,
+                visited_dirs,
                 send,
             ))
             .await?;
         } else {
+            if !crate::validators::should_transfer_entry(
+                &entry.name,
+                &item_rel,
+                false,
+                Some(entry.size.max(0) as u64),
+                mtime_ms,
+                &current_rules,
+            ) {
+                continue;
+            }
             let local_file = local_dir.join(&entry.name);
             let local_file_str = local_file.to_str().unwrap_or("").to_string();
             if let Some(parent) = local_file.parent() {
@@ -3170,7 +3824,11 @@ async fn download_dir_recursive(
     let (tx, rx) = tokio::sync::mpsc::channel::<RemoteDownloadItem>(worker_limit * 8);
 
     // 启动目录树流式扫描生产者（边扫边产出，首个文件毫秒级立即启动传输）
-    // 一次查询目标类型，供整个目录树扫描复用（避免每个子目录都走 load_server_config）
+    // 一次查询目标类型与协议后端，供整个目录树扫描与 Worker 复用
+    let is_scp = matches!(
+        crate::files::remote_fs::resolve_backend(server_id).await,
+        Ok(crate::files::remote_fs::ResolvedRemoteFs::Scp { .. })
+    );
     let target_type_producer = load_target_type(server_id).await;
     let server_id_producer = server_id.to_string();
     let remote_path_producer = remote_path.to_string();
@@ -3181,6 +3839,7 @@ async fn download_dir_recursive(
     let send_producer = send.clone();
 
     let scan_handle = tokio::spawn(async move {
+        let mut visited_dirs = std::collections::HashSet::new();
         walk_remote_dir_to_channel(
             &server_id_producer,
             &remote_path_producer,
@@ -3188,9 +3847,13 @@ async fn download_dir_recursive(
             &tx,
             cancel_producer.as_ref(),
             &target_type_producer,
+            is_scp,
             skip_existing,
             &skipped_producer,
             1,
+            "",
+            &[],
+            &mut visited_dirs,
             &send_producer,
         )
         .await
@@ -3207,8 +3870,8 @@ async fn download_dir_recursive(
     let fail_streak = Arc::new(AtomicU64::new(0));
 
     // 启动固定数量的持久 Worker 线程。
-    // 每个 Worker 在其生命周期内最多持有 1 个专用 SFTP 会话及 1 个全局通道名额，
-    // 复用此会话持续从 shared_rx 消费待下载文件，彻底避免按文件高频创建/销毁会话与通道死锁。
+    // SFTP 模式下每个 Worker 持有 1 个专用 SFTP 会话及 1 个全局通道名额；
+    // SCP 模式下每个 Worker 持有 1 个全局通道名额并经由 scp_download_file 流式下载。
     for _ in 0..worker_limit {
         let rx = shared_rx.clone();
         let conn = conn.clone();
@@ -3226,6 +3889,7 @@ async fn download_dir_recursive(
                 russh_sftp::client::SftpSession,
                 tokio::sync::OwnedSemaphorePermit,
             )> = None;
+            let mut scp_permit: Option<tokio::sync::OwnedSemaphorePermit> = None;
 
             loop {
                 if let Some(ref flag) = cancel {
@@ -3247,58 +3911,89 @@ async fn download_dir_recursive(
                     None => break,
                 };
 
-                if worker_session.is_none() {
-                    let permit = match crate::ssh::manager::acquire_transfer_channel_with_cancel(
-                        &server_id,
-                        cancel.as_ref().map(|a| a.as_ref()),
-                    )
-                    .await
-                    {
-                        Some(p) => p,
-                        None => {
-                            let mut err_guard = fatal_error.lock().await;
-                            if err_guard.is_none() {
-                                *err_guard = Some("Transfer canceled or channel closed".to_string());
-                            }
-                            break;
-                        }
-                    };
-
-                    match conn.create_dedicated_sftp_session().await {
-                        Ok(s) => {
-                            worker_session = Some((s, permit));
-                        }
-                        Err(e) => {
-                            let mut err_guard = fatal_error.lock().await;
-                            if err_guard.is_none() {
-                                *err_guard = Some(format!("SFTP session failed: {}", e));
-                            }
-                            break;
-                        }
-                    }
-                }
-
-                let (ref sftp, _) = worker_session.as_ref().unwrap();
                 let dl_tmp_path = format!("{}.sw-dl-tmp-{}", task.local_path, uuid::Uuid::new_v4());
                 let send_bytes = send.clone();
                 let file_remote = task.remote_path.clone();
 
-                let dl_res = download_file_with_auto_retry(
-                    &server_id,
-                    &task.remote_path,
-                    &task.local_path,
-                    &dl_tmp_path,
-                    Some(sftp),
-                    move |transferred, total| {
-                        send_bytes(transferred, total, &file_remote, "bytes", None);
-                    },
-                    cancel.as_ref(),
-                    None,
-                    false,
-                    // 目录批量下载：跳过逐文件 fsync
-                    false,
-                )
-                .await;
+                let dl_res = if is_scp {
+                    if scp_permit.is_none() {
+                        match crate::ssh::manager::acquire_transfer_channel_with_cancel(
+                            &server_id,
+                            cancel.as_ref().map(|a| a.as_ref()),
+                        )
+                        .await
+                        {
+                            Some(p) => scp_permit = Some(p),
+                            None => {
+                                let mut err_guard = fatal_error.lock().await;
+                                if err_guard.is_none() {
+                                    *err_guard = Some("Transfer canceled or channel closed".to_string());
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    crate::files::scp::scp_download_file(
+                        &server_id,
+                        &task.remote_path,
+                        &task.local_path,
+                        &dl_tmp_path,
+                        move |transferred, total| {
+                            send_bytes(transferred, total, &file_remote, "bytes", None);
+                        },
+                        cancel.as_ref(),
+                    )
+                    .await
+                } else {
+                    if worker_session.is_none() {
+                        let permit = match crate::ssh::manager::acquire_transfer_channel_with_cancel(
+                            &server_id,
+                            cancel.as_ref().map(|a| a.as_ref()),
+                        )
+                        .await
+                        {
+                            Some(p) => p,
+                            None => {
+                                let mut err_guard = fatal_error.lock().await;
+                                if err_guard.is_none() {
+                                    *err_guard = Some("Transfer canceled or channel closed".to_string());
+                                }
+                                break;
+                            }
+                        };
+
+                        match conn.create_dedicated_sftp_session().await {
+                            Ok(s) => {
+                                worker_session = Some((s, permit));
+                            }
+                            Err(e) => {
+                                let mut err_guard = fatal_error.lock().await;
+                                if err_guard.is_none() {
+                                    *err_guard = Some(format!("SFTP session failed: {}", e));
+                                }
+                                break;
+                            }
+                        }
+                    }
+
+                    let (ref sftp, _) = worker_session.as_ref().unwrap();
+                    download_file_with_auto_retry(
+                        &server_id,
+                        &task.remote_path,
+                        &task.local_path,
+                        &dl_tmp_path,
+                        Some(sftp),
+                        move |transferred, total| {
+                            send_bytes(transferred, total, &file_remote, "bytes", None);
+                        },
+                        cancel.as_ref(),
+                        None,
+                        false,
+                        // 目录批量下载：跳过逐文件 fsync
+                        false,
+                    )
+                    .await
+                };
 
                 match dl_res {
                     Ok(()) => {
@@ -3310,6 +4005,7 @@ async fn download_dir_recursive(
                     Err(e) => {
                         if is_session_fatal_error(&e) {
                             worker_session = None;
+                            scp_permit = None;
                         }
                         fail_streak.fetch_add(1, Ordering::Relaxed);
                         failures.lock().await.push(TransferFailure {
@@ -3331,6 +4027,9 @@ async fn download_dir_recursive(
             }
         });
     }
+
+    // 仅由 Worker 持有 receiver，避免 Worker 提前退出时父作用域保活 rx 导致 scan_handle 死锁
+    drop(shared_rx);
 
     // 等待所有在途并发下载任务全部完成
     while let Some(res) = join_set.join_next().await {
@@ -3390,8 +4089,20 @@ pub async fn files_download_archive(
     server_id: String,
     remote_path: String,
     format: Option<String>,
+    transfer_id: Option<String>,
 ) -> Result<FileDownloadResult, String> {
     use tauri_plugin_dialog::DialogExt;
+
+    if matches!(
+        crate::files::remote_fs::resolve_backend(&server_id).await?,
+        crate::files::remote_fs::ResolvedRemoteFs::Ftp { .. }
+    ) {
+        return Ok(FileDownloadResult {
+            success: false,
+            error: Some("Archived download is not supported over FTP/FTPS".to_string()),
+            local_path: None,
+        });
+    }
 
     let target_type = load_target_type(&server_id).await;
     if target_type.eq_ignore_ascii_case("windows") {
@@ -3457,7 +4168,9 @@ pub async fn files_download_archive(
     let archive_name = format!("{}{}", dir_name, ext);
     // 使用 UUID 命名避免并发归档冲突（毫秒时间戳在同一毫秒内会碰撞）
     let tmp_archive = format!("/tmp/sw-archive-{}{}", uuid::Uuid::new_v4(), ext);
-    let transfer_id = format!("dl-archive-{}", uuid::Uuid::new_v4());
+    let transfer_id = transfer_id
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| format!("dl-archive-{}", uuid::Uuid::new_v4()));
 
     let send = |current: u64, total: u64, name: &str, phase: &str, done: Option<bool>| {
         send_progress(
@@ -3474,6 +4187,23 @@ pub async fn files_download_archive(
                 total_type: Some("bytes".to_string()),
                 tmp_path: None,
                 error: None,
+            },
+        );
+    };
+    let send_fail = |name: &str, err_msg: &str| {
+        send_progress(
+            &app,
+            TransferProgress {
+                transfer_id: transfer_id.clone(),
+                r#type: "download".to_string(),
+                current: 0,
+                total: 0,
+                file_name: name.to_string(),
+                done: Some(false),
+                phase: None,
+                total_type: Some("bytes".to_string()),
+                tmp_path: None,
+                error: Some(err_msg.to_string()),
             },
         );
     };
@@ -3511,10 +4241,27 @@ pub async fn files_download_archive(
         }
     };
 
+    // 提前注册传输任务，确保 packing 阶段即可被 files_cancel_transfer 取消
+    let cancel_flag = register_transfer(&transfer_id);
+    let _transfer_guard = TransferRegistrationGuard::new(&transfer_id);
+
     send(0, 0, &dir_name, "packing", None);
 
-    // 执行打包
-    let pack_res = ssh_execute_command(&server_id, &pack_cmd).await;
+    // 执行打包（支持取消打断）
+    let pack_res = tokio::select! {
+        biased;
+        _ = crate::ssh::manager::sleep_until_cancel(Some(&cancel_flag)) => {
+            let _ = ssh_execute_command(&server_id, &format!("rm -f {}", escaped_tmp)).await;
+            let err_msg = "Transfer canceled by user".to_string();
+            send_fail(&dir_name, &err_msg);
+            return Ok(FileDownloadResult {
+                success: false,
+                error: Some(err_msg),
+                local_path: None,
+            });
+        }
+        res = ssh_execute_command(&server_id, &pack_cmd) => res,
+    };
 
     // 检查权限拒绝：按行匹配 stderr 行首模式，避免文件名含 "Permission denied" 子串时误计数
     let output = format!("{}{}", pack_res.stderr, pack_res.stdout);
@@ -3528,12 +4275,14 @@ pub async fn files_download_archive(
         .count();
     if perm_denied_count > 0 {
         let _ = ssh_execute_command(&server_id, &format!("rm -f {}", escaped_tmp)).await;
+        let err_msg = format!(
+            "{} file(s) have no access permission. Packaging canceled. Please use sudo or choose a directory with permissions.",
+            perm_denied_count
+        );
+        send_fail(&dir_name, &err_msg);
         return Ok(FileDownloadResult {
             success: false,
-            error: Some(format!(
-                "{} file(s) have no access permission. Packaging canceled. Please use sudo or choose a directory with permissions.",
-                perm_denied_count
-            )),
+            error: Some(err_msg),
             local_path: None,
         });
     }
@@ -3542,100 +4291,168 @@ pub async fn files_download_archive(
     let check_cmd = format!("test -f {} && echo \"exists\" || echo \"missing\"", escaped_tmp);
     let check_res = ssh_execute_command(&server_id, &check_cmd).await;
     if check_res.stdout.trim() != "exists" {
+        let detail = if !pack_res.stderr.trim().is_empty() {
+            pack_res.stderr
+        } else {
+            pack_res.stdout
+        };
+        let err_msg = format!("Packaging failed: {}", detail);
+        send_fail(&dir_name, &err_msg);
         return Ok(FileDownloadResult {
             success: false,
-            error: Some(format!("Packaging failed: {}", pack_res.stderr)),
+            error: Some(err_msg),
             local_path: None,
         });
     }
 
-    // 检查压缩包大小（限制 10GB）；解析失败时返回错误而非降级为 0，避免跳过限制
-    let size_cmd = format!("stat -c '%s' {} 2>/dev/null", escaped_tmp);
+    // 检查压缩包大小（限制 10GB）；兼容 GNU stat / BSD stat / wc -c，解析失败时返回错误而非降级为 0
+    let size_cmd = format!(
+        "stat -c '%s' {} 2>/dev/null || stat -f '%z' {} 2>/dev/null || wc -c < {} 2>/dev/null",
+        escaped_tmp, escaped_tmp, escaped_tmp
+    );
     let size_res = ssh_execute_command(&server_id, &size_cmd).await;
     let archive_size: u64 = match size_res.stdout.trim().parse() {
         Ok(value) => value,
         Err(e) => {
             // 清理临时文件后返回错误
             let _ = ssh_execute_command(&server_id, &format!("rm -f {}", escaped_tmp)).await;
-            return Err(format!(
+            let err_msg = format!(
                 "Failed to parse archive size: {} (output: {:?})",
                 e, size_res.stdout
-            ));
+            );
+            send_fail(&dir_name, &err_msg);
+            return Err(err_msg);
         }
     };
     const MAX_ARCHIVE_SIZE: u64 = 10 * 1024 * 1024 * 1024;
     if archive_size > MAX_ARCHIVE_SIZE {
         let _ = ssh_execute_command(&server_id, &format!("rm -f {}", escaped_tmp)).await;
+        let err_msg = format!(
+            "Compressed archive too large ({}MB), exceeding 10GB limit",
+            archive_size / 1024 / 1024
+        );
+        send_fail(&dir_name, &err_msg);
         return Ok(FileDownloadResult {
             success: false,
-            error: Some(format!(
-                "Compressed archive too large ({}MB), exceeding 10GB limit",
-                archive_size / 1024 / 1024
-            )),
+            error: Some(err_msg),
+            local_path: None,
+        });
+    }
+
+    if cancel_flag.load(Ordering::Relaxed) {
+        let _ = ssh_execute_command(&server_id, &format!("rm -f {}", escaped_tmp)).await;
+        let err_msg = "Transfer canceled by user".to_string();
+        send_fail(&dir_name, &err_msg);
+        return Ok(FileDownloadResult {
+            success: false,
+            error: Some(err_msg),
             local_path: None,
         });
     }
 
     send(1, 1, &dir_name, "packed", None);
 
-    // 弹出保存对话框
-    let file_path = app
-        .dialog()
-        .file()
-        .set_title("Save Archive")
-        .set_file_name(&archive_name)
-        .blocking_save_file();
+    // 弹出保存对话框（放到阻塞线程池，避免阻塞 Tokio worker）
+    let app_dlg = app.clone();
+    let archive_name_dlg = archive_name.clone();
+    let file_path = match tokio::task::spawn_blocking(move || {
+        app_dlg
+            .dialog()
+            .file()
+            .set_title("Save Archive")
+            .set_file_name(&archive_name_dlg)
+            .blocking_save_file()
+    })
+    .await
+    {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = ssh_execute_command(&server_id, &format!("rm -f {}", escaped_tmp)).await;
+            let err_msg = format!("Dialog task failed: {}", e);
+            send_fail(&archive_name, &err_msg);
+            return Err(err_msg);
+        }
+    };
     let local_path = match file_path {
         Some(p) => p.to_string(),
         None => {
             let _ = ssh_execute_command(&server_id, &format!("rm -f {}", escaped_tmp)).await;
+            let err_msg = "已取消下载".to_string();
+            send_fail(&archive_name, &err_msg);
             return Ok(FileDownloadResult {
                 success: false,
-                error: Some("User canceled".to_string()),
+                error: Some(err_msg),
                 local_path: None,
             });
         }
     };
 
     // 磁盘空间预检：与 files_download 对齐，5% 安全余量；查询失败时跳过检查
-    if let Ok(free) = get_local_available_space(&local_path) {
+    let lp_space = local_path.clone();
+    if let Ok(Ok(free)) =
+        tokio::task::spawn_blocking(move || get_local_available_space(&lp_space)).await
+    {
         const SAFETY_MARGIN: f64 = 1.05;
         let required = (archive_size as f64 * SAFETY_MARGIN) as u64;
         if free < required {
             let _ = ssh_execute_command(&server_id, &format!("rm -f {}", escaped_tmp)).await;
+            let err_msg = format!(
+                "Insufficient local disk space: required {} bytes (with 5% safety margin), available {} bytes",
+                required, free
+            );
+            send_fail(&archive_name, &err_msg);
             return Ok(FileDownloadResult {
                 success: false,
-                error: Some(format!(
-                    "Insufficient local disk space: required {} bytes (with 5% safety margin), available {} bytes",
-                    required, free
-                )),
+                error: Some(err_msg),
                 local_path: None,
             });
         }
     }
 
-    // 下载压缩包（使用 SFTP 子系统流式传输，32KB 分块，内存友好）
+    // 下载压缩包（优先 SCP 若当前后端已切换，否则使用 SFTP 流式传输）
     send(0, 0, &archive_name, "downloading", None);
-    // 注册传输任务，获取 cancel flag（用户可调用 files_cancel_transfer 取消下载阶段）
-    let cancel_flag = register_transfer(&transfer_id);
-    let _transfer_guard = TransferRegistrationGuard::new(&transfer_id);
     // 归档下载最终失败/取消时清理本地 tmp（不支持对外断点续传，但内部断连可自愈）
     let dl_tmp_local = format!("{}.sw-dl-tmp-{}", local_path, uuid::Uuid::new_v4());
-    let write_result = download_file_with_auto_retry(
+    let write_result = if let Some(scp_res) = crate::files::remote_fs::try_scp_download_single(
         &server_id,
         &tmp_archive,
         &local_path,
         &dl_tmp_local,
-        None,
         |transferred, total| {
             send(transferred, total, &archive_name, "downloading", None);
         },
         Some(&cancel_flag),
-        None,
-        false,
-        true,
     )
-    .await;
+    .await
+    {
+        scp_res
+    } else {
+        match crate::ssh::manager::acquire_transfer_channel_with_cancel(
+            &server_id,
+            Some(&*cancel_flag),
+        )
+        .await
+        {
+            Some(_permit) => {
+                download_file_with_auto_retry(
+                    &server_id,
+                    &tmp_archive,
+                    &local_path,
+                    &dl_tmp_local,
+                    None,
+                    |transferred, total| {
+                        send(transferred, total, &archive_name, "downloading", None);
+                    },
+                    Some(&cancel_flag),
+                    None,
+                    false,
+                    true,
+                )
+                .await
+            }
+            None => Err("Transfer canceled or channel unavailable".to_string()),
+        }
+    };
     // 注销传输任务（无论成功/失败/取消）
     unregister_transfer(&transfer_id);
 
@@ -3652,11 +4469,14 @@ pub async fn files_download_archive(
                 local_path: Some(local_path),
             })
         }
-        Err(e) => Ok(FileDownloadResult {
-            success: false,
-            error: Some(e),
-            local_path: None,
-        }),
+        Err(e) => {
+            send_fail(&archive_name, &e);
+            Ok(FileDownloadResult {
+                success: false,
+                error: Some(e),
+                local_path: None,
+            })
+        }
     }
 }
 
@@ -3677,20 +4497,31 @@ pub async fn files_upload(
     // 校验路径（按目标类型分发）
     let path_validation = crate::validators::validate_path_for_target(remote_dir.clone(), false, &target_type);
     if !path_validation.valid {
+        let err_msg = format!(
+            "Invalid path: {}",
+            path_validation.error.unwrap_or_default()
+        );
+        let server_label = resolve_server_audit_label(&server_id).await;
+        record_transfer_audit(
+            Some(server_label),
+            "上传文件",
+            "failed",
+            Some(format!("remote_dir={}, error={}", remote_dir, err_msg)),
+        )
+        .await;
         return Ok(FileUploadResult {
             success: false,
-            error: Some(format!(
-                "Invalid path: {}",
-                path_validation.error.unwrap_or_default()
-            )),
+            error: Some(err_msg),
             results: Vec::new(),
         });
     }
 
-    // 根据类型弹出文件选择对话框
-    let file_paths: Vec<String> = match upload_type.as_str() {
+    // 根据类型弹出文件选择对话框（放到阻塞线程池，避免阻塞 Tokio worker）
+    let app_dlg = app.clone();
+    let upload_type_dlg = upload_type.clone();
+    let file_paths: Vec<String> = tokio::task::spawn_blocking(move || match upload_type_dlg.as_str() {
         "file" => {
-            let files = app
+            let files = app_dlg
                 .dialog()
                 .file()
                 .set_title("Select Upload Files")
@@ -3701,7 +4532,7 @@ pub async fn files_upload(
             }
         }
         "dir" | "directory" => {
-            let folders = app
+            let folders = app_dlg
                 .dialog()
                 .file()
                 .set_title("Select Upload Folder")
@@ -3713,7 +4544,7 @@ pub async fn files_upload(
         }
         _ => {
             // auto: 先文件后文件夹
-            let files = app
+            let files = app_dlg
                 .dialog()
                 .file()
                 .set_title("Select Upload Files (Press ESC to cancel and select folder)")
@@ -3723,7 +4554,7 @@ pub async fn files_upload(
                     paths.into_iter().map(|p| p.to_string()).collect()
                 }
                 _ => {
-                    let folders = app
+                    let folders = app_dlg
                         .dialog()
                         .file()
                         .set_title("Select Upload Folder")
@@ -3735,7 +4566,9 @@ pub async fn files_upload(
                 }
             }
         }
-    };
+    })
+    .await
+    .map_err(|e| format!("Dialog task failed: {}", e))?;
 
     if file_paths.is_empty() {
         return Ok(FileUploadResult {
@@ -3777,14 +4610,23 @@ pub async fn files_upload(
 
     // 单文件上传：预生成 tmp_path 并发送携带 tmp_path 的初始事件（前端用于断点续传）
     // 多文件/目录上传：不支持断点续传，传 None
-    let is_single = file_paths.len() == 1
-        && std::fs::metadata(&file_paths[0]).map(|m| !m.is_dir()).unwrap_or(false);
+    let is_single = if file_paths.len() == 1 {
+        tokio::fs::metadata(&file_paths[0])
+            .await
+            .map(|m| !m.is_dir())
+            .unwrap_or(false)
+    } else {
+        false
+    };
 
     let target_remote_dir = if is_windows {
         crate::targets::windows::validators::posix_to_windows_path(&remote_dir)
     } else {
         remote_dir.clone()
     };
+
+    let resolved_fs = crate::files::remote_fs::resolve_backend(&server_id).await?;
+    let supports_resume = resolved_fs.capabilities().supports_resume;
 
     let tmp_path_override: Option<String> = if is_single {
         let base_name = StdPath::new(&file_paths[0])
@@ -3793,24 +4635,31 @@ pub async fn files_upload(
             .unwrap_or("file")
             .to_string();
         let remote_path = if is_windows {
-            if target_remote_dir.ends_with('\\') {
-                format!("{}{}", target_remote_dir, base_name)
+            let clean_dir = target_remote_dir.trim_end_matches(['/', '\\']);
+            if clean_dir.is_empty() {
+                format!("C:\\{}", base_name)
             } else {
-                format!("{}\\{}", target_remote_dir, base_name)
+                format!("{}\\{}", clean_dir, base_name)
             }
         } else {
-            if remote_dir == "/" {
+            let clean_dir = remote_dir.trim_end_matches('/');
+            if clean_dir.is_empty() {
                 format!("/{}", base_name)
             } else {
-                format!("{}/{}", remote_dir, base_name)
+                format!("{}/{}", clean_dir, base_name)
             }
         };
-        let tmp = if is_windows {
-            // Windows: 使用新 transfer 模块的 .uploading 命名（正斜杠）
-            let sftp_path = crate::targets::windows::path_resolver::PathResolver::to_sftp(&remote_path);
-            crate::targets::windows::path_resolver::PathResolver::uploading_tmp(&sftp_path)
+        let tmp_opt = if supports_resume {
+            let tmp = if is_windows {
+                // Windows: 使用新 transfer 模块的 .uploading 命名（正斜杠）
+                let sftp_path = crate::targets::windows::path_resolver::PathResolver::to_sftp(&remote_path);
+                crate::targets::windows::path_resolver::PathResolver::uploading_tmp(&sftp_path)
+            } else {
+                format!("{}.sw-upload-tmp-{}", remote_path, uuid::Uuid::new_v4())
+            };
+            Some(tmp)
         } else {
-            format!("{}.sw-upload-tmp-{}", remote_path, uuid::Uuid::new_v4())
+            None
         };
         send_progress(
             &app,
@@ -3823,11 +4672,11 @@ pub async fn files_upload(
                 done: None,
                 phase: None,
                 total_type: Some("bytes".to_string()),
-                tmp_path: Some(tmp.clone()),
+                tmp_path: tmp_opt.clone(),
                 error: None,
             },
         );
-        Some(tmp)
+        tmp_opt
     } else {
         None
     };
@@ -3857,6 +4706,14 @@ pub async fn files_upload(
                 error: Some(msg.clone()),
             });
             unregister_transfer(&transfer_id);
+            let server_label = resolve_server_audit_label(&server_id).await;
+            record_transfer_audit(
+                Some(server_label),
+                "上传文件",
+                "failed",
+                Some(format!("remote_dir={}, count={}, error={}", remote_dir, file_paths.len(), msg)),
+            )
+            .await;
             return Ok(FileUploadResult { success: false, error: Some(msg), results: Vec::new() });
         }
     }
@@ -3915,6 +4772,29 @@ pub async fn files_upload(
         },
     );
 
+    let server_label = resolve_server_audit_label(&server_id).await;
+    record_transfer_audit(
+        Some(server_label),
+        "上传文件",
+        if any_success { "success" } else { "failed" },
+        Some(match &error {
+            Some(e) => format!(
+                "remote_dir={}, files={}, succeeded={}, error={}",
+                remote_dir,
+                file_paths.len(),
+                succeeded,
+                e
+            ),
+            None => format!(
+                "remote_dir={}, files={}, succeeded={}",
+                remote_dir,
+                file_paths.len(),
+                succeeded
+            ),
+        }),
+    )
+    .await;
+
     Ok(FileUploadResult {
         success: any_success,
         error,
@@ -3940,12 +4820,21 @@ pub async fn files_upload_from_paths(
     // 校验路径（按目标类型分发，Windows 允许盘符路径）
     let path_validation = crate::validators::validate_path_for_target(remote_dir.clone(), false, &target_type);
     if !path_validation.valid {
+        let err_msg = format!(
+            "Invalid path: {}",
+            path_validation.error.unwrap_or_default()
+        );
+        let server_label = resolve_server_audit_label(&server_id).await;
+        record_transfer_audit(
+            Some(server_label),
+            "上传文件",
+            "failed",
+            Some(format!("remote_dir={}, error={}", remote_dir, err_msg)),
+        )
+        .await;
         return Ok(FileUploadResult {
             success: false,
-            error: Some(format!(
-                "Invalid path: {}",
-                path_validation.error.unwrap_or_default()
-            )),
+            error: Some(err_msg),
             results: Vec::new(),
         });
     }
@@ -4020,14 +4909,25 @@ pub async fn files_upload_from_paths(
 
     // 单文件上传：预生成 tmp_path 并发送携带 tmp_path 的初始事件（前端用于断点续传）
     // 多文件/目录上传：不支持断点续传，传 None
-    let is_single = local_paths.len() == 1
-        && std::fs::metadata(&local_paths[0]).map(|m| !m.is_dir()).unwrap_or(false);
+    let is_single = if local_paths.len() == 1 {
+        tokio::fs::metadata(&local_paths[0])
+            .await
+            .map(|m| !m.is_dir())
+            .unwrap_or(false)
+    } else {
+        false
+    };
 
     let target_remote_dir = if is_windows {
         crate::targets::windows::validators::posix_to_windows_path(&remote_dir)
     } else {
         remote_dir.clone()
     };
+
+    let resolved_fs = crate::files::remote_fs::resolve_backend(&server_id).await?;
+    let supports_resume = resolved_fs.capabilities().supports_resume;
+    let is_ftp = matches!(resolved_fs, crate::files::remote_fs::ResolvedRemoteFs::Ftp { .. });
+    let is_scp = matches!(resolved_fs, crate::files::remote_fs::ResolvedRemoteFs::Scp { .. });
 
     let tmp_path_override: Option<String> = if is_single {
         let base_name = override_name
@@ -4054,7 +4954,15 @@ pub async fn files_upload_from_paths(
                 format!("{}/{}", clean_dir, base_name)
             }
         };
-        let tmp = format!("{}.sw-upload-tmp-{}", remote_path.replace('\\', "/"), uuid::Uuid::new_v4());
+        let tmp_opt = if supports_resume {
+            Some(format!(
+                "{}.sw-upload-tmp-{}",
+                remote_path.replace('\\', "/"),
+                uuid::Uuid::new_v4()
+            ))
+        } else {
+            None
+        };
         send_progress(
             &app,
             TransferProgress {
@@ -4066,11 +4974,11 @@ pub async fn files_upload_from_paths(
                 done: None,
                 phase: Some("preflight".to_string()),
                 total_type: Some("bytes".to_string()),
-                tmp_path: Some(tmp.clone()),
+                tmp_path: tmp_opt.clone(),
                 error: None,
             },
         );
-        Some(tmp)
+        tmp_opt
     } else {
         // 多文件/目录上传：提前发送 preflight 事件，让前端立即创建传输记录。
         // 原本需要等写权限预检 + 文件计数完成后才发，高延迟下用户需等 ~1s 才能看到记录。
@@ -4101,11 +5009,80 @@ pub async fn files_upload_from_paths(
         None
     };
 
-    let is_ftp = crate::ftp::is_ftp_backed_server(&server_id).await;
-
-    // 写权限预检：在目标目录尝试创建一个 0 字节临时文件并立即删除（仅 SFTP 执行；FTP 在 STOR 时直接校验）。
+    // 写权限预检：在目标目录尝试创建一个 0 字节临时文件并立即删除（FTP 在 STOR 时校验；SCP 走 shell 探测）。
     // 无写入权限或目录不存在时立即返回明确错误，避免静默上传到错误位置（如用户目录）。
-    if !is_ftp {
+    if is_scp {
+        if let Err(e) = crate::ssh::manager::SshManager::global().get_connection(&server_id) {
+            send_progress(&app, TransferProgress {
+                transfer_id: transfer_id.clone(),
+                r#type: "upload".to_string(),
+                current: 0,
+                total: 0,
+                file_name: String::new(),
+                done: Some(false),
+                phase: None,
+                total_type: None,
+                tmp_path: None,
+                error: Some(format!("Connection not found: {}", e)),
+            });
+            return Ok(FileUploadResult { success: false, error: Some(e.to_string()), results: Vec::new() });
+        }
+        if !is_windows {
+            let clean_dir = target_remote_dir.replace('\\', "/");
+            let dir_check = ssh_execute_command(
+                &server_id,
+                &format!("test -d {} && echo '__SW_DIR_OK__'", crate::validators::escape_shell_arg(clean_dir.clone())),
+            ).await;
+            if !dir_check.stdout.contains("__SW_DIR_OK__") {
+                let msg = format!("Target directory does not exist: '{}'", target_remote_dir);
+                send_progress(&app, TransferProgress {
+                    transfer_id: transfer_id.clone(),
+                    r#type: "upload".to_string(),
+                    current: 0,
+                    total: 0,
+                    file_name: String::new(),
+                    done: Some(false),
+                    phase: None,
+                    total_type: None,
+                    tmp_path: None,
+                    error: Some(msg.clone()),
+                });
+                return Ok(FileUploadResult { success: false, error: Some(msg), results: Vec::new() });
+            }
+            let probe_name = format!(".sw-perm-probe-{}.tmp", uuid::Uuid::new_v4());
+            let probe_path = if clean_dir == "/" {
+                format!("/{}", probe_name)
+            } else {
+                format!("{}/{}", clean_dir.trim_end_matches('/'), probe_name)
+            };
+            let escaped_probe = crate::validators::escape_shell_arg(probe_path);
+            let write_check = ssh_execute_command(
+                &server_id,
+                &format!("touch -- {} && rm -f -- {}", escaped_probe, escaped_probe),
+            ).await;
+            if write_check.exit_code != 0 {
+                let reason = if write_check.stderr.trim().is_empty() {
+                    "permission denied".to_string()
+                } else {
+                    write_check.stderr.trim().to_string()
+                };
+                let msg = format!("No write permission to '{}': {}", target_remote_dir, reason);
+                send_progress(&app, TransferProgress {
+                    transfer_id: transfer_id.clone(),
+                    r#type: "upload".to_string(),
+                    current: 0,
+                    total: 0,
+                    file_name: String::new(),
+                    done: Some(false),
+                    phase: None,
+                    total_type: None,
+                    tmp_path: None,
+                    error: Some(msg.clone()),
+                });
+                return Ok(FileUploadResult { success: false, error: Some(msg), results: Vec::new() });
+            }
+        }
+    } else if !is_ftp {
         let conn = match crate::ssh::manager::SshManager::global().get_connection(&server_id) {
             Ok(c) => c,
             Err(e) => {
@@ -4167,7 +5144,11 @@ pub async fn files_upload_from_paths(
             format!("{}/{}", target_remote_dir, probe_name)
         };
         match probe_sftp.create(&probe_path).await {
-            Ok(_h) => { let _ = probe_sftp.remove_file(&probe_path).await; }
+            Ok(mut h) => {
+                let _ = h.shutdown().await;
+                drop(h);
+                let _ = probe_sftp.remove_file(&probe_path).await;
+            }
             Err(e) => {
                 let msg = format!("No write permission to '{}': {}", target_remote_dir, e);
                 send_progress(&app, TransferProgress {
@@ -4272,6 +5253,29 @@ pub async fn files_upload_from_paths(
         },
     );
 
+    let server_label = resolve_server_audit_label(&server_id).await;
+    record_transfer_audit(
+        Some(server_label),
+        "上传文件",
+        if any_success { "success" } else { "failed" },
+        Some(match &error {
+            Some(e) => format!(
+                "remote_dir={}, files={}, succeeded={}, error={}",
+                remote_dir,
+                local_paths.len(),
+                succeeded,
+                e
+            ),
+            None => format!(
+                "remote_dir={}, files={}, succeeded={}",
+                remote_dir,
+                local_paths.len(),
+                succeeded
+            ),
+        }),
+    )
+    .await;
+
     Ok(FileUploadResult {
         success: any_success,
         error,
@@ -4295,10 +5299,14 @@ async fn perform_upload(
     concurrency: usize,
 ) -> UploadBatchOutcome {
     // 判断是否为单文件上传（跳过递归统计文件数，减少文件IO/线程调度开销，使临时文件更快捷地生成）
-    let is_single_file = local_paths.len() == 1
-        && std::fs::metadata(&local_paths[0])
+    let is_single_file = if local_paths.len() == 1 {
+        tokio::fs::metadata(&local_paths[0])
+            .await
             .map(|m| !m.is_dir())
-            .unwrap_or(false);
+            .unwrap_or(false)
+    } else {
+        false
+    };
 
     // 统计总文件数，用于进度显示
     // 用 spawn_blocking 避免同步递归阻塞 Tauri async 命令线程（深目录如 node_modules 可能阻塞数百毫秒）
@@ -4338,18 +5346,57 @@ async fn perform_upload(
         }
     }
 
-    let is_ftp = crate::ftp::is_ftp_backed_server(server_id).await;
+    let resolved_fs = crate::files::remote_fs::resolve_backend(server_id).await.ok();
+    let is_ftp = matches!(resolved_fs, Some(crate::files::remote_fs::ResolvedRemoteFs::Ftp { .. }));
+    let is_scp = matches!(resolved_fs, Some(crate::files::remote_fs::ResolvedRemoteFs::Scp { .. }));
 
-    // 仅在单文件上传或纯扁平文件批次时创建预置会话；
+    // 仅在单文件上传或纯扁平文件批次（且当前后端为 SFTP）时创建预置会话；
     // 目录递归传输内部具备专用的生产者-消费者会话池，外部预创建的会话完全不被使用，
-    // 若盲目创建会空占一个 SSH Channel 额度，导致大目录上传逼近或超过 OpenSSH MaxSessions 产生 ConnectFailed。
-    let has_any_dir = local_paths.iter().any(|p| {
-        std::fs::metadata(p).map(|m| m.is_dir()).unwrap_or(false)
-    });
+    // 若盲目创建会空占一个 SSH Channel 额度，导致大目录上传逼近或超过 OpenSSH MaxSessions 产生 ConnectFailed；
+    // SCP / FTP 模式不走 SFTP 子系统，必须跳过 SFTP 会话预创建。
+    let mut has_any_dir = false;
+    for p in local_paths {
+        if tokio::fs::metadata(p).await.map(|m| m.is_dir()).unwrap_or(false) {
+            has_any_dir = true;
+            break;
+        }
+    }
 
-    let sftp: Option<Arc<russh_sftp::client::SftpSession>> = if has_any_dir || is_ftp {
+    let mut _batch_permit: Option<tokio::sync::OwnedSemaphorePermit> = None;
+    let sftp: Option<Arc<russh_sftp::client::SftpSession>> = if has_any_dir || is_ftp || is_scp {
         None
     } else {
+        let permit = match crate::ssh::manager::acquire_transfer_channel_with_cancel(
+            server_id,
+            cancel.map(|c| c.as_ref()),
+        )
+        .await
+        {
+            Some(p) => p,
+            None => {
+                return UploadBatchOutcome {
+                    results: local_paths
+                        .iter()
+                        .map(|p| {
+                            let name = StdPath::new(p)
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("file")
+                                .to_string();
+                            UploadFileResult {
+                                file_name: name,
+                                success: false,
+                                error: Some("Transfer canceled or channel unavailable".to_string()),
+                            }
+                        })
+                        .collect(),
+                    succeeded: 0,
+                    skipped: 0,
+                    failures: Vec::new(),
+                };
+            }
+        };
+        _batch_permit = Some(permit);
         match crate::ssh::manager::SshManager::global().get_connection(server_id) {
             Ok(conn) => match conn.create_dedicated_sftp_session().await {
                 Ok(s) => Some(Arc::new(s)),
@@ -4430,7 +5477,8 @@ async fn perform_upload(
         let local_path = local_path.clone();
         // 目录内部会在每个子文件完成后自行更新 completed；只有顶层普通文件
         // 需要在 upload_path 成功返回后补记一次，避免多文件上传一直显示 0/N。
-        let is_top_level_file = std::fs::metadata(&local_path)
+        let is_top_level_file = tokio::fs::metadata(&local_path)
+            .await
             .map(|metadata| !metadata.is_dir())
             .unwrap_or(false);
         let remote_dir = remote_dir.to_string();
@@ -4575,14 +5623,22 @@ async fn perform_upload(
     }
 }
 
-/// 递归统计本地路径下的文件数
-/// 符号链接计为 0（与上传环节跳过 symlink 的行为一致），防止 symlink 环导致无限递归：
-/// 本函数在 spawn_blocking 中调用且 panic="abort"，栈溢出会直接崩溃整个应用。
+/// 递归统计本地路径下的文件数（遵循 SYMLINK_POLICY 并在跟随模式下做规范路径环路防护）。
+/// 本函数在 spawn_blocking 中调用且 panic="abort"，防止 symlink 环导致无限递归崩溃。
 fn count_local_files(path: &str) -> u64 {
-    count_local_files_inner(path, 0, &[])
+    let symlink_policy = SYMLINK_POLICY.load(Ordering::Relaxed);
+    let mut visited_dirs = std::collections::HashSet::new();
+    count_local_files_inner(path, 0, "", &[], symlink_policy, &mut visited_dirs)
 }
 
-fn count_local_files_inner(path: &str, depth: u32, extra_rules: &[String]) -> u64 {
+fn count_local_files_inner(
+    path: &str,
+    depth: u32,
+    rel_path: &str,
+    extra_rules: &[String],
+    symlink_policy: u8,
+    visited_dirs: &mut std::collections::HashSet<std::path::PathBuf>,
+) -> u64 {
     if depth > MAX_RECURSION_DEPTH {
         return 0;
     }
@@ -4590,24 +5646,50 @@ fn count_local_files_inner(path: &str, depth: u32, extra_rules: &[String]) -> u6
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("");
-    if crate::validators::is_ignored_with_extra(file_name, extra_rules) {
-        return 0;
-    }
     // symlink_metadata 不跟随符号链接：跟随版 metadata 会对指向目录的链接返回 is_dir=true，
     // 进而递归进入链接目标 —— 环形链接（如 ln -s . loop）即无限递归
-    let metadata = match std::fs::symlink_metadata(path) {
+    let sym_meta = match std::fs::symlink_metadata(path) {
         Ok(m) => m,
-        Err(_) => return 1,
+        Err(_) => return if depth == 0 { 1 } else { 0 },
     };
-    if metadata.file_type().is_symlink() {
+    if sym_meta.file_type().is_symlink() && symlink_policy == 0 {
         return 0;
     }
+    let metadata = if sym_meta.file_type().is_symlink() {
+        match std::fs::metadata(path) {
+            Ok(m) => m,
+            Err(_) => return 0,
+        }
+    } else {
+        sym_meta
+    };
     if !metadata.is_dir() {
+        let eff_rel = if rel_path.is_empty() { file_name } else { rel_path };
+        if !crate::validators::should_transfer_entry(
+            file_name,
+            eff_rel,
+            false,
+            Some(metadata.len()),
+            local_mtime_ms(&metadata),
+            extra_rules,
+        ) {
+            return 0;
+        }
         return 1;
     }
 
+    if depth > 0 && crate::validators::is_ignored_entry(file_name, rel_path, true, extra_rules) {
+        return 0;
+    }
+
+    if let Ok(canon) = std::fs::canonicalize(path) {
+        if !visited_dirs.insert(canon) {
+            return 0;
+        }
+    }
+
     let local_dir = std::path::Path::new(path);
-    let dir_rules = crate::validators::parse_gitignore_in_dir(local_dir);
+    let dir_rules = crate::validators::parse_gitignore_in_dir_scoped(local_dir, rel_path);
     let mut current_rules = extra_rules.to_vec();
     if !dir_rules.is_empty() {
         current_rules.extend(dir_rules);
@@ -4618,7 +5700,20 @@ fn count_local_files_inner(path: &str, depth: u32, extra_rules: &[String]) -> u6
         for entry in entries.flatten() {
             let p = entry.path();
             let p_str = p.to_string_lossy().to_string();
-            count += count_local_files_inner(&p_str, depth + 1, &current_rules);
+            let child_name = entry.file_name().to_string_lossy().to_string();
+            let child_rel = if rel_path.is_empty() {
+                child_name
+            } else {
+                format!("{}/{}", rel_path, child_name)
+            };
+            count += count_local_files_inner(
+                &p_str,
+                depth + 1,
+                &child_rel,
+                &current_rules,
+                symlink_policy,
+                visited_dirs,
+            );
         }
     }
     // 只统计真实文件数：此前 count.max(1) 会让每个空目录/仅含子目录的目录都虚增 1，
@@ -4641,34 +5736,24 @@ async fn upload_path(
     skip_existing: bool,
     concurrency: usize,
 ) -> Result<TransferSummary, String> {
-    let metadata = std::fs::metadata(local_path)
+    let metadata = tokio::fs::metadata(local_path)
+        .await
         .map_err(|e| format!("Failed to read local file: {}", e))?;
 
     if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(server_id).await {
         let ftp_remote_path = remote_path.replace('\\', "/");
         if metadata.is_dir() {
-            let send_clone = send.clone();
-            let on_file_done: Arc<dyn Fn(u64, u64, &str) + Send + Sync> =
-                Arc::new(move |done, total, name| {
-                    send_clone(done, total, name, "count");
-                });
-            crate::ftp::ftp_upload_dir_recursive(
+            return crate::ftp::ftp_upload_dir_recursive(
                 &ftp_cfg,
                 local_path,
                 &ftp_remote_path,
-                &on_file_done,
+                &send,
                 completed,
                 total_files,
+                skip_existing,
                 cancel,
-                0,
             )
-            .await?;
-            return Ok(TransferSummary {
-                succeeded: completed.load(Ordering::Relaxed),
-                skipped: 0,
-                failed: Vec::new(),
-                fatal: None,
-            });
+            .await;
         } else {
             let file_name = StdPath::new(local_path)
                 .file_name()
@@ -4743,6 +5828,18 @@ async fn upload_single_file(
         .and_then(|n| n.to_str())
         .unwrap_or("file");
 
+    if let Some(scp_res) = crate::files::remote_fs::try_scp_upload_single(
+        server_id,
+        local_path,
+        remote_path,
+        |transferred, total| send(transferred, total, file_name, "bytes"),
+        cancel,
+    )
+    .await
+    {
+        return scp_res;
+    }
+
     // 统一使用 manager.rs 成熟的 SFTP 流式传输（具备超时、取消、TOCTOU 续传校验、三步原子备份 rename 与 Windows 路径兼容）
     // 临时文件路径：外部传入（单文件，支持续传）或内部生成（目录递归，不支持续传）
     let owned_tmp = format!("{}.sw-upload-tmp-{}", remote_path.replace('\\', "/"), uuid::Uuid::new_v4());
@@ -4753,6 +5850,18 @@ async fn upload_single_file(
     //
     // 断连（含服务端 1GiB rekey 崩溃）时自动重连，新建专用会话并从远端 tmp
     // 实际大小续传；首轮复用外部共享会话（目录上传场景）
+    let _permit = if sftp.is_none() {
+        Some(
+            crate::ssh::manager::acquire_transfer_channel_with_cancel(
+                server_id,
+                cancel.map(|c| c.as_ref()),
+            )
+            .await
+            .ok_or_else(|| "Transfer canceled or channel unavailable".to_string())?,
+        )
+    } else {
+        None
+    };
     let sftp_result = upload_file_with_auto_retry(
         server_id,
         local_path,
@@ -4779,18 +5888,21 @@ struct LocalUploadItem {
 }
 
 /// 递归遍历本地目录结构并流式投递待上传文件到 MPSC Channel（生产者）
-/// 同时按需在远端创建目标目录结构（使用专用 SFTP 会话，不与文件传输竞争通道）
+/// 同时按需在远端创建目标目录结构（SFTP 使用专用会话，SCP 使用 mkdir）
 async fn walk_local_dir_to_channel(
+    server_id: &str,
     local_path: &str,
     remote_path: &str,
-    sftp: &russh_sftp::client::SftpSession,
+    sftp: Option<&russh_sftp::client::SftpSession>,
     tx: &tokio::sync::mpsc::Sender<LocalUploadItem>,
     cancel: Option<&Arc<AtomicBool>>,
     // 目录续传：远端已存在且大小一致时跳过
     skip_existing: bool,
     skipped: &Arc<AtomicU64>,
     depth: u32,
+    rel_base: &str,
     extra_rules: &[String],
+    visited_dirs: &mut std::collections::HashSet<std::path::PathBuf>,
     send: &Arc<dyn Fn(u64, u64, &str, &str) + Send + Sync + 'static>,
 ) -> Result<(), String> {
     if depth > MAX_RECURSION_DEPTH {
@@ -4805,23 +5917,49 @@ async fn walk_local_dir_to_channel(
         }
     }
 
-    // 使用专用 SFTP 会话在远端创建目录（若已存在则忽略）
-    let remote_dir_path = remote_path.replace('\\', "/");
-    if let Err(e) = sftp.create_dir(&remote_dir_path).await {
-        match sftp.metadata(&remote_dir_path).await {
-            Ok(meta) if meta.is_dir() => {}
-            _ => return Err(format!("SFTP mkdir failed: {}", e)),
+    if let Ok(canon) = tokio::fs::canonicalize(local_path).await {
+        if !visited_dirs.insert(canon) {
+            return Ok(());
         }
     }
 
-    let local_dir = std::path::Path::new(local_path);
-    let dir_rules = crate::validators::parse_gitignore_in_dir(local_dir);
-    let mut current_rules = extra_rules.to_vec();
-    if !dir_rules.is_empty() {
-        current_rules.extend(dir_rules);
+    // 在远端创建目录（若已存在则忽略）
+    let remote_dir_path = remote_path.replace('\\', "/");
+    if let Some(sftp_sess) = sftp {
+        if let Err(e) = sftp_sess.create_dir(&remote_dir_path).await {
+            match sftp_sess.metadata(&remote_dir_path).await {
+                Ok(meta) if meta.is_dir() => {}
+                _ => return Err(format!("SFTP mkdir failed: {}", e)),
+            }
+        }
+    } else {
+        let mk_res = crate::files::scp::scp_mkdir(server_id, &remote_dir_path).await?;
+        if mk_res.exit_code != 0 {
+            return Err(format!(
+                "SCP mkdir failed for '{}': {}",
+                remote_dir_path,
+                mk_res.stderr
+            ));
+        }
     }
 
-    let entries = std::fs::read_dir(local_path)
+    let mut current_rules = extra_rules.to_vec();
+    if crate::validators::should_respect_gitignore() {
+        let local_dir = std::path::PathBuf::from(local_path);
+        let rel_owned = rel_base.to_string();
+        if let Ok(dir_rules) = tokio::task::spawn_blocking(move || {
+            crate::validators::parse_gitignore_in_dir_scoped(&local_dir, &rel_owned)
+        })
+        .await
+        {
+            if !dir_rules.is_empty() {
+                current_rules.extend(dir_rules);
+            }
+        }
+    }
+
+    let mut rd = tokio::fs::read_dir(local_path)
+        .await
         .map_err(|e| format!("Failed to read local directory: {}", e))?;
 
     let is_windows_path = remote_path.contains('\\')
@@ -4829,17 +5967,35 @@ async fn walk_local_dir_to_channel(
             && remote_path.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false)
             && remote_path.chars().nth(1) == Some(':'));
 
-    for entry in entries {
+    let symlink_policy = SYMLINK_POLICY.load(Ordering::Relaxed);
+
+    while let Some(entry) = rd
+        .next_entry()
+        .await
+        .map_err(|e| format!("Failed to read entry: {}", e))?
+    {
         if let Some(flag) = cancel {
             if flag.load(Ordering::Relaxed) {
                 return Ok(());
             }
         }
-        let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-        let item_name = entry.file_name().to_string_lossy().to_string();
-        if crate::validators::is_ignored_with_extra(&item_name, &current_rules) {
+        // 先检查 file_type（不跟随软链），避免悬空软链在 SYMLINK_POLICY==0 时因 .metadata() 报错中断上传
+        let file_type = entry
+            .file_type()
+            .await
+            .map_err(|e| format!("Failed to read file type: {}", e))?;
+        if file_type.is_symlink() && symlink_policy == 0 {
+            // 符号链接记入 skipped（默认策略为跳过）
+            skipped.fetch_add(1, Ordering::Relaxed);
             continue;
         }
+
+        let item_name = entry.file_name().to_string_lossy().to_string();
+        let item_rel = if rel_base.is_empty() {
+            item_name.clone()
+        } else {
+            format!("{}/{}", rel_base, item_name)
+        };
         let item_local_path = entry.path().to_string_lossy().to_string();
         let item_remote_path = if is_windows_path {
             if remote_path.ends_with('\\') {
@@ -4855,16 +6011,24 @@ async fn walk_local_dir_to_channel(
             }
         };
 
-        let metadata = entry.metadata().map_err(|e| format!("Failed to read metadata: {}", e))?;
-        let file_type = entry.file_type().map_err(|e| format!("Failed to read file type: {}", e))?;
-        if file_type.is_symlink() && SYMLINK_POLICY.load(Ordering::Relaxed) == 0 {
-            // 符号链接记入 skipped（默认策略为跳过）
-            skipped.fetch_add(1, Ordering::Relaxed);
-            continue;
-        }
+        let metadata = match tokio::fs::metadata(&item_local_path).await {
+            Ok(m) => m,
+            Err(e) => {
+                if file_type.is_symlink() {
+                    // 跟随模式下遇到悬空符号链接，记入 skipped 并继续其余条目
+                    skipped.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
+                return Err(format!("Failed to read metadata: {}", e));
+            }
+        };
 
         if metadata.is_dir() {
+            if crate::validators::is_ignored_entry(&item_name, &item_rel, true, &current_rules) {
+                continue;
+            }
             Box::pin(walk_local_dir_to_channel(
+                server_id,
                 &item_local_path,
                 &item_remote_path,
                 sftp,
@@ -4873,15 +6037,36 @@ async fn walk_local_dir_to_channel(
                 skip_existing,
                 skipped,
                 depth + 1,
+                &item_rel,
                 &current_rules,
+                visited_dirs,
                 send,
             ))
             .await?;
         } else {
+            if !crate::validators::should_transfer_entry(
+                &item_name,
+                &item_rel,
+                false,
+                Some(metadata.len()),
+                local_mtime_ms(&metadata),
+                &current_rules,
+            ) {
+                continue;
+            }
             // 目录续传：远端已存在同名且大小一致的文件时直接跳过
             if skip_existing {
-                if let Ok(remote_meta) = sftp.metadata(&item_remote_path).await {
-                    if remote_meta.len() == metadata.len() {
+                if let Some(sftp_sess) = sftp {
+                    if let Ok(remote_meta) = sftp_sess.metadata(&item_remote_path).await {
+                        if remote_meta.len() == metadata.len() {
+                            skipped.fetch_add(1, Ordering::Relaxed);
+                            continue;
+                        }
+                    }
+                } else if let Ok((false, remote_sz)) =
+                    crate::files::scp::scp_stat_basic(server_id, &item_remote_path).await
+                {
+                    if remote_sz == metadata.len() {
                         skipped.fetch_add(1, Ordering::Relaxed);
                         continue;
                     }
@@ -4915,10 +6100,15 @@ async fn upload_dir_recursive(
     skip_existing: bool,
     concurrency: usize,
 ) -> Result<TransferSummary, String> {
+    let is_scp = matches!(
+        crate::files::remote_fs::resolve_backend(server_id).await,
+        Ok(crate::files::remote_fs::ResolvedRemoteFs::Scp { .. })
+    );
     let conn = crate::ssh::manager::SshManager::global()
         .get_connection(server_id)
         .map_err(|e| e.to_string())?;
     let skipped = Arc::new(AtomicU64::new(0));
+    let dir_succeeded = Arc::new(AtomicU64::new(0));
 
     // 预留通道配额给短命令与扫描，worker_limit 封顶到 TRANSFER_CHANNELS_PER_SERVER - 1
     let worker_limit = concurrency
@@ -4934,41 +6124,63 @@ async fn upload_dir_recursive(
     let server_id_producer = server_id.to_string();
     let conn_producer = conn.clone();
 
-    // 目录扫描在独立任务中进行：按需申请 1 个通道租约创建专用 SFTP 会话，
-    // 扫描并在远端按需创建好目录骨架后，自动释放会话与租约，不持续占用文件传输通道。
+    // 目录扫描在独立任务中进行：SFTP 模式下申请 1 个专用会话；SCP 模式下直接用 scp_mkdir
     let scan_handle = tokio::spawn(async move {
-        let permit = match crate::ssh::manager::acquire_transfer_channel_with_cancel(
-            &server_id_producer,
-            cancel_producer.as_ref().map(|a| a.as_ref()),
-        )
-        .await
-        {
-            Some(p) => p,
-            None => return Err("Transfer canceled or channel unavailable".to_string()),
-        };
-
-        let producer_sftp = conn_producer
-            .create_dedicated_sftp_session()
+        let mut visited_dirs = std::collections::HashSet::new();
+        if is_scp {
+            walk_local_dir_to_channel(
+                &server_id_producer,
+                &local_path_producer,
+                &remote_path_producer,
+                None,
+                &tx,
+                cancel_producer.as_ref(),
+                skip_existing,
+                &skipped_producer,
+                1,
+                "",
+                &[],
+                &mut visited_dirs,
+                &send_producer,
+            )
             .await
-            .map_err(|e| format!("SFTP session failed for directory scan: {}", e))?;
+        } else {
+            let permit = match crate::ssh::manager::acquire_transfer_channel_with_cancel(
+                &server_id_producer,
+                cancel_producer.as_ref().map(|a| a.as_ref()),
+            )
+            .await
+            {
+                Some(p) => p,
+                None => return Err("Transfer canceled or channel unavailable".to_string()),
+            };
 
-        let res = walk_local_dir_to_channel(
-            &local_path_producer,
-            &remote_path_producer,
-            &producer_sftp,
-            &tx,
-            cancel_producer.as_ref(),
-            skip_existing,
-            &skipped_producer,
-            1,
-            &[],
-            &send_producer,
-        )
-        .await;
+            let producer_sftp = conn_producer
+                .create_dedicated_sftp_session()
+                .await
+                .map_err(|e| format!("SFTP session failed for directory scan: {}", e))?;
 
-        drop(producer_sftp);
-        drop(permit);
-        res
+            let res = walk_local_dir_to_channel(
+                &server_id_producer,
+                &local_path_producer,
+                &remote_path_producer,
+                Some(&producer_sftp),
+                &tx,
+                cancel_producer.as_ref(),
+                skip_existing,
+                &skipped_producer,
+                1,
+                "",
+                &[],
+                &mut visited_dirs,
+                &send_producer,
+            )
+            .await;
+
+            drop(producer_sftp);
+            drop(permit);
+            res
+        }
     });
 
     let shared_rx = Arc::new(tokio::sync::Mutex::new(rx));
@@ -4978,13 +6190,14 @@ async fn upload_dir_recursive(
     let fail_streak = Arc::new(AtomicU64::new(0));
 
     // 启动固定数量的持久 Worker 线程。
-    // 每个 Worker 在其生命周期内最多持有 1 个专用 SFTP 会话及 1 个全局通道名额，
-    // 复用此会话持续从 shared_rx 消费待传文件，彻底避免按文件高频创建/销毁会话与通道死锁。
+    // SFTP 模式下每个 Worker 持有 1 个专用 SFTP 会话及 1 个全局通道名额；
+    // SCP 模式下每个 Worker 持有 1 个全局通道名额并经由 scp_upload_file 流式上传。
     for _ in 0..worker_limit {
         let rx = shared_rx.clone();
         let conn = conn.clone();
         let send = send.clone();
         let completed = completed.clone();
+        let dir_succeeded = dir_succeeded.clone();
         let server_id = server_id.to_string();
         let cancel = cancel.cloned();
         let fatal_error = fatal_error.clone();
@@ -4996,6 +6209,7 @@ async fn upload_dir_recursive(
                 russh_sftp::client::SftpSession,
                 tokio::sync::OwnedSemaphorePermit,
             )> = None;
+            let mut scp_permit: Option<tokio::sync::OwnedSemaphorePermit> = None;
 
             loop {
                 if let Some(ref flag) = cancel {
@@ -5018,67 +6232,99 @@ async fn upload_dir_recursive(
                     None => break, // 生产者完成且管道已空，Worker 正常退出
                 };
 
-                // 首次处理文件时延迟建立专用 SFTP 会话与申请通道租约（按需占用）
-                if worker_session.is_none() {
-                    let permit = match crate::ssh::manager::acquire_transfer_channel_with_cancel(
-                        &server_id,
-                        cancel.as_ref().map(|a| a.as_ref()),
-                    )
-                    .await
-                    {
-                        Some(p) => p,
-                        None => {
-                            let mut err_guard = fatal_error.lock().await;
-                            if err_guard.is_none() {
-                                *err_guard = Some("Transfer canceled or channel closed".to_string());
-                            }
-                            break;
-                        }
-                    };
-
-                    match conn.create_dedicated_sftp_session().await {
-                        Ok(s) => {
-                            worker_session = Some((s, permit));
-                        }
-                        Err(e) => {
-                            let mut err_guard = fatal_error.lock().await;
-                            if err_guard.is_none() {
-                                *err_guard = Some(format!("SFTP session failed: {}", e));
-                            }
-                            break;
-                        }
-                    }
-                }
-
-                let (ref sftp, _) = worker_session.as_ref().unwrap();
-                let ul_tmp_path = format!(
-                    "{}.sw-upload-tmp-{}",
-                    task.remote_path.replace('\\', "/"),
-                    uuid::Uuid::new_v4()
-                );
                 let send_bytes = send.clone();
                 let file_remote = task.remote_path.clone();
 
-                let ul_res = upload_file_with_auto_retry(
-                    &server_id,
-                    &task.local_path,
-                    &task.remote_path,
-                    &ul_tmp_path,
-                    Some(sftp),
-                    move |transferred, total| {
-                        send_bytes(transferred, total, &file_remote, "bytes");
-                    },
-                    cancel.as_ref(),
-                    None,
-                    false,
-                    // 目录批量上传：跳过逐文件 fsync
-                    false,
-                )
-                .await;
+                let ul_res = if is_scp {
+                    if scp_permit.is_none() {
+                        match crate::ssh::manager::acquire_transfer_channel_with_cancel(
+                            &server_id,
+                            cancel.as_ref().map(|a| a.as_ref()),
+                        )
+                        .await
+                        {
+                            Some(p) => scp_permit = Some(p),
+                            None => {
+                                let mut err_guard = fatal_error.lock().await;
+                                if err_guard.is_none() {
+                                    *err_guard = Some("Transfer canceled or channel closed".to_string());
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    crate::files::scp::scp_upload_file(
+                        &server_id,
+                        &task.local_path,
+                        &task.remote_path,
+                        move |transferred, total| {
+                            send_bytes(transferred, total, &file_remote, "bytes");
+                        },
+                        cancel.as_ref(),
+                    )
+                    .await
+                } else {
+                    // 首次处理文件时延迟建立专用 SFTP 会话与申请通道租约（按需占用）
+                    if worker_session.is_none() {
+                        let permit = match crate::ssh::manager::acquire_transfer_channel_with_cancel(
+                            &server_id,
+                            cancel.as_ref().map(|a| a.as_ref()),
+                        )
+                        .await
+                        {
+                            Some(p) => p,
+                            None => {
+                                let mut err_guard = fatal_error.lock().await;
+                                if err_guard.is_none() {
+                                    *err_guard = Some("Transfer canceled or channel closed".to_string());
+                                }
+                                break;
+                            }
+                        };
+
+                        match conn.create_dedicated_sftp_session().await {
+                            Ok(s) => {
+                                worker_session = Some((s, permit));
+                            }
+                            Err(e) => {
+                                let mut err_guard = fatal_error.lock().await;
+                                if err_guard.is_none() {
+                                    *err_guard = Some(format!("SFTP session failed: {}", e));
+                                }
+                                break;
+                            }
+                        }
+                    }
+
+                    let (ref sftp, _) = worker_session.as_ref().unwrap();
+                    let ul_tmp_path = format!(
+                        "{}.sw-upload-tmp-{}",
+                        task.remote_path.replace('\\', "/"),
+                        uuid::Uuid::new_v4()
+                    );
+
+                    upload_file_with_auto_retry(
+                        &server_id,
+                        &task.local_path,
+                        &task.remote_path,
+                        &ul_tmp_path,
+                        Some(sftp),
+                        move |transferred, total| {
+                            send_bytes(transferred, total, &file_remote, "bytes");
+                        },
+                        cancel.as_ref(),
+                        None,
+                        false,
+                        // 目录批量上传：跳过逐文件 fsync
+                        false,
+                    )
+                    .await
+                };
 
                 match ul_res {
                     Ok(()) => {
                         fail_streak.store(0, Ordering::Relaxed);
+                        dir_succeeded.fetch_add(1, Ordering::Relaxed);
                         let done = completed.fetch_add(1, Ordering::SeqCst) + 1;
                         if total_files > 0 {
                             send(done, total_files, &task.remote_path, "count");
@@ -5088,6 +6334,7 @@ async fn upload_dir_recursive(
                         // 若遇底层网络断开或会话级致命错误，丢弃当前会话（下轮自动重连或熔断）
                         if is_session_fatal_error(&e) {
                             worker_session = None;
+                            scp_permit = None;
                         }
                         fail_streak.fetch_add(1, Ordering::Relaxed);
                         failures.lock().await.push(TransferFailure {
@@ -5109,6 +6356,9 @@ async fn upload_dir_recursive(
             }
         });
     }
+
+    // 仅由 Worker 持有 receiver，避免 Worker 提前退出时父作用域保活 rx 导致 scan_handle 死锁
+    drop(shared_rx);
 
     // 等待所有 Worker 完成
     while let Some(res) = join_set.join_next().await {
@@ -5135,7 +6385,7 @@ async fn upload_dir_recursive(
     // 最终由命令结束时的 done 事件触发前端将 current/total 严丝合缝对齐。
     let failed = std::mem::take(&mut *failures.lock().await);
     Ok(TransferSummary {
-        succeeded: completed.load(Ordering::Relaxed),
+        succeeded: dir_succeeded.load(Ordering::Relaxed),
         skipped: skipped.load(Ordering::Relaxed),
         failed,
         fatal,
@@ -5165,6 +6415,51 @@ pub async fn files_resume_upload(
     transfer_id: String,
     expected_source_size: Option<u64>,
 ) -> Result<FileUploadResult, String> {
+    let file_name = StdPath::new(&local_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("file")
+        .to_string();
+
+    let emit_early_fail = |err_msg: &str| {
+        if !transfer_id.trim().is_empty() {
+            send_progress(
+                &app,
+                TransferProgress {
+                    transfer_id: transfer_id.clone(),
+                    r#type: "upload".to_string(),
+                    current: 0,
+                    total: 0,
+                    file_name: file_name.clone(),
+                    done: Some(false),
+                    phase: None,
+                    total_type: None,
+                    tmp_path: None,
+                    error: Some(err_msg.to_string()),
+                },
+            );
+        }
+    };
+
+    let resolved_fs = match crate::files::remote_fs::resolve_backend(&server_id).await {
+        Ok(fs) => fs,
+        Err(e) => {
+            emit_early_fail(&e);
+            return Err(e);
+        }
+    };
+    if !resolved_fs.capabilities().supports_resume {
+        let err_msg = format!(
+            "Resume is not supported on {} backend",
+            resolved_fs.capabilities().backend
+        );
+        emit_early_fail(&err_msg);
+        return Ok(FileUploadResult {
+            success: false,
+            error: Some(err_msg),
+            results: Vec::new(),
+        });
+    }
     let target_type = load_target_type(&server_id).await;
     // Windows 目标路径归一：前端记录的 targetPath 是 POSIX 形式（/C:/...），
     // 而首次上传实际使用盘符形式（C:\...，SFTP 层再统一为 C:/...）。续传若直接
@@ -5178,12 +6473,14 @@ pub async fn files_resume_upload(
     // 路径校验（defense-in-depth，按目标类型分发）
     let path_validation = crate::validators::validate_path_for_target(remote_path.clone(), false, &target_type);
     if !path_validation.valid {
+        let err_msg = format!(
+            "Invalid remote path: {}",
+            path_validation.error.unwrap_or_default()
+        );
+        emit_early_fail(&err_msg);
         return Ok(FileUploadResult {
             success: false,
-            error: Some(format!(
-                "Invalid remote path: {}",
-                path_validation.error.unwrap_or_default()
-            )),
+            error: Some(err_msg),
             results: Vec::new(),
         });
     }
@@ -5192,19 +6489,23 @@ pub async fn files_resume_upload(
     // 防止攻击者构造 tmp_remote_path="/home/victim/.ssh/id_rsa" 触发任意文件 rename（窃取/丢失）
     let tmp_validation = crate::validators::validate_tmp_path(&tmp_remote_path, Some(&remote_path));
     if !tmp_validation.valid {
+        let err_msg = format!(
+            "Invalid temporary remote path: {}",
+            tmp_validation.error.unwrap_or_default()
+        );
+        emit_early_fail(&err_msg);
         return Ok(FileUploadResult {
             success: false,
-            error: Some(format!(
-                "Invalid temporary remote path: {}",
-                tmp_validation.error.unwrap_or_default()
-            )),
+            error: Some(err_msg),
             results: Vec::new(),
         });
     }
     if crate::files::remote::is_dangerous_root_path(&tmp_remote_path) {
+        let err_msg = format!("Refused to resume upload to dangerous root path: {}", tmp_remote_path);
+        emit_early_fail(&err_msg);
         return Ok(FileUploadResult {
             success: false,
-            error: Some(format!("Refused to resume upload to dangerous root path: {}", tmp_remote_path)),
+            error: Some(err_msg),
             results: Vec::new(),
         });
     }
@@ -5216,33 +6517,31 @@ pub async fn files_resume_upload(
         match tokio::fs::metadata(&local_path).await {
             Ok(meta) => {
                 if meta.len() != expected {
+                    let err_msg = format!(
+                        "Source file has changed since transfer started (size {} -> {}); \
+                         resume aborted to prevent corruption. Please start a fresh transfer.",
+                        expected,
+                        meta.len()
+                    );
+                    emit_early_fail(&err_msg);
                     return Ok(FileUploadResult {
                         success: false,
-                        error: Some(format!(
-                            "Source file has changed since transfer started (size {} -> {}); \
-                             resume aborted to prevent corruption. Please start a fresh transfer.",
-                            expected,
-                            meta.len()
-                        )),
+                        error: Some(err_msg),
                         results: Vec::new(),
                     });
                 }
             }
             Err(e) => {
+                let err_msg = format!("Cannot stat source file to verify integrity: {}", e);
+                emit_early_fail(&err_msg);
                 return Ok(FileUploadResult {
                     success: false,
-                    error: Some(format!("Cannot stat source file to verify integrity: {}", e)),
+                    error: Some(err_msg),
                     results: Vec::new(),
                 });
             }
         }
     }
-
-    let file_name = StdPath::new(&local_path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("file")
-        .to_string();
 
     let send = |current: u64, total: u64, name: &str, total_type: &str| {
         send_progress(
@@ -5354,14 +6653,34 @@ pub async fn files_resume_upload(
         };
     }
 
-    // 获取 SFTP 会话
-    let conn = match crate::ssh::manager::SshManager::global().get_connection(&server_id) {
-        Ok(c) => c,
-        Err(e) => {
+    // 获取 SFTP 会话（申请传输通道名额）
+    let _permit = match crate::ssh::manager::acquire_transfer_channel_with_cancel(
+        &server_id,
+        Some(&*cancel_flag),
+    )
+    .await
+    {
+        Some(p) => p,
+        None => {
+            let err_msg = "Transfer canceled or channel unavailable".to_string();
+            emit_early_fail(&err_msg);
             unregister_transfer(&transfer_id);
             return Ok(FileUploadResult {
                 success: false,
-                error: Some(e.to_string()),
+                error: Some(err_msg),
+                results: Vec::new(),
+            });
+        }
+    };
+    let conn = match crate::ssh::manager::SshManager::global().get_connection(&server_id) {
+        Ok(c) => c,
+        Err(e) => {
+            let err_msg = e.to_string();
+            emit_early_fail(&err_msg);
+            unregister_transfer(&transfer_id);
+            return Ok(FileUploadResult {
+                success: false,
+                error: Some(err_msg),
                 results: Vec::new(),
             });
         }
@@ -5369,10 +6688,12 @@ pub async fn files_resume_upload(
     let sftp = match conn.create_dedicated_sftp_session().await {
         Ok(s) => s,
         Err(e) => {
+            let err_msg = format!("SFTP session failed: {}", e);
+            emit_early_fail(&err_msg);
             unregister_transfer(&transfer_id);
             return Ok(FileUploadResult {
                 success: false,
-                error: Some(format!("SFTP session failed: {}", e)),
+                error: Some(err_msg),
                 results: Vec::new(),
             });
         }
@@ -5440,6 +6761,9 @@ pub async fn files_resume_upload(
         );
     }
 
+    // 预先探测完远端 tmp 大小后释放此临时探测会话，避免 upload_file_with_auto_retry 走共享会话分支而在断连时放弃自动重连
+    drop(sftp);
+
     // 执行传输：续传传入 Some(offset)，全新传输传入 None
     // keep_tmp_on_failure=true：与函数文档注释对齐——失败/暂停保留临时文件允许
     // 再次续传；取消时由前端显式调用 files_cleanup_tmp_file 清理
@@ -5449,7 +6773,7 @@ pub async fn files_resume_upload(
         &local_path,
         &remote_path,
         &effective_tmp_path,
-        Some(&sftp),
+        None,
         |transferred, total| {
             send(transferred, total, &file_name, "bytes");
         },
@@ -5514,16 +6838,58 @@ pub async fn files_resume_download(
     offset: u64,
     transfer_id: String,
 ) -> Result<FileDownloadResult, String> {
+    let file_name = remote_path.rsplit(['/', '\\']).next().unwrap_or("file").to_string();
+    let emit_early_fail = |err_msg: &str| {
+        if !transfer_id.trim().is_empty() {
+            send_progress(
+                &app,
+                TransferProgress {
+                    transfer_id: transfer_id.clone(),
+                    r#type: "download".to_string(),
+                    current: 0,
+                    total: 0,
+                    file_name: file_name.clone(),
+                    done: Some(false),
+                    phase: None,
+                    total_type: Some("bytes".to_string()),
+                    tmp_path: None,
+                    error: Some(err_msg.to_string()),
+                },
+            );
+        }
+    };
+
+    let resolved_fs = match crate::files::remote_fs::resolve_backend(&server_id).await {
+        Ok(fs) => fs,
+        Err(e) => {
+            emit_early_fail(&e);
+            return Err(e);
+        }
+    };
+    if !resolved_fs.capabilities().supports_resume {
+        let err_msg = format!(
+            "Resume is not supported on {} backend",
+            resolved_fs.capabilities().backend
+        );
+        emit_early_fail(&err_msg);
+        return Ok(FileDownloadResult {
+            success: false,
+            error: Some(err_msg),
+            local_path: None,
+        });
+    }
     let target_type = load_target_type(&server_id).await;
     // 路径校验（按目标类型分发）
     let path_validation = crate::validators::validate_path_for_target(remote_path.clone(), false, &target_type);
     if !path_validation.valid {
+        let err_msg = format!(
+            "Invalid remote path: {}",
+            path_validation.error.unwrap_or_default()
+        );
+        emit_early_fail(&err_msg);
         return Ok(FileDownloadResult {
             success: false,
-            error: Some(format!(
-                "Invalid remote path: {}",
-                path_validation.error.unwrap_or_default()
-            )),
+            error: Some(err_msg),
             local_path: None,
         });
     }
@@ -5532,17 +6898,17 @@ pub async fn files_resume_download(
     // 防止攻击者构造 tmp_local_path="C:\Important\File" 触发任意本地文件删除/损坏
     let tmp_validation = crate::validators::validate_tmp_path(&tmp_local_path, Some(&local_path));
     if !tmp_validation.valid {
+        let err_msg = format!(
+            "Invalid temporary local path: {}",
+            tmp_validation.error.unwrap_or_default()
+        );
+        emit_early_fail(&err_msg);
         return Ok(FileDownloadResult {
             success: false,
-            error: Some(format!(
-                "Invalid temporary local path: {}",
-                tmp_validation.error.unwrap_or_default()
-            )),
+            error: Some(err_msg),
             local_path: None,
         });
     }
-
-    let file_name = remote_path.rsplit(['/', '\\']).next().unwrap_or("file").to_string();
 
     let send = |current: u64, total: u64, name: &str, total_type: &str| {
         send_progress(
@@ -5644,21 +7010,31 @@ pub async fn files_resume_download(
         )
         .await
     } else {
-        download_file_with_auto_retry(
+        match crate::ssh::manager::acquire_transfer_channel_with_cancel(
             &server_id,
-            &remote_path,
-            &local_path,
-            &effective_tmp_path,
-            None,
-            |transferred, total| {
-                send(transferred, total, &file_name, "bytes");
-            },
-            cancel_ref,
-            effective_offset,
-            true,
-            true,
+            Some(&*cancel_flag),
         )
         .await
+        {
+            Some(_permit) => {
+                download_file_with_auto_retry(
+                    &server_id,
+                    &remote_path,
+                    &local_path,
+                    &effective_tmp_path,
+                    None,
+                    |transferred, total| {
+                        send(transferred, total, &file_name, "bytes");
+                    },
+                    cancel_ref,
+                    effective_offset,
+                    true,
+                    true,
+                )
+                .await
+            }
+            None => Err("Transfer canceled or channel unavailable".to_string()),
+        }
     };
 
     unregister_transfer(&transfer_id);
@@ -5724,9 +7100,24 @@ pub async fn files_cleanup_tmp_file(
     }
 
     if is_remote {
-        if let Ok(Some(ftp_cfg)) = crate::ftp::resolve_ftp_config_for_server(&server_id).await {
-            let _ = crate::ftp::ftp_delete(ftp_cfg, &tmp_path.replace('\\', "/")).await;
-            return Ok(true);
+        match crate::files::remote_fs::resolve_backend(&server_id).await? {
+            crate::files::remote_fs::ResolvedRemoteFs::Ftp { cfg, .. } => {
+                let _ = crate::ftp::ftp_delete(cfg, &tmp_path.replace('\\', "/")).await;
+                return Ok(true);
+            }
+            crate::files::remote_fs::ResolvedRemoteFs::Scp { .. } => {
+                let res = crate::files::scp::scp_delete(&server_id, &tmp_path).await?;
+                if res.exit_code == 0 {
+                    return Ok(true);
+                }
+                let msg = res.stderr;
+                let lower = msg.to_lowercase();
+                if lower.contains("no such file") || lower.contains("not found") {
+                    return Ok(true);
+                }
+                return Err(format!("Failed to remove remote tmp file: {}", msg));
+            }
+            crate::files::remote_fs::ResolvedRemoteFs::Sftp { .. } => {}
         }
         let conn = crate::ssh::manager::SshManager::global()
             .get_connection(&server_id)
@@ -6049,10 +7440,14 @@ async fn walk_s2s_dir_to_channel(
     tx: &tokio::sync::mpsc::Sender<ServerToServerItem>,
     cancel: Option<&Arc<AtomicBool>>,
     target_type: &str,
+    dest_target_type: &str,
     // 目录续传：目标已存在且大小一致时跳过
     skip_existing: bool,
     skipped: &Arc<AtomicU64>,
     depth: u32,
+    rel_base: &str,
+    extra_rules: &[String],
+    visited_dirs: &mut std::collections::HashSet<String>,
     send: &Arc<dyn Fn(u64, u64, &str, &str) + Send + Sync + 'static>,
 ) -> Result<(), String> {
     if depth > MAX_RECURSION_DEPTH {
@@ -6064,7 +7459,28 @@ async fn walk_s2s_dir_to_channel(
         }
     }
 
-    let remote_dest_dir = dest_path.replace('\\', "/");
+    let src_is_windows = target_type.eq_ignore_ascii_case("windows");
+    let dest_is_windows = dest_target_type.eq_ignore_ascii_case("windows");
+    let src_sftp_dir = if src_is_windows {
+        crate::targets::windows::path_resolver::PathResolver::to_sftp(src_path)
+    } else {
+        src_path.to_string()
+    };
+
+    // 符号链接循环防护：按源端规范路径去重
+    let canonical_dir = src_sftp
+        .canonicalize(&src_sftp_dir)
+        .await
+        .unwrap_or_else(|_| src_sftp_dir.trim_end_matches('/').to_string());
+    if !visited_dirs.insert(canonical_dir) {
+        return Ok(());
+    }
+
+    let remote_dest_dir = if dest_is_windows {
+        crate::targets::windows::path_resolver::PathResolver::to_sftp(dest_path)
+    } else {
+        dest_path.replace('\\', "/")
+    };
     if let Err(e) = dest_sftp.create_dir(&remote_dest_dir).await {
         match dest_sftp.metadata(&remote_dest_dir).await {
             Ok(meta) if meta.is_dir() => {}
@@ -6074,52 +7490,130 @@ async fn walk_s2s_dir_to_channel(
 
     let entries = crate::files::remote::files_list_with_target(
         server_id_src.to_string(),
-        src_path.to_string(),
+        src_sftp_dir.clone(),
         target_type,
     )
     .await?;
 
-    for entry in entries {
+    let mut current_rules = extra_rules.to_vec();
+    if crate::validators::should_respect_gitignore() {
+        const MAX_GITIGNORE_BYTES: usize = 64 * 1024;
+        if let Some(gi) = entries.iter().find(|e| !e.is_directory && e.name == ".gitignore") {
+            if gi.size <= MAX_GITIGNORE_BYTES as i64 {
+                let gi_sftp_path = if src_is_windows {
+                    crate::targets::windows::path_resolver::PathResolver::to_sftp(&gi.path)
+                } else {
+                    gi.path.clone()
+                };
+                if let Ok(mut file) = src_sftp.open(&gi_sftp_path).await {
+                    let mut buf = Vec::new();
+                    let mut chunk = [0u8; 8192];
+                    while buf.len() < MAX_GITIGNORE_BYTES {
+                        match file.read(&mut chunk).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => {
+                                let take = n.min(MAX_GITIGNORE_BYTES - buf.len());
+                                buf.extend_from_slice(&chunk[..take]);
+                            }
+                        }
+                    }
+                    let text = String::from_utf8_lossy(&buf);
+                    let dir_rules = crate::validators::parse_gitignore_content_scoped(&text, rel_base);
+                    if !dir_rules.is_empty() {
+                        current_rules.extend(dir_rules);
+                    }
+                }
+            }
+        }
+    }
+
+    let symlink_policy = SYMLINK_POLICY.load(Ordering::Relaxed);
+
+    for mut entry in entries {
         if let Some(flag) = cancel {
             if flag.load(Ordering::Relaxed) {
                 return Ok(());
             }
         }
-        if entry.name == "." || entry.name == ".." || crate::validators::is_ignored(&entry.name) {
+        if entry.name == "." || entry.name == ".." {
             continue;
         }
 
-        // symlink 检测：默认策略为跳过并记入 skipped；Follow 策略下继续传输目标
-        if entry.is_symlink && SYMLINK_POLICY.load(Ordering::Relaxed) == 0 {
-            skipped.fetch_add(1, Ordering::Relaxed);
-            continue;
+        let entry_sftp_path = if src_is_windows {
+            crate::targets::windows::path_resolver::PathResolver::to_sftp(&entry.path)
+        } else {
+            entry.path.clone()
+        };
+
+        // symlink 检测：默认策略为跳过并记入 skipped；Follow 策略下解析真实目标类型与大小
+        if entry.is_symlink {
+            if symlink_policy == 0 {
+                skipped.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+            match src_sftp.metadata(&entry_sftp_path).await {
+                Ok(meta) => {
+                    entry.is_directory = meta.is_dir();
+                    if !entry.is_directory && meta.len() > 0 {
+                        entry.size = meta.len().min(i64::MAX as u64) as i64;
+                    }
+                }
+                Err(_) => {
+                    skipped.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
+            }
         }
+
+        let item_rel = if rel_base.is_empty() {
+            entry.name.clone()
+        } else {
+            format!("{}/{}", rel_base, entry.name)
+        };
+        let mtime_ms = parse_modified_time_ms(&entry.modified_time);
 
         let item_dest_path = if remote_dest_dir == "/" {
             format!("/{}", entry.name)
         } else {
-            format!("{}/{}", remote_dest_dir, entry.name)
+            format!("{}/{}", remote_dest_dir.trim_end_matches('/'), entry.name)
         };
 
         if entry.is_directory {
+            if crate::validators::is_ignored_entry(&entry.name, &item_rel, true, &current_rules) {
+                continue;
+            }
             Box::pin(walk_s2s_dir_to_channel(
                 server_id_src,
                 src_sftp,
                 dest_sftp,
-                &entry.path,
+                &entry_sftp_path,
                 &item_dest_path,
                 tx,
                 cancel,
                 target_type,
+                dest_target_type,
                 skip_existing,
                 skipped,
                 depth + 1,
+                &item_rel,
+                &current_rules,
+                visited_dirs,
                 send,
             ))
             .await?;
         } else {
             // readdir 已返回文件大小，无需再为每个文件发一次 metadata RTT
             let size = entry.size.max(0) as u64;
+            if !crate::validators::should_transfer_entry(
+                &entry.name,
+                &item_rel,
+                false,
+                Some(size),
+                mtime_ms,
+                &current_rules,
+            ) {
+                continue;
+            }
 
             // 目录续传：目标已存在同名且大小一致的文件时直接跳过
             if skip_existing {
@@ -6131,9 +7625,9 @@ async fn walk_s2s_dir_to_channel(
                 }
             }
 
-            send(0, size, &entry.path, "manifest");
+            send(0, size, &entry_sftp_path, "manifest");
             if tx.send(ServerToServerItem {
-                src_path: entry.path,
+                src_path: entry_sftp_path,
                 dest_path: item_dest_path,
                 size,
             }).await.is_err() {
@@ -6178,10 +7672,12 @@ async fn server_to_server_dir_recursive(
     let src_conn_producer = src_conn.clone();
     let dest_conn_producer = dest_conn.clone();
 
-    // 一次查询源服务器目标类型，供整个目录树扫描复用（避免每个子目录都走 load_server_config）
+    // 一次查询源/目标服务器类型，供整个目录树扫描复用（避免每个子目录都走 load_server_config）
     let target_type_producer = load_target_type(server_id_src).await;
+    let dest_target_type_producer = load_target_type(server_id_dest).await;
 
     let scan_handle = tokio::spawn(async move {
+        let mut visited_dirs = std::collections::HashSet::new();
         let src_permit = match crate::ssh::manager::acquire_transfer_channel_with_cancel(
             &src_id_producer,
             cancel_producer.as_ref().map(|a| a.as_ref()),
@@ -6219,9 +7715,13 @@ async fn server_to_server_dir_recursive(
             &tx,
             cancel_producer.as_ref(),
             &target_type_producer,
+            &dest_target_type_producer,
             skip_existing,
             &skipped_producer,
             1,
+            "",
+            &[],
+            &mut visited_dirs,
             &send_producer,
         )
         .await;
@@ -6407,6 +7907,9 @@ async fn server_to_server_dir_recursive(
         });
     }
 
+    // 仅由 Worker 持有 receiver，避免 Worker 提前退出时父作用域保活 rx 导致 scan_handle 死锁
+    drop(shared_rx);
+
     while let Some(res) = join_set.join_next().await {
         if let Err(e) = res {
             eprintln!("[s2s_dir] task panicked: {}", e);
@@ -6448,13 +7951,63 @@ pub async fn files_server_to_server_transfer(
 ) -> Result<CommandResult, String> {
     let src_target_type = load_target_type(&src_server_id).await;
     let dest_target_type = load_target_type(&dest_server_id).await;
+
+    // S2S 直传目前仅实现 SFTP 通道；FTP/FTPS 与 SCP 降级后端尚未接入。
+    // 与其在底层 create_dedicated_sftp_session 处报含糊错误或直接失败，
+    // 不如在入口给出明确诊断，让用户知道需要改用 SFTP 或走本地中转。
+    let src_backend = crate::files::remote_fs::resolve_backend(&src_server_id).await;
+    let dest_backend = crate::files::remote_fs::resolve_backend(&dest_server_id).await;
+    let backend_label = |r: &Result<crate::files::remote_fs::ResolvedRemoteFs, String>| match r {
+        Ok(crate::files::remote_fs::ResolvedRemoteFs::Ftp { .. }) => "FTP/FTPS",
+        Ok(crate::files::remote_fs::ResolvedRemoteFs::Scp { .. }) => "SCP",
+        Ok(crate::files::remote_fs::ResolvedRemoteFs::Sftp { .. }) => "SFTP",
+        Err(_) => "未知/未连接",
+    };
+    let src_ok = matches!(src_backend, Ok(crate::files::remote_fs::ResolvedRemoteFs::Sftp { .. }));
+    let dest_ok = matches!(dest_backend, Ok(crate::files::remote_fs::ResolvedRemoteFs::Sftp { .. }));
+    if !src_ok || !dest_ok {
+        let err_msg = format!(
+            "服务器间直传目前仅支持 SFTP 通道（源端: {}，目标端: {}）。 FTP/FTPS 或 SCP 会话请改用本地中转上传/下载。",
+            backend_label(&src_backend), backend_label(&dest_backend)
+        );
+        let src_label = resolve_server_audit_label(&src_server_id).await;
+        let dest_label = resolve_server_audit_label(&dest_server_id).await;
+        record_transfer_audit(
+            Some(format!("{} -> {}", src_label, dest_label)),
+            "服务器间传输",
+            "failed",
+            Some(err_msg.clone()),
+        ).await;
+        return Ok(CommandResult::err(err_msg));
+    }
+
     let src_validation = crate::validators::validate_path_for_target(src_path.clone(), false, &src_target_type);
     if !src_validation.valid {
-        return Ok(CommandResult::err(format!("Invalid source path: {}", src_validation.error.unwrap_or_default())));
+        let err_msg = format!("Invalid source path: {}", src_validation.error.unwrap_or_default());
+        let src_label = resolve_server_audit_label(&src_server_id).await;
+        let dest_label = resolve_server_audit_label(&dest_server_id).await;
+        record_transfer_audit(
+            Some(format!("{} -> {}", src_label, dest_label)),
+            "服务器间传输",
+            "failed",
+            Some(format!("{} -> {}, error={}", src_path, dest_path, err_msg)),
+        )
+        .await;
+        return Ok(CommandResult::err(err_msg));
     }
     let dest_validation = crate::validators::validate_path_for_target(dest_path.clone(), false, &dest_target_type);
     if !dest_validation.valid {
-        return Ok(CommandResult::err(format!("Invalid dest path: {}", dest_validation.error.unwrap_or_default())));
+        let err_msg = format!("Invalid dest path: {}", dest_validation.error.unwrap_or_default());
+        let src_label = resolve_server_audit_label(&src_server_id).await;
+        let dest_label = resolve_server_audit_label(&dest_server_id).await;
+        record_transfer_audit(
+            Some(format!("{} -> {}", src_label, dest_label)),
+            "服务器间传输",
+            "failed",
+            Some(format!("{} -> {}, error={}", src_path, dest_path, err_msg)),
+        )
+        .await;
+        return Ok(CommandResult::err(err_msg));
     }
 
     let transfer_id = format!("s2s-{}", uuid::Uuid::new_v4());
@@ -6465,20 +8018,26 @@ pub async fn files_server_to_server_transfer(
         .unwrap_or("file")
         .to_string();
     let final_dest_name = target_name.unwrap_or(file_name.clone());
-    let final_dest_path = if dest_path == "/" {
+    let src_sftp_path = if src_target_type.eq_ignore_ascii_case("windows") {
+        crate::targets::windows::path_resolver::PathResolver::to_sftp(&src_path)
+    } else {
+        src_path.clone()
+    };
+    let dest_dir_sftp = if dest_target_type.eq_ignore_ascii_case("windows") {
+        crate::targets::windows::path_resolver::PathResolver::to_sftp(&dest_path)
+    } else {
+        dest_path.clone()
+    };
+    let clean_dest_dir = dest_dir_sftp.trim_end_matches('/');
+    let final_dest_path = if clean_dest_dir.is_empty() {
         format!("/{}", final_dest_name)
     } else {
-        format!("{}/{}", dest_path, final_dest_name)
+        format!("{}/{}", clean_dest_dir, final_dest_name)
     };
 
     // 判断源是否为目录：优先用 SFTP stat（跨平台），失败时回退 shell 命令
     // 注意：test -d 是 bash 内建，在 Windows PowerShell/cmd 默认 shell 下不可用
-    let src_remote_path = if src_target_type.eq_ignore_ascii_case("windows") {
-        crate::targets::windows::validators::posix_to_windows_path(&src_path)
-    } else {
-        src_path.clone()
-    };
-    let is_dir = match crate::ssh::manager::sftp_stat(&src_server_id, &src_remote_path).await {
+    let is_dir = match crate::ssh::manager::sftp_stat(&src_server_id, &src_sftp_path).await {
         Ok(meta) => meta.is_dir(),
         Err(_) => {
             // SFTP stat 失败时回退到 shell 判断（Linux 用 test -d，Windows 无可靠回退）
@@ -6582,7 +8141,7 @@ pub async fn files_server_to_server_transfer(
             &dest_server_id,
             &src_conn,
             &dest_conn,
-            &src_path,
+            &src_sftp_path,
             &final_dest_path,
             send_closure,
             &completed,
@@ -6620,6 +8179,19 @@ pub async fn files_server_to_server_transfer(
             Err(e) => Err(e),
         }
     } else {
+        let _src_permit = crate::ssh::manager::acquire_transfer_channel_with_cancel(
+            &src_server_id,
+            Some(&*cancel_flag),
+        )
+        .await
+        .ok_or_else(|| "Transfer canceled or src channel unavailable".to_string())?;
+        let _dest_permit = crate::ssh::manager::acquire_transfer_channel_with_cancel(
+            &dest_server_id,
+            Some(&*cancel_flag),
+        )
+        .await
+        .ok_or_else(|| "Transfer canceled or dest channel unavailable".to_string())?;
+
         // 使用独立 SFTP 会话（与 perform_upload 一致）：create_sftp_session 返回缓存的
         // 共享会话，长时间传输与用户同时浏览目录的 readdir 交错复用同一 session，
         // Windows sftp-server 不支持这种交错，会互相干扰甚至句柄报错
@@ -6628,7 +8200,7 @@ pub async fn files_server_to_server_transfer(
 
         // 单文件传输：断连自动重连重试（双腿 1GiB rekey 均可能断）
         // tmp 路径只生成一次，重试间复用；续传偏移取目标 tmp 实际大小
-        let meta = src_sftp.metadata(&src_path).await.map_err(|e| e.to_string())?;
+        let meta = src_sftp.metadata(&src_sftp_path).await.map_err(|e| e.to_string())?;
         let mut size = meta.size.unwrap_or(0);
 
         send_progress_closure(0, size, &file_name, "bytes", None, None);
@@ -6652,7 +8224,7 @@ pub async fn files_server_to_server_transfer(
             let attempt = server_to_server_single_file(
                 &src_sftp,
                 &dest_sftp,
-                &src_path,
+                &src_sftp_path,
                 &final_dest_path,
                 size,
                 |current, total, tmp| {
@@ -6721,7 +8293,7 @@ pub async fn files_server_to_server_transfer(
                         Ok((s, d)) => {
                             // 重取源文件大小（防断连期间源文件变化）+ 目标 tmp 实际大小
                             size = s
-                                .metadata(&src_path)
+                                .metadata(&src_sftp_path)
                                 .await
                                 .ok()
                                 .and_then(|m| m.size)
@@ -6756,10 +8328,21 @@ pub async fn files_server_to_server_transfer(
     };
     
     unregister_transfer(&transfer_id);
-    
+
+    let src_label = resolve_server_audit_label(&src_server_id).await;
+    let dest_label = resolve_server_audit_label(&dest_server_id).await;
+    let pair_label = format!("{} -> {}", src_label, dest_label);
+
     match result {
         Ok(()) => {
             send_progress_closure(0, 0, &file_name, "bytes", Some(true), None);
+            record_transfer_audit(
+                Some(pair_label),
+                "服务器间传输",
+                "success",
+                Some(format!("{} -> {}", src_path, final_dest_path)),
+            )
+            .await;
             Ok(CommandResult::ok("Server to Server transfer completed successfully"))
         }
         Err(e) => {
@@ -6779,6 +8362,13 @@ pub async fn files_server_to_server_transfer(
                     error: Some(e.clone()),
                 },
             );
+            record_transfer_audit(
+                Some(pair_label),
+                "服务器间传输",
+                "failed",
+                Some(format!("{} -> {}, error={}", src_path, final_dest_path, e)),
+            )
+            .await;
             Ok(CommandResult::err(e))
         }
     }
@@ -6826,6 +8416,18 @@ fn external_edit_registry() -> &'static Mutex<std::collections::HashMap<String, 
     EXTERNAL_EDIT_REGISTRY.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
 }
 
+fn format_size_limit(limit_bytes: u64) -> String {
+    if limit_bytes >= 1024 * 1024 && limit_bytes % (1024 * 1024) == 0 {
+        format!("{} MB", limit_bytes / (1024 * 1024))
+    } else if limit_bytes >= 1024 * 1024 {
+        format!("{:.2} MB", limit_bytes as f64 / (1024.0 * 1024.0))
+    } else if limit_bytes >= 1024 {
+        format!("{:.2} KB", limit_bytes as f64 / 1024.0)
+    } else {
+        format!("{} B", limit_bytes)
+    }
+}
+
 /// 启动外部编辑器联动：下载远程文件到临时缓存目录，启动外部编辑器，并在后台监听保存自动同步回传
 #[tauri::command]
 pub async fn files_start_external_edit(
@@ -6833,39 +8435,87 @@ pub async fn files_start_external_edit(
     server_id: String,
     remote_path: String,
     editor_cmd: Option<String>,
+    max_size_bytes: Option<u64>,
 ) -> Result<ExternalEditSession, String> {
-    use base64::Engine as _;
-
-    // 最大允许外部编辑的远程文件大小：2MB（防止大文件频繁全量同步与冲突检测造成严重性能与内存卡顿）
-    const MAX_EXTERNAL_EDIT_SIZE: u64 = 2 * 1024 * 1024; // 2MB
+    // 默认限制 10 MB；传入 Some(0) 时放宽到安全上限 100 MB；否则按指定上限执行
+    const DEFAULT_EXTERNAL_EDIT_MAX_SIZE: u64 = 10 * 1024 * 1024;
+    const SAFETY_CEILING_EXTERNAL_EDIT_SIZE: u64 = 100 * 1024 * 1024;
+    let effective_max_size = match max_size_bytes {
+        None => DEFAULT_EXTERNAL_EDIT_MAX_SIZE,
+        Some(0) => SAFETY_CEILING_EXTERNAL_EDIT_SIZE,
+        Some(limit) => limit.min(SAFETY_CEILING_EXTERNAL_EDIT_SIZE),
+    };
+    let limit_label = format_size_limit(effective_max_size);
+    let server_label = resolve_server_audit_label(&server_id).await;
 
     // 0. 预检远程文件大小，避免拉取超大文件消耗大量带宽和内存
     if let Ok(stat_json) = files_stat_info(server_id.clone(), remote_path.clone()).await {
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&stat_json) {
             if let Some(size) = val.get("size").and_then(|s| s.as_u64()) {
-                if size > MAX_EXTERNAL_EDIT_SIZE {
+                if size > effective_max_size {
                     let mb = size as f64 / (1024.0 * 1024.0);
-                    return Err(format!(
-                        "远程文件过大（{:.2} MB），外部编辑器仅支持打开不超过 2 MB 的文件",
-                        mb
-                    ));
+                    let err_msg = format!(
+                        "远程文件过大（{:.2} MB），外部编辑器仅支持打开不超过 {} 的文件",
+                        mb, limit_label
+                    );
+                    record_transfer_audit(
+                        Some(server_label),
+                        "外部编辑器打开",
+                        "failed",
+                        Some(format!("path={}, error={}", remote_path, err_msg)),
+                    )
+                    .await;
+                    return Err(err_msg);
                 }
             }
         }
     }
 
-    // 1. 读取远程文件内容 (Base64)
-    let b64_content = files_read_binary(server_id.clone(), remote_path.clone()).await?;
-    let file_bytes = base64::engine::general_purpose::STANDARD
-        .decode(b64_content.trim())
-        .map_err(|e| format!("Decode remote file content failed: {}", e))?;
+    // 1. 统一经 RemoteFs::read_bytes 读取远程文件内容（兼容 SFTP / FTP / SCP，且严格受 effective_max_size 限制，无 base64 内存放大）
+    let resolved_backend = match crate::files::remote_fs::resolve_backend(&server_id).await {
+        Ok(fs) => fs,
+        Err(e) => {
+            record_transfer_audit(
+                Some(server_label),
+                "外部编辑器打开",
+                "failed",
+                Some(format!("path={}, error={}", remote_path, e)),
+            )
+            .await;
+            return Err(e);
+        }
+    };
+    let file_bytes: Vec<u8> = match resolved_backend
+        .read_bytes(&remote_path, effective_max_size as usize)
+        .await
+    {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            record_transfer_audit(
+                Some(server_label),
+                "外部编辑器打开",
+                "failed",
+                Some(format!("path={}, error={}", remote_path, e)),
+            )
+            .await;
+            return Err(e);
+        }
+    };
 
-    if file_bytes.len() as u64 > MAX_EXTERNAL_EDIT_SIZE {
+    if file_bytes.len() as u64 > effective_max_size {
         let mb = file_bytes.len() as f64 / (1024.0 * 1024.0);
-        return Err(format!(
-            "远程文件过大（{:.2} MB），外部编辑器仅支持打开不超过 2 MB 的文件",
-            mb
-        ));
+        let err_msg = format!(
+            "远程文件过大（{:.2} MB），外部编辑器仅支持打开不超过 {} 的文件",
+            mb, limit_label
+        );
+        record_transfer_audit(
+            Some(server_label),
+            "外部编辑器打开",
+            "failed",
+            Some(format!("path={}, error={}", remote_path, err_msg)),
+        )
+        .await;
+        return Err(err_msg);
     }
 
     // 2. 提取文件名并准备本地独立隔离临时目录
@@ -6913,12 +8563,18 @@ pub async fn files_start_external_edit(
         .map_err(|e| format!("Create temp cache directory failed: {}", e))?;
 
     let local_file_path = temp_base.join(&file_name);
-    tokio::fs::write(&local_file_path, &file_bytes)
-        .await
-        .map_err(|e| format!("Write local temp file failed: {}", e))?;
+    if let Err(e) = tokio::fs::write(&local_file_path, &file_bytes).await {
+        let _ = tokio::fs::remove_dir_all(&temp_base).await;
+        return Err(format!("Write local temp file failed: {}", e));
+    }
 
     let local_path_str = local_file_path.to_string_lossy().to_string();
     let initial_size = file_bytes.len() as u64;
+    let initial_hash: [u8; 32] = {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(&file_bytes).into()
+    };
+    drop(file_bytes);
     let initial_time = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     let session_info = ExternalEditSession {
@@ -6941,16 +8597,31 @@ pub async fn files_start_external_edit(
     let local_path_for_watch = local_file_path.clone();
     let session_id_clone = session_id.clone();
     let file_name_clone = file_name.clone();
+    let limit_label_for_watch = limit_label.clone();
+
+    // 3.1 先注册到全局活跃表，再启动 watcher。
+    // 这样 watcher 运行期间的任何时刻调用 files_stop_external_edit 都能命中注册表并设置取消标志；
+    // 若先 spawn 后注册，窗口期内的 stop 会找不到会话，导致 watcher 无法取消、临时目录无人回收。
+    if let Ok(mut reg) = external_edit_registry().lock() {
+        reg.insert(
+            session_id.clone(),
+            ActiveExternalEdit {
+                session: session_info.clone(),
+                cancel_flag: cancel_flag.clone(),
+            },
+        );
+    }
+    // 通知所有前端模块（SFTP 面板 / Files 工作台）刷新活跃外部编辑会话条。
+    // 此前只有 SftpPanel 自己启动的会话会进入其本地列表，从 Files 模块启动的会话不可见也无法停止。
+    let _ = app.emit("files:external-file-started", session_info.clone());
 
     tokio::spawn(async move {
-        let mut last_mtime = std::fs::metadata(&local_path_for_watch)
-            .ok()
-            .and_then(|m| m.modified().ok());
-        let mut last_len = std::fs::metadata(&local_path_for_watch)
-            .ok()
-            .map(|m| m.len())
-            .unwrap_or(0);
-        let mut last_synced_bytes = file_bytes;
+        use sha2::{Digest, Sha256};
+        let initial_meta = tokio::fs::metadata(&local_path_for_watch).await.ok();
+        let mut last_mtime = initial_meta.as_ref().and_then(|m| m.modified().ok());
+        let mut last_len = initial_meta.as_ref().map(|m| m.len()).unwrap_or(0);
+        // 仅保留 32 字节 SHA-256 摘要作为基线，避免每个大文件会话长期常驻最高 100MB 字节缓冲
+        let mut last_synced_hash = initial_hash;
 
         tracing::info!(
             "Started external editor watcher for session {} on file {}",
@@ -6966,7 +8637,7 @@ pub async fn files_start_external_edit(
                 break;
             }
 
-            let meta = match std::fs::metadata(&local_path_for_watch) {
+            let meta = match tokio::fs::metadata(&local_path_for_watch).await {
                 Ok(m) => {
                     not_found_count = 0;
                     m
@@ -6985,26 +8656,68 @@ pub async fn files_start_external_edit(
                 }
             };
 
-            let current_mtime = meta.modified().ok();
-            let current_len = meta.len();
+            let pre_mtime = meta.modified().ok();
+            let pre_len = meta.len();
 
-            let mtime_changed = match (last_mtime, current_mtime) {
+            let mtime_changed = match (last_mtime, pre_mtime) {
                 (Some(a), Some(b)) => a != b,
-                _ => false,
+                _ => pre_mtime.is_some() != last_mtime.is_some(),
             };
 
-            if mtime_changed || current_len != last_len {
+            if mtime_changed || pre_len != last_len {
                 // 防抖 debounce 600ms，等待外部编辑器完成磁盘写入
                 tokio::time::sleep(tokio::time::Duration::from_millis(600)).await;
                 if cancel_flag_clone.load(Ordering::Relaxed) {
                     break;
                 }
 
+                // 防抖后再读取最终 mtime/len，避免窗口期内二次写入导致后续基准过期
+                let post_meta = tokio::fs::metadata(&local_path_for_watch).await.ok();
+                let post_mtime = post_meta.as_ref().and_then(|m| m.modified().ok()).or(pre_mtime);
+                let post_len = post_meta.as_ref().map(|m| m.len()).unwrap_or(pre_len);
+
+                // 内存防护：读入本地编辑文件前先校验大小上限，防止大文件 OOM
+                if post_len > effective_max_size {
+                    let mb = post_len as f64 / (1024.0 * 1024.0);
+                    let _ = app_clone.emit(
+                        "files:external-file-sync-failed",
+                        serde_json::json!({
+                            "sessionId": session_id_clone.clone(),
+                            "fileName": file_name_clone.clone(),
+                            "error": format!(
+                                "本地文件过大（{:.2} MB），超过外部编辑自动回传上限 {}",
+                                mb, limit_label_for_watch
+                            )
+                        }),
+                    );
+                    last_mtime = post_mtime;
+                    last_len = post_len;
+                    continue;
+                }
+
                 if let Ok(new_bytes) = tokio::fs::read(&local_path_for_watch).await {
+                    if new_bytes.len() as u64 > effective_max_size {
+                        let mb = new_bytes.len() as f64 / (1024.0 * 1024.0);
+                        let _ = app_clone.emit(
+                            "files:external-file-sync-failed",
+                            serde_json::json!({
+                                "sessionId": session_id_clone.clone(),
+                                "fileName": file_name_clone.clone(),
+                                "error": format!(
+                                    "本地文件过大（{:.2} MB），超过外部编辑自动回传上限 {}",
+                                    mb, limit_label_for_watch
+                                )
+                            }),
+                        );
+                        last_mtime = post_mtime;
+                        last_len = post_len;
+                        continue;
+                    }
+                    let new_hash: [u8; 32] = Sha256::digest(&new_bytes).into();
                     // 若内容实际上未变化则跳过
-                    if new_bytes == last_synced_bytes {
-                        last_mtime = current_mtime;
-                        last_len = current_len;
+                    if new_hash == last_synced_hash {
+                        last_mtime = post_mtime;
+                        last_len = post_len;
                         continue;
                     }
 
@@ -7015,31 +8728,66 @@ pub async fn files_start_external_edit(
                         server_id_clone
                     );
 
-                    // 写回前做冲突检测：只有确认「远端内容与上次同步基线不同」
-                    // 才算冲突。远端读取失败 / 解码失败一律放行原有自动回传路径，
-                    // 否则网络抖动会被误判成冲突，导致本地修改被静默放弃。
-                    let has_conflict = match files_read_binary(
-                        server_id_clone.clone(),
-                        remote_path_clone.clone(),
-                    )
-                    .await
-                    {
-                        Ok(b64) => match base64::engine::general_purpose::STANDARD.decode(b64.trim()) {
-                            Ok(bytes) => bytes != last_synced_bytes,
-                            Err(err) => {
+                    let backend = match crate::files::remote_fs::resolve_backend(&server_id_clone).await {
+                        Ok(fs) => fs,
+                        Err(err) => {
+                            let _ = app_clone.emit(
+                                "files:external-file-sync-failed",
+                                serde_json::json!({
+                                    "sessionId": session_id_clone.clone(),
+                                    "fileName": file_name_clone.clone(),
+                                    "error": format!("解析远程文件后端失败: {}", err)
+                                }),
+                            );
+                            last_mtime = post_mtime;
+                            last_len = post_len;
+                            continue;
+                        }
+                    };
+
+                    // 写回前做冲突检测（使用受 effective_max_size 限制的 read_bytes）：
+                    // 若远端文件已被改写或体积已超出限制，视为冲突并跳过自动覆盖；
+                    // 仅当远端文件不存在（已被删除/新建场景）或瞬时读取失败时按策略处理。
+                    let conflict_check = backend
+                        .read_bytes(&remote_path_clone, effective_max_size as usize)
+                        .await;
+                    let has_conflict = match conflict_check {
+                        Ok(bytes) => {
+                            let remote_hash: [u8; 32] = Sha256::digest(&bytes).into();
+                            remote_hash != last_synced_hash
+                        }
+                        Err(err) => {
+                            let lower = err.to_ascii_lowercase();
+                            if lower.contains("exceeds")
+                                || lower.contains("too large")
+                                || lower.contains("上限")
+                                || lower.contains("limit")
+                            {
+                                true
+                            } else if lower.contains("no such file")
+                                || lower.contains("not found")
+                                || lower.contains("does not exist")
+                                || lower.contains("550")
+                            {
+                                // 远端文件已不存在，放行写回
+                                false
+                            } else {
                                 tracing::warn!(
-                                    "External edit: remote content decode failed, keeping write-back: {}",
+                                    "External edit: remote conflict check failed, aborting write-back to avoid silent overwrite: {}",
                                     err
                                 );
-                                false
+                                let _ = app_clone.emit(
+                                    "files:external-file-sync-failed",
+                                    serde_json::json!({
+                                        "sessionId": session_id_clone.clone(),
+                                        "fileName": file_name_clone.clone(),
+                                        "error": format!("写回前冲突检测失败，已中止自动覆盖: {}", err)
+                                    }),
+                                );
+                                last_mtime = post_mtime;
+                                last_len = post_len;
+                                continue;
                             }
-                        },
-                        Err(err) => {
-                            tracing::warn!(
-                                "External edit: remote pre-write read failed, keeping write-back: {}",
-                                err
-                            );
-                            false
                         }
                     };
                     if has_conflict {
@@ -7056,29 +8804,25 @@ pub async fn files_start_external_edit(
                             }),
                         );
                         // 记录本次本地状态，避免同一变更被反复告警
-                        last_mtime = current_mtime;
-                        last_len = current_len;
+                        last_mtime = post_mtime;
+                        last_len = post_len;
                         continue;
                     }
 
-                    let b64_payload = format!(
-                        "::base64::{}",
-                        base64::engine::general_purpose::STANDARD.encode(&new_bytes)
-                    );
+                    let synced_len = new_bytes.len() as u64;
 
-                    match files_write(
-                        server_id_clone.clone(),
-                        remote_path_clone.clone(),
-                        b64_payload,
-                    )
-                    .await
+                    match backend
+                        .write_bytes_bounded(&remote_path_clone, new_bytes, effective_max_size as usize)
+                        .await
                     {
                         Ok(res) if res.exit_code == 0 => {
-                            last_synced_bytes = new_bytes;
-                            last_len = last_synced_bytes.len() as u64;
-                            last_mtime = std::fs::metadata(&local_path_for_watch)
+                            last_synced_hash = new_hash;
+                            last_len = synced_len;
+                            last_mtime = tokio::fs::metadata(&local_path_for_watch)
+                                .await
                                 .ok()
-                                .and_then(|m| m.modified().ok());
+                                .and_then(|m| m.modified().ok())
+                                .or(post_mtime);
 
                             let now_str = chrono::Local::now()
                                 .format("%Y-%m-%d %H:%M:%S")
@@ -7088,7 +8832,7 @@ pub async fn files_start_external_edit(
                             if let Ok(mut reg) = external_edit_registry().lock() {
                                 if let Some(active) = reg.get_mut(&session_id_clone) {
                                     active.session.last_synced_at = Some(now_str.clone());
-                                    active.session.last_synced_size = last_len;
+                                    active.session.last_synced_size = synced_len;
                                 }
                             }
 
@@ -7101,7 +8845,7 @@ pub async fn files_start_external_edit(
                                     remote_path: remote_path_clone.clone(),
                                     local_path: local_path_for_watch.to_string_lossy().to_string(),
                                     file_name: file_name_clone.clone(),
-                                    size: last_len,
+                                    size: synced_len,
                                     timestamp: now_str,
                                 },
                             );
@@ -7119,6 +8863,9 @@ pub async fn files_start_external_edit(
                                     "error": res.stderr
                                 }),
                             );
+                            // 记录已处理过的文件元数据，避免未再次保存前每 1 秒无限重试与弹窗轰炸
+                            last_mtime = post_mtime;
+                            last_len = post_len;
                         }
                         Err(e) => {
                             tracing::error!("External file auto-sync failed: {}", e);
@@ -7130,16 +8877,28 @@ pub async fn files_start_external_edit(
                                     "error": e
                                 }),
                             );
+                            // 记录已处理过的文件元数据，避免未再次保存前每 1 秒无限重试与弹窗轰炸
+                            last_mtime = post_mtime;
+                            last_len = post_len;
                         }
                     }
                 }
             }
         }
 
-        // 退出循环时，确保自动从全局注册表中移除
+        // 退出循环时，清理临时目录、全局注册表并通知前端移除会话
         if let Ok(mut reg) = external_edit_registry().lock() {
             reg.remove(&session_id_clone);
         }
+        if let Some(parent) = local_path_for_watch.parent() {
+            let _ = tokio::fs::remove_dir_all(parent).await;
+        }
+        let _ = app_clone.emit(
+            "files:external-file-stopped",
+            serde_json::json!({
+                "sessionId": session_id_clone.clone()
+            }),
+        );
 
         tracing::info!(
             "External editor watcher stopped for session {}",
@@ -7147,31 +8906,27 @@ pub async fn files_start_external_edit(
         );
     });
 
-    // 4. 将该会话加入全局活跃注册表
-    if let Ok(mut reg) = external_edit_registry().lock() {
-        reg.insert(
-            session_id.clone(),
-            ActiveExternalEdit {
-                session: session_info.clone(),
-                cancel_flag,
-            },
-        );
-    }
-
-    // 5. 启动外部编辑器打开该本地文件
-    let editor_choice = editor_cmd.as_deref().unwrap_or("default");
-    let open_res = match editor_choice {
+    // 4. 启动外部编辑器打开该本地文件（放到阻塞线程池，避免 spawn 阻塞 Tokio worker）
+    // 安全白名单：只接受前端可下发的 "code" / "default"，其余一律回退系统默认程序。
+    // 绝不把 IPC 传入的任意字符串当作可执行文件路径启动，避免渲染进程被注入后借命令执行任意程序。
+    let editor_choice = match editor_cmd.as_deref() {
+        Some("code") => "code".to_string(),
+        _ => "default".to_string(),
+    };
+    let editor_choice_for_log = editor_choice.clone();
+    let local_path_for_spawn = local_path_str.clone();
+    let open_res = tokio::task::spawn_blocking(move || match editor_choice.as_str() {
         "code" => {
             #[cfg(target_os = "windows")]
             {
                 std::process::Command::new("cmd")
-                    .args(["/c", "code", &local_path_str])
+                    .args(["/c", "code", &local_path_for_spawn])
                     .spawn()
             }
             #[cfg(not(target_os = "windows"))]
             {
                 std::process::Command::new("code")
-                    .arg(&local_path_str)
+                    .arg(&local_path_for_spawn)
                     .spawn()
             }
         }
@@ -7179,36 +8934,64 @@ pub async fn files_start_external_edit(
             #[cfg(target_os = "windows")]
             {
                 std::process::Command::new("cmd")
-                    .args(["/c", "start", "", &local_path_str])
+                    .args(["/c", "start", "", &local_path_for_spawn])
                     .spawn()
             }
             #[cfg(target_os = "macos")]
             {
                 std::process::Command::new("open")
-                    .arg(&local_path_str)
+                    .arg(&local_path_for_spawn)
                     .spawn()
             }
             #[cfg(not(any(target_os = "windows", target_os = "macos")))]
             {
                 std::process::Command::new("xdg-open")
-                    .arg(&local_path_str)
+                    .arg(&local_path_for_spawn)
                     .spawn()
             }
         }
-        custom_exe => {
-            std::process::Command::new(custom_exe)
-                .arg(&local_path_str)
-                .spawn()
+        _ => {
+            // 白名单之外的取值不可达（上方已规范化为 "code"/"default"）；
+            // 保留兜底为系统默认关联程序，绝不执行调用方传入的任意命令。
+            #[cfg(target_os = "windows")]
+            {
+                std::process::Command::new("cmd")
+                    .args(["/c", "start", "", &local_path_for_spawn])
+                    .spawn()
+            }
+            #[cfg(target_os = "macos")]
+            {
+                std::process::Command::new("open")
+                    .arg(&local_path_for_spawn)
+                    .spawn()
+            }
+            #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+            {
+                std::process::Command::new("xdg-open")
+                    .arg(&local_path_for_spawn)
+                    .spawn()
+            }
         }
-    };
+    })
+    .await
+    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+    .and_then(|r| r);
 
     if let Err(e) = open_res {
         tracing::warn!(
             "Spawn external editor '{}' returned error: {}, but file is cached and being watched.",
-            editor_choice,
+            editor_choice_for_log,
             e
         );
     }
+
+    record_transfer_audit(
+        Some(server_label),
+        "外部编辑器打开",
+        "success",
+        Some(format!("path={}, size={}", remote_path, initial_size)),
+    )
+    .await;
 
     Ok(session_info)
 }
@@ -7288,6 +9071,24 @@ pub fn stop_all_external_edits() {
                 let _ = std::fs::remove_dir_all(entry.path());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod stage3_fix_tests {
+    use super::parse_modified_time_ms;
+
+    #[test]
+    fn parses_iso_bsd_busybox_and_iis_modified_times() {
+        assert!(parse_modified_time_ms("2026-11-15 10:20:30").is_some());
+        assert!(parse_modified_time_ms("2026-11-15 10:20").is_some());
+        assert!(parse_modified_time_ms("2026-11-15T10:20:30Z").is_some());
+        assert!(parse_modified_time_ms("Nov 15 10:22").is_some());
+        assert!(parse_modified_time_ms("Nov  5 09:05").is_some());
+        assert!(parse_modified_time_ms("Nov 15 2025").is_some());
+        assert!(parse_modified_time_ms("08-11-26  02:30PM").is_some());
+        assert!(parse_modified_time_ms("08-11-26 02:30AM").is_some());
+        assert!(parse_modified_time_ms("").is_none());
     }
 }
 

@@ -12,11 +12,12 @@
 
 import React from 'react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, act, waitFor } from '@testing-library/react'
 import { SettingsDialog } from '../settings-dialog'
 import { AISettingsPanel } from '../ai-settings-panel'
 import { SyncSettingsPanel } from '../sync-settings-panel'
 import { useAppStore, DEFAULT_SFTP_EXCLUSIONS } from '@/store'
+import { backend } from '@/services/api'
 import { useUpdaterStore } from '@/store/updater-store'
 import { useAIStore } from '@/store/ai-store'
 import { useSyncStore } from '@/store/sync-store'
@@ -42,6 +43,8 @@ vi.mock('@/services/api', async (importOriginal) => {
       files: {
         ...actual.backend?.files,
         setExclusionConfig: vi.fn().mockResolvedValue(undefined),
+        setSymlinkPolicy: vi.fn().mockResolvedValue(undefined),
+        setTransferRateLimit: vi.fn().mockResolvedValue(undefined),
       },
       auditLogs: {
         list: vi.fn().mockResolvedValue([]),
@@ -103,10 +106,17 @@ describe('SettingsDialog Switches Suite', () => {
       terminalDrawBoldInBrightColors: true,
       terminalHintEnabled: true,
       terminalHighlightEnabled: true,
+      sftpDefaultViewMode: 'list',
+      sftpShowHidden: false,
       sftpLocalShowHidden: false,
       sftpRemoteShowHidden: false,
+      workspaceFileShowHidden: false,
       sftpExclusionEnabled: true,
       sftpExclusionPatterns: [...DEFAULT_SFTP_EXCLUSIONS],
+      sftpIncludePatterns: [],
+      sftpMinSizeKb: null,
+      sftpMaxSizeKb: null,
+      externalEditMaxSizeMb: 10,
       sftpRespectGitignore: true,
       appLockEnabled: false,
       appLockPasswordHash: null,
@@ -408,25 +418,32 @@ describe('SettingsDialog Switches Suite', () => {
   })
 
   describe('4. SFTP File Transfer Switches (SFTP 文件传输开关与条件置灰)', () => {
-    it('toggles sftpLocalShowHidden and sftpRemoteShowHidden', () => {
+    it('toggles unified sftpShowHidden and syncs legacy fields', () => {
       renderSettingsDialog({ defaultTab: 'sftp' })
 
-      const hiddenLabels = screen.getAllByText('显示隐藏文件')
-      expect(hiddenLabels.length).toBeGreaterThanOrEqual(2)
-
-      // 本地面板显示隐藏文件
-      const localSwitch = hiddenLabels[0].closest('.justify-between')!.querySelector('button[role="switch"]')!
+      const hiddenLabel = screen.getByText('显示隐藏文件')
+      const hiddenSwitch = hiddenLabel.closest('.justify-between')!.querySelector('button[role="switch"]')!
       act(() => {
-        fireEvent.click(localSwitch)
+        fireEvent.click(hiddenSwitch)
       })
-      expect(useAppStore.getState().sftpLocalShowHidden).toBe(true)
+      const state = useAppStore.getState()
+      expect(state.sftpShowHidden).toBe(true)
+      expect(state.sftpLocalShowHidden).toBe(true)
+      expect(state.sftpRemoteShowHidden).toBe(true)
+      expect(state.workspaceFileShowHidden).toBe(true)
+    })
 
-      // 远端面板显示隐藏文件
-      const remoteSwitch = hiddenLabels[1].closest('.justify-between')!.querySelector('button[role="switch"]')!
+    it('switches unified file viewMode across SFTP and Workspace preferences', () => {
+      renderSettingsDialog({ defaultTab: 'sftp' })
+
+      const largeBtn = screen.getByRole('button', { name: '大图标' })
       act(() => {
-        fireEvent.click(remoteSwitch)
+        fireEvent.click(largeBtn)
       })
-      expect(useAppStore.getState().sftpRemoteShowHidden).toBe(true)
+      const state = useAppStore.getState()
+      expect(state.sftpDefaultViewMode).toBe('large')
+      expect(state.sftpLocalViewMode).toBe('large')
+      expect(state.sftpRemoteViewMode).toBe('large')
     })
 
     it('toggles sftpExclusionEnabled and updates exclusion container opacity/pointer-events', () => {
@@ -474,6 +491,39 @@ describe('SettingsDialog Switches Suite', () => {
       expect(parentContainer.className).not.toContain('opacity-50')
     })
 
+    it('keeps sftpSymlinkPolicy interactive when sftpExclusionEnabled is disabled', () => {
+      useAppStore.setState({ sftpExclusionEnabled: false, sftpSymlinkPolicy: 'skip' })
+      renderSettingsDialog({ defaultTab: 'sftp' })
+
+      const followBtn = screen.getByRole('button', { name: '跟随并传输目标内容' })
+      expect(followBtn.closest('.pointer-events-none')).toBeNull()
+      expect(followBtn.closest('.opacity-50')).toBeNull()
+
+      act(() => {
+        fireEvent.click(followBtn)
+      })
+      expect(useAppStore.getState().sftpSymlinkPolicy).toBe('follow')
+    })
+
+    it('preserves non-zero precision when switching rateLimitUnit to MB/s on small values (<5 KB/s)', () => {
+      useAppStore.setState({ transferRateLimit: 1 })
+      renderSettingsDialog({ defaultTab: 'sftp' })
+
+      const mbBtn = screen.getByRole('button', { name: 'MB/s' })
+      act(() => {
+        fireEvent.click(mbBtn)
+      })
+
+      const rateInput = screen.getByDisplayValue('0.001') as HTMLInputElement
+      expect(rateInput.value).toBe('0.001')
+      expect(rateInput.value).not.toBe('0')
+
+      act(() => {
+        fireEvent.blur(rateInput)
+      })
+      expect(useAppStore.getState().transferRateLimit).toBe(1)
+    })
+
     it('toggles sftpRespectGitignore', () => {
       renderSettingsDialog({ defaultTab: 'sftp' })
 
@@ -490,6 +540,108 @@ describe('SettingsDialog Switches Suite', () => {
         fireEvent.click(gitignoreSwitch)
       })
       expect(useAppStore.getState().sftpRespectGitignore).toBe(true)
+    })
+
+    it('updates externalEditMaxSizeMb via number input (clamped 1~100) and unlimited checkbox (0)', () => {
+      renderSettingsDialog({ defaultTab: 'sftp' })
+
+      const maxInput = screen.getByRole('spinbutton', { name: '外部编辑大小上限 (MB)' }) as HTMLInputElement
+      expect(maxInput.value).toBe('10')
+
+      // 输入超限数值时夹紧到 100
+      act(() => {
+        fireEvent.change(maxInput, { target: { value: '250' } })
+      })
+      expect(useAppStore.getState().externalEditMaxSizeMb).toBe(100)
+
+      // 输入有效值 25
+      act(() => {
+        fireEvent.change(maxInput, { target: { value: '25' } })
+      })
+      expect(useAppStore.getState().externalEditMaxSizeMb).toBe(25)
+
+      // 勾选无限制复选框设为 0
+      const unlimitedLabel = screen.getByText('无限制（上限 100MB）')
+      const unlimitedCheckbox = unlimitedLabel.closest('label')!.querySelector('input[type="checkbox"]') as HTMLInputElement
+      act(() => {
+        fireEvent.click(unlimitedCheckbox)
+      })
+      expect(useAppStore.getState().externalEditMaxSizeMb).toBe(0)
+
+      // 取消勾选恢复默认值 10
+      act(() => {
+        fireEvent.click(unlimitedCheckbox)
+      })
+      expect(useAppStore.getState().externalEditMaxSizeMb).toBe(10)
+    })
+
+    it('updates sftpIncludePatterns and size range (KB) and syncs exclusion config to backend', () => {
+      const setExclusionSpy = vi.mocked(backend!.files.setExclusionConfig)
+      setExclusionSpy.mockClear()
+
+      renderSettingsDialog({ defaultTab: 'sftp' })
+
+      const includeInput = screen.getByRole('textbox', { name: '包含过滤白名单 (Include Glob)' }) as HTMLTextAreaElement
+      act(() => {
+        fireEvent.change(includeInput, { target: { value: '*.log, src/**/*.ts' } })
+      })
+      expect(useAppStore.getState().sftpIncludePatterns).toEqual(['*.log', 'src/**/*.ts'])
+
+      const minInput = screen.getByLabelText('最小 (KB)') as HTMLInputElement
+      const maxInput = screen.getByLabelText('最大 (KB)') as HTMLInputElement
+
+      act(() => {
+        fireEvent.change(minInput, { target: { value: '128' } })
+        fireEvent.change(maxInput, { target: { value: '4096' } })
+      })
+
+      expect(useAppStore.getState().sftpMinSizeKb).toBe(128)
+      expect(useAppStore.getState().sftpMaxSizeKb).toBe(4096)
+      expect(setExclusionSpy).toHaveBeenLastCalledWith(
+        true,
+        expect.any(Array),
+        true,
+        expect.objectContaining({
+          includePatterns: ['*.log', 'src/**/*.ts'],
+          minSizeBytes: 128 * 1024,
+          maxSizeBytes: 4096 * 1024,
+        }),
+      )
+
+      // 最小大于最大时显示范围告警
+      act(() => {
+        fireEvent.change(minInput, { target: { value: '8192' } })
+      })
+      expect(screen.getByText('最小值大于最大值，请检查范围')).toBeTruthy()
+    })
+
+    it('filters audit logs by transfer type in AuditLogsPanel', async () => {
+      const listSpy = vi.mocked(backend!.auditLogs.list)
+      const countSpy = vi.mocked(backend!.auditLogs.count)
+      listSpy.mockClear()
+      countSpy.mockClear()
+
+      renderSettingsDialog({ defaultTab: 'logs' })
+
+      await waitFor(() => {
+        expect(listSpy).toHaveBeenCalled()
+      })
+
+      // 打开类型筛选 SelectPopover 并选择“文件传输”
+      const filterTrigger = screen.getByRole('button', { name: '全部异常' })
+      act(() => {
+        fireEvent.click(filterTrigger)
+      })
+
+      const transferOption = screen.getByText('文件传输')
+      act(() => {
+        fireEvent.click(transferOption)
+      })
+
+      await waitFor(() => {
+        expect(listSpy).toHaveBeenLastCalledWith('transfer', undefined, 12, 0)
+        expect(countSpy).toHaveBeenLastCalledWith('transfer', undefined)
+      })
     })
   })
 

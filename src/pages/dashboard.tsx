@@ -49,6 +49,7 @@ import {
   ServerCog,
   ArrowLeftRight,
   Command,
+  SlidersHorizontal,
 } from 'lucide-react'
 import { sshService } from '@/services/ssh-service'
 import { backend } from '@/services/api'
@@ -62,6 +63,7 @@ import { OsIcon } from '@/components/dashboard/os-icon'
 import { ImportServersDialog } from '@/components/server/import-servers-dialog'
 import { BatchBmcPowerDialog } from '@/components/server/batch-bmc-power-dialog'
 import { BatchCommandDialog } from '@/components/server/batch-command-dialog'
+import { BatchEditDialog } from '@/components/server/batch-edit-dialog'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import type { Server as ServerType, WorkspaceModule } from '@/types'
 import { useTranslation } from '@/i18n'
@@ -129,6 +131,7 @@ interface ServerActions {
   onImport: () => void
   onBatchBmcPower: () => void
   onBatchCommand: () => void
+  onBatchEdit: () => void
 }
 const ServerActionsContext = createContext<ServerActions | null>(null)
 function useServerActions(): ServerActions {
@@ -141,6 +144,7 @@ function useServerActions(): ServerActions {
       onImport: () => {},
       onBatchBmcPower: () => {},
       onBatchCommand: () => {},
+      onBatchEdit: () => {},
     }
   }
   return ctx
@@ -204,6 +208,8 @@ export function Dashboard() {
   const [batchBmcPowerOpen, setBatchBmcPowerOpen] = useState(false)
   // 批量命令执行弹窗（仅选中集合含可执行 SSH 命令的服务器时打开）
   const [batchCommandOpen, setBatchCommandOpen] = useState(false)
+  // 批量属性编辑弹窗（P1-12）
+  const [batchEditOpen, setBatchEditOpen] = useState(false)
 
   const isDragging = useRef(false)
   // 拖拽监听器的引用，便于组件卸载时兜底清理（LEAK-1）
@@ -700,6 +706,11 @@ export function Dashboard() {
         setBatchCommandOpen(true)
       }
     },
+    onBatchEdit: () => {
+      if (selectedServerIds.size > 0) {
+        setBatchEditOpen(true)
+      }
+    },
   }), [openExportDialog, servers, selectedServerIds])
 
   return (
@@ -720,6 +731,15 @@ export function Dashboard() {
             <Command className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground/60" />
             <span className="truncate flex-1 text-left">快捷入口</span>
             <kbd className="ml-auto flex-shrink-0 text-[10px] px-1 py-0.5 rounded-md font-mono tabular-nums bg-transparent text-muted-foreground/50 group-hover/row:bg-muted/70 group-hover/row:text-foreground">{isMac ? '⌘K' : 'Ctrl K'}</kbd>
+          </button>
+          <button
+            type="button"
+            onClick={() => useAppStore.getState().openLocalTab()}
+            title={t('ls_quick_btn')}
+            className="group/row mt-0.5 w-full flex items-center gap-1 h-6 pl-1 pr-1.5 rounded-md text-[11px] transition-colors duration-150 cursor-pointer select-none text-muted-foreground hover:bg-accent/40 hover:text-foreground font-medium"
+          >
+            <Terminal className="h-3.5 w-3.5 flex-shrink-0 text-emerald-500/80" />
+            <span className="truncate flex-1 text-left">{t('ls_quick_btn')}</span>
           </button>
         </div>
             {/* 分组树（含默认分组）+ 我的收藏（分组区下方），互不组合、单选生效 */}
@@ -888,6 +908,47 @@ export function Dashboard() {
             </div>
           </div>
 
+        {/* 多选快捷操作栏（仅选中 ≥ 2 台时出现） */}
+        {selectedServerIds.size > 1 && (
+          <div className="flex items-center justify-between gap-2 px-4 py-1.5 bg-primary/5 border-b border-primary/15 text-xs flex-shrink-0">
+            <span className="font-medium text-foreground">
+              {t('dash_selected_count', { count: selectedServerIds.size })}
+            </span>
+            <div className="flex items-center gap-1.5">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs gap-1.5"
+                onClick={() => setBatchEditOpen(true)}
+              >
+                <SlidersHorizontal className="h-3.5 w-3.5" />
+                {t('dash_batch_edit')}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs gap-1.5 text-destructive hover:text-destructive"
+                onClick={handleBatchDelete}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                {t('dash_batch_delete')}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs gap-1"
+                onClick={handleClearSelection}
+              >
+                <X className="h-3.5 w-3.5" />
+                {t('dash_batch_clear_selection')}
+              </Button>
+            </div>
+          </div>
+        )}
+
         {/* 可滚动内容区 */}
         <div className="flex-1 flex flex-col overflow-hidden">
             <div className="dashboard-content-area flex-1 flex flex-col min-h-0">
@@ -897,7 +958,9 @@ export function Dashboard() {
                     ref={listAreaRef}
                     className="flex-1 flex flex-col min-h-0"
                     onMouseDown={handleMarqueeMouseDown}
-                    onClick={() => {
+                    onClick={(e) => {
+                      // 忽略通过 React Portal 冒泡上来的右键菜单/弹窗点击，避免右键触发批量编辑等操作时立即清空选中集合
+                      if (e.target instanceof Node && !e.currentTarget.contains(e.target)) return
                       // 刚结束框选时抑制本次 click，避免清空刚选中的内容
                       if (consumeMarqueeClick()) return
                       handleClearSelection()
@@ -1154,6 +1217,13 @@ export function Dashboard() {
         servers={servers.filter((s) => selectedServerIds.has(s.id) && hasSshChannel(s))}
         onClose={() => setBatchCommandOpen(false)}
       />
+
+      {/* 批量编辑服务器公共属性（P1-12） */}
+      <BatchEditDialog
+        open={batchEditOpen}
+        servers={servers.filter((s) => selectedServerIds.has(s.id))}
+        onClose={() => setBatchEditOpen(false)}
+      />
     </div>
   )
 }
@@ -1178,7 +1248,7 @@ function ServerContextMenu({ children, server, selected, selectedCount, selected
   const { t } = useTranslation()
   const openTab = useAppStore(s => s.openTab)
   const openSftpWithServers = useAppStore(s => s.openSftpWithServers)
-  const { onAddServer, onExportServer, onExportAll, onImport, onBatchBmcPower, onBatchCommand } = useServerActions()
+  const { onAddServer, onExportServer, onExportAll, onImport, onBatchBmcPower, onBatchCommand, onBatchEdit } = useServerActions()
   // 「移动到分组」：自选多台服务器批量改归属（右键项被选中集合内时移动整组选中）
   const serverGroups = useAppStore(s => s.serverGroups)
   const updateServer = useAppStore(s => s.updateServer)
@@ -1226,7 +1296,7 @@ function ServerContextMenu({ children, server, selected, selectedCount, selected
       <ContextMenuTrigger asChild>
         {children}
       </ContextMenuTrigger>
-      <ContextMenuContent className="w-52">
+      <ContextMenuContent className="w-52" onClick={(e) => e.stopPropagation()}>
         {showBatch ? (
           <>
             {/* 多选模式：仅保留批量操作，移除所有针对单个服务器的操作（重命名/打开终端/编辑/删除等） */}
@@ -1268,6 +1338,11 @@ function ServerContextMenu({ children, server, selected, selectedCount, selected
                 {t('dash_batch_command')}
               </ContextMenuItem>
             )}
+            <ContextMenuItem onClick={onBatchEdit}>
+              <SlidersHorizontal className="h-4 w-4" />
+              {t('dash_batch_edit')}
+              <span className="ml-auto text-[10px] text-muted-foreground">{selectedCount}</span>
+            </ContextMenuItem>
             <ContextMenuSeparator />
             <ContextMenuItem onClick={onClearSelection}>
               <X className="h-4 w-4" />
@@ -1400,7 +1475,10 @@ function ServerContextMenu({ children, server, selected, selectedCount, selected
             <FolderTree className="mr-2 h-4 w-4 text-muted-foreground" />
             {t('server_move_to_group')}
           </ContextMenuSubTrigger>
-          <ContextMenuSubContent className="w-52 p-1">
+          <ContextMenuSubContent
+            className="w-52 p-1 max-h-[min(360px,var(--radix-context-menu-content-available-height,60vh))] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
             <GroupTreePicker
               groups={serverGroups}
               value={server.groupId || null}

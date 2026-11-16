@@ -21,7 +21,12 @@ import {
   Boxes,
 } from 'lucide-react'
 import type { ComponentType } from 'react'
-import type { WorkspaceModule, FileTransferConfig } from '@/types'
+import type {
+  WorkspaceModule,
+  FileTransferConfig,
+  LocalShellConfig,
+  Server as ServerModel,
+} from '@/types'
 import { WindowsIcon } from '@/components/ui/windows-icon'
 
 // ============================================================================
@@ -39,12 +44,13 @@ export type ConnectionTargetType =
   | 'xinchuang'
   | 'esxi'
   | 'kubernetes'
+  | 'local'
 
 /** 连接协议（与后端 ConnectionProtocol 枚举的 lowercase 字符串对应） */
-export type ConnectionProtocol = 'ssh' | 'rdp' | 'winrm' | 'telnet' | 'vnc' | 'serial' | 'redfish' | 'https' | 'k8s'
+export type ConnectionProtocol = 'ssh' | 'rdp' | 'winrm' | 'telnet' | 'vnc' | 'serial' | 'redfish' | 'https' | 'k8s' | 'local'
 
 /** 认证方式（SSH 支持密码、私钥、证书与 Agent；其他协议由各自客户端处理） */
-export type AuthMethod = 'password' | 'privateKey' | 'sshAgent' | 'certificate'
+export type AuthMethod = 'password' | 'privateKey' | 'sshAgent' | 'certificate' | 'keyboardInteractive'
 
 /**
  * 能力位，与后端 `src-tauri/src/connection/mod.rs` 的 `CapabilityFlags` 一一对应。
@@ -68,7 +74,7 @@ export interface TargetCapabilities {
 }
 
 /** 工作台连接形态，用于替换各组件中散落的 isXxxServer 布尔 */
-export type ConnectionKind = 'ssh' | 'telnet' | 'serial' | 'redfish' | 'external' | 'https' | 'k8s'
+export type ConnectionKind = 'ssh' | 'telnet' | 'serial' | 'local' | 'redfish' | 'external' | 'https' | 'k8s'
 
 /** 目标类型规格 —— 描述该类型的目标在 UI 与行为上的差异 */
 export interface TargetTypeSpec {
@@ -236,6 +242,17 @@ export const CONNECTION_TARGETS: TargetTypeSpec[] = [
     supportedProtocols: ['k8s'],
     enabled: false,
   },
+  {
+    id: 'local',
+    labelKey: 'ct_local',
+    icon: Terminal,
+    defaultPort: 0,
+    defaultUsername: '',
+    defaultAuthType: 'password',
+    availableModules: ['terminal'],
+    supportedProtocols: ['local'],
+    enabled: true,
+  },
 ]
 
 const SSH_HOST_CAPS: TargetCapabilities = {
@@ -251,6 +268,10 @@ const REDFISH_CAPS: TargetCapabilities = {
   probe: false, tlsCertOverride: true, requiresHost: true,
 }
 const SERIAL_CAPS: TargetCapabilities = {
+  sshBacked: false, terminal: true, metrics: false, files: false,
+  probe: false, tlsCertOverride: false, requiresHost: false,
+}
+const LOCAL_CAPS: TargetCapabilities = {
   sshBacked: false, terminal: true, metrics: false, files: false,
   probe: false, tlsCertOverride: false, requiresHost: false,
 }
@@ -276,12 +297,17 @@ export const TARGET_CAPABILITIES: Record<ConnectionTargetType, TargetCapabilitie
   xinchuang: SSH_HOST_CAPS,
   esxi: HTTPS_DEVICE_CAPS,
   kubernetes: K8S_CAPS,
+  local: LOCAL_CAPS,
 }
 
 const EXTERNAL_OVERRIDES: Partial<TargetCapabilities> = {
   sshBacked: false, terminal: false, metrics: false, files: false, probe: false,
 }
 const SERIAL_OVERRIDES: Partial<TargetCapabilities> = {
+  sshBacked: false, terminal: true, metrics: false, files: false,
+  probe: false, tlsCertOverride: false, requiresHost: false,
+}
+const LOCAL_OVERRIDES: Partial<TargetCapabilities> = {
   sshBacked: false, terminal: true, metrics: false, files: false,
   probe: false, tlsCertOverride: false, requiresHost: false,
 }
@@ -304,6 +330,7 @@ export const CONNECTION_PROTOCOLS: ProtocolSpec[] = [
   { id: 'redfish', labelKey: 'cp_redfish', defaultPort: 443, kind: 'redfish', capabilityOverrides: REDFISH_OVERRIDES },
   { id: 'https', labelKey: 'cp_https', defaultPort: 443, kind: 'https' },
   { id: 'k8s', labelKey: 'cp_k8s', defaultPort: 6443, kind: 'k8s' },
+  { id: 'local', labelKey: 'cp_local', defaultPort: 0, kind: 'local', capabilityOverrides: LOCAL_OVERRIDES },
 ]
 
 // ============================================================================
@@ -434,10 +461,12 @@ export interface ServerConnectionFlags {
   isDeviceManagedServer: boolean
   isWindowsServer: boolean
   isSerialServer: boolean
+  isLocalServer: boolean
   isRdpServer: boolean
   isVncServer: boolean
   isTelnetServer: boolean
   isNetworkServer: boolean
+  supportsBroadcast: boolean
   supportsMetrics: boolean
   supportsFiles: boolean
   supportsProbe: boolean
@@ -459,22 +488,28 @@ export function getServerConnectionFlags(
   const spec = getTargetTypeSpec(targetType)
   const connectionKind = getConnectionKind(targetType, protocol)
   const caps = getTargetCapabilities(targetType, protocol)
+  const isSerialServer = spec.id === 'serial' || connectionKind === 'serial' || osType === 'serial'
+  const isLocalServer = spec.id === 'local' || connectionKind === 'local'
+  const isRdpServer = protocol === 'rdp' || targetType === 'rdp'
   return {
     connectionKind,
     isBmcServer: spec.id === 'bmc',
     isDeviceManagedServer: isDeviceManagedTarget(targetType),
     isWindowsServer: spec.id === 'windows',
     // osType 兜底来自标签条的历史行为：部分旧资产靠 osType 标记串口
-    isSerialServer:
-      spec.id === 'serial' || connectionKind === 'serial' || osType === 'serial',
+    isSerialServer,
+    isLocalServer,
     // 精确等价于重构前的 protocol === 'rdp'（含早期脏数据 targetType === 'rdp'）。
     // 刻意不用 connectionKind === 'external'：那会把 winrm / vnc 一并判成 RDP，
     // 扩大排除范围并改变 connId / 模块可见性。
-    isRdpServer: protocol === 'rdp' || targetType === 'rdp',
+    isRdpServer,
     isVncServer: protocol === 'vnc',
     // 精确等价于 protocol === 'telnet'：不夹带其他形态，供终端三路分派使用
     isTelnetServer: connectionKind === 'telnet',
     isNetworkServer: spec.id === 'network',
+    // 串口与本地终端禁用键盘广播（防误操宿主机）
+    supportsBroadcast:
+      caps.terminal && !isSerialServer && !isLocalServer && !isDeviceManagedTarget(targetType) && !isRdpServer,
     supportsMetrics: caps.metrics,
     supportsFiles: caps.files,
     supportsProbe: caps.probe,
@@ -622,9 +657,9 @@ export function parseFileTransferConfig(raw?: string | null): FileTransferConfig
     const parsed = JSON.parse(raw) as Partial<FileTransferConfig>
     if (!parsed || typeof parsed !== 'object') return null
     const proto = String(parsed.protocol || 'sftp').trim().toLowerCase()
-    if (proto !== 'ftp' && proto !== 'ftps' && proto !== 'sftp') return null
+    if (proto !== 'auto' && proto !== 'sftp' && proto !== 'scp' && proto !== 'ftp' && proto !== 'ftps') return null
     return {
-      protocol: proto as 'sftp' | 'ftp' | 'ftps',
+      protocol: proto as 'auto' | 'sftp' | 'scp' | 'ftp' | 'ftps',
       port: typeof parsed.port === 'number' ? parsed.port : undefined,
       tlsMode: parsed.tlsMode === 'implicit' ? 'implicit' : 'explicit',
       useServerCredentials: parsed.useServerCredentials !== false,
@@ -634,7 +669,7 @@ export function parseFileTransferConfig(raw?: string | null): FileTransferConfig
       hasPassword: Boolean(parsed.hasPassword),
       transferMode: parsed.transferMode === 'active' ? 'active' : 'passive',
       encoding: parsed.encoding === 'gbk' ? 'gbk' : 'utf-8',
-      allowInvalidCerts: parsed.allowInvalidCerts !== false,
+      allowInvalidCerts: parsed.allowInvalidCerts === true,
     }
   } catch {
     return null
@@ -646,7 +681,7 @@ export function parseFileTransferConfig(raw?: string | null): FileTransferConfig
  */
 export function getServerFileTransferProtocol(
   server?: { fileTransferConfig?: string | null } | null,
-): 'sftp' | 'ftp' | 'ftps' {
+): 'auto' | 'sftp' | 'scp' | 'ftp' | 'ftps' {
   const cfg = parseFileTransferConfig(server?.fileTransferConfig)
   return cfg?.protocol || 'sftp'
 }
@@ -682,7 +717,9 @@ export function isModuleVisibleForServer(
     return protocols.includes('ssh')
       || protocols.includes('telnet')
       || protocols.includes('serial')
+      || protocols.includes('local')
       || flags.isSerialServer
+      || flags.isLocalServer
       || flags.isNetworkServer
   }
   if (module === 'files') return protocols.includes('ssh') || hasFtp
@@ -720,4 +757,80 @@ export function inferServerProtocols(input: ProtocolInferenceInput): string[] {
     return list.length > 0 ? list : ['ssh']
   }
   return [input.protocol || 'ssh']
+}
+
+export const EPHEMERAL_LOCAL_SERVER_PREFIX = '__local__:'
+
+export function isEphemeralLocalServerId(serverId?: string | null): boolean {
+  return Boolean(serverId && serverId.startsWith(EPHEMERAL_LOCAL_SERVER_PREFIX))
+}
+
+export function extractLocalProfileId(serverId?: string | null): string | undefined {
+  if (!serverId || !serverId.startsWith(EPHEMERAL_LOCAL_SERVER_PREFIX)) return undefined
+  const rest = serverId.slice(EPHEMERAL_LOCAL_SERVER_PREFIX.length).trim()
+  return !rest || rest === 'default' ? undefined : rest
+}
+
+export function parseLocalShellConfig(raw?: string | null): LocalShellConfig {
+  if (!raw || typeof raw !== 'string' || !raw.trim()) return {}
+  try {
+    const parsed = JSON.parse(raw) as Partial<LocalShellConfig>
+    if (!parsed || typeof parsed !== 'object') return {}
+    return {
+      profileId: typeof parsed.profileId === 'string' && parsed.profileId.trim() ? parsed.profileId.trim() : undefined,
+      cwd: typeof parsed.cwd === 'string' && parsed.cwd.trim() ? parsed.cwd.trim() : undefined,
+    }
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * 缓存临时本地终端虚拟 Server 对象，确保相同 `(serverId, profileId, cwd, title)`
+ * 连续解析返回同一引用，避免被 Zustand / React selector 使用时触发无限重渲染。
+ */
+const ephemeralLocalServerCache = new Map<string, ServerModel>()
+
+/**
+ * 解析 tab 对应的 Server 配置（支持 __local__:<profileId> 临时本地终端，不写入持久化列表）
+ */
+export function resolveServerForTab(
+  servers: ServerModel[],
+  serverId?: string | null,
+  tab?: { localProfileId?: string | null; localCwd?: string | null; title?: string } | null,
+): ServerModel | undefined {
+  if (!serverId) return undefined
+  const found = servers.find((s) => s.id === serverId)
+  if (found) return found
+  if (!isEphemeralLocalServerId(serverId)) return undefined
+  const profileId = tab?.localProfileId ?? extractLocalProfileId(serverId)
+  const cwd = tab?.localCwd ?? undefined
+  const title = tab?.title || (profileId ? `Local (${profileId})` : 'Local Shell')
+  const cacheKey = JSON.stringify([serverId, profileId ?? '', cwd ?? '', title])
+  const cached = ephemeralLocalServerCache.get(cacheKey)
+  if (cached) return cached
+
+  const synthesized: ServerModel = {
+    id: serverId,
+    name: title,
+    host: 'localhost',
+    port: 0,
+    username: '',
+    authType: 'password',
+    tags: [],
+    favorite: false,
+    status: 'online',
+    targetType: 'local',
+    protocol: 'local',
+    protocols: ['local'],
+    credentialsConfig:
+      profileId || cwd ? JSON.stringify({ profileId, cwd }) : undefined,
+    createdAt: 0,
+    updatedAt: 0,
+  }
+  if (ephemeralLocalServerCache.size >= 64) {
+    ephemeralLocalServerCache.clear()
+  }
+  ephemeralLocalServerCache.set(cacheKey, synthesized)
+  return synthesized
 }

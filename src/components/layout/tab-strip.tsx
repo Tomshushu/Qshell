@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useAppStore } from "@/store";
 import { Z_LAYER } from "@/lib/z-layer";
@@ -20,19 +20,29 @@ import {
   ArrowLeftRight,
   Radio,
   Search,
+  Terminal,
 } from "lucide-react";
-import type { WorkspaceTab, WorkspaceDef } from "@/types";
+import type { WorkspaceTab, WorkspaceDef, LocalShellProfile } from "@/types";
 import { useTranslation } from "@/i18n";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { friendlyError } from "@/lib/error-messages";
 import { backend, isTauri } from "@/services/api";
+import { sshService } from "@/services/ssh-service";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   computeDropZone,
   zoneToSplit,
   collectGroupIds,
 } from "@/utils/split-layout";
-import { clampMenuToViewport } from "@/lib/menu-position";
+import { clampMenuToViewport, computeSubmenuVerticalClamp } from "@/lib/menu-position";
 import { useModalStack } from "@/hooks/use-modal-stack";
 import {
   buildGroupTree,
@@ -41,7 +51,12 @@ import {
   type GroupTreeNode,
 } from "@/lib/server-groups";
 import { OsIcon } from "@/pages/dashboard";
-import { deviceStatusKeys, getServerConnectionFlags, resolveServerOpenAction } from "@/services/connection-targets";
+import {
+  deviceStatusKeys,
+  getServerConnectionFlags,
+  resolveServerForTab,
+  resolveServerOpenAction,
+} from "@/services/connection-targets";
 import { GroupFilterChip, UNGROUPED_FILTER } from "@/components/ui/group-tree-picker";
 import { Button } from "@/components/ui/button";
 
@@ -108,6 +123,8 @@ export function TabStrip({ tabs, className }: TabStripProps) {
   const toggleWorkspaceLock = useAppStore((s) => s.toggleWorkspaceLock);
   const closeOtherWorkspaces = useAppStore((s) => s.closeOtherWorkspaces);
   const openTab = useAppStore((s) => s.openTab);
+  const openLocalTab = useAppStore((s) => s.openLocalTab);
+  const [localProfiles, setLocalProfiles] = useState<LocalShellProfile[]>([]);
   const dragging = useAppStore((s) => s.dragging);
   const dragTabId = useAppStore((s) => s.dragTabId);
   const setDragState = useAppStore((s) => s.setDragState);
@@ -1062,7 +1079,7 @@ export function TabStrip({ tabs, className }: TabStripProps) {
                   const s = serverStates[`ws:${t.serverId}:${t.id}`] ?? serverStates[t.serverId];
                   return s?.state === "connecting" || s?.state === "authenticating";
                 });
-                const wsServer = servers.find((s) => s.id === activeWsTab?.serverId);
+                const wsServer = resolveServerForTab(servers, activeWsTab?.serverId, activeWsTab);
                 const wsFlags = getServerConnectionFlags(wsServer?.targetType, wsServer?.protocol, wsServer?.osType);
                 const isWsBmc = wsFlags.isDeviceManagedServer;
                 const isWsRdp = wsFlags.isRdpServer;
@@ -1259,7 +1276,7 @@ export function TabStrip({ tabs, className }: TabStripProps) {
               stateEntry?.state === "authenticating";
             // BMC 带外管理通过 Redfish (HTTPS) 工作，不依赖 SSH 连接，
             // 顶部 Tab 状态指示器应显示"已就绪"而非"已断开"
-            const tabServer = servers.find((s) => s.id === tab.serverId);
+            const tabServer = resolveServerForTab(servers, tab.serverId, tab);
             // OsIcon 只按 osType / targetType 判定类型，不识别 protocol，
             // 因此串口（protocol === 'serial'）需在此归一为 targetType='serial'，
             // 否则会被误显示成默认的 Linux 图标。
@@ -1425,21 +1442,71 @@ export function TabStrip({ tabs, className }: TabStripProps) {
 
           return renderedItems;
         })()}
-        <button
-          type="button"
-          className="mx-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border/50 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          title={t("tb_open_other_servers")}
-          aria-label={t("tb_open_other_servers")}
-          onClick={() => {
-            setSelectedServerId(null);
-            setServerQuery("");
-            setGroupFilter(null);
-            setTagFilter(null);
-            setShowServerPicker(true);
+        <DropdownMenu
+          onOpenChange={(open) => {
+            if (open && localProfiles.length === 0) {
+              void sshService
+                .listLocalShellProfiles()
+                .then((profiles) => setLocalProfiles(profiles))
+                .catch(() => {});
+            }
           }}
         >
-          <Plus className="h-3.5 w-3.5" />
-        </button>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="mx-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border/50 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              title={t("tb_open_other_servers")}
+              aria-label={t("tb_open_other_servers")}
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-56">
+            <DropdownMenuLabel className="text-[11px] font-medium text-muted-foreground">
+              {t("ls_section_title")}
+            </DropdownMenuLabel>
+            {localProfiles.length > 0 ? (
+              localProfiles.map((profile) => (
+                <DropdownMenuItem
+                  key={profile.id}
+                  className="gap-2 text-xs cursor-pointer"
+                  onClick={() => openLocalTab(profile.id, profile.label)}
+                >
+                  <Terminal className="h-3.5 w-3.5 text-emerald-500" />
+                  <span className="truncate flex-1">{profile.label}</span>
+                  {profile.isDefault && (
+                    <span className="text-[10px] text-muted-foreground">
+                      {t("ls_default_auto")}
+                    </span>
+                  )}
+                </DropdownMenuItem>
+              ))
+            ) : (
+              <DropdownMenuItem
+                className="gap-2 text-xs cursor-pointer"
+                onClick={() => openLocalTab()}
+              >
+                <Terminal className="h-3.5 w-3.5 text-emerald-500" />
+                <span>{t("ls_quick_btn")}</span>
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              className="gap-2 text-xs cursor-pointer"
+              onClick={() => {
+                setSelectedServerId(null);
+                setServerQuery("");
+                setGroupFilter(null);
+                setTagFilter(null);
+                setShowServerPicker(true);
+              }}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>{t("ls_open_saved_servers")}</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {tabScrollState.left && (
@@ -1731,55 +1798,29 @@ export function TabStrip({ tabs, className }: TabStripProps) {
                   />
 
                   {/* 设置标签颜色 */}
-                  <div className="relative group/color">
-                    <button
-                      className="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-accent text-left transition-all active:scale-[0.98] cursor-pointer duration-150"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <Palette className="h-3.5 w-3.5" />
-                      <span>{t("tab_set_color")}</span>
-                      <ChevronRight className="h-3.5 w-3.5 ml-auto text-muted-foreground/80" />
-                    </button>
-                    {/* 颜色子菜单：根据右侧空间向右/向左拉出 */}
-                    <div
-                      className={cn(
-                        "absolute top-0 z-popup-nested hidden group-hover/color:block",
-                        colorSide === "right"
-                          ? "left-[calc(100%-4px)] pl-2"
-                          : "right-[calc(100%-4px)] pr-2",
-                      )}
-                    >
-                      <div className="rounded-xl border border-slate-200/90 dark:border-white/15 bg-white/98 dark:bg-[#13141f]/98 backdrop-blur-2xl shadow-[0_16px_36px_-6px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.9)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-2 min-w-[210px] grid grid-cols-3 gap-1.5">
-                        {TAB_COLORS.map((color) => (
-                          <button
-                            key={color.nameKey}
-                            className="flex flex-col items-center gap-1 p-1 rounded-lg hover:bg-accent text-[10px] transition-all active:scale-95 cursor-pointer duration-150"
-                            onClick={() => {
-                              setWorkspaceColor(ws.id, color.value);
-                              setCtxMenu(null);
-                            }}
-                            title={t(color.nameKey)}
-                          >
-                            {color.value ? (
-                              <div
-                                className="h-5 w-5 rounded-full border border-white/20 shadow-sm"
-                                style={{ backgroundColor: color.value }}
-                              />
-                            ) : (
-                              <div className="h-5 w-5 rounded-full border border-dashed border-muted-foreground/50 flex items-center justify-center">
-                                <span className="text-[10px] text-muted-foreground">
-                                  ✕
-                                </span>
-                              </div>
-                            )}
-                            <span className="truncate max-w-[50px]">
-                              {t(color.nameKey)}
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
+                  <TabColorSubmenu
+                    colorSide={colorSide}
+                    triggerLabel={t("tab_set_color")}
+                    onPickColor={(colorValue) => {
+                      setWorkspaceColor(ws.id, colorValue);
+                      setCtxMenu(null);
+                    }}
+                    renderSwatch={(color) =>
+                      color.value ? (
+                        <div
+                          className="h-5 w-5 rounded-full border border-white/20 shadow-sm"
+                          style={{ backgroundColor: color.value }}
+                        />
+                      ) : (
+                        <div className="h-5 w-5 rounded-full border border-dashed border-muted-foreground/50 flex items-center justify-center">
+                          <span className="text-[10px] text-muted-foreground">
+                            ✕
+                          </span>
+                        </div>
+                      )
+                    }
+                    t={t}
+                  />
 
                   <CtxMenuDivider />
 
@@ -1858,55 +1899,29 @@ export function TabStrip({ tabs, className }: TabStripProps) {
                   }}
                 />
 
-                <div className="relative group/color">
-                  <button
-                    className="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-accent text-left transition-colors duration-150"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <Palette className="h-3.5 w-3.5" />
-                    <span>{t("tab_set_color")}</span>
-                    <ChevronRight className="h-3.5 w-3.5 ml-auto text-muted-foreground/80" />
-                  </button>
-                  {/* 颜色子菜单：根据右侧空间向右/向左拉出 */}
-                  <div
-                    className={cn(
-                      "absolute top-0 z-popup-nested hidden group-hover/color:block",
-                      colorSide === "right"
-                        ? "left-[calc(100%-4px)] pl-2"
-                        : "right-[calc(100%-4px)] pr-2",
-                    )}
-                  >
-                    <div className="glass-strong border border-border/60 rounded-xl shadow-lg p-2 min-w-[210px] grid grid-cols-3 gap-1.5">
-                      {TAB_COLORS.map((color) => (
-                        <button
-                          key={color.nameKey}
-                          className="flex flex-col items-center gap-1 p-1 rounded-lg hover:bg-accent text-[10px] transition-colors duration-150"
-                          onClick={() => {
-                            setTabColor(ctxTab.id, color.value);
-                            setCtxMenu(null);
-                          }}
-                          title={t(color.nameKey)}
-                        >
-                          {color.value ? (
-                            <div
-                              className="h-5 w-5 rounded-full border border-white/20 shadow-sm"
-                              style={{ backgroundColor: color.value }}
-                            />
-                          ) : (
-                            <div className="h-5 w-5 rounded-full border border-dashed border-muted-foreground/60 flex items-center justify-center">
-                              <span className="text-[8px] leading-none text-muted-foreground">
-                                X
-                              </span>
-                            </div>
-                          )}
-                          <span className="truncate max-w-[48px]">
-                            {t(color.nameKey)}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
+                <TabColorSubmenu
+                  colorSide={colorSide}
+                  triggerLabel={t("tab_set_color")}
+                  onPickColor={(colorValue) => {
+                    setTabColor(ctxTab.id, colorValue);
+                    setCtxMenu(null);
+                  }}
+                  renderSwatch={(color) =>
+                    color.value ? (
+                      <div
+                        className="h-5 w-5 rounded-full border border-white/20 shadow-sm"
+                        style={{ backgroundColor: color.value }}
+                      />
+                    ) : (
+                      <div className="h-5 w-5 rounded-full border border-dashed border-muted-foreground/60 flex items-center justify-center">
+                        <span className="text-[8px] leading-none text-muted-foreground">
+                          X
+                        </span>
+                      </div>
+                    )
+                  }
+                  t={t}
+                />
 
                 <CtxMenuDivider />
 
@@ -1997,11 +2012,11 @@ export function TabStrip({ tabs, className }: TabStripProps) {
             const activeWsTab =
               wsTabs.find((t) => t.id === activeTabId) ||
               wsTabs[0];
-            const wsServer = servers.find((s) => s.id === activeWsTab?.serverId);
-            const wsFlags = getServerConnectionFlags(wsServer?.targetType, wsServer?.protocol, wsServer?.osType);
-            const isWsBmc = wsFlags.isDeviceManagedServer;
-            const isWsRdp = wsFlags.isRdpServer;
-            const isWsSerial = wsFlags.isSerialServer;
+            const wsServer = resolveServerForTab(servers, activeWsTab?.serverId, activeWsTab);
+            const wsFlagsDrag = getServerConnectionFlags(wsServer?.targetType, wsServer?.protocol, wsServer?.osType);
+            const isWsBmc = wsFlagsDrag.isDeviceManagedServer;
+            const isWsRdp = wsFlagsDrag.isRdpServer;
+            const isWsSerial = wsFlagsDrag.isSerialServer;
             const isWsConnected = wsTabs.some(
               (t) => (connectedServers[`ws:${t.serverId}:${t.id}`] ?? connectedServers[t.serverId]) ?? false,
             );
@@ -2230,4 +2245,87 @@ function CtxMenuItem({
 
 function CtxMenuDivider() {
   return <div className="h-px bg-border/60 my-1 mx-1" />;
+}
+
+function TabColorSubmenu({
+  colorSide,
+  triggerLabel,
+  onPickColor,
+  renderSwatch,
+  t,
+}: {
+  colorSide: "left" | "right";
+  triggerLabel: string;
+  onPickColor: (value: string | undefined) => void;
+  renderSwatch: (color: (typeof TAB_COLORS)[number]) => React.ReactNode;
+  t: (key: string) => string;
+}) {
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [offsetTop, setOffsetTop] = useState(0);
+  const [maxHeight, setMaxHeight] = useState<number | undefined>(undefined);
+
+  const reposition = useCallback(() => {
+    const el = triggerRef.current;
+    if (!el || typeof window === "undefined" || window.innerHeight <= 0) return;
+    const rect = el.getBoundingClientRect();
+    const clamped = computeSubmenuVerticalClamp(
+      rect.top,
+      panelRef.current?.offsetHeight || 160,
+      6,
+      0,
+    );
+    setOffsetTop((prev) => (prev === clamped.offsetTop ? prev : clamped.offsetTop));
+    setMaxHeight((prev) => (prev === clamped.maxHeight ? prev : clamped.maxHeight));
+  }, []);
+
+  useLayoutEffect(() => {
+    reposition();
+  }, [reposition]);
+
+  return (
+    <div
+      ref={triggerRef}
+      className="relative group/color"
+      onMouseEnter={reposition}
+      onFocus={reposition}
+    >
+      <button
+        className="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-accent text-left transition-all active:scale-[0.98] cursor-pointer duration-150"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <Palette className="h-3.5 w-3.5" />
+        <span>{triggerLabel}</span>
+        <ChevronRight className="h-3.5 w-3.5 ml-auto text-muted-foreground/80" />
+      </button>
+      <div
+        data-testid="tab-color-submenu-wrapper"
+        className={cn(
+          "absolute z-popup-nested hidden group-hover/color:block",
+          colorSide === "right"
+            ? "left-[calc(100%-4px)] pl-2"
+            : "right-[calc(100%-4px)] pr-2",
+        )}
+        style={{ top: offsetTop }}
+      >
+        <div
+          ref={panelRef}
+          className="rounded-xl border border-slate-200/90 dark:border-white/15 bg-white/98 dark:bg-[#13141f]/98 backdrop-blur-2xl shadow-[0_16px_36px_-6px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.9)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-2 min-w-[210px] grid grid-cols-3 gap-1.5 overflow-y-auto overflow-x-hidden"
+          style={{ maxHeight }}
+        >
+          {TAB_COLORS.map((color) => (
+            <button
+              key={color.nameKey}
+              className="flex flex-col items-center gap-1 p-1 rounded-lg hover:bg-accent text-[10px] transition-all active:scale-95 cursor-pointer duration-150"
+              onClick={() => onPickColor(color.value)}
+              title={t(color.nameKey)}
+            >
+              {renderSwatch(color)}
+              <span className="truncate max-w-[50px]">{t(color.nameKey)}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
 }

@@ -22,6 +22,8 @@ import {
   writeTextFile as writeLocal,
   readTextFile as readTextFileLocal,
   readFile as readFileLocal,
+  open as openLocalFile,
+  SeekMode,
 } from '@tauri-apps/plugin-fs'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -76,6 +78,7 @@ import {
   Ban,
   AlertCircle,
   Eye,
+  EyeOff,
   Save,
   Pencil,
   WifiOff,
@@ -83,6 +86,13 @@ import {
   Braces,
   ExternalLink,
   Code,
+  Columns2,
+  PanelLeft,
+  PanelRight,
+  FolderTree,
+  GitCompare,
+  Clock,
+  Binary,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { formatSftpError, isSftpConnectionError } from '@/lib/sftp-error'
@@ -107,6 +117,7 @@ import {
   writeLastLocalPath,
   getFileTypeLabel,
   HTML_EXT_SET,
+  BINARY_EXT_SET,
   isBinaryContent,
 } from '@/components/workspace/modules/local-file-picker-utils'
 import {
@@ -143,6 +154,7 @@ import {
   CLIPBOARD_FEEDBACK_MS,
   RATE_SMOOTHING_ALPHA,
   TRANSFER_REFRESH_INTERVAL_MS,
+  REMOTE_PREVIEW_MAX_SIZE,
   MAX_RIGHT_TABS,
   INITIAL_VIEWER_STATE,
   createEmptyRightTab,
@@ -186,7 +198,120 @@ import {
   useServerFilterList,
   SftpActionsDropdown,
   SftpBookmarkDropdown,
+  ViewModeDropdown,
 } from '@/components/sftp/sftp-dropdowns'
+import {
+  useTransferQueueStore,
+  acquireTransferQueueListeners,
+  registerTransferMeta,
+  type UnifiedTransferTask,
+  type UnifiedTransferPriority,
+  type UnifiedTransferProtocol,
+} from '@/store/transfer-queue-store'
+import { FileDirectoryTree } from '@/components/workspace/modules/files/file-directory-tree'
+import type { TreeNode } from '@/components/workspace/modules/files/types'
+import {
+  BatchRenameDialog,
+  type BatchRenameTarget,
+  type BatchRenameResult,
+} from '@/components/sftp/batch-rename-dialog'
+import { FileDiffDialog, type FileDiffCandidate } from '@/components/sftp/file-diff-dialog'
+import type { BinaryChunkedSourceInput } from '@/components/terminal/tools/diff/SideBySideDiffViewer'
+import { readClipboardPath } from '@/lib/clipboard-path'
+
+const SFTP_MAX_TREE_NODES = 500
+const SFTP_BINARY_DIFF_THRESHOLD = 2 * 1024 * 1024 // 2MB: 以上自动启用分块二进制差异对比
+
+async function readLocalFileChunk(path: string, offset: number, len: number): Promise<Uint8Array> {
+  const handle = await openLocalFile(path, { read: true })
+  try {
+    if (offset > 0) {
+      await handle.seek(offset, SeekMode.Start)
+    }
+    const buf = new Uint8Array(len)
+    let totalRead = 0
+    while (totalRead < len) {
+      const n = await handle.read(buf.subarray(totalRead))
+      if (n === null || n === 0) break
+      totalRead += n
+    }
+    return totalRead === len ? buf : buf.slice(0, totalRead)
+  } finally {
+    await handle.close().catch(() => {})
+  }
+}
+
+function createRemoteChunkLoader(serverId: string, filePath: string): (offset: number, len: number) => Promise<Uint8Array> {
+  return async (offset: number, len: number) => {
+    const res = await sshService.readFileChunk(serverId, filePath, offset, len)
+    return res.dataBase64 ? base64ToBytes(res.dataBase64) : new Uint8Array(0)
+  }
+}
+
+function sftpEntriesToTreeNodes(entries: Array<{ name: string; path: string; isDirectory: boolean }>): TreeNode[] {
+  return entries
+    .filter((f) => f.isDirectory && f.name !== '.' && f.name !== '..')
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((d) => ({
+      path: d.path,
+      name: d.name,
+      children: [],
+      loaded: false,
+      loading: false,
+    }))
+}
+
+function findSftpTreeNode(root: TreeNode, targetPath: string): TreeNode | null {
+  if (root.path === targetPath) return root
+  for (const child of root.children) {
+    const found = findSftpTreeNode(child, targetPath)
+    if (found) return found
+  }
+  return null
+}
+
+function updateSftpTreeNode(
+  root: TreeNode,
+  targetPath: string,
+  updater: (node: TreeNode) => TreeNode,
+): TreeNode {
+  if (root.path === targetPath) return updater(root)
+  if (!root.children.length) return root
+  let changed = false
+  const nextChildren = root.children.map((child) => {
+    const updated = updateSftpTreeNode(child, targetPath, updater)
+    if (updated !== child) changed = true
+    return updated
+  })
+  return changed ? { ...root, children: nextChildren } : root
+}
+
+function flattenSftpTree(root: TreeNode, expandedPaths: Set<string>): { node: TreeNode; depth: number }[] {
+  const result: { node: TreeNode; depth: number }[] = []
+  const walk = (node: TreeNode, depth: number) => {
+    result.push({ node, depth })
+    if (expandedPaths.has(node.path) && node.loaded) {
+      node.children.forEach((c) => walk(c, depth + 1))
+    }
+  }
+  walk(root, 0)
+  return result
+}
+
+function nextTransferPriority(p: UnifiedTransferPriority): UnifiedTransferPriority {
+  if (p === 'normal') return 'high'
+  if (p === 'high') return 'low'
+  return 'normal'
+}
+
+function formatScheduledRemaining(scheduledAt: number, now: number, t: (key: string) => string): string {
+  const diffSec = Math.ceil((scheduledAt - now) / 1000)
+  if (diffSec <= 1) return t('tx_scheduled_soon')
+  if (diffSec < 60) return t('tx_scheduled_in').replace('{time}', `${diffSec}s`)
+  const min = Math.floor(diffSec / 60)
+  const sec = diffSec % 60
+  return t('tx_scheduled_in').replace('{time}', sec > 0 ? `${min}m${sec}s` : `${min}m`)
+}
 
 // 传输明细固定行高（px）：虚拟滚动无需逐行测量，偏移稳定
 const TRANSFER_CHILD_ROW_HEIGHT = 24
@@ -333,16 +458,75 @@ export function SftpPanel() {
   const sftpExclusionEnabled = useAppStore((s) => s.sftpExclusionEnabled)
   const sftpExclusionPatterns = useAppStore((s) => s.sftpExclusionPatterns)
   const sftpRespectGitignore = useAppStore((s) => s.sftpRespectGitignore)
-  // SFTP 视图与隐藏文件配置：本地与远程面板完全独立
-  const sftpLocalViewMode = useAppStore((s) => s.sftpLocalViewMode) || 'list'
-  const sftpRemoteViewMode = useAppStore((s) => s.sftpRemoteViewMode) || 'list'
-  const sftpLocalShowHidden = useAppStore((s) => s.sftpLocalShowHidden)
-  const setSftpLocalShowHidden = useAppStore((s) => s.setSftpLocalShowHidden)
-  const sftpRemoteShowHidden = useAppStore((s) => s.sftpRemoteShowHidden)
-  const setSftpRemoteShowHidden = useAppStore((s) => s.setSftpRemoteShowHidden)
-  // SFTP 批量打开联动：待在 SFTP 传输面板中批量连接打开的服务器 ID 列表
+  const sftpIncludePatterns = useAppStore((s) => s.sftpIncludePatterns)
+  const sftpMinSizeKb = useAppStore((s) => s.sftpMinSizeKb)
+  const sftpMaxSizeKb = useAppStore((s) => s.sftpMaxSizeKb)
+  // SFTP 视图与隐藏文件配置：全局统一（与工作台文件模块保持一致）
+  const sftpViewMode = useAppStore((s) => s.sftpDefaultViewMode) || 'list'
+  const setSftpDefaultViewMode = useAppStore((s) => s.setSftpDefaultViewMode)
+  const sftpShowHidden = useAppStore((s) => s.sftpShowHidden)
+  const setSftpShowHidden = useAppStore((s) => s.setSftpShowHidden)
+  // SFTP 批量打开联动：待在 SFTP 传输面板中批量连接打开的服务器 ID 列表与目标目录
   const sftpPendingOpenServerIds = useAppStore((s) => s.sftpPendingOpenServerIds)
+  const sftpPendingOpenTargetDirs = useAppStore((s) => s.sftpPendingOpenTargetDirs)
   const clearSftpPendingOpenServers = useAppStore((s) => s.clearSftpPendingOpenServers)
+  // P2-18 / P2-19: 单双栏切换 & 左侧可折叠目录树开关
+  const sftpPaneMode = useAppStore((s) => s.sftpPaneMode) || 'dual'
+  const setSftpPaneMode = useAppStore((s) => s.setSftpPaneMode)
+  const sftpShowDirectoryTree = useAppStore((s) => s.sftpShowDirectoryTree)
+  const setSftpShowDirectoryTree = useAppStore((s) => s.setSftpShowDirectoryTree)
+  // U2: 全局统一传输队列
+  const unifiedQueueTasks = useTransferQueueStore((s) => s.tasks)
+  const [lastFocusedPane, setLastFocusedPane] = useState<'local' | 'remote'>('local')
+  const [treeWidth, setTreeWidth] = useState<number>(210)
+  const [treeRoot, setTreeRoot] = useState<TreeNode>({ path: '/', name: '/', children: [], loaded: false, loading: false })
+  const [expandedTreePaths, setExpandedTreePaths] = useState<Set<string>>(() => new Set(['/']))
+  const treeResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
+  const treeResizeHandlersRef = useRef<{ move: ((ev: MouseEvent) => void) | null; up: (() => void) | null }>({ move: null, up: null })
+  const treeContextKeyRef = useRef<string>('')
+
+  // P1-14 / P2-24: 分块 Hex 预览数据源（匹配 viewer.token 防竞态）
+  const [viewerHexSource, setViewerHexSource] = useState<{
+    token: number
+    totalSize: number
+    onLoadRange?: (offset: number, len: number) => Promise<Uint8Array>
+    data?: Uint8Array
+  } | null>(null)
+
+  // P2-17: 批量重命名弹窗状态
+  const [batchRenameState, setBatchRenameState] = useState<{
+    open: boolean
+    side: 'local' | 'remote'
+    serverId?: string
+    items: BatchRenameTarget[]
+  }>({ open: false, side: 'local', items: [] })
+
+  // P2-15: 文件对比弹窗状态
+  const [fileDiffState, setFileDiffState] = useState<{
+    open: boolean
+    leftTitle: string
+    rightTitle: string
+    leftSize?: number
+    rightSize?: number
+    loadTextPair?: () => Promise<{ leftText: string; rightText: string }>
+    loadBytesPair?: () => Promise<{ leftBytes: Uint8Array; rightBytes: Uint8Array }>
+    leftBinaryChunked?: BinaryChunkedSourceInput
+    rightBinaryChunked?: BinaryChunkedSourceInput
+    initialMode: 'auto' | 'text' | 'binary'
+    candidates?: FileDiffCandidate[]
+    initialLeftId?: string
+    initialRightId?: string
+    chunkedThresholdBytes?: number
+  }>({ open: false, leftTitle: '', rightTitle: '', initialMode: 'auto' })
+
+  // U2: 预约延迟传输回调与自定义秒数弹窗
+  const scheduledRunnersRef = useRef<Map<string, () => Promise<void>>>(new Map())
+  const [scheduleClockNow, setScheduleClockNow] = useState<number>(() => Date.now())
+  const [customScheduleState, setCustomScheduleState] = useState<{
+    open: boolean
+    secondsInput: string
+    onConfirmDelay?: (delayMs: number) => void
+  }>({ open: false, secondsInput: '120' })
 
   // 1. 本地 Explorer 状态
   const [localPath, setLocalPath] = useState<string>('')
@@ -364,32 +548,52 @@ export function SftpPanel() {
   leftServerIdRef.current = leftServerId
   const isLeftRemote = leftSideType === 'remote' && !!leftServerId
   const [connectingLeftServerId, setConnectingLeftServerId] = useState<string>("")
+  const [isLeftRemoteDisconnected, setIsLeftRemoteDisconnected] = useState<boolean>(false)
+  const isLeftRemoteDisconnectedRef = useRef<boolean>(false)
+  isLeftRemoteDisconnectedRef.current = isLeftRemoteDisconnected
   const [compareActive, setCompareActive] = useState<boolean>(false)
   const [showSyncWizard, setShowSyncWizard] = useState<boolean>(false)
+  const searchSelectTimerRef = useRef<number | null>(null)
+  const tmpRefreshTimersRef = useRef<Set<number>>(new Set())
   const [activeExternalSessions, setActiveExternalSessions] = useState<ExternalEditSession[]>([])
 
   // 初始加载与订阅外部编辑自动同步
   useEffect(() => {
+    let active = true
     if (!backend?.files?.listActiveExternalEdits) return
     backend.files.listActiveExternalEdits().then((list) => {
-      if (Array.isArray(list)) setActiveExternalSessions(list)
+      if (active && mountedRef.current && Array.isArray(list)) {
+        setActiveExternalSessions(list)
+      }
     }).catch(() => {})
+    return () => {
+      active = false
+    }
   }, [])
 
   useEffect(() => {
     let unlistenSync: (() => void) | undefined
     let unlistenFail: (() => void) | undefined
+    let unlistenStopped: (() => void) | undefined
+    let unlistenStarted: (() => void) | undefined
     let disposed = false
 
     if (backend?.files?.onExternalFileSynced) {
       unlistenSync = backend.files.onExternalFileSynced((payload) => {
-        toast.success(`✨ 文件 ${payload.fileName} 已自动同步保存至服务器`)
+        toastRef.current.success(`✨ 文件 ${payload.fileName} 已自动同步保存至服务器`)
         if (selectedServerIdRef.current === payload.serverId) {
           loadRemoteDirectoryRef.current(payload.serverId, remotePathRef.current)
         }
         if (leftServerIdRef.current === payload.serverId) {
           loadLocalDirectoryRef.current(localPathRef.current)
         }
+        setActiveExternalSessions((prev) =>
+          prev.map((s) =>
+            s.sessionId === payload.sessionId
+              ? { ...s, lastSyncedAt: payload.timestamp, lastSyncedSize: payload.size }
+              : s,
+          ),
+        )
       })
     }
 
@@ -397,12 +601,38 @@ export function SftpPanel() {
       if (disposed) return
       listen<{ fileName: string; error: string }>("files:external-file-sync-failed", (ev) => {
         if (disposed) return
-        toast.error(`❌ 文件 ${ev.payload.fileName} 自动同步失败: ${ev.payload.error}`)
+        toastRef.current.error(`❌ 文件 ${ev.payload.fileName} 自动同步失败: ${ev.payload.error}`)
       }).then((un) => {
         if (disposed) {
           un()
         } else {
           unlistenFail = un
+        }
+      })
+      listen<{ sessionId: string }>("files:external-file-stopped", (ev) => {
+        if (disposed) return
+        setActiveExternalSessions((prev) =>
+          prev.filter((s) => s.sessionId !== ev.payload.sessionId),
+        )
+      }).then((un) => {
+        if (disposed) {
+          un()
+        } else {
+          unlistenStopped = un
+        }
+      })
+      // 其他模块（如 Files 工作台）启动的外部编辑也要出现在活跃胶囊条中
+      listen<ExternalEditSession>("files:external-file-started", (ev) => {
+        if (disposed) return
+        setActiveExternalSessions((prev) => [
+          ...prev.filter((s) => s.sessionId !== ev.payload.sessionId),
+          ev.payload,
+        ])
+      }).then((un) => {
+        if (disposed) {
+          un()
+        } else {
+          unlistenStarted = un
         }
       })
     })
@@ -411,6 +641,8 @@ export function SftpPanel() {
       disposed = true
       unlistenSync?.()
       unlistenFail?.()
+      unlistenStopped?.()
+      unlistenStarted?.()
     }
   }, [])
 
@@ -421,15 +653,18 @@ export function SftpPanel() {
     fileSize?: number
   ) => {
     if (!backend?.files?.startExternalEdit) return
-    const MAX_EXTERNAL_EDIT_SIZE = 2 * 1024 * 1024 // 2MB
-    if (typeof fileSize === 'number' && fileSize > MAX_EXTERNAL_EDIT_SIZE) {
+    const externalEditMaxSizeMb = useAppStore.getState().externalEditMaxSizeMb
+    const effectiveMaxMb = externalEditMaxSizeMb === 0 ? 100 : externalEditMaxSizeMb
+    const maxBytes = effectiveMaxMb * 1024 * 1024
+    const limitArg = externalEditMaxSizeMb === 0 ? 0 : maxBytes
+    if (typeof fileSize === 'number' && fileSize > maxBytes) {
       const sizeMb = (fileSize / (1024 * 1024)).toFixed(2)
-      toastRef.current.warning(`文件过大（${sizeMb} MB），外部编辑器仅支持打开不超过 2 MB 的远程文件`)
+      toastRef.current.warning(`文件过大（${sizeMb} MB），外部编辑器仅支持打开不超过 ${effectiveMaxMb} MB 的远程文件`)
       return
     }
     try {
       toastRef.current.info('正在启动外部程序...')
-      const session = await backend.files.startExternalEdit(serverId, filePath, editorCmd)
+      const session = await backend.files.startExternalEdit(serverId, filePath, editorCmd, limitArg)
       setActiveExternalSessions((prev) => [
         ...prev.filter((s) => s.sessionId !== session.sessionId),
         session,
@@ -447,8 +682,10 @@ export function SftpPanel() {
     if (!backend?.files?.stopExternalEdit) return
     try {
       await backend.files.stopExternalEdit(sessionId)
-      setActiveExternalSessions((prev) => prev.filter((s) => s.sessionId !== sessionId))
-      toast.info('已停止监听')
+      if (mountedRef.current) {
+        setActiveExternalSessions((prev) => prev.filter((s) => s.sessionId !== sessionId))
+        toastRef.current.info('已停止外部编辑监听')
+      }
     } catch (err) {
       console.error('Stop external edit failed', err)
     }
@@ -462,8 +699,6 @@ export function SftpPanel() {
   const [selectedLocalPaths, setSelectedLocalPaths] = useState<Set<string>>(new Set())
   const [localError, setLocalError] = useState<string | null>(null)
   const [systemRoots, setSystemRoots] = useState<string[]>([])
-  const [leftViewMode, setLeftViewMode] = useState<SftpViewMode>(sftpLocalViewMode)
-  const [rightViewMode, setRightViewMode] = useState<SftpViewMode>(sftpRemoteViewMode)
   // 列表视图列宽（null = 使用默认 fr 比例）：拖动表头列边界调整
   const [leftColWidths, setLeftColWidths] = useState<number[] | null>(null)
   const [rightColWidths, setRightColWidths] = useState<number[] | null>(null)
@@ -476,11 +711,23 @@ export function SftpPanel() {
     return widths.slice(0, -1).map((w) => `${Math.round(w)}px`).join(' ') + ' minmax(60px, 1fr)'
   }
 
+  const colResizeHandlersRef = useRef<{
+    move: ((ev: PointerEvent) => void) | null
+    up: (() => void) | null
+  }>({ move: null, up: null })
+  const renameClickTimerRef = useRef<number | null>(null)
+
   const handleColResize = (side: 'left' | 'right', index: number, e: React.PointerEvent) => {
     e.preventDefault()
     e.stopPropagation()
     const header = side === 'left' ? leftHeaderRef.current : rightHeaderRef.current
     if (!header) return
+    const prevHandlers = colResizeHandlersRef.current
+    if (prevHandlers.move) window.removeEventListener('pointermove', prevHandlers.move)
+    if (prevHandlers.up) {
+      window.removeEventListener('pointerup', prevHandlers.up)
+      window.removeEventListener('pointercancel', prevHandlers.up)
+    }
     const cols = Array.from(header.children) as HTMLElement[]
     const startWidths = cols.map((c) => c.getBoundingClientRect().width)
     const startX = e.clientX
@@ -495,9 +742,13 @@ export function SftpPanel() {
     const onUp = () => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+      colResizeHandlersRef.current = { move: null, up: null }
     }
+    colResizeHandlersRef.current = { move: onMove, up: onUp }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
   }
 
   const renderColResizeHandle = (side: 'left' | 'right', index: number) => (
@@ -511,18 +762,6 @@ export function SftpPanel() {
   const leftColCount = leftSideType === 'remote' ? 6 : 4
   const leftColTemplate = buildColTemplate(leftColWidths, leftColCount)
   const rightColTemplate = buildColTemplate(rightColWidths, 6)
-
-  const handleSetLeftViewMode = useCallback((mode: SftpViewMode) => {
-    setLeftViewMode(mode)
-  }, [])
-
-  const handleSetRightViewMode = useCallback((mode: SftpViewMode) => {
-    setRightViewMode(mode)
-  }, [])
-
-  useEffect(() => {
-    setLeftViewMode(sftpLocalViewMode)
-  }, [sftpLocalViewMode])
 
   // 2. 远程 Explorer 状
   const [selectedServerId, setSelectedServerId] = useState<string>('')
@@ -950,6 +1189,26 @@ export function SftpPanel() {
   const [localPathInput, setLocalPathInput] = useState('')
   const [remotePathEditing, setRemotePathEditing] = useState(false)
   const [remotePathInput, setRemotePathInput] = useState('')
+  const localPathInputRef = useRef<HTMLInputElement>(null)
+  const remotePathInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!localPathEditing) return
+    const timer = window.setTimeout(() => {
+      localPathInputRef.current?.focus()
+      localPathInputRef.current?.select()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [localPathEditing])
+
+  useEffect(() => {
+    if (!remotePathEditing) return
+    const timer = window.setTimeout(() => {
+      remotePathInputRef.current?.focus()
+      remotePathInputRef.current?.select()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [remotePathEditing])
 
   const startLocalPathEdit = useCallback(() => {
     setLocalPathInput(localPath)
@@ -978,10 +1237,12 @@ export function SftpPanel() {
   }, [remotePathInput, remotePath, selectedServerId, isRemoteDisconnected])
 
   // === 上次访问路径记忆（按 serverId 持久化到 localStorage）===
-  // 远程路径变化时保存，下次连接同一服务器时自动恢复
+  // 远程路径变化时保存，下次连接同一服务器时自动恢复（统一剥离 sftp: 前缀与读取端对齐）
   useEffect(() => {
     if (!selectedServerId || !remotePath) return
-    try { localStorage.setItem(`qshell.sftp.last-remote-path.${selectedServerId}`, remotePath) }
+    const baseId = toBaseServerId(selectedServerId)
+    if (!baseId) return
+    try { localStorage.setItem(`qshell.sftp.last-remote-path.${baseId}`, remotePath) }
     catch { /* ignore */ }
   }, [selectedServerId, remotePath])
 
@@ -1037,71 +1298,35 @@ export function SftpPanel() {
     })
   }, [leftPrefs])
 
-  // === 显示隐藏文件开关：左右面板完全独立 ===
-  // 1. 本地面板：默认继承 store.sftpLocalShowHidden（未设置时默认 false）
-  const [leftShowHidden, setLeftShowHiddenRaw] = useState<boolean>(() => {
-    return sftpLocalShowHidden ?? false
-  })
-  useEffect(() => {
-    setLeftShowHiddenRaw(sftpLocalShowHidden ?? false)
-  }, [sftpLocalShowHidden])
-
-  // 2. 远程面板工作副本：默认继承 store.sftpRemoteShowHidden（未设置时默认 true）
-  const [rightShowHidden, setRightShowHiddenRaw] = useState<boolean>(() => {
-    return sftpRemoteShowHidden ?? true
-  })
-  useEffect(() => {
-    setRightShowHiddenRaw(sftpRemoteShowHidden ?? true)
-  }, [sftpRemoteShowHidden])
-
+  // === 全局统一显示隐藏文件开关 ===
   const isHiddenName = useCallback((name: string): boolean => {
     if (name === '..' || name === '.') return false
     return name.startsWith('.')
   }, [])
 
-  // 切换左侧隐藏文件显示
-  const setLeftShowHidden = useCallback((value: boolean | ((prev: boolean) => boolean)) => {
-    setLeftShowHiddenRaw(prev => {
-      const next = typeof value === 'function' ? value(prev) : value
-      setSftpLocalShowHidden(next)
-      try {
-        localStorage.setItem('qshell.sftp.local.showHidden', String(next))
-      } catch { /* ignore */ }
-      if (prev && !next) {
-        setSelectedLocalPaths(s => {
-          const filtered = new Set<string>()
-          for (const p of s) {
-            const name = p.split(/[/\\]/).pop() || ''
-            if (!isHiddenName(name)) filtered.add(p)
-          }
-          return filtered
-        })
-      }
-      return next
-    })
-  }, [isHiddenName, setSftpLocalShowHidden])
-
-  // 切换右侧隐藏文件显示（工作副本）
-  const setRightShowHidden = useCallback((value: boolean | ((prev: boolean) => boolean)) => {
-    setRightShowHiddenRaw(prev => {
-      const next = typeof value === 'function' ? value(prev) : value
-      setSftpRemoteShowHidden(next)
-      try {
-        localStorage.setItem('qshell.sftp.remote.showHidden', String(next))
-      } catch { /* ignore */ }
-      if (prev && !next) {
-        setSelectedRemotePaths(s => {
-          const filtered = new Set<string>()
-          for (const p of s) {
-            const name = p.split(/[/\\]/).pop() || ''
-            if (!isHiddenName(name)) filtered.add(p)
-          }
-          return filtered
-        })
-      }
-      return next
-    })
-  }, [isHiddenName, setSftpRemoteShowHidden])
+  // 切换隐藏文件显示，同时在关闭时清理已选中的隐藏条目
+  const toggleSftpShowHidden = useCallback(() => {
+    const next = !sftpShowHidden
+    setSftpShowHidden(next)
+    if (!next) {
+      setSelectedLocalPaths((s) => {
+        const filtered = new Set<string>()
+        for (const p of s) {
+          const name = p.split(/[/\\]/).pop() || ''
+          if (!isHiddenName(name)) filtered.add(p)
+        }
+        return filtered
+      })
+      setSelectedRemotePaths((s) => {
+        const filtered = new Set<string>()
+        for (const p of s) {
+          const name = p.split(/[/\\]/).pop() || ''
+          if (!isHiddenName(name)) filtered.add(p)
+        }
+        return filtered
+      })
+    }
+  }, [isHiddenName, setSftpShowHidden, sftpShowHidden])
 
   // === 文件剪贴板（跨面板复制/粘贴）===
   // Ctrl+C 把当前面板选中文件路径写入 fileClipboard；Ctrl+V 把剪贴板内容粘贴到对侧面板
@@ -1156,28 +1381,26 @@ export function SftpPanel() {
     serverId?: string
   ) => {
     if (file.isDirectory) return false
-    // 本地文件不限制大小；仅远程服务器受网络传输与 SFTP 缓冲区安全保护（100MB）
-    if (side === 'remote' && file.size > 100 * 1024 * 1024) {
-      toastRef.current.warning(`${tRef.current('fs_preview_too_large') || '远程文件过大无法在线预览'} (100MB)`)
-      return false
-    }
     if (side === 'remote' && isRemoteDisconnected) {
       toastRef.current.warning(tRef.current('sftp_offline_readonly_tip'))
       return false
     }
-    const kind = getPreviewKind(file.name, file.size, side === 'remote')
-    if (kind === 'unsupported') return false  // 非预览类型，交给原流程
     const ext = getFileExt(file.name)
+    const rawKind = getPreviewKind(file.name, file.size, side === 'remote')
+    const isLargeRemoteUnsupported = side === 'remote' && file.size > REMOTE_PREVIEW_MAX_SIZE
+    const isBinaryOrUnsupported = rawKind === 'unsupported' || BINARY_EXT_SET.has(ext) || isLargeRemoteUnsupported
+    const kind = isBinaryOrUnsupported ? 'universal' : rawKind
     const isImage = kind === 'image'
     const isText = kind === 'text'
     const isDocx = kind === 'docx'
     const isLegacyDoc = kind === 'legacy_doc'
     const isSpreadsheet = kind === 'spreadsheet'
     const isCsvOrTsv = isSpreadsheet && (ext === 'csv' || ext === 'tsv')
-    const needRawBytes = kind === 'universal' || isDocx || isLegacyDoc || (isSpreadsheet && !isCsvOrTsv)
+    const needRawBytes = !isBinaryOrUnsupported && (kind === 'universal' || isDocx || isLegacyDoc || (isSpreadsheet && !isCsvOrTsv))
 
     // 分配 token，后续 setViewer 的 updater 中校验 token，防止旧请求覆盖新请求
     const myToken = ++viewerTokenRef.current
+    setViewerHexSource(null)
     setViewer({
       open: true,
       mode: 'preview',
@@ -1195,8 +1418,34 @@ export function SftpPanel() {
     const updateIfMine = (patch: Partial<FileViewerState>) => {
       setViewer(v => v.token === myToken ? { ...v, ...patch } : v)
     }
+    const openChunkedHex = async (detectedSize?: number) => {
+      if (side === 'remote' && serverId) {
+        let total = detectedSize ?? file.size
+        if (!total || total <= 0) {
+          const probe = await sshService.readFileChunk(serverId, file.path, 0, 16)
+          total = probe.totalSize
+        }
+        setViewerHexSource({
+          token: myToken,
+          totalSize: total,
+          onLoadRange: createRemoteChunkLoader(serverId, file.path),
+        })
+        updateIfMine({ loading: false, isBinary: true, fileSize: total, error: undefined })
+      } else {
+        const total = detectedSize ?? file.size
+        setViewerHexSource({
+          token: myToken,
+          totalSize: total,
+          onLoadRange: (offset, len) => readLocalFileChunk(file.path, offset, len),
+        })
+        updateIfMine({ loading: false, isBinary: true, fileSize: total, error: undefined })
+      }
+    }
     try {
-      if (needRawBytes) {
+      if (isBinaryOrUnsupported) {
+        // P1-14 / P2-24: 二进制 / 未知扩展名 / 超大远程文件均走分块 HexViewer，而非直接拒绝
+        await openChunkedHex()
+      } else if (needRawBytes) {
         // 二进制流（Word docx、旧版 doc、Excel xlsx/xls、压缩包 zip/jar/war）
         if (side === 'remote' && serverId) {
           const b64 = await sshService.readBinaryFile(serverId, file.path)
@@ -1223,7 +1472,7 @@ export function SftpPanel() {
           if (res.exitCode !== 0) throw new Error(res.stderr || t('sftp_read_failed'))
           const decoded = decodeReadResult(res.stdout || '')
           if (isBinaryContent(decoded.text)) {
-            updateIfMine({ loading: false, isBinary: true, error: tRef.current('sftp_viewer_binary_unsupported') })
+            await openChunkedHex()
           } else {
             updateIfMine({ loading: false, isBinary: false, content: decoded.text, encoding: decoded.encoding, eol: decoded.eol, hasBom: decoded.hasBom })
           }
@@ -1231,7 +1480,7 @@ export function SftpPanel() {
           try {
             const text = await readTextFileLocal(file.path)
             if (isBinaryContent(text)) {
-              updateIfMine({ loading: false, isBinary: true, error: tRef.current('sftp_viewer_binary_unsupported') })
+              await openChunkedHex()
             } else {
               // 本地文本：剥离 UTF-8 BOM 字符并记录，保存时补回；EOL 检测与远程保持一致
               const hasBom = text.startsWith('\uFEFF')
@@ -1334,11 +1583,18 @@ export function SftpPanel() {
     try {
       const b64 = await sshService.readBinaryFile(v.serverId, v.path)
       if (!b64) throw new Error(tRef.current('sftp_read_failed'))
-      const decoded = decodeTextWithEncoding(base64ToBytes(b64), encoding)
+      const rawBytes = base64ToBytes(b64)
+      const decoded = decodeTextWithEncoding(rawBytes, encoding)
       if (isBinaryContent(decoded.text)) {
-        updateIfMine({ loading: false, isBinary: true, error: tRef.current('sftp_viewer_binary_unsupported') })
+        setViewerHexSource({
+          token: myToken,
+          totalSize: rawBytes.length,
+          data: rawBytes,
+        })
+        updateIfMine({ loading: false, isBinary: true, error: undefined })
         return
       }
+      setViewerHexSource(null)
       updateIfMine({ loading: false, isBinary: false, content: decoded.text, encoding, eol: decoded.eol, hasBom: decoded.hasBom })
     } catch (e: unknown) {
       updateIfMine({ loading: false, error: getErrorMessage(e, String(e)) })
@@ -1382,6 +1638,7 @@ export function SftpPanel() {
       URL.revokeObjectURL(viewerObjectUrlRef.current)
       viewerObjectUrlRef.current = null
     }
+    setViewerHexSource(null)
     setViewer(INITIAL_VIEWER_STATE)
   }, [viewer.dirty])
   // 传输面板高度（像素），可拖拽调整；从 localStorage 恢复用户上次设置
@@ -1517,9 +1774,13 @@ export function SftpPanel() {
   const splitResizeHandlersRef = useRef<{ move: ((e: MouseEvent) => void) | null; up: ((e: MouseEvent) => void) | null }>({ move: null, up: null })
   const handleSplitResizeStart = (e: React.MouseEvent) => {
     e.preventDefault()
+    const prevHandlers = splitResizeHandlersRef.current
+    if (prevHandlers.move) document.removeEventListener('mousemove', prevHandlers.move)
+    if (prevHandlers.up) document.removeEventListener('mouseup', prevHandlers.up)
     const handleMouseMove = (moveEvent: MouseEvent) => {
       if (!containerRef.current) return
       const rect = containerRef.current.getBoundingClientRect()
+      if (rect.width <= 0) return
       const offset = moveEvent.clientX - rect.left
       const percentage = (offset / rect.width) * 100
       setLocalSplitPercent(Math.max(10, Math.min(90, percentage)))
@@ -1557,19 +1818,30 @@ export function SftpPanel() {
   const setRemoteSortOrder = rightPrefs.setSortOrder
   const handleRemoteSort = rightPrefs.handleSort
 
+  const isServerWindows = (sid?: string | null): boolean => {
+    if (!sid) return false
+    const baseId = toBaseServerId(sid)
+    return serversRef.current.find(s => s.id === baseId)?.targetType === 'windows'
+  }
+
   const loadLocalDirectory = async (
     pathString: string,
     overrideSideType?: 'local' | 'remote',
     overrideServerId?: string,
     options?: { isRefresh?: boolean },
   ) => {
-    if (!backend) return
+    if (!backend || !mountedRef.current) return
     const prevPath = localPathRef.current
     // 递增请求序号：响应返回时校验，丢弃过期响应（用户已切换到其他目录）
     const reqId = ++localDirReqIdRef.current
 
     const activeSideType = overrideSideType !== undefined ? overrideSideType : leftSideType
     const activeServerId = overrideServerId !== undefined ? overrideServerId : leftServerId
+
+    if (activeSideType === 'remote' && activeServerId && isLeftRemoteDisconnectedRef.current) {
+      toastRef.current.warning(tRef.current('sftp_offline_readonly_tip'))
+      return
+    }
 
     setLocalLoading(true)
     setLocalError(null)
@@ -1605,7 +1877,7 @@ export function SftpPanel() {
         const { local: localRoot, remote: remoteRoot } = syncPairRootRef.current
         const targetPath = getSyncPathFromRoot(
           pathString, localRoot, remoteRoot,
-          getLocalOs() === 'windows', false,
+          getLocalOs() === 'windows', isServerWindows(selectedServerId),
         )
         if (targetPath && targetPath !== remotePathRef.current) {
           // 标记为同步触发，防止对侧切换反向触发同步（避免乒乓）
@@ -1644,7 +1916,7 @@ export function SftpPanel() {
     pathString: string,
     options?: { isRefresh?: boolean },
   ) => {
-    if (!backend || !serverId) return
+    if (!backend || !serverId || !mountedRef.current) return
     const prevPath = remotePathRef.current
     const reqId = ++remoteDirReqIdRef.current
 
@@ -1667,7 +1939,7 @@ export function SftpPanel() {
         const { local: localRoot, remote: remoteRoot } = syncPairRootRef.current
         const targetPath = getSyncPathFromRoot(
           pathString, remoteRoot, localRoot,
-          false, getLocalOs() === 'windows',
+          isServerWindows(serverId), getLocalOs() === 'windows',
         )
         if (targetPath && targetPath !== localPathRef.current) {
           syncSourceRef.current = 'sync'
@@ -1734,8 +2006,9 @@ export function SftpPanel() {
             syncBrowsing: syncBrowsing,
             syncPairRoot: syncPairRootRef.current,
             compareActive: compareActive,
-            viewMode: rightViewMode,
-            showHidden: rightShowHidden,
+            remoteDrives: remoteDrives,
+            viewMode: sftpViewMode,
+            showHidden: sftpShowHidden,
           }
         : t
     ))
@@ -1743,7 +2016,21 @@ export function SftpPanel() {
       remoteFiles, remoteLoading, remoteSearch,
       remoteError, isRemoteDisconnected, remoteDisconnectedError,
       remoteSortField, remoteSortOrder, syncBrowsing, compareActive,
-      rightViewMode, rightShowHidden])
+      remoteDrives, sftpViewMode, sftpShowHidden])
+
+  // 非双栏模式时退出目录对比高亮；左侧为远程模式时关闭本地-远程同步浏览
+  useEffect(() => {
+    if (sftpPaneMode !== 'dual' && compareActive) {
+      setCompareActive(false)
+    }
+  }, [sftpPaneMode, compareActive])
+
+  useEffect(() => {
+    if (leftSideType === 'remote' && syncBrowsing) {
+      setSyncBrowsing(false)
+      syncPairRootRef.current = null
+    }
+  }, [leftSideType, syncBrowsing])
 
   // 同步标签名（首次连接成功后 serverName 为空，需补全）
   useEffect(() => {
@@ -1794,19 +2081,19 @@ export function SftpPanel() {
     setRemoteSortOrder(target.sortOrder)
     setSyncBrowsing(target.syncBrowsing)
     setCompareActive(target.compareActive)
+    setRemoteDrives(target.remoteDrives || [])
     syncPairRootRef.current = target.syncPairRoot
-    setRightViewMode(target.viewMode || sftpRemoteViewMode || 'list')
-    setRightShowHidden(target.showHidden !== undefined ? target.showHidden : (sftpRemoteShowHidden ?? true))
     // 重置递归搜索状态，避免切换 tab 时残留前一个 tab 的搜索结果
     setSearchMode('filter')
     setRecursiveSearchPattern('')
     setSearchResults([])
     setRecursiveSearching(false)
 
+    activeRightTabIdRef.current = tabId
     setActiveRightTabId(tabId)
     setBatchSelectedServerIds(new Set())
     remoteListRef.current?.scrollTo({ top: 0 })
-  }, [rightTabs, sftpRemoteViewMode, sftpRemoteShowHidden, setRightShowHidden])
+  }, [rightTabs])
 
   // 新建空 tab 并设为 active（不发起连接，仅创建占位）
   // 返回新 tab id；若已达上限返回空字符串
@@ -1816,18 +2103,24 @@ export function SftpPanel() {
       return ''
     }
     const tab = createEmptyRightTab(
-      sftpRemoteViewMode || 'list',
-      sftpRemoteShowHidden ?? true,
+      sftpViewMode,
+      sftpShowHidden,
       remoteSortField,
       remoteSortOrder
     )
-    setRightTabs(prev => [...prev, tab])
+    setRightTabs(prev => {
+      const next = [...prev, tab]
+      rightTabsRef.current = next
+      return next
+    })
+    activeRightTabIdRef.current = tab.id
     setActiveRightTabId(tab.id)
     // 清空工作副本（新 tab 是空的）
     setSelectedServerId('')
     setConnectingServerId('')
     setRemotePath('')
     setRemoteFiles([])
+    setRemoteDrives([])
     setRemoteLoading(false)
     setRemoteSearch('')
     setSelectedRemotePaths(new Set())
@@ -1840,40 +2133,45 @@ export function SftpPanel() {
     setSyncBrowsing(false)
     setCompareActive(false)
     syncPairRootRef.current = null
-    setRightViewMode(tab.viewMode ?? 'list')
-    setRightShowHidden(tab.showHidden ?? (sftpRemoteShowHidden ?? true))
     // 重置递归搜索状态
     setSearchMode('filter')
     setRecursiveSearchPattern('')
     setSearchResults([])
     setRecursiveSearching(false)
     return tab.id
-  }, [rightTabs.length])
+  }, [rightTabs.length, sftpViewMode, sftpShowHidden, remoteSortField, remoteSortOrder])
 
-  // 关闭 tab：从 rightTabs 删除，断开 SSH 连接，切换到相邻 tab
+  // 关闭 tab：从 rightTabs 删除，断开 SSH 连接（FTP-only 标签跳过），切换到相邻 tab
   const closeRightTab = useCallback(async (tabId: string) => {
     const tab = rightTabs.find(t => t.id === tabId)
     if (!tab) return
 
-    // 断开该 tab 的 SSH 连接（若有）
+    // 断开该 tab 的 SSH 连接（若有；FTP/FTPS 无需调用 SSH disconnect）
     if (tab.serverId) {
-      try { await sshService.disconnect(tab.serverId) }
-      catch (e) { console.warn('[RightTab] disconnect failed:', e) }
+      const baseId = toBaseServerId(tab.serverId)
+      const tabSrv = serversRef.current.find(s => s.id === baseId)
+      if (!hasFtpFileTransfer(tabSrv)) {
+        try { await sshService.disconnect(tab.serverId) }
+        catch (e) { console.warn('[RightTab] disconnect failed:', e) }
+      }
     }
 
     const idx = rightTabs.findIndex(t => t.id === tabId)
     const newTabs = rightTabs.filter(t => t.id !== tabId)
+    rightTabsRef.current = newTabs
     setRightTabs(newTabs)
 
     // 如果关闭的是 active tab，切换到相邻 tab
     if (tabId === activeRightTabIdRef.current) {
       if (newTabs.length === 0) {
         // 没有剩余 tab：清空工作副本
+        activeRightTabIdRef.current = ''
         setActiveRightTabId('')
         setSelectedServerId('')
         setConnectingServerId('')
         setRemotePath('')
         setRemoteFiles([])
+        setRemoteDrives([])
         setRemoteLoading(false)
         setRemoteSearch('')
         setSelectedRemotePaths(new Set())
@@ -1881,8 +2179,6 @@ export function SftpPanel() {
         setSyncBrowsing(false)
         setCompareActive(false)
         syncPairRootRef.current = null
-        setRightViewMode(sftpRemoteViewMode || 'list')
-        setRightShowHidden(sftpRemoteShowHidden ?? true)
         // 保留进行中（transferring/paused）的传输记录，以及属于左侧远程会话的传输记录，避免丢失跟踪与操作入口
         setTransferRecords(prev => prev.filter(t =>
           t.status === 'transferring' ||
@@ -2036,10 +2332,12 @@ export function SftpPanel() {
       }
 
       let homeDir = "/"
-      try {
-        homeDir = await sshService.getHomeDirectory(sftpConnId)
-      } catch (e) {
-        console.error("Failed to get home directory:", e)
+      if (!isFtp) {
+        try {
+          homeDir = await sshService.getHomeDirectory(sftpConnId)
+        } catch (e) {
+          console.error("Failed to get home directory:", e)
+        }
       }
 
       // Windows 远程：homeDir 可能是 C:\Users\...，确保非空时直接使用
@@ -2049,7 +2347,9 @@ export function SftpPanel() {
       if (srv?.targetType === 'windows' && homeDir && !homeDir.includes(':') && !homeDir.startsWith('\\\\')) {
         homeDir = 'C:\\'
       }
+      isLeftRemoteDisconnectedRef.current = false
       setLeftServerId(sftpConnId)
+      setIsLeftRemoteDisconnected(false)
       setLocalPath(homeDir || "/")
       setSelectedLocalPaths(new Set())
       setLocalSearch('')
@@ -2072,21 +2372,33 @@ export function SftpPanel() {
     // 这样保证用户在服务器列表点击连接时，要么复用空 tab，要么新建 tab
     const currentTab = activeRightTab
     const isCurrentTabEmpty = currentTab && !currentTab.serverId && !currentTab.connectingId
-    if (rightTabs.length === 0 || !currentTab) {
+    let tid = currentTab?.id || ''
+    if (rightTabs.length === 0 || !currentTab || !isCurrentTabEmpty) {
       const newId = createRightTab()
       if (!newId) return  // 已达上限
-    } else if (!isCurrentTabEmpty) {
-      // 当前 tab 已被占用，新建 tab
-      const newId = createRightTab()
-      if (!newId) return  // 已达上限
+      tid = newId
     }
-    // 此时 active tab 必为空 tab（serverId/connectingId 都为空）
     setBatchSelectedServerIds(new Set())
 
     const sftpConnId = toSftpConnId(serverId)
     const baseId = toBaseServerId(serverId)
-    setConnectingServerId(sftpConnId)
-    setRemoteError(null)
+    const srvMeta = servers.find(s => s.id === baseId)
+    const tabDisplayName = srvMeta?.name || srvMeta?.host || baseId
+    setRightTabs(prev => {
+      const updated = prev.map(t => t.id === tid ? {
+        ...t,
+        serverName: tabDisplayName,
+        connectingId: sftpConnId,
+        loading: true,
+        error: null,
+      } : t)
+      rightTabsRef.current = updated
+      return updated
+    })
+    if (activeRightTabIdRef.current === tid) {
+      setConnectingServerId(sftpConnId)
+      setRemoteError(null)
+    }
     try {
       const srvBeforeConnect = servers.find(s => s.id === baseId)
       const isFtp = hasFtpFileTransfer(srvBeforeConnect)
@@ -2096,65 +2408,153 @@ export function SftpPanel() {
           throw new Error(connectRes.error || 'Connection failed')
         }
       }
+      if (!mountedRef.current) return
+      if (!rightTabsRef.current.some(t => t.id === tid)) {
+        if (!isFtp) {
+          sshService.disconnect(sftpConnId).catch(() => {})
+        }
+        return
+      }
 
       // 按目标类型获取路径工具（Linux/Windows 完全隔离）
       const srv = servers.find(s => s.id === baseId)
       const isWin = srv?.targetType === 'windows'
       const pathUtils = getPathUtils(srv?.targetType || 'linux')
-      let homeDir = pathUtils.getDefaultHomeDir()
-      try {
-        const fetched = await sshService.getHomeDirectory(sftpConnId)
-        if (fetched) {
-          // Windows targetType 但返回了 POSIX 路径（如 /），忽略用兜底
-          if (isWin && !fetched.includes(':') && !fetched.startsWith('\\\\')) {
-            // 保持 homeDir = 默认值
-          } else {
-            homeDir = fetched
+      let homeDir = isFtp ? '/' : pathUtils.getDefaultHomeDir()
+      if (!isFtp) {
+        try {
+          const fetched = await sshService.getHomeDirectory(sftpConnId)
+          if (fetched) {
+            // Windows targetType 但返回了 POSIX 路径（如 /），忽略用兜底
+            if (isWin && !fetched.includes(':') && !fetched.startsWith('\\\\')) {
+              // 保持 homeDir = 默认值
+            } else {
+              homeDir = fetched
+            }
           }
+        } catch (e) {
+          console.error('Failed to get home directory:', e)
         }
-      } catch (e) {
-        console.error('Failed to get home directory:', e)
       }
+      if (!mountedRef.current) return
 
-      // Windows 远程：获取盘符列表用于磁盘切换栏
-      if (srv?.targetType === 'windows') {
+      // Windows 远程：获取盘符列表用于磁盘切换栏（FTP 无需请求）
+      let tabDrives: string[] = []
+      if (isWin && !isFtp) {
         try {
           const drives = await backend?.files.listDrives(sftpConnId)
-          setRemoteDrives(drives || ['C:\\'])
+          tabDrives = drives || ['C:\\']
         } catch {
-          setRemoteDrives(['C:\\'])
+          tabDrives = ['C:\\']
         }
-      } else {
-        setRemoteDrives([])
+      }
+      if (!mountedRef.current) return
+      if (!rightTabsRef.current.some(t => t.id === tid)) {
+        if (!isFtp) {
+          sshService.disconnect(sftpConnId).catch(() => {})
+        }
+        return
       }
 
-      // 切换服务器时重置传输记录和冲突状态，避免上一会话残留错配
-      setTransferRecords([])
-      pendingPathsRef.current.clear()
-      resetConflictState()
-
-      setSelectedServerId(sftpConnId)
-      // 优先恢复上次访问路径；失败则回退到 home 目录
-      // 注意：Windows 远程的 home 目录形如 C:\Users\Admin，不应视为无效路径
       const lastPath = (() => {
         try { return localStorage.getItem(`qshell.sftp.last-remote-path.${baseId}`) || '' }
         catch { return '' }
       })()
-      // 校验上次路径与当前 targetType 兼容（通过平台专属工具函数判断）
-      if (pathUtils.isPathCompatible(lastPath)) {
-        try {
-          await loadRemoteDirectory(sftpConnId, lastPath)
-          return
-        } catch {
-          // 上次路径无效（可能已被删除），回退到 home 目录
+      const hasValidLastPath = pathUtils.isPathCompatible(lastPath)
+      const fallbackHome = homeDir || '/'
+
+      if (activeRightTabIdRef.current === tid) {
+        setRemoteDrives(tabDrives)
+        // 切换服务器时重置传输记录和冲突状态，避免上一会话残留错配
+        setTransferRecords([])
+        pendingPathsRef.current.clear()
+        resetConflictState()
+
+        setSelectedServerId(sftpConnId)
+        setRightTabs(prev => {
+          const updated = prev.map(t => t.id === tid ? {
+            ...t,
+            serverId: sftpConnId,
+            serverName: srv?.name || srv?.host || baseId,
+            remoteDrives: tabDrives,
+          } : t)
+          rightTabsRef.current = updated
+          return updated
+        })
+
+        if (hasValidLastPath) {
+          try {
+            await loadRemoteDirectory(sftpConnId, lastPath)
+            return
+          } catch {
+            // 上次路径无效（可能已被删除），回退到 home 目录
+          }
         }
+        if (activeRightTabIdRef.current === tid) {
+          await loadRemoteDirectory(sftpConnId, fallbackHome)
+        }
+      } else {
+        // 用户在异步连接期间已切换到其他标签：仅静默更新目标标签真源，绝不覆盖当前激活标签工作副本
+        let targetPath = hasValidLastPath ? lastPath : fallbackHome
+        let files: FileEntry[] = []
+        if (backend) {
+          try {
+            files = await backend.files.list(sftpConnId, targetPath)
+          } catch {
+            if (hasValidLastPath && targetPath !== fallbackHome) {
+              try {
+                files = await backend.files.list(sftpConnId, fallbackHome)
+                targetPath = fallbackHome
+              } catch {
+                // ignore
+              }
+            }
+          }
+        }
+        if (!mountedRef.current) return
+        setRightTabs(prev => {
+          const updated = prev.map(t => t.id === tid ? {
+            ...t,
+            serverId: sftpConnId,
+            serverName: srv?.name || srv?.host || baseId,
+            connectingId: '',
+            path: targetPath,
+            files,
+            remoteDrives: tabDrives,
+            loading: false,
+            error: null,
+          } : t)
+          rightTabsRef.current = updated
+          return updated
+        })
       }
-      await loadRemoteDirectory(sftpConnId, homeDir || '/')
     } catch (err: unknown) {
+      if (!mountedRef.current) return
       console.error('Connection error:', err)
-      setRemoteError(getErrorMessage(err, String(err)))
+      const errMsg = getErrorMessage(err, String(err))
+      if (activeRightTabIdRef.current === tid) {
+        setRemoteError(errMsg)
+      }
+      setRightTabs(prev => {
+        const updated = prev.map(t => t.id === tid ? {
+          ...t,
+          connectingId: '',
+          loading: false,
+          error: errMsg,
+        } : t)
+        rightTabsRef.current = updated
+        return updated
+      })
     } finally {
-      setConnectingServerId('')
+      if (!mountedRef.current) return
+      if (activeRightTabIdRef.current === tid) {
+        setConnectingServerId('')
+      }
+      setRightTabs(prev => {
+        const updated = prev.map(t => t.id === tid ? { ...t, connectingId: '', loading: false } : t)
+        rightTabsRef.current = updated
+        return updated
+      })
     }
   }
 
@@ -2183,22 +2583,26 @@ export function SftpPanel() {
         }
       }
 
-      // Windows 盘符更新
+      // Windows 盘符更新（FTP 跳过）
       const srv = servers.find(s => s.id === toBaseServerId(targetServerId))
-      if (srv?.targetType === 'windows') {
+      let tabDrives: string[] = []
+      if (srv?.targetType === 'windows' && !isFtp) {
         try {
           const drives = await backend?.files.listDrives(targetServerId)
-          setRemoteDrives(drives || ['C:\\'])
+          tabDrives = drives || ['C:\\']
         } catch {
-          setRemoteDrives(['C:\\'])
+          tabDrives = ['C:\\']
         }
+      }
+      if (!targetTab || targetTab.id === activeRightTabIdRef.current) {
+        setRemoteDrives(tabDrives)
       }
 
       setIsRemoteDisconnected(false)
       setRemoteDisconnectedError(null)
       setRightTabs(prev => prev.map(t =>
         t.serverId === targetServerId
-          ? { ...t, disconnected: false, disconnectedError: null, error: null, connectingId: '', loading: false }
+          ? { ...t, disconnected: false, disconnectedError: null, error: null, connectingId: '', loading: false, remoteDrives: tabDrives }
           : t
       ))
 
@@ -2234,26 +2638,32 @@ export function SftpPanel() {
     setSelectedServerId('')
     setRemotePath('')
     setRemoteFiles([])
+    setRemoteDrives([])
     setRemoteError(null)
-    setRightViewMode(sftpRemoteViewMode || 'list')
-    setRightShowHidden(sftpRemoteShowHidden ?? true)
     const activeId = activeRightTabIdRef.current
     if (activeId) {
       setRightTabs(prev => prev.map(t =>
         t.id === activeId
-          ? { ...createEmptyRightTab(sftpRemoteViewMode || 'list', sftpRemoteShowHidden ?? true), id: t.id }
+          ? { ...createEmptyRightTab(sftpViewMode, sftpShowHidden), id: t.id }
           : t
       ))
     }
-  }, [sftpRemoteViewMode, sftpRemoteShowHidden, setRightShowHidden])
+  }, [sftpViewMode, sftpShowHidden])
 
-  // 批量打开/连接多个服务器的 SFTP 传输标签（支持从 Dashboard 联动消费或 SFTP 内部批量连接）
-  const handleBatchConnectServers = useCallback(async (serverIds: string[]) => {
+  // 批量打开/连接多个服务器的 SFTP 传输标签（支持从 Dashboard 或终端右键联动消费）
+  const handleBatchConnectServers = useCallback(async (serverIds: string[], targetDirs?: Record<string, string>) => {
     if (!serverIds || serverIds.length === 0) return
 
     // 1. 去重并校验有效性（过滤不存在的 ID）
-    const uniqueIds = Array.from(new Set(serverIds)).filter(id => servers.some(s => s.id === id))
+    const uniqueIds = Array.from(new Set(serverIds)).filter(id => servers.some(s => s.id === toBaseServerId(id)))
     if (uniqueIds.length === 0) return
+
+    const resolveRequestedDir = (rawId: string): string => {
+      if (!targetDirs) return ''
+      const baseId = toBaseServerId(rawId)
+      const connId = toSftpConnId(rawId)
+      return (targetDirs[rawId] || targetDirs[baseId] || targetDirs[connId] || '').trim()
+    }
 
     // 2. 区分：哪些服务器已经在现有 rightTabs 中打开了？或正在并发连接中？
     const currentTabs = rightTabsRef.current
@@ -2261,12 +2671,51 @@ export function SftpPanel() {
 
     const existingTabByServerId = new Map<string, RightTab>()
     for (const tab of currentTabs) {
-      if (tab.serverId) existingTabByServerId.set(tab.serverId, tab)
-      if (tab.connectingId) existingTabByServerId.set(tab.connectingId, tab)
+      if (tab.serverId) {
+        existingTabByServerId.set(tab.serverId, tab)
+        existingTabByServerId.set(toBaseServerId(tab.serverId), tab)
+      }
+      if (tab.connectingId) {
+        existingTabByServerId.set(tab.connectingId, tab)
+        existingTabByServerId.set(toBaseServerId(tab.connectingId), tab)
+      }
+    }
+
+    const focusExistingTabWithDir = (rawId: string, tab: RightTab) => {
+      const requestedDir = resolveRequestedDir(rawId)
+      const baseSid = toBaseServerId(tab.serverId || tab.connectingId || rawId)
+      const srv = servers.find(s => s.id === baseSid)
+      const pathUtils = getPathUtils(srv?.targetType || 'linux')
+      const canNavigate = Boolean(requestedDir && pathUtils.isPathCompatible(requestedDir))
+
+      if (tab.disconnected && canNavigate) {
+        setRightTabs(prev => {
+          const updated = prev.map(t => t.id === tab.id ? { ...t, path: requestedDir } : t)
+          rightTabsRef.current = updated
+          return updated
+        })
+      }
+
+      const wasActive = tab.id === activeRightTabIdRef.current
+      const currentTabPath = wasActive ? remotePathRef.current : tab.path
+      if (!wasActive) {
+        switchToRightTab(tab.id)
+        remotePathRef.current = tab.path
+      }
+
+      if (canNavigate && !tab.connectingId && tab.serverId) {
+        if (tab.disconnected) {
+          void handleReconnectServer(tab.id)
+        } else if (currentTabPath !== requestedDir) {
+          void loadRemoteDirectoryRef.current(tab.serverId, requestedDir)
+        }
+      }
     }
 
     // 需要新打开连接的 serverId 列表（已打开或正连接中的均过滤掉）
-    const toOpenIds = uniqueIds.filter(id => !existingTabByServerId.has(id) && !inProgress.has(id))
+    const toOpenIds = uniqueIds.filter(
+      id => !existingTabByServerId.has(id) && !inProgress.has(id) && !inProgress.has(toSftpConnId(id))
+    )
 
     // 3. 计算可用槽位
     const occupiedTabs = currentTabs.filter(t => t.serverId || t.connectingId)
@@ -2277,7 +2726,7 @@ export function SftpPanel() {
       toast.warning(t('sftp_max_tabs_reached', { max: MAX_RIGHT_TABS }))
       const firstExisting = uniqueIds.find(id => existingTabByServerId.has(id))
       if (firstExisting) {
-        switchToRightTab(existingTabByServerId.get(firstExisting)!.id)
+        focusExistingTabWithDir(firstExisting, existingTabByServerId.get(firstExisting)!)
       }
       return
     }
@@ -2288,11 +2737,11 @@ export function SftpPanel() {
       finalOpenIds = finalOpenIds.slice(0, availableSlots)
     }
 
-    // 如果没有需要新打开的，只需激活第一个已存在的 tab
+    // 如果没有需要新打开的，只需激活第一个已存在的 tab（并在指定了目录时跳转到目标目录）
     if (finalOpenIds.length === 0) {
       const firstExisting = uniqueIds.find(id => existingTabByServerId.has(id))
       if (firstExisting) {
-        switchToRightTab(existingTabByServerId.get(firstExisting)!.id)
+        focusExistingTabWithDir(firstExisting, existingTabByServerId.get(firstExisting)!)
       }
       return
     }
@@ -2300,6 +2749,7 @@ export function SftpPanel() {
     // 登记正在连接中的 serverId，防止并发重复调度
     for (const id of finalOpenIds) {
       inProgress.add(id)
+      inProgress.add(toSftpConnId(id))
     }
 
     // 4. 构建新的 tabs 列表
@@ -2321,7 +2771,7 @@ export function SftpPanel() {
       const sid = toSftpConnId(rawSid)
       const baseSid = toBaseServerId(rawSid)
       const srv = servers.find(s => s.id === baseSid)
-      const newTab = createEmptyRightTab(sftpRemoteViewMode || 'list', sftpRemoteShowHidden ?? true)
+      const newTab = createEmptyRightTab(sftpViewMode, sftpShowHidden)
       newTab.serverId = sid
       newTab.serverName = srv?.name || srv?.host || baseSid
       newTab.connectingId = sid
@@ -2365,11 +2815,13 @@ export function SftpPanel() {
     })
 
     // 激活首个 tab 并初始化其工作副本
+    activeRightTabIdRef.current = primaryTabId
     setActiveRightTabId(primaryTabId)
     setSelectedServerId(primaryServerId)
     setConnectingServerId(primaryServerId)
     setRemotePath('')
     setRemoteFiles([])
+    setRemoteDrives([])
     setRemoteLoading(true)
     setRemoteSearch('')
     setSelectedRemotePaths(new Set())
@@ -2394,25 +2846,30 @@ export function SftpPanel() {
             const srv = servers.find(s => s.id === baseSid)
             const isWin = srv?.targetType === 'windows'
             const pathUtils = getPathUtils(srv?.targetType || 'linux')
-            let homeDir = pathUtils.getDefaultHomeDir()
-            try {
-              const fetched = await sshService.getHomeDirectory(sid)
-              if (fetched) {
-                if (isWin && !fetched.includes(':') && !fetched.startsWith('\\\\')) {
-                  // keep default
-                } else {
-                  homeDir = fetched
+            let homeDir = isFtp ? '/' : pathUtils.getDefaultHomeDir()
+            if (!isFtp) {
+              try {
+                const fetched = await sshService.getHomeDirectory(sid)
+                if (fetched) {
+                  if (isWin && !fetched.includes(':') && !fetched.startsWith('\\\\')) {
+                    // keep default
+                  } else {
+                    homeDir = fetched
+                  }
                 }
+              } catch (e) {
+                console.error('Failed to get home directory:', e)
               }
-            } catch (e) {
-              console.error('Failed to get home directory:', e)
             }
 
+            const requestedDir = resolveRequestedDir(baseSid)
             const lastPath = (() => {
               try { return localStorage.getItem(`qshell.sftp.last-remote-path.${baseSid}`) || '' }
               catch { return '' }
             })()
-            const targetPath = (pathUtils.isPathCompatible(lastPath) ? lastPath : homeDir) || '/'
+            const hasValidRequestedDir = Boolean(requestedDir && pathUtils.isPathCompatible(requestedDir))
+            const fallbackPath = (pathUtils.isPathCompatible(lastPath) ? lastPath : homeDir) || homeDir || '/'
+            let targetPath = hasValidRequestedDir ? requestedDir : fallbackPath
 
             let files: FileEntry[] = []
             if (backend) {
@@ -2420,6 +2877,24 @@ export function SftpPanel() {
                 files = await backend.files.list(sid, targetPath)
               } catch (listErr) {
                 console.warn('Failed to list files for batch tab:', listErr)
+                if (hasValidRequestedDir && fallbackPath !== targetPath) {
+                  try {
+                    files = await backend.files.list(sid, fallbackPath)
+                    targetPath = fallbackPath
+                  } catch (fallbackErr) {
+                    console.warn('Failed to list fallback directory for batch tab:', fallbackErr)
+                  }
+                }
+              }
+            }
+
+            let tabDrives: string[] = []
+            if (isWin && !isFtp && backend) {
+              try {
+                const drives = await backend.files.listDrives(sid)
+                tabDrives = drives || ['C:\\']
+              } catch {
+                tabDrives = ['C:\\']
               }
             }
 
@@ -2429,16 +2904,9 @@ export function SftpPanel() {
               setConnectingServerId('')
               setRemotePath(targetPath)
               setRemoteFiles(files)
+              setRemoteDrives(tabDrives)
               setRemoteLoading(false)
               setRemoteError(null)
-              if (isWin && backend) {
-                try {
-                  const drives = await backend.files.listDrives(sid)
-                  setRemoteDrives(drives)
-                } catch {
-                  setRemoteDrives(['C:\\'])
-                }
-              }
             }
 
             // 无论是否 active，都更新 rightTabs 保证真源数据完整
@@ -2452,6 +2920,7 @@ export function SftpPanel() {
                   connectingId: '',
                   path: targetPath,
                   files,
+                  remoteDrives: tabDrives,
                   loading: false,
                   error: null,
                 }
@@ -2481,15 +2950,17 @@ export function SftpPanel() {
             })
           } finally {
             inProgressBatchServerIdsRef.current.delete(sid)
+            inProgressBatchServerIdsRef.current.delete(baseSid)
           }
         })()
       }
     } catch {
       for (const sid of finalOpenIds) {
         inProgressBatchServerIdsRef.current.delete(sid)
+        inProgressBatchServerIdsRef.current.delete(toSftpConnId(sid))
       }
     }
-  }, [servers, toast, t, switchToRightTab, sftpRemoteViewMode, sftpRemoteShowHidden])
+  }, [servers, toast, t, switchToRightTab, handleReconnectServer, sftpViewMode, sftpShowHidden])
 
   const handleBatchConnectServersRef = useRef(handleBatchConnectServers)
   handleBatchConnectServersRef.current = handleBatchConnectServers
@@ -2500,18 +2971,24 @@ export function SftpPanel() {
   useEffect(() => {
     if (sftpPendingOpenServerIds && sftpPendingOpenServerIds.length > 0) {
       const ids = [...sftpPendingOpenServerIds]
-      const batchKey = [...ids].sort().join(',')
+      const targetDirs = sftpPendingOpenTargetDirs && Object.keys(sftpPendingOpenTargetDirs).length > 0
+        ? { ...sftpPendingOpenTargetDirs }
+        : undefined
+      const dirKey = targetDirs
+        ? Object.keys(targetDirs).sort().map(k => `${k}=${targetDirs[k]}`).join(';')
+        : ''
+      const batchKey = `${[...ids].sort().join(',')}|${dirKey}`
       const now = Date.now()
       clearSftpPendingOpenServers()
 
-      if (batchKey === lastProcessedBatchKeyRef.current.key && now - lastProcessedBatchKeyRef.current.time < 3000) {
+      if (batchKey === lastProcessedBatchKeyRef.current.key && now - lastProcessedBatchKeyRef.current.time < 500) {
         return
       }
       lastProcessedBatchKeyRef.current = { key: batchKey, time: now }
 
-      void handleBatchConnectServersRef.current(ids)
+      void handleBatchConnectServersRef.current(ids, targetDirs)
     }
-  }, [sftpPendingOpenServerIds, clearSftpPendingOpenServers])
+  }, [sftpPendingOpenServerIds, sftpPendingOpenTargetDirs, clearSftpPendingOpenServers])
 
   // Load system roots and initial local directory
   useEffect(() => {
@@ -2548,17 +3025,44 @@ export function SftpPanel() {
   // === 传输排除与忽略规则同步 ===
   useEffect(() => {
     if (!backend) return
-    sshService.setExclusionConfig(sftpExclusionEnabled, sftpExclusionPatterns, sftpRespectGitignore).catch(err => {
+    sshService.setExclusionConfig(
+      sftpExclusionEnabled,
+      sftpExclusionPatterns,
+      sftpRespectGitignore,
+      {
+        includePatterns: sftpIncludePatterns ?? [],
+        minSizeBytes: sftpMinSizeKb != null ? sftpMinSizeKb * 1024 : null,
+        maxSizeBytes: sftpMaxSizeKb != null ? sftpMaxSizeKb * 1024 : null,
+      },
+    ).catch(err => {
       console.warn('[ExclusionConfig] sync failed:', err)
     })
-  }, [sftpExclusionEnabled, sftpExclusionPatterns, sftpRespectGitignore])
+  }, [sftpExclusionEnabled, sftpExclusionPatterns, sftpRespectGitignore, sftpIncludePatterns, sftpMinSizeKb, sftpMaxSizeKb])
 
-  // === 递归搜索（功能1）===
+  // === 递归搜索（功能1，FTP/FTPS 不支持递归搜索）===
   // searchMode 为 recursive 时，输入关键词后 debounce 500ms 触发搜索
   // 用请求序号丢弃过期响应（用户快速输入时只采纳最后一次结果）
   const recursiveSearchReqIdRef = useRef<number>(0)
+  const isSelectedServerFtp = useMemo(() => {
+    const baseId = toBaseServerId(selectedServerId)
+    const srv = baseId ? servers.find(s => s.id === baseId) : undefined
+    return hasFtpFileTransfer(srv)
+  }, [selectedServerId, servers])
+  const isLeftServerFtp = useMemo(() => {
+    const baseId = toBaseServerId(leftServerId)
+    const srv = baseId ? servers.find(s => s.id === baseId) : undefined
+    return hasFtpFileTransfer(srv)
+  }, [leftServerId, servers])
   useEffect(() => {
-    if (searchMode !== 'recursive') {
+    if (isSelectedServerFtp && searchMode === 'recursive') {
+      setSearchMode('filter')
+      setRecursiveSearchPattern('')
+      setSearchResults([])
+      setRecursiveSearching(false)
+    }
+  }, [isSelectedServerFtp, searchMode])
+  useEffect(() => {
+    if (searchMode !== 'recursive' || isSelectedServerFtp) {
       setSearchResults([])
       setRecursiveSearching(false)
       return
@@ -2594,7 +3098,7 @@ export function SftpPanel() {
       }
     }, 500)
     return () => clearTimeout(timer)
-  }, [searchMode, recursiveSearchPattern, selectedServerId, remotePath])
+  }, [searchMode, isSelectedServerFtp, recursiveSearchPattern, selectedServerId, remotePath])
 
   // 点击搜索结果：跳转到该文件所在目录并选中
   const handleSearchResultClick = useCallback((result: SearchResult) => {
@@ -2605,8 +3109,12 @@ export function SftpPanel() {
     setSearchResults([])
     setRemoteSearch('')
     loadRemoteDirectory(selectedServerId, result.parentDir)
-    // 延迟选中（等目录加载完成），用 setTimeout 简化避免与 remoteFiles 异步加载竞态
-    setTimeout(() => {
+    // 延迟选中（等目录加载完成），用受管定时器避免卸载后写 state
+    if (searchSelectTimerRef.current !== null) {
+      window.clearTimeout(searchSelectTimerRef.current)
+    }
+    searchSelectTimerRef.current = window.setTimeout(() => {
+      searchSelectTimerRef.current = null
       if (!mountedRef.current) return
       setSelectedRemotePaths(new Set([result.path]))
     }, 500)
@@ -2633,6 +3141,10 @@ export function SftpPanel() {
 
       // 连接成功恢复：清除离线断连标记，并就地刷新目录
       if (data.state === ConnectionState.Ready) {
+        if (leftServerIdRef.current && data.serverId === leftServerIdRef.current) {
+          isLeftRemoteDisconnectedRef.current = false
+          setIsLeftRemoteDisconnected(false)
+        }
         if (isActiveTab) {
           const wasDisconnected = rightTabsRef.current.find(t => t.id === activeRightTabIdRef.current)?.disconnected
           setIsRemoteDisconnected(false)
@@ -2651,6 +3163,11 @@ export function SftpPanel() {
       }
 
       if (data.state !== ConnectionState.Disconnected && data.state !== ConnectionState.Failed) return
+
+      if (leftServerIdRef.current && data.serverId === leftServerIdRef.current) {
+        isLeftRemoteDisconnectedRef.current = true
+        setIsLeftRemoteDisconnected(true)
+      }
 
       const disconnectReason = data.error || tRef.current('sftp_transfer_disconnected')
 
@@ -2713,10 +3230,12 @@ export function SftpPanel() {
   }, [])
 
   // 订阅传输进度事件，维护本会话内的传输记录列表
+  // 全局统一队列由 acquireTransferQueueListeners 单例维护，此处仅登记元数据与更新本地 transferRecords
   // 使用 ref 持有 panelOpen 状态避免依赖导致的重复订阅/丢事件
   const transferPanelOpenRef = useRef(transferPanelOpen)
   transferPanelOpenRef.current = transferPanelOpen
   useEffect(() => {
+    const releaseQueueListeners = acquireTransferQueueListeners(sshService)
     // 单条进度事件的实际处理逻辑（bytes 事件会先进入合批缓冲，再由 flush 统一调用）
     const processProgressEvent = (data: TransferProgressData) => {
       if (!mountedRef.current) return
@@ -2820,6 +3339,37 @@ export function SftpPanel() {
           if (arr.length === 0) map.delete(fileName)
         }
       }
+      if (!existingRecord) {
+        const effType = type === 's2s' ? 's2s' : type === 'upload' ? 'upload' : 'download'
+        const effSource = pendingSource
+        const effTarget = pendingTarget
+        const effServerId = pendingServerId ?? selectedServerIdRef.current
+        const effSrv = effServerId ? serversRef.current.find(s => s.id === toBaseServerId(effServerId)) : undefined
+        const rawProto = getServerFileTransferProtocol(effSrv)
+        const effProto: UnifiedTransferProtocol =
+          effType === 's2s'
+            ? 's2s'
+            : rawProto === 'ftp' || rawProto === 'ftps'
+              ? 'ftp'
+              : rawProto === 'scp'
+                ? 'scp'
+                : 'sftp'
+        const isDirTask = totalType === 'count' || directoryTransferIdsRef.current.has(transferId)
+        registerTransferMeta(
+          transferId,
+          {
+            serverId: effServerId,
+            serverName: effType === 'upload' ? pendingTargetServer : pendingSourceServer,
+            localPath: effType === 'upload' ? effSource : effType === 'download' ? effTarget : undefined,
+            remotePath: effType === 'upload' ? effTarget : effType === 'download' ? effSource : effTarget,
+            protocol: effProto,
+            isDirectory: isDirTask || undefined,
+            totalType: isDirTask ? 'count' : totalType === 'bytes' ? 'bytes' : undefined,
+            fileName: fileName || (effSource ? effSource.split(/[/\\]/).pop() || fileName : fileName),
+          },
+          now,
+        )
+      }
 
       // 首次收到 tmp_path（新记录）触发目标目录刷新，让用户立即看到临时文件
       // 在 setTransferRecords updater 外部执行，避免 StrictMode 双调用副作用
@@ -2828,15 +3378,21 @@ export function SftpPanel() {
       if (!existingRecord && tmpPath) {
         const effectiveServerId = pendingServerId || selectedServerIdRef.current
         if (type === 'upload' && effectiveServerId) {
-          setTimeout(() => {
+          const timerId = window.setTimeout(() => {
+            tmpRefreshTimersRef.current.delete(timerId)
+            if (!mountedRef.current) return
             if (selectedServerIdRef.current === effectiveServerId) {
               loadRemoteDirectoryRef.current(effectiveServerId, remotePathRef.current)
             }
           }, 150)
+          tmpRefreshTimersRef.current.add(timerId)
         } else if (type === 'download') {
-          setTimeout(() => {
+          const timerId = window.setTimeout(() => {
+            tmpRefreshTimersRef.current.delete(timerId)
+            if (!mountedRef.current) return
             loadLocalDirectoryRef.current(localPathRef.current)
           }, 150)
+          tmpRefreshTimersRef.current.add(timerId)
         }
       }
 
@@ -2849,9 +3405,34 @@ export function SftpPanel() {
           // 若不加守卫会把 paused/canceled 记录改写成 failed —— 暂停→续传按钮消失（断点续传断裂）、
           // 取消被误显示为失败。仅 transferring 中的记录才允许被失败信号定型。
           if (isFailSignal) {
+            const queueTask = useTransferQueueStore.getState().tasks.find(q => q.id === transferId)
+            const isPausedInQueue = queueTask?.status === 'paused'
+            const isCancelledInQueue = queueTask?.status === 'cancelled'
             return prev.map(t => {
               if (t.transferId !== transferId) return t
               if (t.status !== 'transferring') return t
+              if (isPausedInQueue) {
+                return {
+                  ...t,
+                  status: 'paused' as const,
+                  completedAt: now,
+                  rate: 0,
+                  resumable: true,
+                  resuming: false,
+                  tmpPath: t.tmpPath ?? queueTask?.tmpPath,
+                }
+              }
+              if (isCancelledInQueue) {
+                return {
+                  ...t,
+                  status: 'canceled' as const,
+                  completedAt: now,
+                  rate: 0,
+                  resumable: false,
+                  resuming: false,
+                  tmpPath: undefined,
+                }
+              }
               return {
                 ...t,
                 status: 'failed' as const,
@@ -3285,6 +3866,7 @@ export function SftpPanel() {
     })
 
     return () => {
+      releaseQueueListeners()
       if (typeof unsubscribe === 'function') unsubscribe()
       if (typeof unsubscribeFailures === 'function') unsubscribeFailures()
       if (progressFlushRafRef.current !== null) {
@@ -3296,6 +3878,8 @@ export function SftpPanel() {
         cancelAnimationFrame(manifestFlushRafRef.current)
         manifestFlushRafRef.current = null
       }
+      tmpRefreshTimersRef.current.forEach((id) => window.clearTimeout(id))
+      tmpRefreshTimersRef.current.clear()
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -3431,6 +4015,28 @@ export function SftpPanel() {
         clearTimeout(extractionAutoCloseTimerRef.current)
         extractionAutoCloseTimerRef.current = null
       }
+      // 清理列宽拖拽监听器与点击重命名延时定时器
+      const colHandlers = colResizeHandlersRef.current
+      if (colHandlers.move) window.removeEventListener('pointermove', colHandlers.move)
+      if (colHandlers.up) {
+        window.removeEventListener('pointerup', colHandlers.up)
+        window.removeEventListener('pointercancel', colHandlers.up)
+      }
+      colResizeHandlersRef.current = { move: null, up: null }
+      if (renameClickTimerRef.current !== null) {
+        clearTimeout(renameClickTimerRef.current)
+        renameClickTimerRef.current = null
+      }
+      if (searchSelectTimerRef.current !== null) {
+        clearTimeout(searchSelectTimerRef.current)
+        searchSelectTimerRef.current = null
+      }
+      if (hoverCardTimerRef.current !== null) {
+        clearTimeout(hoverCardTimerRef.current)
+        hoverCardTimerRef.current = null
+      }
+      tmpRefreshTimersRef.current.forEach(id => clearTimeout(id))
+      tmpRefreshTimersRef.current.clear()
       // 清理本地图片预览的 blob URL，避免内存泄漏
       if (viewerObjectUrlRef.current) {
         URL.revokeObjectURL(viewerObjectUrlRef.current)
@@ -3519,14 +4125,23 @@ export function SftpPanel() {
     for (const id of removed) {
       directoryTransferIdsRef.current.delete(id)
       transferTopNameRef.current.delete(id)
+      directoryRateTrackerRef.current.delete(id)
+      scheduledRunnersRef.current.delete(id)
     }
+    useTransferQueueStore.getState().clearCompleted()
   }, [])
 
   const clearAllTransfers = useCallback(() => {
     // 存在进行中的传输时拒绝清空，避免丢失可取消/续传的传输记录
-    if (transferRecords.some(r => r.status === 'transferring')) {
+    const currentRecords = transferRecordsRef.current
+    if (currentRecords.some(r => r.status === 'transferring')) {
       toastRef.current.warning(tRef.current('sftp_transfer_transferring'))
       return
+    }
+    for (const r of currentRecords) {
+      if (r.tmpPath && r.serverId && r.type !== 's2s') {
+        sshService.cleanupTmpFile(r.serverId, r.tmpPath, r.type === 'upload').catch(() => {})
+      }
     }
     setTransferRecords([])
     setTransferChildren({})
@@ -3534,7 +4149,83 @@ export function SftpPanel() {
     directoryTransferIdsRef.current.clear()
     transferTopNameRef.current.clear()
     directoryRateTrackerRef.current.clear()
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    scheduledRunnersRef.current.clear()
+    useTransferQueueStore.getState().clearAll()
+  }, [])
+
+  useEffect(() => {
+    const handleQueueCleared = () => {
+      setTransferRecords([])
+      setTransferChildren({})
+      setExpandedTransfers(new Set())
+      directoryTransferIdsRef.current.clear()
+      transferTopNameRef.current.clear()
+      directoryRateTrackerRef.current.clear()
+      scheduledRunnersRef.current.clear()
+    }
+    const handleQueueSync = (e: Event) => {
+      const detail = (e as CustomEvent<{
+        action?: 'pause' | 'resume' | 'cancel' | 'remove' | 'clearCompleted'
+        taskId?: string
+        status?: string
+      }>).detail
+      if (!detail?.action) return
+      const { action, taskId } = detail
+      if (action === 'clearCompleted') {
+        setTransferRecords(prev => prev.filter(t => t.status === 'transferring' || t.status === 'paused'))
+        return
+      }
+      if (!taskId) return
+      if (action === 'remove') {
+        setTransferRecords(prev => prev.filter(t => t.transferId !== taskId))
+        setTransferChildren(prev => {
+          if (!(taskId in prev)) return prev
+          const next = { ...prev }
+          delete next[taskId]
+          return next
+        })
+        setExpandedTransfers(prev => {
+          if (!prev.has(taskId)) return prev
+          const next = new Set(prev)
+          next.delete(taskId)
+          return next
+        })
+        directoryTransferIdsRef.current.delete(taskId)
+        transferTopNameRef.current.delete(taskId)
+        directoryRateTrackerRef.current.delete(taskId)
+        scheduledRunnersRef.current.delete(taskId)
+        return
+      }
+      if (action === 'pause') {
+        setTransferRecords(prev => prev.map(t =>
+          t.transferId === taskId && t.status === 'transferring'
+            ? { ...t, status: 'paused' as const, rate: 0 }
+            : t
+        ))
+        return
+      }
+      if (action === 'cancel') {
+        setTransferRecords(prev => prev.map(t =>
+          t.transferId === taskId && (t.status === 'transferring' || t.status === 'paused')
+            ? { ...t, status: 'failed' as const, error: tRef.current('sftp_transfer_canceled') || 'Canceled', completedAt: Date.now(), rate: 0 }
+            : t
+        ))
+        return
+      }
+      if (action === 'resume') {
+        setTransferRecords(prev => prev.map(t =>
+          t.transferId === taskId && t.status === 'paused'
+            ? { ...t, status: 'transferring' as const, startTime: Date.now(), error: undefined }
+            : t
+        ))
+      }
+    }
+    window.addEventListener('qshell:transfer-queue-cleared', handleQueueCleared)
+    window.addEventListener('qshell:transfer-queue-sync', handleQueueSync)
+    return () => {
+      window.removeEventListener('qshell:transfer-queue-cleared', handleQueueCleared)
+      window.removeEventListener('qshell:transfer-queue-sync', handleQueueSync)
+    }
   }, [])
 
   const removeTransfer = useCallback((id: string) => {
@@ -3554,6 +4245,8 @@ export function SftpPanel() {
     directoryTransferIdsRef.current.delete(id)
     transferTopNameRef.current.delete(id)
     directoryRateTrackerRef.current.delete(id)
+    scheduledRunnersRef.current.delete(id)
+    useTransferQueueStore.getState().removeTask(id)
   }, [])
 
   /**
@@ -3626,6 +4319,7 @@ export function SftpPanel() {
         child.status === 'completed' ? child : { ...child, status: 'canceled' as const }
       ),
     } : prev)
+    useTransferQueueStore.getState().cancelTask(transferId)
     try {
       await sshService.cancelTransfer(transferId)
     } catch (err) {
@@ -3671,6 +4365,7 @@ export function SftpPanel() {
           }
         : t
     ))
+    useTransferQueueStore.getState().pauseTask(transferId)
     try {
       await sshService.cancelTransfer(transferId)
       // 暂停是可恢复操作，风险低，不加二次确认；仅提示用户可点击继续
@@ -3697,6 +4392,7 @@ export function SftpPanel() {
     if (!record.tmpPath || !record.sourcePath || !record.targetPath) {
       toastRef.current.error(tRef.current('sftp_resume_failed_tmp_missing'))
       setTransferRecords(prev => prev.filter(t => t.transferId !== transferId))
+      useTransferQueueStore.getState().removeTask(transferId)
       return
     }
     // 使用传输记录所属的 serverId，而非当前活跃 tab 的 serverId，避免跨服务器误操作
@@ -3712,6 +4408,7 @@ export function SftpPanel() {
       tmpPath: record.tmpPath,
       isUpload: record.type === 'upload',
     })
+    useTransferQueueStore.getState().resumeTask(transferId)
     setTransferRecords(prev => prev.map(t =>
       t.transferId === transferId
         ? {
@@ -3737,6 +4434,12 @@ export function SftpPanel() {
      */
     const handleResumeFailure = (error: string) => {
       sshService.unregisterActiveTransfer(transferId)
+      useTransferQueueStore.getState().updateTask(transferId, {
+        status: 'failed',
+        error,
+        speedBytesPerSec: 0,
+        etaSeconds: undefined,
+      })
       setTransferRecords(prev => prev.map(t =>
         t.transferId === transferId && t.status === 'transferring'
           ? {
@@ -3757,32 +4460,50 @@ export function SftpPanel() {
     }
 
     try {
-      if (record.type === 'upload') {
+      const res = record.type === 'upload'
         // 上传：sourcePath=本地路径，targetPath=远程路径，tmpPath=远程临时文件
-        const res = await sshService.resumeUpload(
-          sid,
-          record.sourcePath,
-          record.targetPath,
-          record.tmpPath,
-          record.lastOffset,
-          transferId,
-          record.total,
-        )
-        if (!res.success && !((res.error || '').includes('canceled'))) {
+        ? await sshService.resumeUpload(
+            sid,
+            record.sourcePath,
+            record.targetPath,
+            record.tmpPath,
+            record.lastOffset,
+            transferId,
+            record.total,
+          )
+        // 下载：sourcePath=远程路径，targetPath=本地路径，tmpPath=本地临时文件
+        : await sshService.resumeDownload(
+            sid,
+            record.sourcePath,
+            record.targetPath,
+            record.tmpPath,
+            record.lastOffset,
+            transferId,
+          )
+      if (!res) {
+        handleResumeFailure(t('sftp_resume_failed'))
+      } else if (!res.success) {
+        if ((res.error || '').includes('canceled')) {
+          const qTask = useTransferQueueStore.getState().tasks.find(t => t.id === transferId)
+          if (qTask && qTask.status === 'queued') {
+            useTransferQueueStore.getState().updateTask(transferId, {
+              status: 'cancelled',
+              speedBytesPerSec: 0,
+              etaSeconds: undefined,
+            })
+          }
+        } else {
           handleResumeFailure(res.error || t('sftp_resume_failed'))
         }
       } else {
-        // 下载：sourcePath=远程路径，targetPath=本地路径，tmpPath=本地临时文件
-        const res = await sshService.resumeDownload(
-          sid,
-          record.sourcePath,
-          record.targetPath,
-          record.tmpPath,
-          record.lastOffset,
-          transferId
-        )
-        if (!res.success && !((res.error || '').includes('canceled'))) {
-          handleResumeFailure(res.error || t('sftp_resume_failed'))
+        const qTask = useTransferQueueStore.getState().tasks.find(t => t.id === transferId)
+        if (qTask && qTask.status === 'queued') {
+          useTransferQueueStore.getState().updateTask(transferId, {
+            status: 'completed',
+            transferredBytes: qTask.totalBytes,
+            speedBytesPerSec: 0,
+            etaSeconds: 0,
+          })
         }
       }
     } catch (err: unknown) {
@@ -4102,16 +4823,33 @@ export function SftpPanel() {
     const sid = serverId || selectedServerId
     if (!sid) return
     if (!entry.isDirectory) return
+    const srv = servers.find(s => s.id === toBaseServerId(sid))
+    if (hasFtpFileTransfer(srv)) return
+    if ((sid === selectedServerId && isRemoteDisconnected) || (sid === leftServerId && isLeftRemoteDisconnectedRef.current)) {
+      toastRef.current.warning(tRef.current('sftp_offline_readonly_tip'))
+      return
+    }
     const now = Date.now()
     const archiveName = `${entry.name}.${format}`
-    const transferId = `archive-${now}-${Math.random().toString(36).slice(2, 8)}`
+    const transferId = `dl-archive-${now}-${Math.random().toString(36).slice(2, 8)}`
+    const targetArchivePath = joinPath(localPath, archiveName)
+    const rawProto = getServerFileTransferProtocol(srv)
+    const proto: UnifiedTransferProtocol = rawProto === 'scp' ? 'scp' : 'sftp'
+    registerTransferMeta(transferId, {
+      serverId: sid,
+      serverName: serverNameOf(sid),
+      localPath: targetArchivePath,
+      remotePath: entry.path,
+      protocol: proto,
+      fileName: archiveName,
+    })
     setTransferRecords(prev => [{
       transferId,
       type: 'download' as const,
       serverId: sid || '',
       fileName: archiveName,
       sourcePath: entry.path,
-      targetPath: joinPath(localPath, archiveName),
+      targetPath: targetArchivePath,
       sourceServerName: serverNameOf(sid),
       current: 0, total: 0, percent: 0,
       status: 'transferring' as const,
@@ -4121,7 +4859,7 @@ export function SftpPanel() {
     }, ...prev].slice(0, 500))
     if (!transferPanelOpen) setTransferPanelOpen(true)
     try {
-      const res = await sshService.downloadArchive(sid, entry.path, format)
+      const res = await sshService.downloadArchive(sid, entry.path, format, transferId)
       // 无论成功失败都更新记录状态，避免永远停留在 transferring
       setTransferRecords(prev => prev.map(r => r.transferId === transferId ? {
         ...r,
@@ -4130,6 +4868,12 @@ export function SftpPanel() {
         completedAt: Date.now(),
       } : r))
       if (!res.success) {
+        useTransferQueueStore.getState().updateTask(transferId, {
+          status: 'failed',
+          error: res.error || t('sftp_archive_download_failed'),
+          speedBytesPerSec: 0,
+          etaSeconds: undefined,
+        })
         showTransferNotice(res.error || t('sftp_archive_download_failed'))
       }
       // 刷新本地目录以显示下载的归档文件（归档下载到当前本地目录）
@@ -4142,6 +4886,12 @@ export function SftpPanel() {
         error: msg,
         completedAt: Date.now(),
       } : r))
+      useTransferQueueStore.getState().updateTask(transferId, {
+        status: 'failed',
+        error: msg,
+        speedBytesPerSec: 0,
+        etaSeconds: undefined,
+      })
       showTransferNotice(msg)
     }
   }
@@ -4155,6 +4905,10 @@ export function SftpPanel() {
     if (entry.isDirectory || !isSupportedArchiveName(entry.name) || extractingArchivePath) return
     const sid = side === 'remote' ? serverId : null
     if (side === 'remote' && !sid) return
+    if (side === 'remote' && sid) {
+      const srv = servers.find(s => s.id === toBaseServerId(sid))
+      if (hasFtpFileTransfer(srv)) return
+    }
     if (extractionAutoCloseTimerRef.current !== null) {
       window.clearTimeout(extractionAutoCloseTimerRef.current)
       extractionAutoCloseTimerRef.current = null
@@ -4388,9 +5142,14 @@ export function SftpPanel() {
     loadLocalDirectory(localPath, undefined, undefined, { isRefresh: true })
   }
 
-  // 3. 本地创建文件夹
+  // 3. 左侧创建文件夹（本地或左侧远程服务器）
   const handleCreateFolderLocal = async () => {
-    const validateErr = validateFileName(newFolderName, t)
+    const isLeftRemote = leftSideType === 'remote' && !!leftServerId
+    if (isLeftRemote && isLeftRemoteDisconnectedRef.current) {
+      toastRef.current.warning(tRef.current('sftp_offline_readonly_tip'))
+      return
+    }
+    const validateErr = validateFileName(newFolderName, t, isLeftRemote ? 'remote' : 'local')
     if (validateErr) { setLocalError(validateErr); return }
     const newName = newFolderName.trim()
     // 文件夹不允许覆盖式创建（mkdir 无 -p 时会报错，但显式提示更友好）
@@ -4399,20 +5158,37 @@ export function SftpPanel() {
       return
     }
     try {
-      const pathString = joinPath(localPath, newName)
-      await mkdirLocal(pathString)
-      setShowCreateFolder(false)
-      setNewFolderName('')
-      loadLocalDirectory(localPath, undefined, undefined, { isRefresh: true })
+      if (isLeftRemote) {
+        const pathString = localPath.endsWith('/') ? localPath + newName : localPath + '/' + newName
+        const res = await sshService.mkdir(leftServerId, pathString)
+        if (res.exitCode !== 0) {
+          setLocalError(res.stderr || t('sftp_create_directory_failed'))
+          return
+        }
+        setShowCreateFolder(false)
+        setNewFolderName('')
+        loadLocalDirectory(localPath, 'remote', leftServerId, { isRefresh: true })
+      } else {
+        const pathString = joinPath(localPath, newName)
+        await mkdirLocal(pathString)
+        setShowCreateFolder(false)
+        setNewFolderName('')
+        loadLocalDirectory(localPath, undefined, undefined, { isRefresh: true })
+      }
     } catch (err: unknown) {
-      console.error('Failed to create local directory:', err)
+      console.error('Failed to create directory:', err)
       setLocalError(getErrorMessage(err, String(err)))
     }
   }
 
-  // 4. 本地创建文件
+  // 4. 左侧创建文件（本地或左侧远程服务器）
   const handleCreateFileLocal = async () => {
-    const validateErr = validateFileName(newFileName, t)
+    const isLeftRemote = leftSideType === 'remote' && !!leftServerId
+    if (isLeftRemote && isLeftRemoteDisconnectedRef.current) {
+      toastRef.current.warning(tRef.current('sftp_offline_readonly_tip'))
+      return
+    }
+    const validateErr = validateFileName(newFileName, t, isLeftRemote ? 'remote' : 'local')
     if (validateErr) { setLocalError(validateErr); return }
     const newName = newFileName.trim()
     // 文件已存在：writeFile 会清空原文件内容，必须明确确认后才执行
@@ -4424,13 +5200,25 @@ export function SftpPanel() {
       if (!ok) return // 用户取消，保留对话框供修改名称
     }
     try {
-      const pathString = joinPath(localPath, newName)
-      await writeLocal(pathString, '')
-      setShowCreateFile(false)
-      setNewFileName('')
-      loadLocalDirectory(localPath, undefined, undefined, { isRefresh: true })
+      if (isLeftRemote) {
+        const pathString = localPath.endsWith('/') ? localPath + newName : localPath + '/' + newName
+        const res = await sshService.writeFile(leftServerId, pathString, '')
+        if (res.exitCode !== 0) {
+          setLocalError(res.stderr || t('sftp_upload_failed'))
+          return
+        }
+        setShowCreateFile(false)
+        setNewFileName('')
+        loadLocalDirectory(localPath, 'remote', leftServerId, { isRefresh: true })
+      } else {
+        const pathString = joinPath(localPath, newName)
+        await writeLocal(pathString, '')
+        setShowCreateFile(false)
+        setNewFileName('')
+        loadLocalDirectory(localPath, undefined, undefined, { isRefresh: true })
+      }
     } catch (err: unknown) {
-      console.error('Failed to create local file:', err)
+      console.error('Failed to create file:', err)
       setLocalError(getErrorMessage(err, String(err)))
     }
   }
@@ -4456,7 +5244,11 @@ export function SftpPanel() {
     try {
       // 远程路径分隔符恒为 /
       const pathString = remotePath.endsWith('/') ? remotePath + newName : remotePath + '/' + newName
-      await sshService.writeFile(selectedServerId, pathString, '')
+      const res = await sshService.writeFile(selectedServerId, pathString, '')
+      if (res.exitCode !== 0) {
+        setRemoteError(res.stderr || t('sftp_upload_failed'))
+        return
+      }
       setShowCreateFile(false)
       setNewFileName('')
       loadRemoteDirectory(selectedServerId, remotePath)
@@ -4484,22 +5276,25 @@ export function SftpPanel() {
     if (!permissionsTarget) return
     const sid = permissionsServerId || selectedServerId
     if (!sid) return
+    const targetSrv = servers.find(s => s.id === toBaseServerId(sid))
+    const isFtp = hasFtpFileTransfer(targetSrv)
+    const recursive = isFtp ? false : permissionsRecursive
     setPermSaving(true)
     try {
       const mode = getOctalMode(perms)
-      const permRes = await sshService.setPermissions(sid, permissionsTarget.path, mode, permissionsRecursive)
+      const permRes = await sshService.setPermissions(sid, permissionsTarget.path, mode, recursive)
       if (permRes.exitCode !== 0) {
         throw new Error(permRes.stderr || 'Failed to update file permissions')
       }
 
-      // chmod 成功后再 chown；若 chown 失败，明确提示部分成功，避免用户误以为全部失败
-      if (ownerUser !== permissionsTarget.owner || ownerGroup !== permissionsTarget.group) {
+      // chmod 成功后再 chown；FTP/FTPS 不支持 chown，跳过
+      if (!isFtp && (ownerUser !== permissionsTarget.owner || ownerGroup !== permissionsTarget.group)) {
         const chownRes = await sshService.chownFile(
           sid,
           permissionsTarget.path,
           ownerUser,
           ownerGroup,
-          permissionsRecursive
+          recursive
         )
         if (chownRes.exitCode !== 0) {
           throw new Error(
@@ -4523,9 +5318,9 @@ export function SftpPanel() {
     }
   }
 
-  // SFTP 配置诊断（检测 Windows 服务端 SFTP 配置状态）
+  // SFTP 配置诊断（检测 Windows 服务端 SFTP 配置状态；FTP/FTPS 不适用）
   const handleDiagnoseSftp = async () => {
-    if (!selectedServerId) return
+    if (!selectedServerId || isSelectedServerFtp) return
     if (!backend) {
       toast.error(tRef.current('sftp_diag_failed'))
       return
@@ -4701,7 +5496,7 @@ export function SftpPanel() {
   // 注：loadLocalDirectory/loadRemoteDirectory/t 通过 ref 读取，避免这些高频重建的值进入依赖数组
   const handleDownloadRemoteFiles = useCallback(async (srcServerId: string, destFolder: string, files: FileEntry[], destFilesList: (FileEntry | LocalFileEntry)[]) => {
     if (!srcServerId || files.length === 0) return
-    if (srcServerId === selectedServerId && isRemoteDisconnected) {
+    if ((srcServerId === selectedServerId && isRemoteDisconnected) || (srcServerId === leftServerIdRef.current && isLeftRemoteDisconnectedRef.current)) {
       toastRef.current.warning(tRef.current('sftp_offline_readonly_tip'))
       return
     }
@@ -4791,7 +5586,7 @@ export function SftpPanel() {
   // 与远程"跳过 symlink"策略一致，不会跟随 symlink 递归上传。
   const handleUploadLocalPaths = useCallback(async (targetServerId: string, targetPath: string, paths: string[], destFilesList: (FileEntry | LocalFileEntry)[]) => {
     if (!targetServerId || paths.length === 0) return
-    if (targetServerId === selectedServerId && isRemoteDisconnected) {
+    if ((targetServerId === selectedServerId && isRemoteDisconnected) || (targetServerId === leftServerIdRef.current && isLeftRemoteDisconnectedRef.current)) {
       toastRef.current.warning(tRef.current('sftp_offline_readonly_tip'))
       return
     }
@@ -4934,8 +5729,19 @@ export function SftpPanel() {
     destFilesList: (FileEntry | LocalFileEntry)[],
   ) => {
     if (!srcServerId || !destServerId || srcFiles.length === 0) return
-    if ((srcServerId === selectedServerId && isRemoteDisconnected) || (destServerId === selectedServerId && isRemoteDisconnected)) {
+    if (
+      (srcServerId === selectedServerId && isRemoteDisconnected) ||
+      (destServerId === selectedServerId && isRemoteDisconnected) ||
+      (srcServerId === leftServerIdRef.current && isLeftRemoteDisconnectedRef.current) ||
+      (destServerId === leftServerIdRef.current && isLeftRemoteDisconnectedRef.current)
+    ) {
       toastRef.current.warning(tRef.current('sftp_offline_readonly_tip'))
+      return
+    }
+    const srcSrv = servers.find(s => s.id === toBaseServerId(srcServerId))
+    const destSrv = servers.find(s => s.id === toBaseServerId(destServerId))
+    if (hasFtpFileTransfer(srcSrv) || hasFtpFileTransfer(destSrv)) {
+      toastRef.current.warning(tRef.current('sftp_ftp_s2s_unsupported') || 'FTP/FTPS 服务器暂不支持服务器对拷')
       return
     }
     const myBatchId = ++transferBatchIdRef.current
@@ -5173,7 +5979,7 @@ export function SftpPanel() {
   const filteredLocalFiles = useMemo(() => {
     const query = localSearch.toLowerCase().trim()
     const filtered = localFiles
-      .filter((f) => leftShowHidden || !isHiddenName(f.name))
+      .filter((f) => sftpShowHidden || !isHiddenName(f.name))
       .filter((f) => !query || f.name.toLowerCase().includes(query))
     const sorted = sortFiles(
       filtered,
@@ -5196,14 +6002,14 @@ export function SftpPanel() {
       return [parentEntry, ...sorted]
     }
     return sorted
-  }, [localFiles, localSearch, localPath, localSortField, localSortOrder, leftShowHidden, isHiddenName])
+  }, [localFiles, localSearch, localPath, localSortField, localSortOrder, sftpShowHidden, isHiddenName])
 
   // 过滤远程文件
   // 注：t 通过 tRef 读取，避免 t 引用变化导致每次重算
   const filteredRemoteFiles = useMemo(() => {
     const query = remoteSearch.toLowerCase().trim()
     const filtered = remoteFiles
-      .filter((f) => rightShowHidden || !isHiddenName(f.name))
+      .filter((f) => sftpShowHidden || !isHiddenName(f.name))
       .filter((f) => !query || f.name.toLowerCase().includes(query))
     const sorted = sortFiles(
       filtered,
@@ -5227,7 +6033,7 @@ export function SftpPanel() {
       return [parentEntry, ...sorted]
     }
     return sorted
-  }, [remoteFiles, remoteSearch, remotePath, remoteSortField, remoteSortOrder, rightShowHidden, isHiddenName])
+  }, [remoteFiles, remoteSearch, remotePath, remoteSortField, remoteSortOrder, sftpShowHidden, isHiddenName])
 
   // 同步 ref（键盘快捷键回调读取最新列表，避免闭包陷阱）
   filteredLocalFilesRef.current = filteredLocalFiles
@@ -5421,11 +6227,517 @@ export function SftpPanel() {
     copyFilesToClipboard, pasteFilesFromClipboard,
   }
 
+  // U2 / P2-20 / P2-21: 同步全局并发设置并运行延迟/优先级调度器
+  useEffect(() => {
+    useTransferQueueStore.getState().setMaxConcurrent(sftpTransferConcurrency)
+  }, [sftpTransferConcurrency])
+
+  const hasScheduledOrQueued = useMemo(
+    () => unifiedQueueTasks.some((task) => task.status === 'scheduled' || task.status === 'queued'),
+    [unifiedQueueTasks],
+  )
+
+  useEffect(() => {
+    if (!hasScheduledOrQueued) return
+    useTransferQueueStore.getState().tickScheduler(Date.now())
+    const timer = window.setInterval(() => {
+      const now = Date.now()
+      setScheduleClockNow(now)
+      useTransferQueueStore.getState().tickScheduler(now)
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [hasScheduledOrQueued])
+
+  const scheduleDelayedTransfer = useCallback((params: {
+    direction: 'upload' | 'download' | 's2s'
+    fileName: string
+    totalBytes: number
+    serverId: string
+    serverName?: string
+    sourceServerId?: string
+    targetServerId?: string
+    localPath?: string
+    remotePath?: string
+    delayMs: number
+    runner: () => Promise<void>
+  }) => {
+    const taskId = `sched-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const scheduledAt = Date.now() + Math.max(1000, params.delayMs)
+    const runTask = async () => {
+      try {
+        await params.runner()
+      } finally {
+        scheduledRunnersRef.current.delete(taskId)
+        useTransferQueueStore.getState().removeTask(taskId)
+      }
+    }
+    scheduledRunnersRef.current.set(taskId, runTask)
+    const targetSrv = servers.find(s => s.id === toBaseServerId(params.serverId))
+    const rawProto = getServerFileTransferProtocol(targetSrv)
+    const resolvedProtocol: UnifiedTransferProtocol =
+      params.direction === 's2s'
+        ? 's2s'
+        : rawProto === 'ftp' || rawProto === 'ftps'
+          ? 'ftp'
+          : rawProto === 'scp'
+            ? 'scp'
+            : 'sftp'
+    useTransferQueueStore.getState().enqueueTask({
+      id: taskId,
+      protocol: resolvedProtocol,
+      direction: params.direction,
+      serverId: params.serverId,
+      serverName: params.serverName,
+      sourceServerId: params.sourceServerId,
+      targetServerId: params.targetServerId,
+      localPath: params.localPath,
+      remotePath: params.remotePath,
+      fileName: params.fileName,
+      totalBytes: params.totalBytes,
+      scheduledAt,
+      priority: 'normal',
+      startFn: runTask,
+    })
+    setScheduleClockNow(Date.now())
+    if (!transferPanelOpenRef.current) setTransferPanelOpen(true)
+    const secs = Math.max(1, Math.round(params.delayMs / 1000))
+    toastRef.current.info(
+      tRef.current('tx_scheduled_in').replace('{time}', `${secs}s`),
+    )
+  }, [])
+
+  // P2-19: 目录树激活侧、节点加载与调整宽度
+  const effectiveTreeSide: 'local' | 'remote' = sftpPaneMode === 'left'
+    ? 'local'
+    : sftpPaneMode === 'right'
+      ? 'remote'
+      : lastFocusedPane
+
+  const treeCurrentPath = effectiveTreeSide === 'local' ? localPath : remotePath
+  const treeActiveBreadcrumbs = effectiveTreeSide === 'local' ? localBreadcrumbs : remoteBreadcrumbs
+  const treeRootCrumb = treeActiveBreadcrumbs[0]
+  const treeRootPath = treeRootCrumb?.path || (effectiveTreeSide === 'local' && leftSideType === 'local' && getLocalOs() === 'windows' ? 'C:\\' : '/')
+  const treeRootLabel = treeRootCrumb?.label || treeRootPath
+
+  const fetchTreeChildren = useCallback(async (dirPath: string): Promise<TreeNode[]> => {
+    if (!backend?.files) return []
+    if (effectiveTreeSide === 'local') {
+      if (leftSideType === 'remote' && leftServerId) {
+        if (isLeftRemoteDisconnected) return []
+        const list = await backend.files.list(leftServerId, dirPath)
+        return sftpEntriesToTreeNodes(list)
+      }
+      const res = await backend.files.listLocalDirectory(dirPath)
+      return sftpEntriesToTreeNodes(res.files)
+    }
+    if (!selectedServerId || isRemoteDisconnected) return []
+    const list = await backend.files.list(selectedServerId, dirPath)
+    return sftpEntriesToTreeNodes(list)
+  }, [effectiveTreeSide, leftSideType, leftServerId, isLeftRemoteDisconnected, selectedServerId, isRemoteDisconnected])
+
+  const loadTreeNodeChildren = useCallback(async (targetPath: string) => {
+    setTreeRoot((prev) => updateSftpTreeNode(prev, targetPath, (n) => ({ ...n, loading: true })))
+    try {
+      const children = await fetchTreeChildren(targetPath)
+      if (!mountedRef.current) return
+      setTreeRoot((prev) =>
+        updateSftpTreeNode(prev, targetPath, (n) => ({ ...n, children, loaded: true, loading: false })),
+      )
+    } catch {
+      if (!mountedRef.current) return
+      setTreeRoot((prev) => updateSftpTreeNode(prev, targetPath, (n) => ({ ...n, loading: false })))
+    }
+  }, [fetchTreeChildren])
+
+  const handleRefreshTreeRoot = useCallback(() => {
+    const freshRoot: TreeNode = { path: treeRootPath, name: treeRootLabel, children: [], loaded: false, loading: false }
+    setTreeRoot(freshRoot)
+    setExpandedTreePaths(new Set([treeRootPath]))
+    void loadTreeNodeChildren(treeRootPath)
+  }, [treeRootPath, treeRootLabel, loadTreeNodeChildren])
+
+  useEffect(() => {
+    if (!sftpShowDirectoryTree) return
+    const sideKey = effectiveTreeSide === 'local'
+      ? `local:${leftSideType}:${leftServerId}:${leftSideType === 'remote' && isLeftRemoteDisconnected ? 'off' : 'on'}:${treeRootPath}`
+      : `remote:${selectedServerId}:${isRemoteDisconnected ? 'off' : 'on'}:${treeRootPath}`
+    if (treeContextKeyRef.current !== sideKey) {
+      treeContextKeyRef.current = sideKey
+      setTreeRoot({ path: treeRootPath, name: treeRootLabel, children: [], loaded: false, loading: false })
+      setExpandedTreePaths(new Set([treeRootPath]))
+      void loadTreeNodeChildren(treeRootPath)
+    }
+  }, [sftpShowDirectoryTree, effectiveTreeSide, leftSideType, leftServerId, isLeftRemoteDisconnected, selectedServerId, isRemoteDisconnected, treeRootPath, treeRootLabel, loadTreeNodeChildren])
+
+  const handleToggleTreeNode = useCallback((nodePath: string) => {
+    const node = findSftpTreeNode(treeRoot, nodePath)
+    const wasExpanded = expandedTreePaths.has(nodePath)
+    setExpandedTreePaths((prev) => {
+      const next = new Set(prev)
+      if (next.has(nodePath)) {
+        next.delete(nodePath)
+      } else {
+        next.add(nodePath)
+      }
+      return next
+    })
+    if (!wasExpanded && node && !node.loaded && !node.loading) {
+      void loadTreeNodeChildren(nodePath)
+    }
+  }, [treeRoot, expandedTreePaths, loadTreeNodeChildren])
+
+  const handleSelectTreeDir = useCallback((nodePath: string) => {
+    const node = findSftpTreeNode(treeRoot, nodePath)
+    setExpandedTreePaths((prev) => {
+      if (prev.has(nodePath)) return prev
+      const next = new Set(prev)
+      next.add(nodePath)
+      return next
+    })
+    if (node && !node.loaded && !node.loading) {
+      void loadTreeNodeChildren(nodePath)
+    }
+    if (effectiveTreeSide === 'local') {
+      if (leftSideType === 'remote' && isLeftRemoteDisconnected) {
+        toastRef.current.warning(tRef.current('sftp_offline_readonly_tip'))
+        return
+      }
+      if (nodePath !== localPathRef.current) {
+        void loadLocalDirectory(nodePath)
+      }
+    } else {
+      if (isRemoteDisconnected) {
+        toastRef.current.warning(tRef.current('sftp_offline_readonly_tip'))
+        return
+      }
+      if (selectedServerId && nodePath !== remotePathRef.current) {
+        void loadRemoteDirectory(selectedServerId, nodePath)
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [treeRoot, effectiveTreeSide, leftSideType, isLeftRemoteDisconnected, selectedServerId, isRemoteDisconnected, loadTreeNodeChildren])
+
+  useEffect(() => {
+    return () => {
+      if (treeResizeHandlersRef.current.move) {
+        document.removeEventListener('mousemove', treeResizeHandlersRef.current.move)
+      }
+      if (treeResizeHandlersRef.current.up) {
+        document.removeEventListener('mouseup', treeResizeHandlersRef.current.up)
+      }
+    }
+  }, [])
+
+  const handleStartTreeResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    if (treeResizeHandlersRef.current.move) {
+      document.removeEventListener('mousemove', treeResizeHandlersRef.current.move)
+    }
+    if (treeResizeHandlersRef.current.up) {
+      document.removeEventListener('mouseup', treeResizeHandlersRef.current.up)
+    }
+    treeResizeRef.current = { startX: e.clientX, startWidth: treeWidth }
+    const onMove = (ev: MouseEvent) => {
+      if (!treeResizeRef.current) return
+      const delta = ev.clientX - treeResizeRef.current.startX
+      setTreeWidth(Math.max(150, Math.min(400, treeResizeRef.current.startWidth + delta)))
+    }
+    const onUp = () => {
+      treeResizeRef.current = null
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      treeResizeHandlersRef.current = { move: null, up: null }
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    treeResizeHandlersRef.current = { move: onMove, up: onUp }
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [treeWidth])
+
+  const allFlatTreeNodes = useMemo(
+    () => flattenSftpTree(treeRoot, expandedTreePaths),
+    [treeRoot, expandedTreePaths],
+  )
+  const visibleTreeNodes = useMemo(
+    () => allFlatTreeNodes.slice(0, SFTP_MAX_TREE_NODES),
+    [allFlatTreeNodes],
+  )
+  const hasMoreTreeNodes = allFlatTreeNodes.length > SFTP_MAX_TREE_NODES
+
+  // P2-27: 剪贴板路径跳转
+  const handleClipboardPathJump = useCallback(async (side: 'local' | 'remote') => {
+    if (side === 'remote' && isRemoteDisconnected) {
+      toastRef.current.warning(tRef.current('sftp_offline_readonly_tip'))
+      return
+    }
+    const isWin = side === 'local'
+      ? (leftSideType === 'local'
+          ? getLocalOs() === 'windows'
+          : servers.find((s) => s.id === toBaseServerId(leftServerId))?.targetType === 'windows')
+      : connectedServer?.targetType === 'windows'
+    const detected = await readClipboardPath(isWin ? 'windows' : 'posix')
+    if (!detected) {
+      toastRef.current.warning(tRef.current('sftp_clipboard_path_empty'))
+      return
+    }
+    toastRef.current.info(tRef.current('sftp_clipboard_path_detected').replace('{path}', detected))
+    if (side === 'local') {
+      await loadLocalDirectory(detected)
+    } else if (selectedServerId) {
+      await loadRemoteDirectory(selectedServerId, detected)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leftSideType, leftServerId, selectedServerId, connectedServer, isRemoteDisconnected, servers])
+
+  // P2-17: 批量重命名
+  const openBatchRename = useCallback((side: 'local' | 'remote') => {
+    if (side === 'remote' && isRemoteDisconnected) {
+      toastRef.current.warning(tRef.current('sftp_offline_readonly_tip'))
+      return
+    }
+    const items: BatchRenameTarget[] = side === 'local'
+      ? localFiles
+          .filter((f) => selectedLocalPaths.has(f.path) && f.name !== '..')
+          .map((f) => ({ path: f.path, name: f.name, isDirectory: f.isDirectory }))
+      : remoteFiles
+          .filter((f) => selectedRemotePaths.has(f.path) && f.name !== '..')
+          .map((f) => ({ path: f.path, name: f.name, isDirectory: f.isDirectory }))
+    if (items.length < 2) return
+    setBatchRenameState({
+      open: true,
+      side,
+      serverId: side === 'local' ? (isLeftRemote ? leftServerId : undefined) : selectedServerId,
+      items,
+    })
+  }, [localFiles, remoteFiles, selectedLocalPaths, selectedRemotePaths, isLeftRemote, leftServerId, selectedServerId, isRemoteDisconnected])
+
+  const handleExecuteBatchRename = useCallback(async (
+    renames: { oldPath: string; newPath: string }[],
+  ): Promise<BatchRenameResult> => {
+    let succeeded = 0
+    const failed: { path: string; error: string }[] = []
+    const { side, serverId } = batchRenameState
+    for (const { oldPath, newPath } of renames) {
+      try {
+        if (serverId) {
+          const res = await sshService.renameFile(serverId, oldPath, newPath)
+          if (res.exitCode !== 0) {
+            throw new Error(res.stderr || tRef.current('sftp_rename_failed'))
+          }
+        } else {
+          await renameLocal(oldPath, newPath)
+        }
+        succeeded += 1
+      } catch (err: unknown) {
+        failed.push({ path: oldPath, error: getErrorMessage(err, tRef.current('sftp_rename_failed')) })
+      }
+    }
+    if (succeeded > 0) {
+      if (side === 'local') {
+        setSelectedLocalPaths(new Set())
+        void loadLocalDirectory(localPathRef.current, undefined, undefined, { isRefresh: true })
+      } else {
+        setSelectedRemotePaths(new Set())
+        if (selectedServerIdRef.current) {
+          void loadRemoteDirectory(selectedServerIdRef.current, remotePathRef.current)
+        }
+      }
+    }
+    return { succeeded, failed }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batchRenameState])
+
+  // P2-15: 文件对比（支持文本 & 二进制分块 Hex Diff）
+  type DiffFileSpec = {
+    side: 'local' | 'remote'
+    serverId?: string
+    file: { name: string; path: string; size: number; isDirectory: boolean }
+  }
+
+  const compareSelectionStatus = useMemo(() => {
+    const includeLeft = sftpPaneMode !== 'right'
+    const includeRight = sftpPaneMode !== 'left' && !!selectedServerId
+
+    const leftRawSelected = includeLeft
+      ? localFiles.filter((f) => selectedLocalPaths.has(f.path) && f.name !== '..')
+      : []
+    const rightRawSelected = includeRight
+      ? remoteFiles.filter((f) => selectedRemotePaths.has(f.path) && f.name !== '..')
+      : []
+
+    const leftSelected = leftRawSelected.filter((f) => !f.isDirectory)
+    const rightSelected = rightRawSelected.filter((f) => !f.isDirectory)
+
+    const leftSpecs: DiffFileSpec[] = leftSelected.map((file) => ({
+      side: isLeftRemote ? 'remote' : 'local',
+      serverId: isLeftRemote ? leftServerId : undefined,
+      file,
+    }))
+    const rightSpecs: DiffFileSpec[] = rightSelected.map((file) => ({
+      side: 'remote',
+      serverId: selectedServerId,
+      file,
+    }))
+    const candidates = [...leftSpecs, ...rightSpecs]
+    const rawTotal = leftRawSelected.length + rightRawSelected.length
+    const ignoredDirs = rawTotal > candidates.length
+
+    if (candidates.length < 2) {
+      return {
+        info: null,
+        fileCount: candidates.length,
+        ignoredDirs,
+      }
+    }
+
+    let leftSpec: DiffFileSpec
+    let rightSpec: DiffFileSpec
+    let kind: 'cross' | 'left' | 'right' | 'multi'
+
+    if (leftSpecs.length >= 1 && rightSpecs.length >= 1) {
+      leftSpec = leftSpecs[0]
+      rightSpec = rightSpecs[0]
+      kind = candidates.length === 2 ? 'cross' : 'multi'
+    } else if (leftSpecs.length >= 2) {
+      leftSpec = leftSpecs[0]
+      rightSpec = leftSpecs[1]
+      kind = candidates.length === 2 ? 'left' : 'multi'
+    } else {
+      leftSpec = rightSpecs[0]
+      rightSpec = rightSpecs[1]
+      kind = candidates.length === 2 ? 'right' : 'multi'
+    }
+
+    return {
+      info: { leftSpec, rightSpec, candidates, kind },
+      fileCount: candidates.length,
+      ignoredDirs,
+    }
+  }, [localFiles, remoteFiles, selectedLocalPaths, selectedRemotePaths, sftpPaneMode, isLeftRemote, leftServerId, selectedServerId])
+
+  const compareSelectionInfo = compareSelectionStatus.info
+
+  const openFileDiff = useCallback((
+    leftSpec: DiffFileSpec,
+    rightSpec: DiffFileSpec,
+    allSpecs?: DiffFileSpec[],
+  ) => {
+    const isSpecDisconnected = (spec: DiffFileSpec): boolean => {
+      if (spec.side !== 'remote') return false
+      if (!spec.serverId) return true
+      if (spec.serverId === selectedServerIdRef.current && isRemoteDisconnected) return true
+      if (leftSideType === 'remote' && spec.serverId === leftServerIdRef.current && isLeftRemoteDisconnected) return true
+      const tab = rightTabsRef.current.find((t) => t.serverId === spec.serverId)
+      return Boolean(tab?.disconnected)
+    }
+    if (isSpecDisconnected(leftSpec) || isSpecDisconnected(rightSpec)) {
+      toastRef.current.warning(tRef.current('sftp_offline_readonly_tip'))
+      return
+    }
+    const leftExt = getFileExt(leftSpec.file.name)
+    const rightExt = getFileExt(rightSpec.file.name)
+    const isBinary = BINARY_EXT_SET.has(leftExt) || BINARY_EXT_SET.has(rightExt)
+    const isLarge = Math.max(leftSpec.file.size || 0, rightSpec.file.size || 0) > SFTP_BINARY_DIFF_THRESHOLD
+
+    const readTextSpec = async (spec: DiffFileSpec): Promise<string> => {
+      if (isSpecDisconnected(spec)) {
+        throw new Error(tRef.current('sftp_offline_readonly_tip'))
+      }
+      if (spec.side === 'remote' && spec.serverId) {
+        const res = await sshService.readFile(spec.serverId, spec.file.path)
+        if (res.exitCode !== 0) throw new Error(res.stderr || tRef.current('sftp_read_failed'))
+        return decodeReadResult(res.stdout || '').text
+      }
+      return readTextFileLocal(spec.file.path)
+    }
+
+    const readBytesSpec = async (spec: DiffFileSpec): Promise<Uint8Array> => {
+      if (isSpecDisconnected(spec)) {
+        throw new Error(tRef.current('sftp_offline_readonly_tip'))
+      }
+      if (spec.side === 'remote' && spec.serverId) {
+        const b64 = await sshService.readBinaryFile(spec.serverId, spec.file.path)
+        return b64 ? base64ToBytes(b64) : new Uint8Array(0)
+      }
+      return readFileLocal(spec.file.path)
+    }
+
+    const toChunkedInput = (spec: DiffFileSpec): BinaryChunkedSourceInput => ({
+      totalSize: spec.file.size || 0,
+      loadRange: spec.side === 'remote' && spec.serverId
+        ? createRemoteChunkLoader(spec.serverId, spec.file.path)
+        : (offset, len) => readLocalFileChunk(spec.file.path, offset, len),
+    })
+
+    const specId = (spec: DiffFileSpec) =>
+      `${spec.side}:${spec.serverId || 'local'}:${spec.file.path}`
+
+    const sourceLabelOf = (spec: DiffFileSpec) =>
+      spec.serverId ? serverNameOf(spec.serverId) : tRef.current('sftp_local')
+
+    const toCandidate = (spec: DiffFileSpec): FileDiffCandidate => {
+      const srcTag = sourceLabelOf(spec)
+      const exceedChunked = (spec.file.size || 0) > SFTP_BINARY_DIFF_THRESHOLD
+      return {
+        id: specId(spec),
+        label: `${srcTag}: ${spec.file.name}`,
+        fileName: spec.file.name,
+        sourceTag: srcTag,
+        path: spec.file.path,
+        size: spec.file.size,
+        loadText: exceedChunked ? undefined : () => readTextSpec(spec),
+        loadBytes: exceedChunked ? undefined : () => readBytesSpec(spec),
+        binaryChunked: toChunkedInput(spec),
+      }
+    }
+
+    const candidateSpecs = allSpecs && allSpecs.length >= 2 ? allSpecs : [leftSpec, rightSpec]
+    const candidates = candidateSpecs.map(toCandidate)
+
+    setFileDiffState({
+      open: true,
+      leftTitle: `${sourceLabelOf(leftSpec)}: ${leftSpec.file.name}`,
+      rightTitle: `${sourceLabelOf(rightSpec)}: ${rightSpec.file.name}`,
+      leftSize: leftSpec.file.size,
+      rightSize: rightSpec.file.size,
+      initialMode: isBinary || isLarge ? 'binary' : 'auto',
+      candidates,
+      initialLeftId: specId(leftSpec),
+      initialRightId: specId(rightSpec),
+      chunkedThresholdBytes: SFTP_BINARY_DIFF_THRESHOLD,
+      loadTextPair: isLarge
+        ? undefined
+        : async () => {
+            const [leftText, rightText] = await Promise.all([
+              readTextSpec(leftSpec),
+              readTextSpec(rightSpec),
+            ])
+            return { leftText, rightText }
+          },
+      loadBytesPair: isLarge
+        ? undefined
+        : async () => {
+            const [leftBytes, rightBytes] = await Promise.all([
+              readBytesSpec(leftSpec),
+              readBytesSpec(rightSpec),
+            ])
+            return { leftBytes, rightBytes }
+          },
+      leftBinaryChunked: isBinary || isLarge ? toChunkedInput(leftSpec) : undefined,
+      rightBinaryChunked: isBinary || isLarge ? toChunkedInput(rightSpec) : undefined,
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRemoteDisconnected, isLeftRemoteDisconnected, leftSideType])
+
   // dialogOpenRef：判断是否有对话框打开，打开时禁用快捷键
   const dialogOpenRef = useRef(false)
   dialogOpenRef.current = !!(renameTarget || deleteTarget || pendingConflict ||
     pendingOverwrite || permissionsTarget || showCreateFolder || showCreateFile ||
-    viewer.open || localPathEditing || remotePathEditing)
+    viewer.open || localPathEditing || remotePathEditing ||
+    batchRenameState.open || fileDiffState.open || customScheduleState.open)
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -5591,7 +6903,7 @@ export function SftpPanel() {
                       {s.name || s.host}
                     </div>
                     <div className="text-xs text-muted-foreground truncate mt-0.5 font-medium">
-                      {s.host} &bull; ssh, {s.username}:{s.port}
+                      {s.host} &bull; {getServerFileTransferProtocol(s)}, {s.username}:{s.port}
                     </div>
                   </div>
                   {isConnected
@@ -5636,9 +6948,9 @@ export function SftpPanel() {
   const dismissSftpError = () => { setLocalError(null); setRemoteError(null) }
 
   const renderLocalCards = () => {
-    const iconSize = getIconSizeClass(leftViewMode)
+    const iconSize = getIconSizeClass(sftpViewMode)
     return (
-      <div className={cn("sftp-icon-grid", `view-${leftViewMode}`)}>
+      <div className={cn("sftp-icon-grid", `view-${sftpViewMode}`)}>
         {filteredLocalFiles.map((file, index) => {
           const isSelected = selectedLocalPaths.has(file.path)
           const isParent = file.name === '..'
@@ -5743,7 +7055,11 @@ export function SftpPanel() {
                 const pending = pendingRenameRef.current
                 pendingRenameRef.current = null
                 if (!pending || pending.side !== 'local' || pending.path !== file.path) return
-                window.setTimeout(() => {
+                if (renameClickTimerRef.current !== null) {
+                  window.clearTimeout(renameClickTimerRef.current)
+                }
+                renameClickTimerRef.current = window.setTimeout(() => {
+                  renameClickTimerRef.current = null
                   if (!mountedRef.current) return
                   if (dblClickedRef.current) return
                   triggerRename('local')
@@ -5787,9 +7103,9 @@ export function SftpPanel() {
   }
 
   const renderRemoteCards = () => {
-    const iconSize = getIconSizeClass(rightViewMode)
+    const iconSize = getIconSizeClass(sftpViewMode)
     return (
-      <div className={cn("sftp-icon-grid", `view-${rightViewMode}`)}>
+      <div className={cn("sftp-icon-grid", `view-${sftpViewMode}`)}>
         {filteredRemoteFiles.map((file, index) => {
           const isSelected = selectedRemotePaths.has(file.path)
           const isParent = file.name === '..'
@@ -5895,7 +7211,11 @@ export function SftpPanel() {
                 const pending = pendingRenameRef.current
                 pendingRenameRef.current = null
                 if (!pending || pending.side !== 'remote' || pending.path !== file.path) return
-                window.setTimeout(() => {
+                if (renameClickTimerRef.current !== null) {
+                  window.clearTimeout(renameClickTimerRef.current)
+                }
+                renameClickTimerRef.current = window.setTimeout(() => {
+                  renameClickTimerRef.current = null
                   if (!mountedRef.current) return
                   if (dblClickedRef.current) return
                   triggerRename('remote')
@@ -5955,14 +7275,265 @@ export function SftpPanel() {
         document.body,
       )}
 
-      {/* 2. 核心主内容区（双栏文件管理器）
+      {/* 1. 顶部全局布局与工具栏 (P2-18 单双栏切换 / P2-19 目录树开关 / 公共文件协作工具 / 统一视图与隐藏文件) */}
+      <div className="flex items-center justify-between gap-2 px-2.5 h-8 border-b border-border/50 bg-muted/20 select-none shrink-0">
+        <div className="flex items-center gap-1 min-w-0 overflow-x-auto no-scrollbar">
+          <Button
+            type="button"
+            variant={sftpShowDirectoryTree ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={() => setSftpShowDirectoryTree(!sftpShowDirectoryTree)}
+            className="h-6 px-2 text-xs gap-1.5 shrink-0"
+            title={sftpShowDirectoryTree ? t('sftp_tree_hide') : t('sftp_tree_show')}
+          >
+            <FolderTree className="h-3.5 w-3.5 text-primary" />
+            <span>{t('fs_dir_tree')}</span>
+            {sftpShowDirectoryTree && (
+              <span className="text-[10px] text-muted-foreground">
+                ({effectiveTreeSide === 'local' ? (isLeftRemote ? t('sftp_remote') : t('sftp_local')) : t('sftp_remote')})
+              </span>
+            )}
+          </Button>
+
+          <div className="h-3.5 w-px bg-border/60 mx-0.5 shrink-0" />
+
+          <Button
+            type="button"
+            variant={syncBrowsing ? 'secondary' : 'ghost'}
+            size="sm"
+            disabled={!selectedServerId || sftpPaneMode !== 'dual' || leftSideType !== 'local'}
+            onClick={toggleSyncBrowsing}
+            className="h-6 px-2 text-xs gap-1.5 shrink-0"
+            title={
+              syncBrowsing
+                ? t('sftp_sync_browsing_on') || 'Synchronized Browsing (Enabled)'
+                : t('sftp_sync_browsing_off') || 'Synchronized Browsing'
+            }
+          >
+            <Link className={cn('h-3.5 w-3.5', syncBrowsing ? 'text-primary' : 'text-muted-foreground')} />
+            <span>{t('sftp_sync_browsing')}</span>
+          </Button>
+
+          <Button
+            type="button"
+            variant={compareActive ? 'secondary' : 'ghost'}
+            size="sm"
+            disabled={!selectedServerId || sftpPaneMode !== 'dual'}
+            onClick={() => setCompareActive(!compareActive)}
+            className="h-6 px-2 text-xs gap-1.5 shrink-0"
+            title={t('sftp_compare_directories_tip')}
+          >
+            <ArrowLeftRight className={cn('h-3.5 w-3.5', compareActive ? 'text-primary' : 'text-muted-foreground')} />
+            <span>{t('sftp_compare_directories')}</span>
+          </Button>
+
+          <Button
+            type="button"
+            variant={compareSelectionInfo ? 'secondary' : 'ghost'}
+            size="sm"
+            disabled={!compareSelectionInfo}
+            onClick={() => {
+              if (compareSelectionInfo) {
+                openFileDiff(
+                  compareSelectionInfo.leftSpec,
+                  compareSelectionInfo.rightSpec,
+                  compareSelectionInfo.candidates,
+                )
+              }
+            }}
+            className="h-6 px-2 text-xs gap-1.5 shrink-0"
+            title={
+              compareSelectionInfo
+                ? compareSelectionInfo.candidates.length >= 3
+                  ? t('sftp_file_diff_multi_tip')
+                      .replace('{n}', String(compareSelectionInfo.candidates.length))
+                      .replace('{left}', compareSelectionInfo.leftSpec.file.name)
+                      .replace('{right}', compareSelectionInfo.rightSpec.file.name)
+                  : t('sftp_file_diff_pair_tip')
+                      .replace('{left}', compareSelectionInfo.leftSpec.file.name)
+                      .replace('{right}', compareSelectionInfo.rightSpec.file.name)
+                : compareSelectionStatus.fileCount === 1
+                  ? t('sftp_file_diff_need_two_tip')
+                  : compareSelectionStatus.ignoredDirs
+                    ? t('sftp_file_diff_dirs_only_tip')
+                    : t('sftp_file_diff_tip')
+            }
+          >
+            <GitCompare className="h-3.5 w-3.5" />
+            <span>{t('sftp_file_diff')}</span>
+            {compareSelectionInfo && compareSelectionInfo.candidates.length >= 3 && (
+              <span className="rounded bg-primary/15 px-1 text-[10px] font-medium text-primary">
+                {compareSelectionInfo.candidates.length}
+              </span>
+            )}
+          </Button>
+
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={!selectedServerId || sftpPaneMode !== 'dual'}
+            onClick={() => setShowSyncWizard(true)}
+            className="h-6 px-2 text-xs gap-1.5 shrink-0"
+            title={t('sftp_directory_sync_wizard')}
+          >
+            <RefreshCw className="h-3.5 w-3.5 text-primary" />
+            <span>{t('sftp_directory_sync_wizard')}</span>
+          </Button>
+        </div>
+
+        <div className="flex items-center gap-1.5 shrink-0">
+          {activeExternalSessions.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="h-6 px-2 text-xs gap-1.5 border border-primary/30 bg-primary/10 text-primary hover:bg-primary/15"
+                  title="外部编辑器正在监听的文件，点击查看或停止"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  <span>外部编辑 ({activeExternalSessions.length})</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-72">
+                {activeExternalSessions.map((session) => (
+                  <div
+                    key={session.sessionId}
+                    className="flex items-center justify-between gap-2 px-2 py-1.5 text-xs rounded-sm hover:bg-muted/50"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium truncate" title={session.remotePath}>
+                        {session.fileName}
+                      </div>
+                      <div className="text-[10px] text-muted-foreground truncate">
+                        {session.lastSyncedAt ? `上次同步 ${session.lastSyncedAt}` : '监听中'}
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => void handleStopExternalEdit(session.sessionId)}
+                      className="h-6 px-2 text-[11px] text-destructive hover:text-destructive hover:bg-destructive/10 shrink-0"
+                    >
+                      停止
+                    </Button>
+                  </div>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+          <Button
+            type="button"
+            variant={sftpShowHidden ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={toggleSftpShowHidden}
+            className="h-6 px-2 text-xs gap-1.5"
+            title={sftpShowHidden ? t('sftp_hide_hidden') : t('sftp_show_hidden')}
+          >
+            {sftpShowHidden ? (
+              <Eye className="h-3.5 w-3.5 text-primary" />
+            ) : (
+              <EyeOff className="h-3.5 w-3.5 text-muted-foreground" />
+            )}
+            <span>{t('sftp_show_hidden')}</span>
+          </Button>
+
+          <ViewModeDropdown
+            viewMode={sftpViewMode}
+            onChange={setSftpDefaultViewMode}
+            t={t}
+            showLabel
+          />
+
+          <div
+            className="flex items-center rounded-md border border-border/60 bg-background/70 p-0.5"
+            title={t('sftp_pane_toggle')}
+          >
+            <button
+              type="button"
+              onClick={() => setSftpPaneMode('dual')}
+              className={cn(
+                'flex items-center gap-1 rounded px-2 py-0.5 text-[11px] transition-colors cursor-pointer',
+                sftpPaneMode === 'dual'
+                  ? 'bg-primary/15 text-primary font-medium'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+              title={t('sftp_pane_mode_dual')}
+            >
+              <Columns2 className="h-3 w-3" />
+              <span>{t('sftp_pane_mode_dual')}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSftpPaneMode('left')}
+              className={cn(
+                'flex items-center gap-1 rounded px-2 py-0.5 text-[11px] transition-colors cursor-pointer',
+                sftpPaneMode === 'left'
+                  ? 'bg-primary/15 text-primary font-medium'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+              title={t('sftp_pane_mode_left')}
+            >
+              <PanelLeft className="h-3 w-3" />
+              <span>{t('sftp_pane_mode_left')}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSftpPaneMode('right')}
+              className={cn(
+                'flex items-center gap-1 rounded px-2 py-0.5 text-[11px] transition-colors cursor-pointer',
+                sftpPaneMode === 'right'
+                  ? 'bg-primary/15 text-primary font-medium'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+              title={t('sftp_pane_mode_right')}
+            >
+              <PanelRight className="h-3 w-3" />
+              <span>{t('sftp_pane_mode_right')}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* 2. 核心主内容区（可选目录树 + 单/双栏文件管理器）
           min-h-0 确保 flex 子元素能正确收缩，让出底部传输面板的空间 */}
-      <div ref={containerRef} className="flex-1 flex overflow-hidden min-h-0 p-2 gap-1 bg-canvas/40">
-        
+      <div className="flex-1 flex overflow-hidden min-h-0 p-2 gap-1 bg-canvas/40">
+
+        {sftpShowDirectoryTree && (
+          <div className="flex h-full shrink-0 overflow-hidden rounded-xl border border-border/70 bg-card/95 shadow-sm">
+            <FileDirectoryTree
+              treeWidth={treeWidth}
+              treeRoot={treeRoot}
+              visibleTreeNodes={visibleTreeNodes}
+              hasMoreTreeNodes={hasMoreTreeNodes}
+              expandedPaths={expandedTreePaths}
+              currentPath={treeCurrentPath}
+              onToggleTreeNode={handleToggleTreeNode}
+              onSelectDir={handleSelectTreeDir}
+              onRefreshRoot={handleRefreshTreeRoot}
+              onStartResize={handleStartTreeResize}
+              t={t}
+            />
+          </div>
+        )}
+
+        {/* 左右双栏拖拽比例容器：仅包裹左右文件面板与分界线，避免目录树宽度影响分界线百分比计算 */}
+        <div ref={containerRef} className="flex-1 flex min-w-0 min-h-0 gap-1">
+
         {/* ─── 左栏：本地文件浏览器 ────────────────────────────────────────── */}
-        <div 
-          className="flex flex-col h-full overflow-hidden bg-card/95 rounded-xl border border-border/70 shadow-sm flex-shrink-0"
-          style={{ width: `calc(${localSplitPercent}% - 4px)` }}
+        {sftpPaneMode !== 'right' && (
+        <div
+          onMouseDownCapture={() => setLastFocusedPane('local')}
+          onClickCapture={() => setLastFocusedPane('local')}
+          onFocusCapture={() => setLastFocusedPane('local')}
+          className={cn(
+            'flex flex-col h-full overflow-hidden bg-card/95 rounded-xl border border-border/70 shadow-sm',
+            sftpPaneMode === 'left' ? 'flex-1 min-w-0' : 'flex-shrink-0',
+          )}
+          style={sftpPaneMode === 'dual' ? { width: `calc(${localSplitPercent}% - 4px)` } : undefined}
         >
           
                     {/* 本地面板顶部标题 */}
@@ -5980,6 +7551,8 @@ export function SftpPanel() {
                   <DropdownMenuItem onClick={() => {
                     setLeftSideType('local');
                     setLeftServerId('');
+                    isLeftRemoteDisconnectedRef.current = false;
+                    setIsLeftRemoteDisconnected(false);
                     setSelectedLocalPaths(new Set());
                     setLocalSearch('');
                     const saved = readLastLocalPath();
@@ -5992,6 +7565,8 @@ export function SftpPanel() {
                   <DropdownMenuItem onClick={() => {
                     setLeftSideType('remote');
                     setLeftServerId('');
+                    isLeftRemoteDisconnectedRef.current = false;
+                    setIsLeftRemoteDisconnected(false);
                     setSelectedLocalPaths(new Set());
                     setLocalSearch('');
                   }} className="cursor-pointer">
@@ -6066,14 +7641,7 @@ export function SftpPanel() {
               {/* 本地路径面包�?*/}
               {localPathEditing ? (
                 <input
-                  ref={(el) => {
-                    if (el) {
-                      setTimeout(() => {
-                        el.focus()
-                        el.select()
-                      }, 0)
-                    }
-                  }}
+                  ref={localPathInputRef}
                   autoFocus
                   value={localPathInput}
                   onChange={(e) => setLocalPathInput(e.target.value)}
@@ -6094,6 +7662,8 @@ export function SftpPanel() {
                   title={t('sftp_path_goto')}
                   isLocalRootSelectable={leftSideType === 'local'}
                   systemRoots={systemRoots}
+                  onClipboardJump={() => void handleClipboardPathJump('local')}
+                  clipboardJumpTitle={t('sftp_clipboard_path_jump')}
                 />
               )}
 
@@ -6129,10 +7699,6 @@ export function SftpPanel() {
               </div>
 
               <SftpActionsDropdown
-                viewMode={leftViewMode}
-                onViewModeChange={handleSetLeftViewMode}
-                showHidden={leftShowHidden}
-                onToggleShowHidden={() => setLeftShowHidden(v => !v)}
                 onRefresh={() => loadLocalDirectory(localPath, undefined, undefined, { isRefresh: true })}
                 onNewFolder={() => {
                   setCreateFolderSide('local')
@@ -6146,7 +7712,7 @@ export function SftpPanel() {
                 }}
                 onSelectAll={handleSelectAllLocal}
                 onTransfer={() => {
-                  if (!selectedServerId) return
+                  if (sftpPaneMode !== 'dual' || !selectedServerId) return
                   const valid = Array.from(selectedLocalPaths).filter(p => !p.endsWith('/..') && p !== '..')
                   if (valid.length === 0) return
                   if (isLeftRemote) {
@@ -6159,17 +7725,18 @@ export function SftpPanel() {
                   }
                 }}
                 onDelete={() => triggerDelete('local')}
-                canTransfer={!!selectedServerId && Array.from(selectedLocalPaths).some(p => !p.endsWith('/..') && p !== '..')}
+                canTransfer={sftpPaneMode === 'dual' && !!selectedServerId && !(isLeftRemote && (isLeftServerFtp || isSelectedServerFtp)) && Array.from(selectedLocalPaths).some(p => !p.endsWith('/..') && p !== '..')}
                 canDelete={Array.from(selectedLocalPaths).some(p => !p.endsWith('/..') && p !== '..')}
                 transferLabel={
-                  selectedLocalPaths.size > 1
-                    ? t('sftp_transfer_selected').replace('{n}', String(selectedLocalPaths.size))
-                    : t('sftp_transfer_to_target')
+                  sftpPaneMode !== 'dual'
+                    ? `${t('sftp_transfer_to_target')} (${t('sftp_pane_mode_dual')})`
+                    : selectedLocalPaths.size > 1
+                      ? t('sftp_transfer_selected').replace('{n}', String(selectedLocalPaths.size))
+                      : t('sftp_transfer_to_target')
                 }
                 transferIcon={<ArrowRight className="mr-2 h-3.5 w-3.5 text-muted-foreground" />}
                 loading={localLoading}
                 t={t}
-                onOpenSyncWizard={() => setShowSyncWizard(true)}
               />
               <Button
                 variant="ghost"
@@ -6192,7 +7759,7 @@ export function SftpPanel() {
             <div className="flex-1 flex flex-col h-full overflow-hidden relative">
               {localLoading && localFiles.length === 0 ? (
                 <div className="flex-1 overflow-hidden p-2">
-                  <FileSkeletonList viewMode={leftViewMode} count={8} />
+                  <FileSkeletonList viewMode={sftpViewMode} count={8} />
                 </div>
               ) : localError ? (
                 <div className="flex flex-col items-center justify-center h-full p-4 text-center">
@@ -6218,7 +7785,7 @@ export function SftpPanel() {
                     </div>
                   )}
                   {/* 本地列表表头（仅列表模式展示） */}
-                  {leftViewMode === 'list' && (
+                  {sftpViewMode === 'list' && (
                     <div
                       ref={leftHeaderRef}
                       className={cn(
@@ -6287,7 +7854,10 @@ export function SftpPanel() {
                         ref={localListRef}
                         data-panel="local"
                         tabIndex={0}
-                        onFocus={() => setActivePanel('local')}
+                        onFocus={() => {
+                          setActivePanel('local')
+                          setLastFocusedPane('local')
+                        }}
                         onBlur={() => setActivePanel(prev => prev === 'local' ? null : prev)}
                         onScroll={clearCardHover}
                         className={cn(
@@ -6327,7 +7897,7 @@ export function SftpPanel() {
                                   ? t('sftp_no_matching_files')
                                   : t('sftp_no_files')}
                           </div>
-                        ) : leftViewMode === 'list' ? (
+                        ) : sftpViewMode === 'list' ? (
                           <div
                             style={{
                               height: `${localVirtualizer.getTotalSize()}px`,
@@ -6449,8 +8019,12 @@ export function SftpPanel() {
                                     if (!pending || pending.side !== 'local' || pending.path !== file.path) return
                                     // 延时消歧：双击会在 click 之后触发 onDoubleClick（已置 dblClickedRef），
                                     // 250ms 内发生双击则不重命名，交由双击进入目录/传输
-                                    window.setTimeout(() => {
-                                      if (dblClickedRef.current) return
+                                    if (renameClickTimerRef.current !== null) {
+                                      window.clearTimeout(renameClickTimerRef.current)
+                                    }
+                                    renameClickTimerRef.current = window.setTimeout(() => {
+                                      renameClickTimerRef.current = null
+                                      if (!mountedRef.current || dblClickedRef.current) return
                                       triggerRename('local')
                                     }, 250)
                                   }}
@@ -6542,13 +8116,62 @@ export function SftpPanel() {
                           {(() => {
                             // 多选场景判断：右键项属于多选集合时，重命名为单文件操作需隐藏
                             const isMulti = selectedLocalPaths.has(localContextMenuFile.path) && selectedLocalPaths.size > 1
-                            // 可预览/编辑的文件（非目录、文本/图片/PDF/视频/音频）
-                            const canPreview = !localContextMenuFile.isDirectory && !isMulti &&
-                              getPreviewKind(localContextMenuFile.name) !== 'unsupported'
+                            // 可预览/编辑的文件（非目录，二进制/未知类型支持分块 Hex 查看）
+                            const canPreview = !localContextMenuFile.isDirectory && !isMulti
                             // 左侧也是远程服务器时，右键菜单对齐右侧（远程操作针对 leftServerId）
                             const isLeftRemote = leftSideType === 'remote' && !!leftServerId
                             // 左侧为远程时，localContextMenuFile 实际为 FileEntry
                             const leftRemoteFile = isLeftRemote ? (localContextMenuFile as unknown as FileEntry) : null
+                            const leftTransferFiles = isMulti
+                              ? localFiles.filter(f => selectedLocalPaths.has(f.path) && f.name !== '..')
+                              : [localContextMenuFile]
+                            const isS2sFtpBlocked = isLeftRemote && (isLeftServerFtp || isSelectedServerFtp)
+                            const canCrossPaneTransfer = sftpPaneMode === 'dual' && !!selectedServerId && !isS2sFtpBlocked
+                            const allRightTransferTargets = rightTabs.filter(t => {
+                              if (!t.serverId || !t.path) return false
+                              if (!isLeftRemote) return true
+                              if (isLeftServerFtp || t.serverId === leftServerId) return false
+                              const tabSrv = servers.find(s => s.id === toBaseServerId(t.serverId))
+                              return !hasFtpFileTransfer(tabSrv)
+                            })
+                            const triggerScheduledLeftTransfer = (delayMs: number) => {
+                              if (!selectedServerId || leftTransferFiles.length === 0) return
+                              const label = leftTransferFiles.length > 1
+                                ? `${leftTransferFiles[0].name} (+${leftTransferFiles.length - 1})`
+                                : leftTransferFiles[0].name
+                              const totalBytes = leftTransferFiles.reduce((acc, f) => acc + (f.size || 0), 0)
+                              const destPath = remotePath
+                              const destSid = selectedServerId
+                              if (isLeftRemote) {
+                                const srcSid = leftServerId
+                                const filesCopy = [...leftTransferFiles] as unknown as FileEntry[]
+                                scheduleDelayedTransfer({
+                                  direction: 's2s',
+                                  fileName: label,
+                                  totalBytes,
+                                  serverId: destSid,
+                                  serverName: `${serverNameOf(srcSid)} -> ${serverNameOf(destSid)}`,
+                                  sourceServerId: srcSid,
+                                  targetServerId: destSid,
+                                  remotePath: destPath,
+                                  delayMs,
+                                  runner: () => handleServerToServerTransfer(srcSid, destSid, destPath, filesCopy, remoteFilesRef.current),
+                                })
+                              } else {
+                                const pathsCopy = leftTransferFiles.map(f => f.path)
+                                scheduleDelayedTransfer({
+                                  direction: 'upload',
+                                  fileName: label,
+                                  totalBytes,
+                                  serverId: destSid,
+                                  serverName: serverNameOf(destSid),
+                                  localPath: pathsCopy[0],
+                                  remotePath: destPath,
+                                  delayMs,
+                                  runner: () => handleUploadLocalPaths(destSid, destPath, pathsCopy, remoteFilesRef.current),
+                                })
+                              }
+                            }
                             return (
                               <>
                                 {isMulti && (
@@ -6601,9 +8224,10 @@ export function SftpPanel() {
                                   </ContextMenuSub>
                                 )}
                                 <ContextMenuItem
-                                  disabled={!selectedServerId}
+                                  disabled={!canCrossPaneTransfer}
+                                  title={sftpPaneMode !== 'dual' ? '需切换至双栏视图才能跨栏传输' : undefined}
                                   onClick={() => {
-                                    if (!localContextMenuFile) return
+                                    if (!localContextMenuFile || !canCrossPaneTransfer) return
                                     // 左侧也是远程服务器：走 s2s 传输
                                     if (isLeftRemote) {
                                       const files = isMulti
@@ -6628,13 +8252,40 @@ export function SftpPanel() {
                                     ? t('sftp_transfer_selected').replace('{n}', String(selectedLocalPaths.size))
                                     : t('sftp_transfer_to_target')}</span>
                                 </ContextMenuItem>
-                                {rightTabs.filter(t => t.serverId && t.path && (!isLeftRemote || t.serverId !== leftServerId)).length > 1 && (
+                                {canCrossPaneTransfer && (
+                                  <ContextMenuSub>
+                                    <ContextMenuSubTrigger>
+                                      <Clock className="mr-2 h-4 w-4 text-muted-foreground" />
+                                      <span>预约延迟传输</span>
+                                    </ContextMenuSubTrigger>
+                                    <ContextMenuSubContent className="w-44">
+                                      <ContextMenuItem onClick={() => triggerScheduledLeftTransfer(5_000)}>
+                                        <span>5 秒后</span>
+                                      </ContextMenuItem>
+                                      <ContextMenuItem onClick={() => triggerScheduledLeftTransfer(30_000)}>
+                                        <span>30 秒后</span>
+                                      </ContextMenuItem>
+                                      <ContextMenuItem onClick={() => triggerScheduledLeftTransfer(60_000)}>
+                                        <span>1 分钟后</span>
+                                      </ContextMenuItem>
+                                      <ContextMenuItem onClick={() => setCustomScheduleState({
+                                        open: true,
+                                        secondsInput: '120',
+                                        onConfirmDelay: (ms) => triggerScheduledLeftTransfer(ms),
+                                      })}>
+                                        <span>自定义延迟...</span>
+                                      </ContextMenuItem>
+                                    </ContextMenuSubContent>
+                                  </ContextMenuSub>
+                                )}
+                                {allRightTransferTargets.length > 1 && (
                                 <ContextMenuItem
-                                  disabled={rightTabs.filter(t => t.serverId && t.path && (!isLeftRemote || t.serverId !== leftServerId)).length === 0}
+                                  disabled={sftpPaneMode !== 'dual' || allRightTransferTargets.length === 0}
+                                  title={sftpPaneMode !== 'dual' ? '需切换至双栏视图才能跨栏传输' : undefined}
                                   onClick={async () => {
                                     if (!localContextMenuFile) return
                                     // 收集所有已连接且有效的右侧会话（当前目录非空）
-                                    const targets = rightTabs.filter(t => t.serverId && t.path && (!isLeftRemote || t.serverId !== leftServerId))
+                                    const targets = allRightTransferTargets
                                     if (targets.length === 0) return
                                     if (isLeftRemote) {
                                       // 左侧也是远程服务器：逐一对每个右侧会话串行发起 s2s 传输，隔离冲突检测与批次状态
@@ -6699,8 +8350,8 @@ export function SftpPanel() {
                                   <span>{t('tm_copy')}</span>
                                   <ContextMenuShortcut>Ctrl+C</ContextMenuShortcut>
                                 </ContextMenuItem>
-                                {/* 左侧为远程服务器：归档下载（仅目录、单选） */}
-                                {!isMulti && isLeftRemote && leftRemoteFile && leftRemoteFile.isDirectory && (
+                                {/* 左侧为远程服务器：归档下载（仅目录、单选、非 FTP/FTPS） */}
+                                {!isMulti && isLeftRemote && !isLeftServerFtp && leftRemoteFile && leftRemoteFile.isDirectory && (
                                   <ContextMenuSub>
                                     <ContextMenuSubTrigger>
                                       <ArchiveFileIcon className="mr-2 h-4 w-4 text-muted-foreground" />
@@ -6727,7 +8378,7 @@ export function SftpPanel() {
                                     </ContextMenuSubContent>
                                   </ContextMenuSub>
                                 )}
-                                {!isMulti && !localContextMenuFile.isDirectory && isSupportedArchiveName(localContextMenuFile.name) && (
+                                {!isMulti && !localContextMenuFile.isDirectory && isSupportedArchiveName(localContextMenuFile.name) && !(isLeftRemote && isLeftServerFtp) && (
                                   <ContextMenuItem
                                     disabled={extractingArchivePath !== null}
                                     onClick={() => void handleExtractArchive(localContextMenuFile, isLeftRemote ? 'remote' : 'local', isLeftRemote ? leftServerId : undefined)}
@@ -6749,6 +8400,30 @@ export function SftpPanel() {
                                     <Edit2 className="mr-2 h-4 w-4 text-muted-foreground" />
                                     <span>{t('sftp_rename')}</span>
                                     <ContextMenuShortcut>F2</ContextMenuShortcut>
+                                  </ContextMenuItem>
+                                )}
+                                {selectedLocalPaths.size >= 2 && (
+                                  <ContextMenuItem onClick={() => openBatchRename('local')}>
+                                    <Edit2 className="mr-2 h-4 w-4 text-muted-foreground" />
+                                    <span>{t('batch_rename_title')}</span>
+                                  </ContextMenuItem>
+                                )}
+                                {compareSelectionInfo && (compareSelectionInfo.kind === 'left' || compareSelectionInfo.kind === 'cross' || compareSelectionInfo.kind === 'multi') && !localContextMenuFile.isDirectory && (
+                                  <ContextMenuItem
+                                    onClick={() => openFileDiff(
+                                      compareSelectionInfo.leftSpec,
+                                      compareSelectionInfo.rightSpec,
+                                      compareSelectionInfo.candidates,
+                                    )}
+                                  >
+                                    <GitCompare className="mr-2 h-4 w-4 text-muted-foreground shrink-0" />
+                                    <span>
+                                      {compareSelectionInfo.candidates.length >= 3
+                                        ? `${t('sftp_file_diff')} (${compareSelectionInfo.candidates.length})`
+                                        : compareSelectionInfo.kind === 'cross'
+                                          ? `与右栏对比 (${compareSelectionInfo.rightSpec.file.name})`
+                                          : `${t('sftp_file_diff')} (${compareSelectionInfo.leftSpec.file.name} ↔ ${compareSelectionInfo.rightSpec.file.name})`}
+                                    </span>
                                   </ContextMenuItem>
                                 )}
                                 <ContextMenuItem className="text-destructive focus:bg-destructive/10 focus:text-destructive" onClick={() => {
@@ -6865,17 +8540,24 @@ export function SftpPanel() {
           </>
           )}
         </div>
+        )}
 
         {/* Split Resize Handle */}
-        <div 
-          className="relative w-1 flex-shrink-0 flex items-center justify-center cursor-col-resize select-none group z-10 -mx-0.5" 
-          onMouseDown={handleSplitResizeStart}
-        >
-          <div className="w-0.5 h-10 rounded-full bg-border/60 transition-all group-hover:h-16 group-hover:w-1 group-hover:bg-primary/70 group-active:bg-primary" />
-        </div>
+        {sftpPaneMode === 'dual' && (
+          <div
+            className="relative w-1 flex-shrink-0 flex items-center justify-center cursor-col-resize select-none group z-10 -mx-0.5"
+            onMouseDown={handleSplitResizeStart}
+          >
+            <div className="w-0.5 h-10 rounded-full bg-border/60 transition-all group-hover:h-16 group-hover:w-1 group-hover:bg-primary/70 group-active:bg-primary" />
+          </div>
+        )}
 
         {/* ─── 右栏：远程服务器 SFTP 浏览器 ──────────────────────────────────────── */}
+        {sftpPaneMode !== 'left' && (
         <div
+          onMouseDownCapture={() => setLastFocusedPane('remote')}
+          onClickCapture={() => setLastFocusedPane('remote')}
+          onFocusCapture={() => setLastFocusedPane('remote')}
           className="flex flex-col h-full overflow-hidden bg-card/95 rounded-xl border border-border/70 shadow-sm relative flex-1 min-w-0"
         >
           {/* ─── 右侧多标签栏（合并原标签栏 + 顶部标题行）───
@@ -7160,7 +8842,7 @@ export function SftpPanel() {
                             {s.name || s.host}
                           </div>
                           <div className="text-xs text-muted-foreground truncate mt-0.5 font-medium">
-                            {s.host} &bull; ssh, {s.username}:{s.port}
+                            {s.host} &bull; {getServerFileTransferProtocol(s)}, {s.username}:{s.port}
                           </div>
                         </div>
                         {isConnected
@@ -7255,14 +8937,7 @@ export function SftpPanel() {
                   {/* 远程路径面包屑 */}
                   {remotePathEditing ? (
                     <input
-                      ref={(el) => {
-                        if (el) {
-                          setTimeout(() => {
-                            el.focus()
-                            el.select()
-                          }, 0)
-                        }
-                      }}
+                      ref={remotePathInputRef}
                       autoFocus
                       value={remotePathInput}
                       onChange={(e) => setRemotePathInput(e.target.value)}
@@ -7287,6 +8962,9 @@ export function SftpPanel() {
                       }}
                       onDoubleClick={startRemotePathEdit}
                       title={t('sftp_path_goto')}
+                      onClipboardJump={() => void handleClipboardPathJump('remote')}
+                      clipboardJumpTitle={t('sftp_clipboard_path_jump')}
+                      clipboardJumpDisabled={!selectedServerId || isRemoteDisconnected}
                     />
                   )}
 
@@ -7330,29 +9008,31 @@ export function SftpPanel() {
                         searchMode === 'recursive' && "border-primary/60 ring-1 ring-primary/30"
                       )}
                     />
-                    {/* 递归搜索模式切换按钮 */}
-                    <button
-                      onClick={() => {
-                        const next = searchMode === 'recursive' ? 'filter' : 'recursive'
-                        setSearchMode(next)
-                        if (next === 'filter') {
-                          setRecursiveSearchPattern('')
-                          setSearchResults([])
-                          setRecursiveSearching(false)
-                        } else {
-                          setRemoteSearch('')
-                        }
-                      }}
-                      title={t('sftp_search_in_dir') || 'Search in this directory'}
-                      className={cn(
-                        "absolute right-5 top-1/2 -translate-y-1/2 transition-colors",
-                        searchMode === 'recursive'
-                          ? "text-primary"
-                          : "text-muted-foreground/60 hover:text-foreground"
-                      )}
-                    >
-                      <Search className="h-3 w-3" />
-                    </button>
+                    {/* 递归搜索模式切换按钮（FTP/FTPS 不支持递归搜索） */}
+                    {!isSelectedServerFtp && (
+                      <button
+                        onClick={() => {
+                          const next = searchMode === 'recursive' ? 'filter' : 'recursive'
+                          setSearchMode(next)
+                          if (next === 'filter') {
+                            setRecursiveSearchPattern('')
+                            setSearchResults([])
+                            setRecursiveSearching(false)
+                          } else {
+                            setRemoteSearch('')
+                          }
+                        }}
+                        title={t('sftp_search_in_dir') || 'Search in this directory'}
+                        className={cn(
+                          "absolute right-5 top-1/2 -translate-y-1/2 transition-colors",
+                          searchMode === 'recursive'
+                            ? "text-primary"
+                            : "text-muted-foreground/60 hover:text-foreground"
+                        )}
+                      >
+                        <Search className="h-3 w-3" />
+                      </button>
+                    )}
                     {/* 清空按钮 */}
                     {((searchMode === 'filter' && remoteSearch) ||
                       (searchMode === 'recursive' && recursiveSearchPattern)) && (
@@ -7411,7 +9091,7 @@ export function SftpPanel() {
                     )}
                   </div>
 
-                  {connectedServer?.targetType === 'windows' && (
+                  {connectedServer?.targetType === 'windows' && !isSelectedServerFtp && (
                     <Button
                       variant="ghost"
                       size="icon"
@@ -7425,10 +9105,6 @@ export function SftpPanel() {
                     </Button>
                   )}
                   <SftpActionsDropdown
-                    viewMode={rightViewMode}
-                    onViewModeChange={handleSetRightViewMode}
-                    showHidden={rightShowHidden}
-                    onToggleShowHidden={() => setRightShowHidden(v => !v)}
                     onRefresh={() => {
                       if (isRemoteDisconnected) {
                         handleReconnectServer()
@@ -7447,22 +9123,22 @@ export function SftpPanel() {
                       setShowCreateFile(true)
                     }}
                     onSelectAll={handleSelectAllRemote}
-                    onTransfer={handleDownloadSelected}
+                    onTransfer={() => {
+                      if (sftpPaneMode !== 'dual') return
+                      handleDownloadSelected()
+                    }}
                     onDelete={() => triggerDelete('remote')}
-                    canTransfer={selectedRemotePaths.size > 0 && Array.from(selectedRemotePaths).some(p => !p.endsWith('/..') && p !== '..')}
+                    canTransfer={sftpPaneMode === 'dual' && !(isLeftRemote && (isLeftServerFtp || isSelectedServerFtp)) && selectedRemotePaths.size > 0 && Array.from(selectedRemotePaths).some(p => !p.endsWith('/..') && p !== '..')}
                     canDelete={selectedRemotePaths.size > 0 && Array.from(selectedRemotePaths).some(p => !p.endsWith('/..') && p !== '..')}
                     transferLabel={
-                      selectedRemotePaths.size > 1
-                        ? t('sftp_transfer_selected').replace('{n}', String(selectedRemotePaths.size))
-                        : (t('sftp_transfer_to_target') || 'Transfer')
+                      sftpPaneMode !== 'dual'
+                        ? `${t('sftp_transfer_to_target') || 'Transfer'} (${t('sftp_pane_mode_dual')})`
+                        : selectedRemotePaths.size > 1
+                          ? t('sftp_transfer_selected').replace('{n}', String(selectedRemotePaths.size))
+                          : (t('sftp_transfer_to_target') || 'Transfer')
                     }
                     transferIcon={<ArrowLeft className="mr-2 h-3.5 w-3.5 text-muted-foreground" />}
                     loading={remoteLoading}
-                    syncBrowsing={syncBrowsing}
-                    onToggleSyncBrowsing={toggleSyncBrowsing}
-                    compareActive={compareActive}
-                    onToggleCompareActive={() => setCompareActive(!compareActive)}
-                    onOpenSyncWizard={() => setShowSyncWizard(true)}
                     t={t}
                   />
                   <Button
@@ -7591,7 +9267,7 @@ export function SftpPanel() {
               <div className="flex-1 flex flex-col h-full overflow-hidden relative">
                 {remoteLoading && remoteFiles.length === 0 ? (
                   <div className="flex-1 overflow-hidden p-2">
-                    <FileSkeletonList viewMode={rightViewMode} count={8} />
+                    <FileSkeletonList viewMode={sftpViewMode} count={8} />
                   </div>
                 ) : remoteError && !isRemoteDisconnected && remoteFiles.length === 0 ? (
                   <div className="flex flex-col items-center justify-center h-full p-4 text-center">
@@ -7617,7 +9293,7 @@ export function SftpPanel() {
                     </div>
                   )}
                     {/* 表头（仅列表模式展示） */}
-                    {rightViewMode === 'list' && (
+                    {sftpViewMode === 'list' && (
                       <div
                         ref={rightHeaderRef}
                         className="grid grid-cols-[2.5fr_0.8fr_1fr_1.5fr_1.2fr_1fr] px-4 border-b border-border/60 bg-muted/30 text-[13px] text-muted-foreground/80 font-semibold select-none items-stretch h-9 flex-shrink-0 tracking-wider uppercase divide-x divide-border/40"
@@ -7679,7 +9355,10 @@ export function SftpPanel() {
                         ref={remoteListRef}
                         data-panel="remote"
                         tabIndex={0}
-                        onFocus={() => setActivePanel('remote')}
+                        onFocus={() => {
+                          setActivePanel('remote')
+                          setLastFocusedPane('remote')
+                        }}
                         onBlur={() => setActivePanel(prev => prev === 'remote' ? null : prev)}
                         onScroll={clearCardHover}
                         className={cn(
@@ -7719,7 +9398,7 @@ export function SftpPanel() {
                                   ? t('sftp_no_matching_files')
                                   : t('sftp_no_remote_files')}
                           </div>
-                        ) : rightViewMode === 'list' ? (
+                        ) : sftpViewMode === 'list' ? (
                           <div
                             style={{
                               height: `${remoteVirtualizer.getTotalSize()}px`,
@@ -7834,8 +9513,12 @@ export function SftpPanel() {
                                     if (!pending || pending.side !== 'remote' || pending.path !== file.path) return
                                     // 延时消歧：双击会在 click 之后触发 onDoubleClick（已置 dblClickedRef），
                                     // 250ms 内发生双击则不重命名，交由双击进入目录/传输
-                                    window.setTimeout(() => {
-                                      if (dblClickedRef.current) return
+                                    if (renameClickTimerRef.current !== null) {
+                                      window.clearTimeout(renameClickTimerRef.current)
+                                    }
+                                    renameClickTimerRef.current = window.setTimeout(() => {
+                                      renameClickTimerRef.current = null
+                                      if (!mountedRef.current || dblClickedRef.current) return
                                       triggerRename('remote')
                                     }, 250)
                                   }}
@@ -7922,9 +9605,50 @@ export function SftpPanel() {
                           {(() => {
                             // 多选场景判断：右键项属于多选集合时，重命名/编辑权限/复制路径等单文件操作需隐藏
                             const isMulti = selectedRemotePaths.has(remoteContextMenuFile.path) && selectedRemotePaths.size > 1
-                            // 可预览/编辑的文件（非目录、文本/图片/PDF/视频/音频）
-                            const canPreview = !remoteContextMenuFile.isDirectory && !isMulti &&
-                              getPreviewKind(remoteContextMenuFile.name) !== 'unsupported'
+                            // 可预览/编辑的文件（非目录，二进制/未知类型支持分块 Hex 查看）
+                            const canPreview = !remoteContextMenuFile.isDirectory && !isMulti
+                            const rightTransferFiles = isMulti
+                              ? remoteFiles.filter(f => selectedRemotePaths.has(f.path) && f.name !== '..')
+                              : [remoteContextMenuFile]
+                            const isS2sFtpBlocked = isLeftRemote && (isLeftServerFtp || isSelectedServerFtp)
+                            const canCrossPaneTransfer = sftpPaneMode === 'dual' && !!selectedServerId && !isS2sFtpBlocked
+                            const triggerScheduledRightTransfer = (delayMs: number) => {
+                              if (!selectedServerId || rightTransferFiles.length === 0) return
+                              const label = rightTransferFiles.length > 1
+                                ? `${rightTransferFiles[0].name} (+${rightTransferFiles.length - 1})`
+                                : rightTransferFiles[0].name
+                              const totalBytes = rightTransferFiles.reduce((acc, f) => acc + (f.size || 0), 0)
+                              const filesCopy = [...rightTransferFiles]
+                              const srcSid = selectedServerId
+                              const destPath = localPath
+                              if (leftSideType === 'remote' && leftServerId) {
+                                const destSid = leftServerId
+                                scheduleDelayedTransfer({
+                                  direction: 's2s',
+                                  fileName: label,
+                                  totalBytes,
+                                  serverId: srcSid,
+                                  serverName: `${serverNameOf(srcSid)} -> ${serverNameOf(destSid)}`,
+                                  sourceServerId: srcSid,
+                                  targetServerId: destSid,
+                                  remotePath: destPath,
+                                  delayMs,
+                                  runner: () => handleServerToServerTransfer(srcSid, destSid, destPath, filesCopy, localFilesRef.current),
+                                })
+                              } else {
+                                scheduleDelayedTransfer({
+                                  direction: 'download',
+                                  fileName: label,
+                                  totalBytes,
+                                  serverId: srcSid,
+                                  serverName: serverNameOf(srcSid),
+                                  remotePath: filesCopy[0].path,
+                                  localPath: destPath,
+                                  delayMs,
+                                  runner: () => handleDownloadRemoteFiles(srcSid, destPath, filesCopy, localFilesRef.current),
+                                })
+                              }
+                            }
                             return (
                               <>
                                 {isMulti && (
@@ -7971,26 +9695,55 @@ export function SftpPanel() {
                                     </ContextMenuSubContent>
                                   </ContextMenuSub>
                                 )}
-                                <ContextMenuItem onClick={() => {
-                                  if (!remoteContextMenuFile) return
-                                  // 若右键项属于多选集合，则下载所有选中；否则只下载该项
-                                  if (isMulti) {
-                                    handleDownloadSelected()
-                                  } else {
-                                    handleDownloadFile(remoteContextMenuFile)
-                                  }
-                                }}>
+                                <ContextMenuItem
+                                  disabled={!canCrossPaneTransfer}
+                                  title={sftpPaneMode !== 'dual' ? '需切换至双栏视图才能跨栏传输' : undefined}
+                                  onClick={() => {
+                                    if (!remoteContextMenuFile || !canCrossPaneTransfer) return
+                                    // 若右键项属于多选集合，则下载所有选中；否则只下载该项
+                                    if (isMulti) {
+                                      handleDownloadSelected()
+                                    } else {
+                                      handleDownloadFile(remoteContextMenuFile)
+                                    }
+                                  }}>
                                   <Download className="mr-2 h-4 w-4 text-muted-foreground" />
                                   <span>{isMulti
                                     ? t('sftp_transfer_selected').replace('{n}', String(selectedRemotePaths.size))
                                     : t('sftp_transfer_to_target')}</span>
                                 </ContextMenuItem>
+                                {canCrossPaneTransfer && (
+                                  <ContextMenuSub>
+                                    <ContextMenuSubTrigger>
+                                      <Clock className="mr-2 h-4 w-4 text-muted-foreground" />
+                                      <span>预约延迟传输</span>
+                                    </ContextMenuSubTrigger>
+                                    <ContextMenuSubContent className="w-44">
+                                      <ContextMenuItem onClick={() => triggerScheduledRightTransfer(5_000)}>
+                                        <span>5 秒后</span>
+                                      </ContextMenuItem>
+                                      <ContextMenuItem onClick={() => triggerScheduledRightTransfer(30_000)}>
+                                        <span>30 秒后</span>
+                                      </ContextMenuItem>
+                                      <ContextMenuItem onClick={() => triggerScheduledRightTransfer(60_000)}>
+                                        <span>1 分钟后</span>
+                                      </ContextMenuItem>
+                                      <ContextMenuItem onClick={() => setCustomScheduleState({
+                                        open: true,
+                                        secondsInput: '120',
+                                        onConfirmDelay: (ms) => triggerScheduledRightTransfer(ms),
+                                      })}>
+                                        <span>自定义延迟...</span>
+                                      </ContextMenuItem>
+                                    </ContextMenuSubContent>
+                                  </ContextMenuSub>
+                                )}
                                 <ContextMenuItem onClick={() => copyFilesToClipboard('remote')}>
                                   <Copy className="mr-2 h-4 w-4 text-muted-foreground" />
                                   <span>{t('tm_copy')}</span>
                                   <ContextMenuShortcut>Ctrl+C</ContextMenuShortcut>
                                 </ContextMenuItem>
-                                {!isMulti && remoteContextMenuFile.isDirectory && (
+                                {!isMulti && !isSelectedServerFtp && remoteContextMenuFile.isDirectory && (
                                   <ContextMenuSub>
                                     <ContextMenuSubTrigger>
                                       <ArchiveFileIcon className="mr-2 h-4 w-4 text-muted-foreground" />
@@ -8017,7 +9770,7 @@ export function SftpPanel() {
                                     </ContextMenuSubContent>
                                   </ContextMenuSub>
                                 )}
-                                {!isMulti && !remoteContextMenuFile.isDirectory && isSupportedArchiveName(remoteContextMenuFile.name) && (
+                                {!isMulti && !isSelectedServerFtp && !remoteContextMenuFile.isDirectory && isSupportedArchiveName(remoteContextMenuFile.name) && (
                                   <ContextMenuItem
                                     disabled={extractingArchivePath !== null}
                                     onClick={() => void handleExtractArchive(remoteContextMenuFile, 'remote', selectedServerId)}
@@ -8038,6 +9791,30 @@ export function SftpPanel() {
                                     <Edit2 className="mr-2 h-4 w-4 text-muted-foreground" />
                                     <span>{t('sftp_rename')}</span>
                                     <ContextMenuShortcut>F2</ContextMenuShortcut>
+                                  </ContextMenuItem>
+                                )}
+                                {selectedRemotePaths.size >= 2 && (
+                                  <ContextMenuItem onClick={() => openBatchRename('remote')}>
+                                    <Edit2 className="mr-2 h-4 w-4 text-muted-foreground" />
+                                    <span>{t('batch_rename_title')}</span>
+                                  </ContextMenuItem>
+                                )}
+                                {compareSelectionInfo && (compareSelectionInfo.kind === 'right' || compareSelectionInfo.kind === 'cross' || compareSelectionInfo.kind === 'multi') && !remoteContextMenuFile.isDirectory && (
+                                  <ContextMenuItem
+                                    onClick={() => openFileDiff(
+                                      compareSelectionInfo.leftSpec,
+                                      compareSelectionInfo.rightSpec,
+                                      compareSelectionInfo.candidates,
+                                    )}
+                                  >
+                                    <GitCompare className="mr-2 h-4 w-4 text-muted-foreground shrink-0" />
+                                    <span>
+                                      {compareSelectionInfo.candidates.length >= 3
+                                        ? `${t('sftp_file_diff')} (${compareSelectionInfo.candidates.length})`
+                                        : compareSelectionInfo.kind === 'cross'
+                                          ? `与左栏对比 (${compareSelectionInfo.leftSpec.file.name})`
+                                          : `${t('sftp_file_diff')} (${compareSelectionInfo.leftSpec.file.name} ↔ ${compareSelectionInfo.rightSpec.file.name})`}
+                                    </span>
                                   </ContextMenuItem>
                                 )}
                                 <ContextMenuItem className="text-destructive focus:bg-destructive/10 focus:text-destructive" onClick={() => {
@@ -8150,6 +9927,8 @@ export function SftpPanel() {
             </div>
           )}
         </div>
+        )}
+        </div>
       </div>
 
       {/* 3. 远程与本地辅助模态对话框 */}
@@ -8163,11 +9942,15 @@ export function SftpPanel() {
         rightServerId={selectedServerId}
         rightServerName={serverNameOf(selectedServerId)}
         rightPath={remotePath}
+        sourceProtocol={leftSideType === 'local' ? 'local' : getServerFileTransferProtocol(servers.find(s => s.id === toBaseServerId(leftServerId)))}
+        targetProtocol={getServerFileTransferProtocol(connectedServer)}
+        sourceDisconnected={leftSideType === 'remote' && isLeftRemoteDisconnected}
+        targetDisconnected={isRemoteDisconnected}
         onSyncComplete={() => {
           if (leftSideType === 'local') {
             loadLocalDirectory(localPath, undefined, undefined, { isRefresh: true })
           } else if (leftServerId) {
-            loadRemoteDirectory(leftServerId, localPath)
+            loadLocalDirectory(localPath, 'remote', leftServerId, { isRefresh: true })
           }
           if (selectedServerId) {
             loadRemoteDirectory(selectedServerId, remotePath)
@@ -8271,6 +10054,7 @@ export function SftpPanel() {
             URL.revokeObjectURL(viewerObjectUrlRef.current)
             viewerObjectUrlRef.current = null
           }
+          setViewerHexSource(null)
           setViewer(INITIAL_VIEWER_STATE)
         }}
         onCancel={() => setShowCloseViewerConfirm(false)}
@@ -8306,6 +10090,7 @@ export function SftpPanel() {
         permissionsRecursive={permissionsRecursive}
         setPermissionsRecursive={setPermissionsRecursive}
         permSaving={permSaving}
+        isFtpProtocol={hasFtpFileTransfer(servers.find(s => s.id === toBaseServerId(permissionsServerId || selectedServerId)))}
         onClose={() => setPermissionsTarget(null)}
         onSave={handleSavePermissions}
         t={t}
@@ -8383,6 +10168,28 @@ export function SftpPanel() {
         )}
 
         {/* 折叠头部：点击切换展开/隐藏 */}
+        {(() => {
+          const pendingQueueTasks = unifiedQueueTasks.filter(
+            (task) => task.status === 'scheduled' || task.status === 'queued',
+          )
+          const scheduledCount = pendingQueueTasks.filter((task) => task.status === 'scheduled').length
+          const queuedCount = pendingQueueTasks.filter((task) => task.status === 'queued').length
+          const pausedCount = transferRecords.filter((r) => r.status === 'paused').length
+          const totalDisplayCount = transferRecords.length + pendingQueueTasks.length
+          const unifiedTasksById = new Map<string, UnifiedTransferTask>(
+            unifiedQueueTasks.map((task) => [task.id, task]),
+          )
+          const priorityLabelKey = (p: UnifiedTransferPriority) =>
+            p === 'high' ? 'tx_priority_high' : p === 'low' ? 'tx_priority_low' : 'tx_priority_normal'
+          const priorityBadgeClass = (p: UnifiedTransferPriority) =>
+            p === 'high'
+              ? 'border-rose-500/40 bg-rose-500/10 text-rose-500 hover:bg-rose-500/20'
+              : p === 'low'
+                ? 'border-slate-500/30 bg-muted/40 text-muted-foreground hover:bg-muted'
+                : 'border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20'
+
+          return (
+            <>
         <div className="flex items-center justify-between px-3 h-7 text-xs select-none shrink-0 border-b border-border/40">
           <button
             onClick={() => setTransferPanelOpen(o => !o)}
@@ -8392,14 +10199,29 @@ export function SftpPanel() {
             <ChevronDown className={cn("h-3 w-3 transition-transform", transferPanelOpen ? "" : "-rotate-90")} />
             <span className="font-medium">{t('sftp_transfer_title')}</span>
             <span className="text-[10px] text-muted-foreground/70">
-              ({transferRecords.length})
+              ({totalDisplayCount})
             </span>
+            {scheduledCount > 0 && (
+              <span className="rounded bg-amber-500/15 px-1.5 py-0 text-[10px] text-amber-600 dark:text-amber-400">
+                {t('tx_n_scheduled').replace('{n}', String(scheduledCount))}
+              </span>
+            )}
+            {queuedCount > 0 && (
+              <span className="rounded bg-sky-500/15 px-1.5 py-0 text-[10px] text-sky-600 dark:text-sky-400">
+                {t('tx_n_queued').replace('{n}', String(queuedCount))}
+              </span>
+            )}
+            {pausedCount > 0 && (
+              <span className="rounded bg-blue-500/15 px-1.5 py-0 text-[10px] text-blue-500">
+                {t('tx_n_paused').replace('{n}', String(pausedCount))}
+              </span>
+            )}
             {transferRecords.some(r => r.status === 'transferring') && (
               <Loader2 className="h-3 w-3 animate-spin text-primary" />
             )}
           </button>
           <div className="flex items-center gap-1">
-            {transferRecords.length > 0 && transferPanelOpen && (
+            {totalDisplayCount > 0 && transferPanelOpen && (
               <>
                 <Button
                   variant="ghost"
@@ -8432,7 +10254,7 @@ export function SftpPanel() {
                 <span className="truncate">{transferNotice}</span>
               </div>
             )}
-            {transferRecords.length === 0 ? (
+            {totalDisplayCount === 0 ? (
               <div className="py-6 text-center text-xs text-muted-foreground select-none">
                 {t('sftp_transfer_empty')}
               </div>
@@ -8466,9 +10288,113 @@ export function SftpPanel() {
                   </tr>
                 </thead>
                 <tbody>
+                  {/* U2 / P2-20 / P2-21: 预约延迟传输 / 排队中的统一队列任务 */}
+                  {pendingQueueTasks.map((task) => {
+                    const isScheduled = task.status === 'scheduled' && task.scheduledAt !== undefined
+                    const countdownText = isScheduled && task.scheduledAt
+                      ? formatScheduledRemaining(task.scheduledAt, scheduleClockNow, t)
+                      : t('tx_status_queued')
+                    return (
+                      <tr key={task.id} className="h-10 border-b border-border/20 align-middle hover:bg-muted/20 transition-colors">
+                        <td className="h-10 shrink-0 px-2 py-1.5 align-middle">
+                          <div className="flex h-5 items-center justify-center leading-none">
+                            <span className="mr-1 inline-flex h-3 w-3 shrink-0 invisible" />
+                            {task.direction === 'upload'
+                              ? <Upload className="block h-3 w-3 shrink-0 text-blue-500" />
+                              : task.direction === 'download'
+                                ? <Download className="block h-3 w-3 shrink-0 text-green-500" />
+                                : <ArrowLeftRight className="block h-3 w-3 shrink-0 text-purple-500" />}
+                          </div>
+                        </td>
+                        <td className="h-10 max-w-0 overflow-hidden px-2 py-1.5" title={task.fileName}>
+                          <div className="flex h-5 min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap">
+                            <span className="min-w-0 truncate font-medium">{task.fileName}</span>
+                            <button
+                              type="button"
+                              onClick={() => useTransferQueueStore.getState().setPriority(task.id, nextTransferPriority(task.priority))}
+                              title={t('tx_priority_toggle_hint')}
+                              className={cn(
+                                'shrink-0 rounded border px-1 py-0 text-[9px] leading-4 cursor-pointer transition-colors',
+                                priorityBadgeClass(task.priority),
+                              )}
+                            >
+                              {t(priorityLabelKey(task.priority))}
+                            </button>
+                          </div>
+                        </td>
+                        <td className="px-2 py-1.5 shrink-0">
+                          {isScheduled ? (
+                            <Badge variant="soft-warning" className="gap-1 px-1.5 py-0 text-[10px] h-5 font-normal tracking-wide">
+                              <Clock className="h-2.5 w-2.5" />
+                              {t('tx_status_scheduled')}
+                            </Badge>
+                          ) : (
+                            <Badge variant="soft" className="gap-1 px-1.5 py-0 text-[10px] h-5 font-normal tracking-wide">
+                              {t('tx_status_queued')}
+                            </Badge>
+                          )}
+                        </td>
+                        <td className="px-2 py-1.5 font-mono text-[10px] text-muted-foreground shrink-0">
+                          {task.totalBytes > 0 ? formatTransferSize(task.totalBytes) : '—'}
+                        </td>
+                        <td className="px-2 py-1.5 font-mono text-[10px] text-muted-foreground shrink-0 whitespace-nowrap">
+                          {formatClockTime(task.scheduledAt ?? task.createdAt)}
+                        </td>
+                        <td className="px-2 py-1.5 truncate font-mono text-[10px] text-muted-foreground" title={task.localPath || '-'}>
+                          {task.localPath || '-'}
+                        </td>
+                        <td className="px-2 py-1.5 truncate font-mono text-[10px] text-muted-foreground" title={task.remotePath || '-'}>
+                          {task.remotePath || '-'}
+                        </td>
+                        <td className="px-2 py-1.5 truncate text-[10px] text-amber-600 dark:text-amber-400" title={countdownText}>
+                          {countdownText}
+                        </td>
+                        <td className="px-2 py-1.5 shrink-0">
+                          <div className="flex items-center gap-1.5">
+                            <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden min-w-[40px]">
+                              <div className="h-full bg-amber-500/60" style={{ width: '0%' }} />
+                            </div>
+                            <span className="font-mono tabular-nums text-[10px] w-8 text-right shrink-0">0%</span>
+                            <span className="font-mono tabular-nums text-[9px] text-muted-foreground/70 shrink-0 whitespace-nowrap min-w-[58px] text-right">
+                              —
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-2 py-1.5 shrink-0">
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                useTransferQueueStore.getState().rescheduleTask(task.id, undefined)
+                                useTransferQueueStore.getState().tickScheduler(Date.now())
+                              }}
+                              className="text-green-500 hover:text-green-600 cursor-pointer"
+                              title="立即开始"
+                            >
+                              <Play className="h-3 w-3" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                scheduledRunnersRef.current.delete(task.id)
+                                useTransferQueueStore.getState().cancelTask(task.id)
+                                useTransferQueueStore.getState().removeTask(task.id)
+                              }}
+                              className="text-muted-foreground/60 hover:text-red-500 cursor-pointer"
+                              title={t('sftp_transfer_cancel')}
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
                   {/* 限制渲染前 100 条记录避免 DOM 节点爆炸（新记录在数组前面，用户最关心最近的）
                       完整虚拟化需重构为 div 网格，风险较高暂不实施 */}
                   {transferRecords.slice(0, 100).map(item => {
+                    const unifiedTask = unifiedTasksById.get(item.transferId)
+                    const itemPriority = unifiedTask?.priority ?? 'normal'
                     const childRecords = transferChildren[item.transferId] || []
                     const isDirectoryTask = item.totalType === 'count' || directoryTransferIdsRef.current.has(item.transferId)
                     // 目录任务从创建开始就允许点击；清单尚未到达时详情面板显示加载状态。
@@ -8582,8 +10508,24 @@ export function SftpPanel() {
                         {/* 名称：始终只显示顶层文件/文件夹名，避免当前子文件变化触发表格重排。
                             当前子文件仍保留在 title 和可展开详情中。 */}
                         <td className="h-10 max-w-0 overflow-hidden px-2 py-1.5" title={item.currentSubFile ? `${item.fileName} / ${item.currentSubFile}` : item.fileName}>
-                          <div className="flex h-5 min-w-0 items-center overflow-hidden whitespace-nowrap">
+                          <div className="flex h-5 min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap">
                             <span className="min-w-0 truncate font-medium">{item.fileName}</span>
+                            {(item.status === 'transferring' || item.status === 'paused') && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  useTransferQueueStore.getState().setPriority(item.transferId, nextTransferPriority(itemPriority))
+                                }}
+                                title={t('tx_priority_toggle_hint')}
+                                className={cn(
+                                  'shrink-0 rounded border px-1 py-0 text-[9px] leading-4 cursor-pointer transition-colors',
+                                  priorityBadgeClass(itemPriority),
+                                )}
+                              >
+                                {t(priorityLabelKey(itemPriority))}
+                              </button>
+                            )}
                           </div>
                         </td>
                         {/* 状态 */}
@@ -8864,6 +10806,9 @@ export function SftpPanel() {
             )}
           </div>
         )}
+            </>
+          )
+        })()}
       </div>
 
       {/* transferStatus 浮窗已移除，统一用下方 transferRecords 表格展示 */}
@@ -8905,10 +10850,11 @@ export function SftpPanel() {
           )
         }
         extraHeaderActions={(() => {
+          const isHexMode = viewerHexSource?.token === viewer.token
           const ext = getFileExt(viewer.fileName)
-          const isEditable = viewer.kind === 'text' || (viewer.kind === 'spreadsheet' && (ext === 'csv' || ext === 'tsv'))
-          const isJson = ext === 'json'
-          if (!isEditable && !isJson) return null
+          const isEditable = !isHexMode && (viewer.kind === 'text' || (viewer.kind === 'spreadsheet' && (ext === 'csv' || ext === 'tsv')))
+          const isJson = !isHexMode && ext === 'json'
+          if (!isEditable && !isJson && !(isHexMode && viewer.serverId)) return null
           return (
             <div className="flex flex-wrap items-center justify-end gap-1.5">
               {/* 编码选择（Notepad++ 式：手动切换重新打开）+ 换行符徽标 */}
@@ -9047,6 +10993,18 @@ export function SftpPanel() {
             <AlertCircle className={cn("h-8 w-8", viewer.isBinary ? "text-amber-500" : "text-destructive")} />
             <p className={cn("text-sm", viewer.isBinary ? "text-foreground font-medium" : "text-destructive")}>{viewer.error}</p>
           </div>
+        ) : (viewerHexSource && viewerHexSource.token === viewer.token) ? (
+          <div className="w-full h-full flex flex-col overflow-hidden">
+            <UniversalFileViewer
+              data={viewerHexSource.data}
+              fileName={viewer.fileName}
+              initialMode="hex"
+              totalSize={viewerHexSource.totalSize}
+              onLoadRange={viewerHexSource.onLoadRange}
+              className="h-full"
+              onError={(err) => setViewer(v => ({ ...v, error: err.message }))}
+            />
+          </div>
         ) : (viewer.kind === 'universal' || viewer.kind === 'docx' || viewer.kind === 'legacy_doc' || (viewer.kind === 'spreadsheet' && viewer.mode === 'preview') || viewer.kind === 'image' || viewer.kind === 'pdf' || viewer.kind === 'video' || viewer.kind === 'audio') ? (
           <div className="w-full h-full flex flex-col overflow-hidden">
             <UniversalFileViewer
@@ -9097,6 +11055,80 @@ export function SftpPanel() {
         sftpDiagnostics={sftpDiagnostics}
         t={t}
       />
+
+      {/* P2-17: 批量重命名弹窗 */}
+      <BatchRenameDialog
+        open={batchRenameState.open}
+        onClose={() => setBatchRenameState((prev) => ({ ...prev, open: false }))}
+        items={batchRenameState.items}
+        existingNames={(batchRenameState.side === 'local' ? localFiles : remoteFiles)
+          .filter((f) => f.name !== '..')
+          .map((f) => f.name)}
+        targetPlatform={
+          batchRenameState.side === 'local'
+            ? (leftSideType === 'local'
+                ? (getLocalOs() === 'windows' ? 'windows' : 'posix')
+                : (servers.find((s) => s.id === toBaseServerId(leftServerId))?.targetType === 'windows' ? 'windows' : 'posix'))
+            : (connectedServer?.targetType === 'windows' ? 'windows' : 'posix')
+        }
+        onExecuteRename={handleExecuteBatchRename}
+      />
+
+      {/* P2-15: 文件对比弹窗（文本 / 二进制分块对比） */}
+      <FileDiffDialog
+        open={fileDiffState.open}
+        onClose={() => setFileDiffState((prev) => ({ ...prev, open: false }))}
+        leftTitle={fileDiffState.leftTitle}
+        rightTitle={fileDiffState.rightTitle}
+        leftSize={fileDiffState.leftSize}
+        rightSize={fileDiffState.rightSize}
+        loadTextPair={fileDiffState.loadTextPair}
+        loadBytesPair={fileDiffState.loadBytesPair}
+        leftBinaryChunked={fileDiffState.leftBinaryChunked}
+        rightBinaryChunked={fileDiffState.rightBinaryChunked}
+        initialMode={fileDiffState.initialMode}
+        candidates={fileDiffState.candidates}
+        initialLeftId={fileDiffState.initialLeftId}
+        initialRightId={fileDiffState.initialRightId}
+        chunkedThresholdBytes={fileDiffState.chunkedThresholdBytes}
+      />
+
+      {/* U2: 自定义预约延迟传输秒数弹窗 */}
+      <ConfirmDialog
+        open={customScheduleState.open}
+        onCancel={() => {
+          setCustomScheduleState((prev) => ({ ...prev, open: false }))
+        }}
+        title="预约延迟传输"
+        description="设置多少秒后自动开始传输"
+        confirmText={t('common_confirm') || '确定'}
+        cancelText={t('common_cancel') || '取消'}
+        onConfirm={() => {
+          const secs = Number(customScheduleState.secondsInput)
+          const cb = customScheduleState.onConfirmDelay
+          setCustomScheduleState((prev) => ({ ...prev, open: false }))
+          if (!Number.isFinite(secs) || secs <= 0) {
+            toastRef.current.warning('请输入大于 0 的秒数')
+            return
+          }
+          cb?.(Math.round(secs * 1000))
+        }}
+      >
+        <div className="pt-2">
+          <Input
+            type="number"
+            min={1}
+            max={86400}
+            value={customScheduleState.secondsInput}
+            onChange={(e) =>
+              setCustomScheduleState((prev) => ({ ...prev, secondsInput: e.target.value }))
+            }
+            placeholder="延迟秒数（例如 120）"
+            className="h-8 text-xs"
+            autoFocus
+          />
+        </div>
+      </ConfirmDialog>
 
       {/* 统一 SFTP 操作错误弹框 */}
       <ErrorDialog

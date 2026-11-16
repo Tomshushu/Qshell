@@ -22,6 +22,7 @@ mod targets;
 mod rdp;
 mod vnc;
 mod telnet;
+mod local_shell;
 mod session;
 mod https_device;
 pub mod serial;
@@ -57,6 +58,7 @@ pub fn run() {
                     crate::ssh::shell::close_sessions_for_window(&label).await;
                     crate::telnet::close_telnet_sessions_for_window(&label).await;
                     crate::serial::close_sessions_for_window(&label);
+                    crate::local_shell::close_sessions_for_window(&label);
                 });
             }
         })
@@ -214,12 +216,18 @@ pub fn run() {
             commands::servers::servers_restore,
             commands::servers::servers_purge,
             commands::servers::servers_delete_batch,
+            commands::servers::servers_batch_update,
             commands::servers::servers_restore_batch,
             commands::servers::servers_purge_batch,
             commands::servers::servers_cleanup_trash,
             commands::servers::servers_get,
             commands::servers::servers_export,
             commands::servers::servers_import,
+            commands::auth_profiles::auth_profiles_list,
+            commands::auth_profiles::auth_profiles_list_for_sync,
+            commands::auth_profiles::auth_profiles_add,
+            commands::auth_profiles::auth_profiles_update,
+            commands::auth_profiles::auth_profiles_delete,
             commands::server_groups::server_groups_list,
             commands::server_groups::server_groups_add,
             commands::server_groups::server_groups_update,
@@ -228,6 +236,7 @@ pub fn run() {
             commands::server_import::servers_import_external,
             // SSH 连接
             commands::ssh::ssh_connect,
+            commands::ssh::ssh_submit_auth_interaction,
             commands::ssh::ssh_set_terminal_window_size,
             commands::ssh::ssh_disconnect,
             commands::ssh::ssh_execute,
@@ -265,6 +274,8 @@ pub fn run() {
             commands::ssh::ssh_generate_key,
             commands::ssh::ssh_test_ssh_agent,
             commands::ssh::ssh_list_agent_identities,
+            commands::ssh::x11_probe_environment,
+            commands::ssh::x11_import_addon,
 
             // SSH 密钥管理（密钥库：加密存储私钥/证书内容）
             commands::ssh_keys::ssh_keys_list,
@@ -343,10 +354,12 @@ pub fn run() {
             commands::logs::audit_logs_count,
             // 文件管理
             commands::files::files_test_ftp_connection,
+            commands::files::files_get_backend_capabilities,
             commands::files::files_list,
             commands::files::files_list_drives,
             commands::files::files_read,
             commands::files::files_read_binary,
+            commands::files::files_read_chunk,
             commands::files::files_write,
             commands::files::files_mkdir,
             commands::files::files_delete,
@@ -486,6 +499,9 @@ pub fn run() {
             commands::port_forward::port_forward_stop_all,
             // Telnet 协议（P0-5）
             commands::telnet::telnet_create_shell,
+            // 本地 Shell / ConPTY（P0-02）
+            commands::local_shell::local_list_profiles,
+            commands::local_shell::local_create_shell,
             // 串口 Serial/COM（Xshell 级功能）
             commands::serial::serial_list_ports,
             commands::serial::serial_test_port,
@@ -539,6 +555,7 @@ pub fn run() {
                     }
                 });
                 crate::serial::close_all_sessions();
+                crate::local_shell::close_all_sessions();
             }
         });
 }

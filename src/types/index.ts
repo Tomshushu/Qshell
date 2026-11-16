@@ -11,7 +11,7 @@ export interface Server {
    * - sshAgent: SSH Agent 认证（Unix ssh-agent / Windows Pageant）
    * - certificate: OpenSSH 证书认证（私钥 + CA 签名的 *-cert.pub）
    */
-  authType: 'password' | 'privateKey' | 'sshAgent' | 'certificate'
+  authType: 'password' | 'privateKey' | 'sshAgent' | 'certificate' | 'keyboardInteractive'
   password?: string
   privateKeyPath?: string
   privateKeyPassphrase?: string
@@ -26,6 +26,12 @@ export interface Server {
    * 为空/undefined 时回退到路径模式（兼容旧数据）。
    */
   sshKeyId?: string
+  /** 关联的全局身份凭证 ID（指向 auth_profiles 表 id；为空时使用独立认证配置） */
+  authProfileId?: string | null
+  /** 是否启用 SSH Agent 转发（默认关闭） */
+  forwardAgent?: boolean
+  /** 是否启用 SSH X11 图形转发（默认关闭） */
+  x11Forwarding?: boolean
   tags: string[]
   notes?: string
   connectionTimeout?: number
@@ -52,6 +58,8 @@ export interface Server {
   bmcAllowInvalidCerts?: boolean
   /** 泛化后的 TLS 证书开关，适用于所有 HTTPS 设备；缺省时回退读取 bmcAllowInvalidCerts */
   tlsAllowInvalidCerts?: boolean
+  /** 终端类型（TERM，如 xterm-256color / vt100），为空时继承全局设置 */
+  terminalType?: string | null
   /**
    * FinalShell 模式：代理随服务器内联配置。
    * 后端以加密 JSON 字符串存储；前端以 JSON 字符串在数据中传递。
@@ -90,6 +98,10 @@ export interface Server {
    * 连接成功后自动开启会话记录，落盘为纯文本/时间戳审计日志。
    */
   sessionLoggingConfig?: string | null
+  /**
+   * RDP 高级启动与重定向配置（JSON 字符串存储于 Server.rdpConfig）
+   */
+  rdpConfig?: string | null
   /** 所属服务器分组 ID（指向 server_groups 表 id），null/空表示未分组 */
   groupId?: string | null
   /** 回收站删除时间（毫秒时间戳）；为空表示正常，非 NULL 表示待删除 */
@@ -125,12 +137,22 @@ export interface SendExpectRule {
   onTimeoutAction?: 'ignore' | 'warn' | 'disconnect'
 }
 
+/** 登录脚本显式声明参数（用于 %P{name} 宏替换与 session.params 注入） */
+export interface ScriptParam {
+  name: string
+  label?: string
+  defaultValue?: string
+  secret?: boolean
+  required?: boolean
+}
+
 /** 登录脚本运行上下文（提供宏变量插值与脚本上下文） */
 export interface LogonScriptContext {
   username?: string
   host?: string
   port?: number | string
   serverName?: string
+  params?: Record<string, string>
 }
 
 export type LogonScriptMode = 'rules' | 'script'
@@ -146,10 +168,29 @@ export interface LogonScriptsConfig {
   inheritGlobal?: boolean
   /** 全局默认超时处置策略 */
   timeoutPolicy?: 'ignore' | 'warn' | 'disconnect'
+  /** 显式参数清单（运行前/入参插值：%P{name}） */
+  parameters?: ScriptParam[]
   /** 声明式规则列表 */
   rules: SendExpectRule[]
   /** JavaScript 可编程脚本源码（当 mode === 'script' 时生效） */
   customScript?: string
+}
+
+/** RDP 高级启动与重定向配置（与 Rust RdpAdvancedOptions / Server.rdpConfig 对齐） */
+export interface RdpAdvancedOptions {
+  rdpPort?: number
+  width?: number
+  height?: number
+  fullscreen?: boolean
+  colorDepth?: number
+  useMultimon?: boolean
+  redirectClipboard?: boolean
+  redirectDrives?: boolean
+  redirectPrinters?: boolean
+  smartSizing?: boolean
+  enableCredssp?: boolean
+  /** 音频模式：0=本地播放，1=远程播放，2=禁用 */
+  audioMode?: 0 | 1 | 2
 }
 
 /** 会话日志落盘格式：纯文本（无 ANSI 格式码）、带时间戳纯文本、原始终端控制流 */
@@ -169,8 +210,8 @@ export interface SessionLoggingConfig {
 }
 
 export interface FileTransferConfig {
-  /** 文件传输协议：默认 'sftp'（零配置复用 SSH） */
-  protocol: 'sftp' | 'ftp' | 'ftps'
+  /** 文件传输协议：'auto' (SFTP 自动降级 SCP) | 'sftp' (默认复用 SSH) | 'scp' | 'ftp' | 'ftps' */
+  protocol: 'auto' | 'sftp' | 'scp' | 'ftp' | 'ftps'
   /** FTP/FTPS 端口：FTP/显式 FTPS 默认 21，隐式 FTPS 默认 990 */
   port?: number
   /** FTPS 加密模式：'explicit' (AUTH TLS, 21) | 'implicit' (990) */
@@ -189,8 +230,18 @@ export interface FileTransferConfig {
   transferMode?: 'passive' | 'active'
   /** 文件名字符编码：'utf-8' (默认) | 'gbk' */
   encoding?: 'utf-8' | 'gbk'
-  /** FTPS 是否信任自签名证书（默认 true） */
+  /** FTPS 是否信任自签名证书（默认 false，需用户显式勾选） */
   allowInvalidCerts?: boolean
+}
+
+/** 后端 RemoteFs 当前生效的文件传输后端能力 */
+export interface RemoteFsCapabilities {
+  backend: 'sftp' | 'scp' | 'ftp' | 'ftps' | string
+  fallbackFromSftp: boolean
+  supportsSftp: boolean
+  supportsChmod: boolean
+  supportsSymlink: boolean
+  supportsResume: boolean
 }
 
 // ============================================================================
@@ -744,6 +795,26 @@ export interface WorkspaceTab {
   groupId?: string
   /** 所属分屏 Workspace ID（null 表示独立顶层标签） */
   workspaceId?: string | null
+  /** 本地终端指定 Shell Profile ID（仅 __local__: / targetType=local 使用） */
+  localProfileId?: string
+  /** 本地终端初始工作目录（仅 __local__: / targetType=local 使用） */
+  localCwd?: string
+}
+
+/** 本地 Shell Profile 描述 */
+export interface LocalShellProfile {
+  id: string
+  label: string
+  shellPath: string
+  args: string[]
+  isDefault: boolean
+  platform: string
+}
+
+/** 本地终端保存配置（存储于 Server.credentialsConfig JSON 中） */
+export interface LocalShellConfig {
+  profileId?: string
+  cwd?: string
 }
 
 /** SFTP 文件管理器视图模式：'list' 列表 | 'large' 大图标 | 'medium' 中图标 | 'small' 小图标 */
@@ -816,6 +887,17 @@ export interface ServerKeyEntry {
   certificatePath?: string
   certificateContent?: string
   createdAt?: number
+}
+
+export interface X11EnvironmentProbe {
+  available: boolean
+  reachabilityOk: boolean
+  display?: string | null
+  detectedServer?: string | null
+  executablePath?: string | null
+  addonDir: string
+  addonInstalled: boolean
+  message: string
 }
 
 export * from './network'

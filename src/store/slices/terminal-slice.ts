@@ -183,6 +183,12 @@ export const createTerminalSlice: StateCreator<
   terminalEncoding: "default",
   setTerminalEncoding: (encoding) =>
     set({ terminalEncoding: encoding || "default" }),
+  terminalType: "xterm-256color",
+  setTerminalType: (termType) =>
+    set({ terminalType: termType.trim() || "xterm-256color" }),
+  terminalBracketedPaste: false,
+  setTerminalBracketedPaste: (enabled) =>
+    set({ terminalBracketedPaste: enabled }),
   terminalRecordingMaxSizeMb: 200,
   setTerminalRecordingMaxSizeMb: (size) =>
     set({

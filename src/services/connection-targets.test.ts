@@ -24,6 +24,10 @@ import {
   isPureVncServer,
   inferServerProtocols,
   resolveServerOpenAction,
+  resolveServerForTab,
+  isEphemeralLocalServerId,
+  extractLocalProfileId,
+  parseLocalShellConfig,
   getTargetTypeSpec,
   hasCapability,
   type TargetCapabilities,
@@ -53,6 +57,7 @@ const BACKEND_MIRROR: Array<{
   { id: 'xinchuang', protocols: ['ssh', 'vnc'], primary: 'ssh', port: 22, username: 'root', caps: [true, true, true, true, true, false, true] },
   { id: 'esxi', protocols: ['https'], primary: 'https', port: 443, username: 'root', caps: [false, false, false, false, false, true, true] },
   { id: 'kubernetes', protocols: ['k8s'], primary: 'k8s', port: 6443, username: '', caps: [false, false, false, false, false, true, true] },
+  { id: 'local', protocols: ['local'], primary: 'local', port: 0, username: '', caps: [false, true, false, false, false, false, false] },
 ]
 
 const capsTuple = (caps: TargetCapabilities): CapsTuple => [
@@ -84,7 +89,7 @@ describe('connection target capability matrix', () => {
     expect(getProtocolSpec('vnc').defaultPort).toBe(5900)
     // Phase 2-A：unix / xinchuang 后端 TARGET_SPECS 已是完整 SSH 规格，正式开放选择
     expect(getEnabledTargetTypes().map((target) => target.id)).toEqual([
-      'linux', 'windows', 'network', 'bmc', 'serial',
+      'linux', 'windows', 'network', 'bmc', 'serial', 'local',
     ])
     expect(getEnabledTargetTypes()).toEqual(CONNECTION_TARGETS.filter((target) => target.enabled))
     // Phase 2-B-4：ESXi 传输层 / 工作台已接线，正式开放选择
@@ -115,7 +120,7 @@ describe('connection target capability matrix', () => {
   })
 
   it('declares a connection kind for every protocol', () => {
-    expect(CONNECTION_PROTOCOLS).toHaveLength(9)
+    expect(CONNECTION_PROTOCOLS).toHaveLength(10)
     for (const proto of CONNECTION_PROTOCOLS) {
       expect(proto.kind).toBeTruthy()
     }
@@ -206,6 +211,7 @@ describe('legacy flag equivalence matrix', () => {
     ['xinchuang', 'ssh', undefined],
     ['esxi', 'https', undefined],
     ['kubernetes', 'k8s', undefined],
+    ['local', 'local', undefined],
     ['linux', 'ssh', 'serial'],
     ['rdp', 'ssh', undefined],
     ['linux', 'winrm', undefined],
@@ -289,7 +295,7 @@ describe('target type extension contract', () => {
       expect(backendIds.has(spec.id), `${spec.id} 缺少后端 TARGET_SPECS 镜像`).toBe(true)
       expect(spec.labelKey).toBe(`ct_${spec.id}`)
       expect(spec.supportedProtocols.length).toBeGreaterThan(0)
-      expect(spec.defaultPort).toBeGreaterThan(0)
+      expect(spec.defaultPort).toBeGreaterThanOrEqual(0)
       const caps = TARGET_CAPABILITIES[spec.id]
       expect(caps).toBeDefined()
       expect(capsTuple(caps)).toHaveLength(7)
@@ -723,5 +729,38 @@ describe('protocol inference and multi-protocol combinations', () => {
     expect(isModuleVisibleForServer('terminal', hybrid)).toBe(true)
     expect(isModuleVisibleForServer('vnc', hybrid)).toBe(true)
     expect(isModuleVisibleForServer('overview', hybrid)).toBe(true)
+  })
+
+  it('resolves ephemeral local terminal tabs without DB persistence', () => {
+    expect(isEphemeralLocalServerId('__local__:pwsh')).toBe(true)
+    expect(isEphemeralLocalServerId('server-1')).toBe(false)
+    expect(extractLocalProfileId('__local__:default')).toBeUndefined()
+    expect(extractLocalProfileId('__local__:pwsh')).toBe('pwsh')
+    expect(parseLocalShellConfig(JSON.stringify({ profileId: ' bash ', cwd: ' D:/proj ' }))).toEqual({
+      profileId: 'bash',
+      cwd: 'D:/proj',
+    })
+
+    const resolved = resolveServerForTab([], '__local__:pwsh', {
+      localProfileId: 'pwsh',
+      localCwd: 'D:\\SSHTOOL\\Qshell',
+      title: 'PowerShell',
+    })
+    const resolvedAgain = resolveServerForTab([], '__local__:pwsh', {
+      localProfileId: 'pwsh',
+      localCwd: 'D:\\SSHTOOL\\Qshell',
+      title: 'PowerShell',
+    })
+    expect(resolved).toBe(resolvedAgain)
+    expect(resolved).toBeDefined()
+    expect(resolved?.targetType).toBe('local')
+    expect(resolved?.protocol).toBe('local')
+    expect(resolved?.name).toBe('PowerShell')
+    expect(parseLocalShellConfig(resolved?.credentialsConfig)).toEqual({
+      profileId: 'pwsh',
+      cwd: 'D:\\SSHTOOL\\Qshell',
+    })
+    expect(getServerConnectionFlags(resolved?.targetType, resolved?.protocol).isLocalServer).toBe(true)
+    expect(resolveServerForTab([], 'non-existent-server')).toBeUndefined()
   })
 })

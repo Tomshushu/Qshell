@@ -167,6 +167,7 @@ export function ConnectionDiagnosticsDialog({
         // Empty secrets intentionally tell the backend to use the encrypted values
         // already stored for this server. Credentials never need to enter localStorage.
         sshKeyId: server.sshKeyId,
+        authProfileId: server.authProfileId ?? undefined,
         agentIdentity: server.agentIdentity,
         connectionTimeout: Math.min(server.connectionTimeout ?? 15, 20),
         targetType: server.targetType,

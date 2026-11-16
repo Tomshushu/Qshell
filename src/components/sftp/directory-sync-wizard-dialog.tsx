@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Dialog,
   DialogContent,
@@ -27,11 +28,14 @@ import {
   Loader2,
   HardDrive,
   Server,
-  Layers,
+  Filter,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { backend } from "@/services/api";
 import type { SyncFileItem } from "@/services/api/types";
+import { sshService } from "@/services/ssh-service";
+import { useAppStore } from "@/store";
 import { formatFileSize } from "@/components/workspace/modules/local-file-picker-utils";
 import { mkdir as mkdirLocal, remove as removeLocal } from "@tauri-apps/plugin-fs";
 import { useToast } from "@/components/ui/toast";
@@ -45,6 +49,7 @@ export type DiffCategory =
   | "size_mismatch"
   | "time_mismatch"
   | "type_mismatch"
+  | "conflict"
   | "identical";
 
 export type SyncAction =
@@ -54,6 +59,7 @@ export type SyncAction =
   | "update_source"
   | "delete_from_target"
   | "delete_from_source"
+  | "conflict"
   | "none";
 
 export interface SyncDiffItem {
@@ -80,6 +86,11 @@ export interface DirectorySyncWizardDialogProps {
   rightServerId: string;
   rightServerName?: string;
   rightPath: string;
+  // Optional protocol & connection state guards
+  sourceProtocol?: string;
+  targetProtocol?: string;
+  sourceDisconnected?: boolean;
+  targetDisconnected?: boolean;
   // Callback when sync is finished
   onSyncComplete?: () => void;
   t: (key: string) => string;
@@ -90,6 +101,8 @@ interface ScanProgressPayload {
   currentPath: string;
   count: number;
 }
+
+const SYNC_ROW_HEIGHT = 48;
 
 /** 5 列对称网格布局：复选框(36px) | 相对路径(1fr) | 源端属性(140px) | 建议动作(120px) | 目标端属性(140px) */
 const TABLE_GRID_STYLE = {
@@ -137,6 +150,73 @@ function getRelativeParent(relativePath: string): string {
   return parts.slice(0, -1).join("/");
 }
 
+function isFtpProtocol(protocol?: string): boolean {
+  if (!protocol) return false;
+  const norm = protocol.toLowerCase();
+  return norm === "ftp" || norm === "ftps";
+}
+
+/**
+ * 逐级确保远程目录存在（用于嵌套上传/S2S 时父目录被取消勾选或过滤的场景）
+ */
+async function ensureRemoteDirRecursive(
+  serverId: string,
+  baseRemotePath: string,
+  relDir: string,
+  knownDirs: Set<string>,
+): Promise<void> {
+  if (!relDir || !backend?.files?.mkdir) return;
+  const segments = normalizeRelativePath(relDir).split("/").filter(Boolean);
+  let currentRel = "";
+  for (const seg of segments) {
+    currentRel = currentRel ? `${currentRel}/${seg}` : seg;
+    const fullDir = joinRelativePath(baseRemotePath, currentRel);
+    const cacheKey = `${serverId}\0${fullDir}`;
+    if (knownDirs.has(cacheKey)) continue;
+    try {
+      const res = await backend.files.mkdir(serverId, fullDir);
+      if (res && typeof res === "object" && "success" in res && !res.success) {
+        const msg = res.stderr || "";
+        if (/exist|already/i.test(msg)) {
+          knownDirs.add(cacheKey);
+          continue;
+        }
+        if (typeof backend.files.statInfo === "function") {
+          try {
+            const st = await backend.files.statInfo(serverId, fullDir);
+            if (st && (st.type === "directory" || st.type === "dir")) {
+              knownDirs.add(cacheKey);
+              continue;
+            }
+          } catch {
+            // ignore stat error and throw original mkdir error
+          }
+        }
+        throw new Error(msg || `Failed to create remote directory: ${fullDir}`);
+      }
+      knownDirs.add(cacheKey);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/exist|already/i.test(msg)) {
+        knownDirs.add(cacheKey);
+        continue;
+      }
+      if (typeof backend.files.statInfo === "function") {
+        try {
+          const st = await backend.files.statInfo(serverId, fullDir);
+          if (st && (st.type === "directory" || st.type === "dir")) {
+            knownDirs.add(cacheKey);
+            continue;
+          }
+        } catch {
+          // ignore
+        }
+      }
+      throw err;
+    }
+  }
+}
+
 export function DirectorySyncWizardDialog({
   open,
   onOpenChange,
@@ -147,10 +227,15 @@ export function DirectorySyncWizardDialog({
   rightServerId,
   rightServerName,
   rightPath,
+  sourceProtocol,
+  targetProtocol,
+  sourceDisconnected,
+  targetDisconnected,
   onSyncComplete,
   t,
 }: DirectorySyncWizardDialogProps) {
   const { toast } = useToast();
+  const sftpExclusionEnabled = useAppStore((s) => s.sftpExclusionEnabled);
 
   // 配置项
   const [direction, setDirection] = useState<SyncDirection>("source_to_target");
@@ -184,11 +269,29 @@ export function DirectorySyncWizardDialog({
     errors: string[];
   } | null>(null);
   const cancelSyncRef = useRef<boolean>(false);
+  const isSyncingRef = useRef<boolean>(false);
+  const openRef = useRef<boolean>(open);
+  openRef.current = open;
+  const scanReqIdRef = useRef<number>(0);
+  const activeSyncTransferIdsRef = useRef<Set<string>>(new Set());
   // 记录「当前 diffItems 来自哪一次成功扫描」，防止旧差异列表被用到新路径上
   const scanContextRef = useRef<string>("");
+  const tableScrollRef = useRef<HTMLDivElement>(null);
 
   // 镜像删除确认弹窗
   const [showDeleteConfirm, setShowDeleteConfirm] = useState<boolean>(false);
+
+  // 协议与连接状态守卫：Remote<->Remote (serverToServerTransfer) 仅支持 SSH/SFTP，禁止 FTP/FTPS
+  const isRemoteToRemote = leftSideType === "remote";
+  const hasUnsupportedFtp =
+    isRemoteToRemote &&
+    (isFtpProtocol(sourceProtocol) || isFtpProtocol(targetProtocol));
+  const hasDisconnectedSide = Boolean(sourceDisconnected || targetDisconnected);
+  const syncBlockedReason = hasUnsupportedFtp
+    ? "Remote ↔ Remote 目录同步仅支持 SSH/SFTP 协议，不支持 FTP/FTPS 服务器间直接同步。"
+    : hasDisconnectedSide
+      ? "源端或目标端连接已断开，请先重新连接后再扫描或同步。"
+      : null;
 
   // 确立逻辑源端与目标端
   const isTargetLeft = direction === "target_to_source";
@@ -220,6 +323,18 @@ export function DirectorySyncWizardDialog({
     direction,
   ].join("\u0001");
 
+  const cancelActiveInFlightTransfers = useCallback(() => {
+    // 只取消本向导通过 onTransferProgress 登记的任务。
+    // 早期按 createdAt >= 同步开始时间兜底会误伤用户在同步期间从其他面板发起的传输，已移除。
+    const idsToCancel = new Set<string>(activeSyncTransferIdsRef.current);
+    activeSyncTransferIdsRef.current.clear();
+    if (typeof sshService?.cancelTransfer === "function") {
+      for (const tid of idsToCancel) {
+        void sshService.cancelTransfer(tid).catch(() => {});
+      }
+    }
+  }, []);
+
   // 监听 Tauri 后端实时目录树扫描进度事件
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -227,7 +342,7 @@ export function DirectorySyncWizardDialog({
     import("@tauri-apps/api/event").then(({ listen }) => {
       if (disposed) return;
       listen<ScanProgressPayload>("files:scan-tree-progress", (event) => {
-        if (disposed) return;
+        if (disposed || !openRef.current) return;
         setScanProgressInfo({
           currentPath: event.payload.currentPath,
           count: event.payload.count,
@@ -250,7 +365,17 @@ export function DirectorySyncWizardDialog({
   // 执行目录扫描
   const handleScan = useCallback(async () => {
     // 扫描开始前先作废上一次结果：失败 / 超限 / 未完成时 executeSync 一律阻断
+    const reqId = ++scanReqIdRef.current;
     scanContextRef.current = "";
+    if (!openRef.current) return;
+    if (hasUnsupportedFtp) {
+      setScanError(syncBlockedReason);
+      return;
+    }
+    if (hasDisconnectedSide) {
+      setScanError(syncBlockedReason);
+      return;
+    }
     if (!backend?.files?.scanDirectoryTree) {
       setScanError("后端目录扫描接口未就绪");
       return;
@@ -278,19 +403,31 @@ export function DirectorySyncWizardDialog({
         rightScanPromise,
       ]);
 
+      if (!openRef.current || scanReqIdRef.current !== reqId) {
+        return;
+      }
+
       setSourceFiles(isTargetLeft ? rightResults : leftResults);
       setTargetFiles(isTargetLeft ? leftResults : rightResults);
       // 只有完整扫描成功，才允许基于当前上下文执行同步
       scanContextRef.current = scanKey;
     } catch (err: unknown) {
+      if (!openRef.current || scanReqIdRef.current !== reqId) {
+        return;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       setScanError(msg);
       toast.error(`扫描目录失败: ${msg}`);
     } finally {
-      setIsScanning(false);
-      setScanProgressInfo(null);
+      if (scanReqIdRef.current === reqId) {
+        setIsScanning(false);
+        setScanProgressInfo(null);
+      }
     }
   }, [
+    hasUnsupportedFtp,
+    hasDisconnectedSide,
+    syncBlockedReason,
     leftSideType,
     leftServerId,
     leftPath,
@@ -304,9 +441,23 @@ export function DirectorySyncWizardDialog({
   // 组件在 SFTP 面板中常驻挂载，必须每次打开都重新扫描、每次关闭都清空结果，
   // 否则「上一次的差异列表」会被套用到「当前的新路径」上执行删除 / 覆盖。
   const prevOpenRef = useRef<boolean>(false);
+  const prevScanKeyRef = useRef<string>(scanKey);
   useEffect(() => {
     const wasOpen = prevOpenRef.current;
     prevOpenRef.current = open;
+    const keyChanged = prevScanKeyRef.current !== scanKey;
+    prevScanKeyRef.current = scanKey;
+
+    // 打开期间切换目录 / 同步方向：旧差异立即失效并自动重扫，避免用户看到过期差异
+    if (open && wasOpen && keyChanged && !isSyncingRef.current) {
+      scanContextRef.current = "";
+      setSourceFiles([]);
+      setTargetFiles([]);
+      setDiffItems([]);
+      setScanError(null);
+      void handleScan();
+      return;
+    }
 
     if (open && !wasOpen) {
       scanContextRef.current = "";
@@ -317,23 +468,32 @@ export function DirectorySyncWizardDialog({
       setScanProgressInfo(null);
       setSyncProgress(null);
       setIsSyncing(false);
+      isSyncingRef.current = false;
       setShowDeleteConfirm(false);
       cancelSyncRef.current = false;
+      activeSyncTransferIdsRef.current.clear();
       void handleScan();
       return;
     }
     if (!open && wasOpen) {
+      scanReqIdRef.current += 1;
       scanContextRef.current = "";
       cancelSyncRef.current = true;
+      if (isSyncingRef.current) {
+        cancelActiveInFlightTransfers();
+      }
+      setIsScanning(false);
+      setScanProgressInfo(null);
       setSourceFiles([]);
       setTargetFiles([]);
       setDiffItems([]);
       setScanError(null);
       setSyncProgress(null);
       setIsSyncing(false);
+      isSyncingRef.current = false;
       setShowDeleteConfirm(false);
     }
-  }, [open, handleScan]);
+  }, [open, handleScan, cancelActiveInFlightTransfers]);
 
   // 根据扫描结果与规则计算全量差异列表
   useEffect(() => {
@@ -392,22 +552,34 @@ export function DirectorySyncWizardDialog({
           const srcTime = hasBothTimes ? srcTimeRaw : 0;
           const tgtTime = hasBothTimes ? tgtTimeRaw : 0;
           // 时间戳缺失 / 不可解析时不能判为 identical：否则「同大小不同内容」
-          // 会被跳过导致漏传。保守按时间不匹配处理，由用户确认是否覆盖。
-          // SFTP/系统时间戳容差 2000ms
+          // 会被跳过导致漏传。SFTP/系统时间戳容差 2000ms。
           const timeMatch = hasBothTimes && Math.abs(srcTime - tgtTime) <= 2000;
 
           if (!sizeMatch) {
-            category = "size_mismatch";
             if (direction === "bidirectional") {
-              action = srcTime >= tgtTime ? "update_target" : "update_source";
+              if (!hasBothTimes) {
+                // 双向模式缺少任一端修改时间时无法判断哪端较新，标记为冲突跳过，防止 0 >= 0 静默覆盖目标
+                category = "conflict";
+                action = "conflict";
+              } else {
+                category = "size_mismatch";
+                action = srcTime >= tgtTime ? "update_target" : "update_source";
+              }
             } else {
+              category = "size_mismatch";
               action = "update_target";
             }
           } else if (compareMode === "size_and_mtime" && !timeMatch) {
-            category = "time_mismatch";
             if (direction === "bidirectional") {
-              action = srcTime >= tgtTime ? "update_target" : "update_source";
+              if (!hasBothTimes) {
+                category = "conflict";
+                action = "conflict";
+              } else {
+                category = "time_mismatch";
+                action = srcTime >= tgtTime ? "update_target" : "update_source";
+              }
             } else {
+              category = "time_mismatch";
               action = "update_target";
             }
           } else {
@@ -417,8 +589,8 @@ export function DirectorySyncWizardDialog({
         }
       }
 
-      // 默认选中待同步项（非 identical 且 action != none）
-      const selected = action !== "none";
+      // 默认选中待同步项（非 identical、非 conflict 且 action != none）
+      const selected = action !== "none" && action !== "conflict";
 
       computed.push({
         id: key,
@@ -446,11 +618,13 @@ export function DirectorySyncWizardDialog({
 
   // 统计指标
   const stats = useMemo(() => {
-    let totalItems = diffItems.length;
+    const totalItems = diffItems.length;
     let pendingCount = 0;
     let addCount = 0;
     let updateCount = 0;
     let deleteCount = 0;
+    let selectedDeleteCount = 0;
+    let conflictCount = 0;
     let identicalCount = 0;
     let selectedCount = 0;
     let selectedBytes = 0;
@@ -469,11 +643,16 @@ export function DirectorySyncWizardDialog({
         item.action === "delete_from_source"
       ) {
         deleteCount++;
+        if (item.selected) {
+          selectedDeleteCount++;
+        }
+      } else if (item.action === "conflict") {
+        conflictCount++;
       } else {
         identicalCount++;
       }
 
-      if (item.selected) {
+      if (item.selected && item.action !== "none" && item.action !== "conflict") {
         selectedCount++;
         if (!item.isDirectory) {
           const sz =
@@ -491,6 +670,8 @@ export function DirectorySyncWizardDialog({
       addCount,
       updateCount,
       deleteCount,
+      selectedDeleteCount,
+      conflictCount,
       identicalCount,
       selectedCount,
       selectedBytes,
@@ -538,17 +719,32 @@ export function DirectorySyncWizardDialog({
     });
   }, [diffItems, filterTab, searchQuery]);
 
+  const rowVirtualizer = useVirtualizer({
+    count: filteredItems.length,
+    getScrollElement: () => tableScrollRef.current,
+    estimateSize: () => SYNC_ROW_HEIGHT,
+    overscan: 12,
+  });
+
   // 勾选操作
   const toggleItemSelect = (id: string) => {
     setDiffItems((prev) =>
-      prev.map((it) => (it.id === id ? { ...it, selected: !it.selected } : it))
+      prev.map((it) =>
+        it.id === id && it.action !== "conflict"
+          ? { ...it, selected: !it.selected }
+          : it
+      )
     );
   };
 
   const handleSelectAll = (select: boolean) => {
     const idsToChange = new Set(filteredItems.map((it) => it.id));
     setDiffItems((prev) =>
-      prev.map((it) => (idsToChange.has(it.id) ? { ...it, selected: select } : it))
+      prev.map((it) =>
+        idsToChange.has(it.id)
+          ? { ...it, selected: select && it.action !== "conflict" }
+          : it
+      )
     );
   };
 
@@ -556,14 +752,29 @@ export function DirectorySyncWizardDialog({
     setDiffItems((prev) =>
       prev.map((it) => ({
         ...it,
-        selected: it.action !== "none",
+        selected: it.action !== "none" && it.action !== "conflict",
       }))
     );
   };
 
+  const handleDialogOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      if (!nextOpen && isSyncingRef.current) {
+        cancelSyncRef.current = true;
+        cancelActiveInFlightTransfers();
+      }
+      onOpenChange(nextOpen);
+    },
+    [onOpenChange, cancelActiveInFlightTransfers],
+  );
+
   // 真正执行同步任务
   const executeSync = async () => {
     if (!backend?.files) return;
+    if (syncBlockedReason) {
+      toast.error(syncBlockedReason);
+      return;
+    }
     // 差异列表必须来自「当前目录 + 当前方向」的这一次完整扫描。
     // 目录被切换、扫描失败或后端因超限中止时，绝不能拿旧列表执行删除 / 覆盖。
     if (scanContextRef.current !== scanKey) {
@@ -577,14 +788,57 @@ export function DirectorySyncWizardDialog({
       );
       return;
     }
-    const selectedItems = diffItems.filter((it) => it.selected && it.action !== "none");
+    const selectedItems = diffItems.filter(
+      (it) => it.selected && it.action !== "none" && it.action !== "conflict"
+    );
     if (selectedItems.length === 0) {
       toast.warning("没有选中的待同步项");
       return;
     }
 
+    isSyncingRef.current = true;
     setIsSyncing(true);
     cancelSyncRef.current = false;
+    activeSyncTransferIdsRef.current.clear();
+
+    const unsubSyncProgress =
+      typeof sshService?.onTransferProgress === "function"
+        ? sshService.onTransferProgress((data) => {
+            if (data.done === true || data.done === false) {
+              activeSyncTransferIdsRef.current.delete(data.transferId);
+            } else {
+              activeSyncTransferIdsRef.current.add(data.transferId);
+            }
+          })
+        : null;
+
+    // 预填充已知远程目录缓存，避免对已存在目录重复调用 mkdir
+    const knownRemoteDirs = new Set<string>();
+    if (targetSideType === "remote" && targetServerId) {
+      for (const f of targetFiles) {
+        if (f.isDirectory) {
+          const norm = normalizeRelativePath(f.relativePath);
+          if (norm) {
+            knownRemoteDirs.add(
+              `${targetServerId}\0${joinRelativePath(targetPath, norm)}`
+            );
+          }
+        }
+      }
+    }
+    if (sourceSideType === "remote" && sourceServerId) {
+      for (const f of sourceFiles) {
+        if (f.isDirectory) {
+          const norm = normalizeRelativePath(f.relativePath);
+          if (norm) {
+            knownRemoteDirs.add(
+              `${sourceServerId}\0${joinRelativePath(sourcePath, norm)}`
+            );
+          }
+        }
+      }
+    }
+
     const errors: string[] = [];
     setSyncProgress({
       current: 0,
@@ -603,148 +857,217 @@ export function DirectorySyncWizardDialog({
       return aDepth - bDepth; // 创建/传输先浅后深
     });
 
-    for (let i = 0; i < itemsToProcess.length; i++) {
-      if (cancelSyncRef.current) {
-        errors.push("用户取消了同步操作");
-        break;
-      }
-
-      const item = itemsToProcess[i];
-      setSyncProgress({
-        current: i + 1,
-        total: itemsToProcess.length,
-        currentItem: item.relativePath,
-        errors,
-      });
-
-      try {
-        if (item.action === "delete_from_target") {
-          // 从目标端删除
-          const destFullPath = joinRelativePath(targetPath, item.relativePath);
-          if (targetSideType === "local") {
-            await removeLocal(destFullPath, { recursive: true });
-          } else if (targetServerId) {
-            await backend.files.delete(targetServerId, destFullPath);
-          }
-        } else if (item.action === "delete_from_source") {
-          // 从源端删除
-          const srcFullPath = joinRelativePath(sourcePath, item.relativePath);
-          if (sourceSideType === "local") {
-            await removeLocal(srcFullPath, { recursive: true });
-          } else if (sourceServerId) {
-            await backend.files.delete(sourceServerId, srcFullPath);
-          }
-        } else if (
-          item.action === "copy_to_target" ||
-          item.action === "update_target"
-        ) {
-          // 从 Source 传输到 Target
-          if (item.isDirectory) {
-            // 确保目标端目录存在
-            const destDirPath = joinRelativePath(targetPath, item.relativePath);
-            if (targetSideType === "local") {
-              await mkdirLocal(destDirPath, { recursive: true });
-            } else if (targetServerId) {
-              await backend.files.mkdir(targetServerId, destDirPath);
-            }
-          } else {
-            // 文件传输
-            const relParent = getRelativeParent(item.relativePath);
-            const srcFilePath = joinRelativePath(sourcePath, item.relativePath);
-            const targetDirPath = relParent
-              ? joinRelativePath(targetPath, relParent)
-              : targetPath;
-            const targetFilePath = joinRelativePath(targetPath, item.relativePath);
-
-            // 1. 本地 -> 远程
-            if (sourceSideType === "local" && targetServerId) {
-              await backend.files.uploadFromPaths(
-                targetServerId,
-                targetDirPath,
-                [srcFilePath]
-              );
-            }
-            // 2. 远程 -> 本地
-            else if (sourceSideType === "remote" && targetSideType === "local" && sourceServerId) {
-              // 确保本地目标父目录存在
-              if (relParent) {
-                await mkdirLocal(targetDirPath, { recursive: true });
-              }
-              await backend.files.download(
-                sourceServerId,
-                srcFilePath,
-                targetFilePath
-              );
-            }
-            // 3. 远程 -> 远程 (S2S)
-            else if (sourceServerId && targetServerId) {
-              await backend.files.serverToServerTransfer(
-                sourceServerId,
-                srcFilePath,
-                targetServerId,
-                targetDirPath
-              );
-            }
-          }
-        } else if (
-          item.action === "copy_to_source" ||
-          item.action === "update_source"
-        ) {
-          // 双向模式：从 Target 传输到 Source
-          if (item.isDirectory) {
-            const srcDirPath = joinRelativePath(sourcePath, item.relativePath);
-            if (sourceSideType === "local") {
-              await mkdirLocal(srcDirPath, { recursive: true });
-            } else if (sourceServerId) {
-              await backend.files.mkdir(sourceServerId, srcDirPath);
-            }
-          } else {
-            const relParent = getRelativeParent(item.relativePath);
-            const tgtFilePath = joinRelativePath(targetPath, item.relativePath);
-            const srcDirPath = relParent
-              ? joinRelativePath(sourcePath, relParent)
-              : sourcePath;
-            const srcFilePath = joinRelativePath(sourcePath, item.relativePath);
-
-            if (targetSideType === "local" && sourceServerId) {
-              await backend.files.uploadFromPaths(
-                sourceServerId,
-                srcDirPath,
-                [tgtFilePath]
-              );
-            } else if (targetSideType === "remote" && sourceSideType === "local" && targetServerId) {
-              if (relParent) {
-                await mkdirLocal(srcDirPath, { recursive: true });
-              }
-              await backend.files.download(
-                targetServerId,
-                tgtFilePath,
-                srcFilePath
-              );
-            } else if (sourceServerId && targetServerId) {
-              await backend.files.serverToServerTransfer(
-                targetServerId,
-                tgtFilePath,
-                sourceServerId,
-                srcDirPath
-              );
-            }
-          }
+    try {
+      for (let i = 0; i < itemsToProcess.length; i++) {
+        if (cancelSyncRef.current || !openRef.current) {
+          errors.push("用户取消了同步操作");
+          break;
         }
-      } catch (err: unknown) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        errors.push(`${item.relativePath}: ${errorMsg}`);
+
+        const item = itemsToProcess[i];
+        setSyncProgress({
+          current: i + 1,
+          total: itemsToProcess.length,
+          currentItem: item.relativePath,
+          errors: [...errors],
+        });
+
+        try {
+          if (item.action === "delete_from_target") {
+            // 从目标端删除
+            const destFullPath = joinRelativePath(targetPath, item.relativePath);
+            if (targetSideType === "local") {
+              await removeLocal(destFullPath, { recursive: true });
+            } else if (targetServerId) {
+              await backend.files.delete(targetServerId, destFullPath);
+            }
+          } else if (item.action === "delete_from_source") {
+            // 从源端删除
+            const srcFullPath = joinRelativePath(sourcePath, item.relativePath);
+            if (sourceSideType === "local") {
+              await removeLocal(srcFullPath, { recursive: true });
+            } else if (sourceServerId) {
+              await backend.files.delete(sourceServerId, srcFullPath);
+            }
+          } else if (
+            item.action === "copy_to_target" ||
+            item.action === "update_target"
+          ) {
+            // 从 Source 传输到 Target
+            if (item.isDirectory) {
+              // 确保目标端目录存在（含多级父目录）
+              const destDirPath = joinRelativePath(targetPath, item.relativePath);
+              if (targetSideType === "local") {
+                await mkdirLocal(destDirPath, { recursive: true });
+              } else if (targetServerId) {
+                await ensureRemoteDirRecursive(
+                  targetServerId,
+                  targetPath,
+                  item.relativePath,
+                  knownRemoteDirs
+                );
+              }
+            } else {
+              // 文件传输
+              const relParent = getRelativeParent(item.relativePath);
+              const srcFilePath = joinRelativePath(sourcePath, item.relativePath);
+              const targetDirPath = relParent
+                ? joinRelativePath(targetPath, relParent)
+                : targetPath;
+              const targetFilePath = joinRelativePath(targetPath, item.relativePath);
+
+              // 1. 本地 -> 远程
+              if (sourceSideType === "local" && targetServerId) {
+                if (relParent) {
+                  await ensureRemoteDirRecursive(
+                    targetServerId,
+                    targetPath,
+                    relParent,
+                    knownRemoteDirs
+                  );
+                }
+                await backend.files.uploadFromPaths(
+                  targetServerId,
+                  targetDirPath,
+                  [srcFilePath]
+                );
+              }
+              // 2. 远程 -> 本地
+              else if (sourceSideType === "remote" && targetSideType === "local" && sourceServerId) {
+                // 确保本地目标父目录存在
+                if (relParent) {
+                  await mkdirLocal(targetDirPath, { recursive: true });
+                }
+                await backend.files.download(
+                  sourceServerId,
+                  srcFilePath,
+                  targetFilePath
+                );
+              }
+              // 3. 远程 -> 远程 (S2S)
+              else if (sourceServerId && targetServerId) {
+                if (relParent) {
+                  await ensureRemoteDirRecursive(
+                    targetServerId,
+                    targetPath,
+                    relParent,
+                    knownRemoteDirs
+                  );
+                }
+                await backend.files.serverToServerTransfer(
+                  sourceServerId,
+                  srcFilePath,
+                  targetServerId,
+                  targetDirPath
+                );
+              }
+            }
+          } else if (
+            item.action === "copy_to_source" ||
+            item.action === "update_source"
+          ) {
+            // 双向模式：从 Target 传输到 Source
+            if (item.isDirectory) {
+              const srcDirPath = joinRelativePath(sourcePath, item.relativePath);
+              if (sourceSideType === "local") {
+                await mkdirLocal(srcDirPath, { recursive: true });
+              } else if (sourceServerId) {
+                await ensureRemoteDirRecursive(
+                  sourceServerId,
+                  sourcePath,
+                  item.relativePath,
+                  knownRemoteDirs
+                );
+              }
+            } else {
+              const relParent = getRelativeParent(item.relativePath);
+              const tgtFilePath = joinRelativePath(targetPath, item.relativePath);
+              const srcDirPath = relParent
+                ? joinRelativePath(sourcePath, relParent)
+                : sourcePath;
+              const srcFilePath = joinRelativePath(sourcePath, item.relativePath);
+
+              if (targetSideType === "local" && sourceServerId) {
+                if (relParent) {
+                  await ensureRemoteDirRecursive(
+                    sourceServerId,
+                    sourcePath,
+                    relParent,
+                    knownRemoteDirs
+                  );
+                }
+                await backend.files.uploadFromPaths(
+                  sourceServerId,
+                  srcDirPath,
+                  [tgtFilePath]
+                );
+              } else if (targetSideType === "remote" && sourceSideType === "local" && targetServerId) {
+                if (relParent) {
+                  await mkdirLocal(srcDirPath, { recursive: true });
+                }
+                await backend.files.download(
+                  targetServerId,
+                  tgtFilePath,
+                  srcFilePath
+                );
+              } else if (sourceServerId && targetServerId) {
+                if (relParent) {
+                  await ensureRemoteDirRecursive(
+                    sourceServerId,
+                    sourcePath,
+                    relParent,
+                    knownRemoteDirs
+                  );
+                }
+                await backend.files.serverToServerTransfer(
+                  targetServerId,
+                  tgtFilePath,
+                  sourceServerId,
+                  srcDirPath
+                );
+              }
+            }
+          }
+        } catch (err: unknown) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          errors.push(`${item.relativePath}: ${errorMsg}`);
+        }
       }
+    } finally {
+      if (typeof unsubSyncProgress === "function") {
+        unsubSyncProgress();
+      }
+      activeSyncTransferIdsRef.current.clear();
+      isSyncingRef.current = false;
+      setIsSyncing(false);
     }
 
-    setIsSyncing(false);
+    if (!openRef.current || cancelSyncRef.current) {
+      if (openRef.current) {
+        setSyncProgress({
+          current: itemsToProcess.length,
+          total: itemsToProcess.length,
+          currentItem: "",
+          errors: [...errors],
+        });
+      }
+      return;
+    }
+
+    setSyncProgress({
+      current: itemsToProcess.length,
+      total: itemsToProcess.length,
+      currentItem: "",
+      errors: [...errors],
+    });
+
     if (errors.length === 0) {
       toast.success(
         `目录同步成功完成！共处理 ${itemsToProcess.length} 项。`
       );
     } else {
       toast.warning(
-        `目录同步完成，但有 ${errors.length} 项处理失败，详情见报告。`
+        `目录同步完成，但有 ${errors.length} 项处理失败，请查看下方错误明细。`
       );
     }
 
@@ -755,6 +1078,10 @@ export function DirectorySyncWizardDialog({
 
   // 点击“开始同步”时前置检查危险操作
   const handleStartSyncClick = () => {
+    if (syncBlockedReason) {
+      toast.error(syncBlockedReason);
+      return;
+    }
     const hasDeletes = diffItems.some(
       (it) =>
         it.selected &&
@@ -806,6 +1133,16 @@ export function DirectorySyncWizardDialog({
             {t("sftp_sync_action_delete") || "镜像删除"}
           </span>
         );
+      case "conflict":
+        return (
+          <span
+            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-medium bg-orange-500/10 text-orange-600 dark:text-orange-400 border border-orange-500/25 whitespace-nowrap"
+            title="双向模式下缺少修改时间，已跳过以防误覆盖"
+          >
+            <AlertTriangle className="w-3 h-3 shrink-0" />
+            冲突跳过
+          </span>
+        );
       case "none":
       default:
         return (
@@ -819,7 +1156,7 @@ export function DirectorySyncWizardDialog({
 
   return (
     <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
+      <Dialog open={open} onOpenChange={handleDialogOpenChange}>
         <DialogContent className="w-[96vw] max-w-5xl h-[88vh] max-h-[860px] flex flex-col p-6 gap-3.5 overflow-hidden">
           {/* 标题栏 */}
           <DialogHeader className="shrink-0 pb-1">
@@ -845,7 +1182,7 @@ export function DirectorySyncWizardDialog({
                   size="sm"
                   className="h-8 text-xs gap-1.5 cursor-pointer"
                   onClick={handleScan}
-                  disabled={isScanning || isSyncing}
+                  disabled={isScanning || isSyncing || Boolean(syncBlockedReason)}
                 >
                   <RefreshCw
                     className={cn("w-3.5 h-3.5", isScanning && "animate-spin")}
@@ -855,6 +1192,26 @@ export function DirectorySyncWizardDialog({
               </div>
             </div>
           </DialogHeader>
+
+          {/* 协议/断开连接阻断提示 & 全局过滤规则激活提示 */}
+          {syncBlockedReason && (
+            <div
+              role="alert"
+              className="shrink-0 flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+            >
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>{syncBlockedReason}</span>
+            </div>
+          )}
+
+          {sftpExclusionEnabled && (
+            <div className="shrink-0 flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
+              <Filter className="w-3.5 h-3.5 shrink-0" />
+              <span>
+                已启用全局 SFTP 传输排除与过滤规则，扫描及上传/下载将按过滤设置自动忽略匹配文件。
+              </span>
+            </div>
+          )}
 
           {/* 顶部路径卡片与模式控制面板 */}
           <div className="shrink-0 p-3 rounded-xl border border-border/70 bg-muted/20 flex flex-col gap-2.5">
@@ -1104,8 +1461,10 @@ export function DirectorySyncWizardDialog({
                 <input
                   type="checkbox"
                   checked={
-                    filteredItems.length > 0 &&
-                    filteredItems.every((it) => it.selected)
+                    filteredItems.some((it) => it.action !== "conflict") &&
+                    filteredItems
+                      .filter((it) => it.action !== "conflict")
+                      .every((it) => it.selected)
                   }
                   onChange={(e) => handleSelectAll(e.target.checked)}
                   className="accent-primary rounded cursor-pointer"
@@ -1117,8 +1476,11 @@ export function DirectorySyncWizardDialog({
               <div className="text-right pr-2">目标端属性</div>
             </div>
 
-            {/* 表体内容区 */}
-            <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-border/40">
+            {/* 表体内容区（虚拟滚动） */}
+            <div
+              ref={tableScrollRef}
+              className="flex-1 min-h-0 overflow-y-auto"
+            >
               {isScanning ? (
                 <div className="h-full flex flex-col items-center justify-center gap-3 p-8">
                   <div className="relative flex items-center justify-center">
@@ -1158,92 +1520,118 @@ export function DirectorySyncWizardDialog({
                   </div>
                 </div>
               ) : (
-                filteredItems.map((item) => (
-                  <div
-                    key={item.id}
-                    style={TABLE_GRID_STYLE}
-                    onClick={() => toggleItemSelect(item.id)}
-                    className={cn(
-                      "w-full items-center px-3 py-1.5 text-xs transition-colors cursor-pointer select-none",
-                      item.selected
-                        ? "bg-primary/5 hover:bg-primary/10"
-                        : "hover:bg-muted/40 opacity-75"
-                    )}
-                  >
-                    {/* 第 1 列：复选框 */}
-                    <div
-                      className="flex items-center justify-center"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={item.selected}
-                        onChange={() => toggleItemSelect(item.id)}
-                        className="accent-primary rounded cursor-pointer"
-                      />
-                    </div>
-
-                    {/* 第 2 列：相对路径与图标 */}
-                    <div className="flex items-center gap-2 min-w-0 pr-3">
-                      {item.isDirectory ? (
-                        <Folder className="w-4 h-4 shrink-0 text-amber-500 fill-amber-500/20" />
-                      ) : (
-                        <FileText className="w-4 h-4 shrink-0 text-muted-foreground" />
-                      )}
-                      <span
-                        className="font-mono text-xs truncate"
-                        title={item.relativePath}
+                <div
+                  style={{
+                    height: `${rowVirtualizer.getTotalSize()}px`,
+                    width: "100%",
+                    position: "relative",
+                  }}
+                >
+                  {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                    const item = filteredItems[virtualRow.index];
+                    if (!item) return null;
+                    const isConflict = item.action === "conflict";
+                    return (
+                      <div
+                        key={item.id}
+                        style={{
+                          ...TABLE_GRID_STYLE,
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: "100%",
+                          height: `${virtualRow.size}px`,
+                          transform: `translateY(${virtualRow.start}px)`,
+                        }}
+                        onClick={() => {
+                          if (!isConflict) toggleItemSelect(item.id);
+                        }}
+                        className={cn(
+                          "items-center px-3 border-b border-border/40 text-xs transition-colors select-none",
+                          isConflict
+                            ? "bg-orange-500/5 cursor-default"
+                            : item.selected
+                              ? "bg-primary/5 hover:bg-primary/10 cursor-pointer"
+                              : "hover:bg-muted/40 opacity-75 cursor-pointer"
+                        )}
                       >
-                        {item.relativePath}
-                      </span>
-                    </div>
+                        {/* 第 1 列：复选框 */}
+                        <div
+                          className="flex items-center justify-center"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={item.selected}
+                            disabled={isConflict}
+                            onChange={() => toggleItemSelect(item.id)}
+                            className="accent-primary rounded cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                          />
+                        </div>
 
-                    {/* 第 3 列：源端信息 */}
-                    <div className="text-right text-[11px] font-mono text-muted-foreground pr-2">
-                      {item.sourceItem ? (
-                        <div className="flex flex-col items-end leading-tight">
-                          <span className="font-medium text-foreground/85">
-                            {item.sourceItem.isDirectory
-                              ? "<DIR>"
-                              : formatFileSize(item.sourceItem.size)}
+                        {/* 第 2 列：相对路径与图标 */}
+                        <div className="flex items-center gap-2 min-w-0 pr-3">
+                          {item.isDirectory ? (
+                            <Folder className="w-4 h-4 shrink-0 text-amber-500 fill-amber-500/20" />
+                          ) : (
+                            <FileText className="w-4 h-4 shrink-0 text-muted-foreground" />
+                          )}
+                          <span
+                            className="font-mono text-xs truncate"
+                            title={item.relativePath}
+                          >
+                            {item.relativePath}
                           </span>
-                          {item.sourceItem.modifiedTime && (
-                            <span className="text-[10px] text-muted-foreground/60">
-                              {item.sourceItem.modifiedTime.slice(0, 10)}
-                            </span>
+                        </div>
+
+                        {/* 第 3 列：源端信息 */}
+                        <div className="text-right text-[11px] font-mono text-muted-foreground pr-2">
+                          {item.sourceItem ? (
+                            <div className="flex flex-col items-end leading-tight">
+                              <span className="font-medium text-foreground/85">
+                                {item.sourceItem.isDirectory
+                                  ? "<DIR>"
+                                  : formatFileSize(item.sourceItem.size)}
+                              </span>
+                              {item.sourceItem.modifiedTime && (
+                                <span className="text-[10px] text-muted-foreground/60">
+                                  {item.sourceItem.modifiedTime.slice(0, 10)}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground/40 italic">- 不存在 -</span>
                           )}
                         </div>
-                      ) : (
-                        <span className="text-muted-foreground/40 italic">- 不存在 -</span>
-                      )}
-                    </div>
 
-                    {/* 第 4 列：建议操作 */}
-                    <div className="flex items-center justify-center">
-                      {renderActionBadge(item.action)}
-                    </div>
+                        {/* 第 4 列：建议操作 */}
+                        <div className="flex items-center justify-center">
+                          {renderActionBadge(item.action)}
+                        </div>
 
-                    {/* 第 5 列：目标端属性 */}
-                    <div className="text-right text-[11px] font-mono text-muted-foreground pr-2">
-                      {item.targetItem ? (
-                        <div className="flex flex-col items-end leading-tight">
-                          <span className="font-medium text-foreground/85">
-                            {item.targetItem.isDirectory
-                              ? "<DIR>"
-                              : formatFileSize(item.targetItem.size)}
-                          </span>
-                          {item.targetItem.modifiedTime && (
-                            <span className="text-[10px] text-muted-foreground/60">
-                              {item.targetItem.modifiedTime.slice(0, 10)}
-                            </span>
+                        {/* 第 5 列：目标端属性 */}
+                        <div className="text-right text-[11px] font-mono text-muted-foreground pr-2">
+                          {item.targetItem ? (
+                            <div className="flex flex-col items-end leading-tight">
+                              <span className="font-medium text-foreground/85">
+                                {item.targetItem.isDirectory
+                                  ? "<DIR>"
+                                  : formatFileSize(item.targetItem.size)}
+                              </span>
+                              {item.targetItem.modifiedTime && (
+                                <span className="text-[10px] text-muted-foreground/60">
+                                  {item.targetItem.modifiedTime.slice(0, 10)}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground/40 italic">- 不存在 -</span>
                           )}
                         </div>
-                      ) : (
-                        <span className="text-muted-foreground/40 italic">- 不存在 -</span>
-                      )}
-                    </div>
-                  </div>
-                ))
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </div>
           </div>
@@ -1267,6 +1655,38 @@ export function DirectorySyncWizardDialog({
             </div>
           )}
 
+          {/* 同步错误明细报告 */}
+          {syncProgress && syncProgress.errors.length > 0 && (
+            <div
+              role="alert"
+              className="shrink-0 p-3 rounded-xl border border-destructive/40 bg-destructive/10 space-y-1.5"
+            >
+              <div className="flex items-center justify-between text-xs font-medium text-destructive">
+                <span className="flex items-center gap-1.5">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  同步失败明细 ({syncProgress.errors.length})
+                </span>
+                {!isSyncing && (
+                  <button
+                    type="button"
+                    onClick={() => setSyncProgress(null)}
+                    className="p-0.5 rounded hover:bg-destructive/15 text-destructive/80 hover:text-destructive cursor-pointer"
+                    aria-label="关闭错误报告"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+              <div className="max-h-28 overflow-y-auto space-y-1 font-mono text-[11px] text-destructive/90 pr-1">
+                {syncProgress.errors.map((errMsg, idx) => (
+                  <div key={`${idx}-${errMsg}`} className="break-all">
+                    {errMsg}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* 底部操作区 */}
           <DialogFooter className="shrink-0 flex items-center justify-between gap-3 pt-1">
             <div className="text-xs text-muted-foreground">
@@ -1287,6 +1707,7 @@ export function DirectorySyncWizardDialog({
                   size="sm"
                   onClick={() => {
                     cancelSyncRef.current = true;
+                    cancelActiveInFlightTransfers();
                     toast.warning("已请求取消同步");
                   }}
                 >
@@ -1298,7 +1719,7 @@ export function DirectorySyncWizardDialog({
                     variant="outline"
                     size="sm"
                     className="cursor-pointer"
-                    onClick={() => onOpenChange(false)}
+                    onClick={() => handleDialogOpenChange(false)}
                   >
                     关闭
                   </Button>
@@ -1306,7 +1727,7 @@ export function DirectorySyncWizardDialog({
                     variant="default"
                     size="sm"
                     className="gap-1.5 bg-primary font-medium cursor-pointer"
-                    disabled={isScanning || stats.selectedCount === 0}
+                    disabled={isScanning || stats.selectedCount === 0 || Boolean(syncBlockedReason)}
                     onClick={handleStartSyncClick}
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
@@ -1338,7 +1759,7 @@ export function DirectorySyncWizardDialog({
                   {(
                     t("sftp_sync_confirm_delete_desc") ||
                     "将永久删除目标端选中的 {count} 个文件或文件夹，此操作不可恢复！是否继续？"
-                  ).replace("{count}", String(stats.deleteCount))}
+                  ).replace("{count}", String(stats.selectedDeleteCount))}
                 </DialogDescription>
               </div>
             </div>

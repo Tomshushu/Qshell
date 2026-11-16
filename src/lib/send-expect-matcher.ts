@@ -1,5 +1,5 @@
-import type { SendExpectRule, LogonScriptsConfig, LogonScriptContext } from "@/types";
-export type { LogonScriptContext };
+import type { SendExpectRule, LogonScriptsConfig, LogonScriptContext, ScriptParam } from "@/types";
+export type { LogonScriptContext, ScriptParam };
 
 /**
  * 去除 ANSI 控制序列与光标/标题转义码，还原纯文本供规则匹配
@@ -23,6 +23,7 @@ export function stripAnsiCodes(input: string): string {
  * - %n: 服务器名 (serverName)
  * - %d: 当前日期 (YYYY-MM-DD)
  * - %t: 当前时间 (HH:MM:SS)
+ * - %P{name}: 显式脚本参数值 (来自 context.params[name])
  * - %%: 转义百分号 %
  */
 export function interpolateMacros(input: string, context?: LogonScriptContext): string {
@@ -31,7 +32,10 @@ export function interpolateMacros(input: string, context?: LogonScriptContext): 
   const dateStr = now.toISOString().slice(0, 10);
   const timeStr = now.toTimeString().slice(0, 8);
 
-  return input.replace(/%([uhpndts%])/g, (match, code) => {
+  return input.replace(/%(?:P\{([a-zA-Z0-9_.-]+)\}|([uhpndts%]))/g, (match, paramName: string | undefined, code: string | undefined) => {
+    if (paramName !== undefined) {
+      return context?.params?.[paramName] ?? "";
+    }
     switch (code) {
       case "u":
         return context?.username ?? "";
@@ -52,6 +56,48 @@ export function interpolateMacros(input: string, context?: LogonScriptContext): 
         return match;
     }
   });
+}
+
+/**
+ * 解析并合并脚本参数清单与覆盖值，同时收集需要日志脱敏的 secret 值
+ */
+export function resolveScriptParameters(
+  parameters?: ScriptParam[],
+  overrides?: Record<string, string>
+): { params: Record<string, string>; secretValues: string[]; missingRequired: ScriptParam[] } {
+  const params: Record<string, string> = { ...(overrides || {}) };
+  const secretValues: string[] = [];
+  const missingRequired: ScriptParam[] = [];
+
+  if (Array.isArray(parameters)) {
+    for (const p of parameters) {
+      const name = p.name?.trim();
+      if (!name) continue;
+      const val = params[name] ?? p.defaultValue ?? "";
+      params[name] = val;
+      if (p.secret && val) {
+        secretValues.push(val);
+      }
+      if (p.required && !val) {
+        missingRequired.push(p);
+      }
+    }
+  }
+
+  return { params, secretValues, missingRequired };
+}
+
+/**
+ * 将字符串中的敏感参数值替换为脱敏占位符 "******"
+ */
+export function redactSecretValues(text: string, secretValues: string[]): string {
+  if (!text || secretValues.length === 0) return text;
+  let result = text;
+  const sorted = [...new Set(secretValues.filter(Boolean))].sort((a, b) => b.length - a.length);
+  for (const secret of sorted) {
+    result = result.split(secret).join("******");
+  }
+  return result;
 }
 
 export type SendStep =
@@ -144,11 +190,20 @@ export function mergeGlobalLogonConfig(
 
   // 继承模式：以全局规则为基础优先注入，紧接着追加服务器特有规则
   const combinedRules = [...(globalConfig.rules || []), ...(serverConfig.rules || [])];
+  const mergedParamsMap = new Map<string, ScriptParam>();
+  for (const p of globalConfig.parameters || []) {
+    if (p.name?.trim()) mergedParamsMap.set(p.name.trim(), p);
+  }
+  for (const p of serverConfig.parameters || []) {
+    if (p.name?.trim()) mergedParamsMap.set(p.name.trim(), p);
+  }
+  const mergedParameters = Array.from(mergedParamsMap.values());
   return {
     ...globalConfig,
     ...serverConfig,
     enabled: true,
     rules: combinedRules,
+    parameters: mergedParameters.length > 0 ? mergedParameters : undefined,
     mode: serverConfig.mode || globalConfig.mode || "rules",
     timeoutPolicy: serverConfig.timeoutPolicy || globalConfig.timeoutPolicy || "ignore",
   };
@@ -180,16 +235,23 @@ export function createSendExpectState(
   onTimeout?: TimeoutCallback,
   globalConfig?: LogonScriptsConfig | null
 ): SendExpectExecutionState | null {
-  if (!configInput) return null;
+  if (!configInput && !globalConfig?.enabled) return null;
 
   try {
-    let parsed: LogonScriptsConfig =
-      typeof configInput === "string" ? JSON.parse(configInput) : configInput;
+    let parsed: LogonScriptsConfig;
+    if (!configInput) {
+      const merged = mergeGlobalLogonConfig(null, globalConfig);
+      if (!merged) return null;
+      parsed = merged;
+    } else {
+      parsed =
+        typeof configInput === "string" ? JSON.parse(configInput) : configInput;
 
-    // 若配置了继承全局规则，进行合并
-    if (parsed.inheritGlobal && globalConfig) {
-      const merged = mergeGlobalLogonConfig(parsed, globalConfig);
-      if (merged) parsed = merged;
+      // 若配置了继承全局规则，进行合并
+      if (parsed.inheritGlobal && globalConfig) {
+        const merged = mergeGlobalLogonConfig(parsed, globalConfig);
+        if (merged) parsed = merged;
+      }
     }
 
     if (!parsed.enabled) return null;
@@ -383,6 +445,7 @@ export interface ScriptSessionAPI {
   host: string;
   port: number;
   serverName: string;
+  params: Record<string, string>;
 }
 
 export interface ScriptDialogAPI {
@@ -445,12 +508,14 @@ export class ProgrammableScriptController {
       host: this.context?.host || "",
       port: Number(this.context?.port) || 22,
       serverName: this.context?.serverName || "",
+      params: { ...(this.context?.params || {}) },
     };
 
     const screen: ScriptScreenAPI = {
       waitForString: (pattern: string, timeoutMs: number = 30000) => {
         return new Promise<boolean>((resolve) => {
-          if (this.isDestroyed) return resolve(false);
+          if (this.isDestroyed || !pattern) return resolve(false);
+          const safeTimeout = Number.isFinite(timeoutMs) ? Math.max(0, timeoutMs) : 30000;
           const lowerPat = pattern.toLowerCase();
           const existingIdx = this.buffer.toLowerCase().indexOf(lowerPat);
           if (existingIdx !== -1) {
@@ -462,7 +527,7 @@ export class ProgrammableScriptController {
           const timer = setTimeout(() => {
             this.pendingWaits.delete(id);
             resolve(false);
-          }, timeoutMs);
+          }, safeTimeout);
 
           this.pendingWaits.set(id, {
             id,
@@ -482,13 +547,18 @@ export class ProgrammableScriptController {
 
       waitForStrings: (patterns: string[], timeoutMs: number = 30000) => {
         return new Promise<number>((resolve) => {
-          if (this.isDestroyed) return resolve(-1);
-          const lowerList = patterns.map((p) => p.toLowerCase());
+          if (this.isDestroyed || !Array.isArray(patterns) || !patterns.some((p) => Boolean(p))) {
+            return resolve(-1);
+          }
+          const safeTimeout = Number.isFinite(timeoutMs) ? Math.max(0, timeoutMs) : 30000;
+          const lowerList = patterns.map((p) => (p ? p.toLowerCase() : ""));
           const lowerBuf = this.buffer.toLowerCase();
           for (let i = 0; i < lowerList.length; i++) {
-            const idx = lowerBuf.indexOf(lowerList[i]);
+            const lp = lowerList[i];
+            if (!lp) continue;
+            const idx = lowerBuf.indexOf(lp);
             if (idx !== -1) {
-              this.buffer = this.buffer.slice(idx + lowerList[i].length);
+              this.buffer = this.buffer.slice(idx + lp.length);
               return resolve(i);
             }
           }
@@ -497,16 +567,18 @@ export class ProgrammableScriptController {
           const timer = setTimeout(() => {
             this.pendingWaits.delete(id);
             resolve(-1);
-          }, timeoutMs);
+          }, safeTimeout);
 
           this.pendingWaits.set(id, {
             id,
             check: (buf) => {
               const curLower = buf.toLowerCase();
               for (let i = 0; i < lowerList.length; i++) {
-                const idx = curLower.indexOf(lowerList[i]);
+                const lp = lowerList[i];
+                if (!lp) continue;
+                const idx = curLower.indexOf(lp);
                 if (idx !== -1) {
-                  this.buffer = buf.slice(idx + lowerList[i].length);
+                  this.buffer = buf.slice(idx + lp.length);
                   return i;
                 }
               }
@@ -521,11 +593,25 @@ export class ProgrammableScriptController {
       waitForRegex: (regexInput: string | RegExp, timeoutMs: number = 30000) => {
         return new Promise<RegExpExecArray | null>((resolve) => {
           if (this.isDestroyed) return resolve(null);
-          const re =
-            typeof regexInput === "string" ? new RegExp(regexInput, "i") : regexInput;
+          if (typeof regexInput === "string" && !regexInput) return resolve(null);
+          let re: RegExp;
+          try {
+            if (regexInput instanceof RegExp) {
+              re = new RegExp(regexInput.source, regexInput.flags);
+            } else if (typeof regexInput === "string") {
+              re = new RegExp(regexInput, "i");
+            } else {
+              return resolve(null);
+            }
+          } catch {
+            return resolve(null);
+          }
+
+          const safeTimeout = Number.isFinite(timeoutMs) ? Math.max(0, timeoutMs) : 30000;
+          re.lastIndex = 0;
           const match = re.exec(this.buffer);
           if (match) {
-            this.buffer = this.buffer.slice(match.index + match[0].length);
+            this.buffer = this.buffer.slice(match.index + Math.max(1, match[0].length));
             return resolve(match);
           }
 
@@ -533,14 +619,15 @@ export class ProgrammableScriptController {
           const timer = setTimeout(() => {
             this.pendingWaits.delete(id);
             resolve(null);
-          }, timeoutMs);
+          }, safeTimeout);
 
           this.pendingWaits.set(id, {
             id,
             check: (buf) => {
+              re.lastIndex = 0;
               const m = re.exec(buf);
               if (m) {
-                this.buffer = buf.slice(m.index + m[0].length);
+                this.buffer = buf.slice(m.index + Math.max(1, m[0].length));
                 return m;
               }
               return null;
@@ -567,14 +654,14 @@ export class ProgrammableScriptController {
         if (this.dialogCallbacks?.alert) {
           await this.dialogCallbacks.alert(msg);
         } else {
-          window.alert(msg);
+          this.dialogCallbacks?.toast?.(msg, "info");
         }
       },
       prompt: async (msg: string, def?: string) => {
         if (this.dialogCallbacks?.prompt) {
           return await this.dialogCallbacks.prompt(msg, def);
         }
-        return window.prompt(msg, def);
+        return def ?? null;
       },
       toast: (msg: string, type = "info") => {
         this.dialogCallbacks?.toast?.(msg, type);

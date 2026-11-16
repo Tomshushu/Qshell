@@ -110,6 +110,18 @@ pub struct Server {
     /// 为 None 时回退到旧的路径模式（兼容已有数据）。
     #[serde(default)]
     pub ssh_key_id: Option<String>,
+    /// 是否启用 SSH Agent 转发（AllowAgentForwarding，默认关闭，存在远端信任边界风险）
+    #[serde(default)]
+    pub forward_agent: bool,
+    /// 是否启用 SSH X11 图形转发（默认关闭）
+    #[serde(default)]
+    pub x11_forwarding: bool,
+    /// 关联的全局身份凭证 ID（指向 `auth_profiles` 表 `id`；None 表示使用服务器独立认证配置）
+    #[serde(default)]
+    pub auth_profile_id: Option<String>,
+    /// 单服务器终端 TERM 类型覆写（None 表示继承全局 `terminalType` 设置）
+    #[serde(default)]
+    pub terminal_type: Option<String>,
     pub tags: String,
     pub notes: Option<String>,
     pub connection_timeout: i32,
@@ -182,6 +194,12 @@ pub struct Server {
     /// 登录自动化与交互式会话脚本配置（Send-Expect，JSON 字符串，加密存储）
     #[serde(default)]
     pub logon_scripts_config: Option<String>,
+    /// 自动化会话日志落盘配置（JSON 字符串）
+    #[serde(default)]
+    pub session_logging_config: Option<String>,
+    /// RDP 高级连接与重定向配置（JSON 字符串）
+    #[serde(default)]
+    pub rdp_config: Option<String>,
     /// 所属服务器分组 ID（指向 server_groups 表 id），NULL 表示未分组
     #[serde(default)]
     pub group_id: Option<String>,
@@ -219,6 +237,16 @@ pub struct ServerInput {
     /// 关联的 SSH 密钥 ID（指向 `ssh_keys` 表）。None 时回退路径模式。
     #[serde(default)]
     pub ssh_key_id: Option<String>,
+    #[serde(default)]
+    pub forward_agent: Option<bool>,
+    #[serde(default)]
+    pub x11_forwarding: Option<bool>,
+    /// 绑定的全局身份凭证 ID（指向 `auth_profiles` 表）
+    #[serde(default)]
+    pub auth_profile_id: Option<String>,
+    /// 单服务器终端 TERM 类型覆写
+    #[serde(default)]
+    pub terminal_type: Option<String>,
     #[serde(deserialize_with = "deserialize_tags", default)]
     pub tags: Option<String>,
     pub notes: Option<String>,
@@ -273,6 +301,11 @@ pub struct ServerInput {
     pub credentials_config: Option<String>,
     #[serde(default)]
     pub logon_scripts_config: Option<String>,
+    #[serde(default)]
+    pub session_logging_config: Option<String>,
+    /// RDP 高级连接与重定向配置（JSON 字符串）
+    #[serde(default)]
+    pub rdp_config: Option<String>,
     /// 所属分组 ID（None 表示未分组）
     #[serde(default)]
     pub group_id: Option<String>,
@@ -295,6 +328,16 @@ pub struct ServerUpdate {
     pub certificate_path: Option<String>,
     #[serde(default)]
     pub ssh_key_id: Option<String>,
+    #[serde(default)]
+    pub forward_agent: Option<bool>,
+    #[serde(default)]
+    pub x11_forwarding: Option<bool>,
+    /// 绑定的全局身份凭证 ID（指向 `auth_profiles` 表）
+    #[serde(default)]
+    pub auth_profile_id: Option<String>,
+    /// 单服务器终端 TERM 类型覆写
+    #[serde(default)]
+    pub terminal_type: Option<String>,
     #[serde(deserialize_with = "deserialize_tags", default)]
     pub tags: Option<String>,
     pub notes: Option<String>,
@@ -351,9 +394,44 @@ pub struct ServerUpdate {
     pub credentials_config: Option<String>,
     #[serde(default)]
     pub logon_scripts_config: Option<String>,
+    #[serde(default)]
+    pub session_logging_config: Option<String>,
+    /// RDP 高级连接与重定向配置（JSON 字符串）
+    #[serde(default)]
+    pub rdp_config: Option<String>,
     /// 所属分组 ID（None 表示不修改，空字符串表示移出到根目录）
     #[serde(default)]
     pub group_id: Option<String>,
+}
+
+/// 批量编辑服务器补丁（`servers_batch_update` 使用，单事务原子执行）
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerBatchPatch {
+    /// 目标分组 ID（Some("") 归入根分组，Some(id) 移至指定分组，None 不修改）
+    #[serde(default)]
+    pub group_id: Option<String>,
+    /// 标签调整模式: "add" | "remove" | "replace"
+    #[serde(default)]
+    pub tags_mode: Option<String>,
+    /// 标签列表
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+    /// 连接超时（秒，1..=300）
+    #[serde(default)]
+    pub connection_timeout: Option<i32>,
+    /// SSH Agent 转发开关
+    #[serde(default)]
+    pub forward_agent: Option<bool>,
+    /// SSH X11 图形转发开关
+    #[serde(default)]
+    pub x11_forwarding: Option<bool>,
+    /// 绑定的全局身份凭证 ID（Some("") 解除绑定，Some(id) 绑定，None 不修改）
+    #[serde(default)]
+    pub auth_profile_id: Option<String>,
+    /// 单服务器终端 TERM 类型覆写（Some("") 恢复继承全局设置，None 不修改）
+    #[serde(default)]
+    pub terminal_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -478,8 +556,13 @@ fn create_tables(conn: &Connection) -> SqliteResult<()> {
             vnc_password TEXT,
             bmc_port INTEGER DEFAULT 443,
             bmc_allow_invalid_certs INTEGER DEFAULT 0,
+            forward_agent INTEGER DEFAULT 0,
+            x11_forwarding INTEGER DEFAULT 0,
+            auth_profile_id TEXT,
+            ssh_key_id TEXT,
             proxy_ids TEXT DEFAULT '[]',
             default_proxy_id TEXT,
+            tunnel_ids TEXT DEFAULT '[]',
             proxy_config TEXT,
             tunnels_config TEXT,
             keys_config TEXT,
@@ -487,6 +570,10 @@ fn create_tables(conn: &Connection) -> SqliteResult<()> {
             file_transfer_config TEXT,
             credentials_config TEXT,
             logon_scripts_config TEXT,
+            session_logging_config TEXT,
+            rdp_config TEXT,
+            terminal_type TEXT,
+            group_id TEXT,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             deleted_at INTEGER
@@ -632,8 +719,12 @@ fn create_tables(conn: &Connection) -> SqliteResult<()> {
 }
 
 /// 当前数据库结构版本号（通过 SQLite 内置 `PRAGMA user_version` 追踪）。
-/// 后续 Wave 1+ 新增 `auth_profiles` 等表与字段时递增此常量并在 `apply_schema_migrations` 追加分支。
-pub const CURRENT_SCHEMA_VERSION: i32 = 1;
+/// v2：新增全局身份凭证表 `auth_profiles` 与 `servers.auth_profile_id` 关联列。
+/// v3：为 `servers` 表新增单服务器终端 `terminal_type` 列。
+/// v4：修复已处于 v1/v2/v3 的历史库补齐遗漏的 `servers.forward_agent` 等列。
+/// v6：新增 `servers.rdp_config` 列以持久化每台服务器的 RDP 高级启动与重定向配置。
+/// v7：新增 `servers.x11_forwarding` 列以支持每台服务器的 SSH X11 图形转发开关。
+pub const CURRENT_SCHEMA_VERSION: i32 = 7;
 
 pub(crate) fn read_schema_version(conn: &Connection) -> SqliteResult<i32> {
     conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i32>(0))
@@ -641,6 +732,17 @@ pub(crate) fn read_schema_version(conn: &Connection) -> SqliteResult<i32> {
 
 fn write_schema_version(conn: &Connection, version: i32) -> SqliteResult<()> {
     conn.pragma_update(None, "user_version", version)
+}
+
+fn column_exists(conn: &Connection, table: &str, column: &str) -> SqliteResult<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", table))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for name in rows {
+        if name? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// 版本化迁移调度入口（兼容 `user_version == 0` 的老库平滑接入）。
@@ -657,8 +759,128 @@ fn apply_schema_migrations(conn: &Connection) -> SqliteResult<()> {
         version = 1;
     }
 
-    // 预留：后续 v2+ 增量迁移需使用 `conn.unchecked_transaction()` 原子升级后再推进 `version`。
-    let _ = version;
+    // v1 -> v2：在单事务内创建 auth_profiles 表并补齐 servers.auth_profile_id + 索引。
+    if version < 2 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS auth_profiles (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                username TEXT NOT NULL DEFAULT '',
+                auth_type TEXT NOT NULL DEFAULT 'password',
+                password TEXT,
+                ssh_key_id TEXT,
+                private_key_path TEXT,
+                private_key_passphrase TEXT,
+                agent_identity TEXT,
+                certificate_path TEXT,
+                forward_agent INTEGER DEFAULT 0,
+                notes TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            ",
+        )?;
+        if !column_exists(&tx, "servers", "auth_profile_id")? {
+            tx.execute("ALTER TABLE servers ADD COLUMN auth_profile_id TEXT", [])?;
+        }
+        if !column_exists(&tx, "servers", "forward_agent")? {
+            tx.execute("ALTER TABLE servers ADD COLUMN forward_agent INTEGER DEFAULT 0", [])?;
+        }
+        tx.execute(
+            "CREATE INDEX IF NOT EXISTS idx_servers_auth_profile_id ON servers(auth_profile_id)",
+            [],
+        )?;
+        write_schema_version(&tx, 2)?;
+        tx.commit()?;
+        version = 2;
+    }
+
+    // v2 -> v3：为 servers 表新增单服务器终端类型 terminal_type 列。
+    if version < 3 {
+        let tx = conn.unchecked_transaction()?;
+        if !column_exists(&tx, "servers", "forward_agent")? {
+            tx.execute("ALTER TABLE servers ADD COLUMN forward_agent INTEGER DEFAULT 0", [])?;
+        }
+        if !column_exists(&tx, "servers", "terminal_type")? {
+            tx.execute("ALTER TABLE servers ADD COLUMN terminal_type TEXT", [])?;
+        }
+        write_schema_version(&tx, 3)?;
+        tx.commit()?;
+        version = 3;
+    }
+
+    // v3 -> v4：补齐早期从 v1 升级上来的数据库可能缺失的 servers.forward_agent 等后续新增列。
+    if version < 4 {
+        let tx = conn.unchecked_transaction()?;
+        if !column_exists(&tx, "servers", "forward_agent")? {
+            tx.execute("ALTER TABLE servers ADD COLUMN forward_agent INTEGER DEFAULT 0", [])?;
+        }
+        if !column_exists(&tx, "servers", "auth_profile_id")? {
+            tx.execute("ALTER TABLE servers ADD COLUMN auth_profile_id TEXT", [])?;
+        }
+        if !column_exists(&tx, "servers", "terminal_type")? {
+            tx.execute("ALTER TABLE servers ADD COLUMN terminal_type TEXT", [])?;
+        }
+        tx.execute(
+            "CREATE INDEX IF NOT EXISTS idx_servers_auth_profile_id ON servers(auth_profile_id)",
+            [],
+        )?;
+        write_schema_version(&tx, 4)?;
+        tx.commit()?;
+        version = 4;
+    }
+
+    // v4 -> v5：新增 servers.session_logging_config 并对历史库做一次完整幂等补列巡检。
+    if version < 5 {
+        migrate_servers_table(conn);
+        migrate_ssh_keys_table(conn);
+        migrate_proxies_table(conn);
+        migrate_server_groups_table(conn);
+        let tx = conn.unchecked_transaction()?;
+        if !column_exists(&tx, "servers", "forward_agent")? {
+            tx.execute("ALTER TABLE servers ADD COLUMN forward_agent INTEGER DEFAULT 0", [])?;
+        }
+        if !column_exists(&tx, "servers", "auth_profile_id")? {
+            tx.execute("ALTER TABLE servers ADD COLUMN auth_profile_id TEXT", [])?;
+        }
+        if !column_exists(&tx, "servers", "terminal_type")? {
+            tx.execute("ALTER TABLE servers ADD COLUMN terminal_type TEXT", [])?;
+        }
+        if !column_exists(&tx, "servers", "session_logging_config")? {
+            tx.execute("ALTER TABLE servers ADD COLUMN session_logging_config TEXT", [])?;
+        }
+        tx.execute(
+            "CREATE INDEX IF NOT EXISTS idx_servers_auth_profile_id ON servers(auth_profile_id)",
+            [],
+        )?;
+        write_schema_version(&tx, 5)?;
+        tx.commit()?;
+        version = 5;
+    }
+
+    // v5 -> v6：新增 servers.rdp_config 列
+    if version < 6 {
+        let tx = conn.unchecked_transaction()?;
+        if !column_exists(&tx, "servers", "rdp_config")? {
+            tx.execute("ALTER TABLE servers ADD COLUMN rdp_config TEXT", [])?;
+        }
+        write_schema_version(&tx, 6)?;
+        tx.commit()?;
+        version = 6;
+    }
+
+    // v6 -> v7：新增 servers.x11_forwarding 列
+    if version < 7 {
+        let tx = conn.unchecked_transaction()?;
+        if !column_exists(&tx, "servers", "x11_forwarding")? {
+            tx.execute("ALTER TABLE servers ADD COLUMN x11_forwarding INTEGER DEFAULT 0", [])?;
+        }
+        write_schema_version(&tx, 7)?;
+        tx.commit()?;
+    }
+
     Ok(())
 }
 
@@ -815,6 +1037,18 @@ fn migrate_proxies_table(conn: &Connection) {
 /// SQLite 的 ALTER TABLE ADD COLUMN 是幂等的失败（重复添加会报错），所以用 try + ignore。
 fn migrate_servers_table(conn: &Connection) {
     // rusqlite 不支持 IF NOT EXISTS for ADD COLUMN，只能 try 并忽略 duplicate column 错误
+    let _ = conn.execute("ALTER TABLE servers ADD COLUMN auth_type TEXT DEFAULT 'password'", []);
+    let _ = conn.execute("ALTER TABLE servers ADD COLUMN password TEXT", []);
+    let _ = conn.execute("ALTER TABLE servers ADD COLUMN private_key_path TEXT", []);
+    let _ = conn.execute("ALTER TABLE servers ADD COLUMN private_key_passphrase TEXT", []);
+    let _ = conn.execute("ALTER TABLE servers ADD COLUMN tags TEXT DEFAULT '[]'", []);
+    let _ = conn.execute("ALTER TABLE servers ADD COLUMN notes TEXT", []);
+    let _ = conn.execute("ALTER TABLE servers ADD COLUMN connection_timeout INTEGER DEFAULT 15", []);
+    let _ = conn.execute("ALTER TABLE servers ADD COLUMN favorite INTEGER DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE servers ADD COLUMN status TEXT DEFAULT 'unknown'", []);
+    let _ = conn.execute("ALTER TABLE servers ADD COLUMN last_accessed_at INTEGER", []);
+    let _ = conn.execute("ALTER TABLE servers ADD COLUMN os_type TEXT", []);
+    let _ = conn.execute("ALTER TABLE servers ADD COLUMN os_info TEXT", []);
     let _ = conn.execute("ALTER TABLE servers ADD COLUMN last_disconnected_at INTEGER", []);
     let _ = conn.execute("ALTER TABLE servers ADD COLUMN last_error TEXT", []);
     let _ = conn.execute("ALTER TABLE servers ADD COLUMN target_type TEXT DEFAULT 'linux'", []);
@@ -830,6 +1064,8 @@ fn migrate_servers_table(conn: &Connection) {
     let _ = conn.execute("ALTER TABLE servers ADD COLUMN certificate_path TEXT", []);
     // 阶段 3：服务器关联 ssh_keys 表的密钥 id（content-based 连接）
     let _ = conn.execute("ALTER TABLE servers ADD COLUMN ssh_key_id TEXT", []);
+    let _ = conn.execute("ALTER TABLE servers ADD COLUMN forward_agent INTEGER DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE servers ADD COLUMN x11_forwarding INTEGER DEFAULT 0", []);
     // P0-1 重构：跳板机改为独立 proxies 资源。servers 表存储关联的代理 ID 列表（JSON 数组）
     // 与默认使用的代理 ID。旧字段 jump_host_id 保留以兼容老数据读取，但新代码不再写入。
     let _ = conn.execute("ALTER TABLE servers ADD COLUMN proxy_ids TEXT DEFAULT '[]'", []);
@@ -991,6 +1227,13 @@ fn row_to_server(row: &rusqlite::Row<'_>) -> SqliteResult<Server> {
         agent_identity: row.get("agent_identity")?,
         certificate_path: row.get("certificate_path")?,
         ssh_key_id: row.get("ssh_key_id")?,
+        forward_agent: row.get::<_, Option<i32>>("forward_agent").ok().flatten().unwrap_or(0) != 0,
+        x11_forwarding: row.get::<_, Option<i32>>("x11_forwarding").ok().flatten().unwrap_or(0) != 0,
+        auth_profile_id: row.get::<_, Option<String>>("auth_profile_id").ok().flatten()
+            .filter(|s| !s.trim().is_empty()),
+        terminal_type: row.get::<_, Option<String>>("terminal_type").ok().flatten()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
         // 列缺失时（旧版本数据库 / 回滚场景）安全降级为 None
         credentials_config: decrypt_sensitive_text(
             row.get::<_, Option<String>>("credentials_config").ok().flatten(),
@@ -1050,6 +1293,10 @@ fn row_to_server(row: &rusqlite::Row<'_>) -> SqliteResult<Server> {
         logon_scripts_config: decrypt_sensitive_text(
             row.get::<_, Option<String>>("logon_scripts_config").ok().flatten(),
         ),
+        session_logging_config: row.get::<_, Option<String>>("session_logging_config").ok().flatten()
+            .filter(|s| !s.trim().is_empty()),
+        rdp_config: row.get::<_, Option<String>>("rdp_config").ok().flatten()
+            .filter(|s| !s.trim().is_empty()),
         group_id: row.get::<_, Option<String>>("group_id").ok().flatten()
             .filter(|s| !s.is_empty()),
         created_at: row.get("created_at")?,
@@ -1107,11 +1354,11 @@ fn mask_server_passwords(mut server: Server) -> Server {
             }
         }
     }
-    // credentials_config 是加密列，row_to_server 已解密成明文。
-    // 该字段目前没有任何表单写入路径，直接不回显，避免 token / kubeconfig
-    // 等凭据随 servers_list / servers_get / 回收站一起明文送到前端。
-    // 导出走 servers_list_raw（不经过此处），因此备份内容不受影响。
-    server.credentials_config = None;
+    // local 目标将非敏感启动配置 { profileId, cwd } 存入 credentials_config，编辑回显需保留；
+    // 其余设备的 token / kubeconfig 等凭据不随列表回显给前端。
+    if server.target_type != "local" {
+        server.credentials_config = None;
+    }
     server
 }
 
@@ -1298,6 +1545,20 @@ pub fn servers_add(server: String) -> Result<String, String> {
 
     let mut port = input.port.unwrap_or(22);
     let auth_type = input.auth_type.unwrap_or_else(|| "password".to_string());
+    let forward_agent = if input.forward_agent.unwrap_or(false) { 1 } else { 0 };
+    let x11_forwarding = if input.x11_forwarding.unwrap_or(false) { 1 } else { 0 };
+    let auth_profile_id = input
+        .auth_profile_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let terminal_type = input
+        .terminal_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     let tags = input.tags.unwrap_or_else(|| "[]".to_string());
     let connection_timeout = input.connection_timeout.unwrap_or(15);
     let favorite_int = if input.favorite.unwrap_or(false) { 1 } else { 0 };
@@ -1391,6 +1652,18 @@ pub fn servers_add(server: String) -> Result<String, String> {
         Some(s) => Some(encrypt_sensitive_text(s.trim())?),
         None => None,
     };
+    let session_logging_config = input
+        .session_logging_config
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let rdp_config = input
+        .rdp_config
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     let group_id = input
         .group_id
         .as_deref()
@@ -1400,8 +1673,8 @@ pub fn servers_add(server: String) -> Result<String, String> {
         .unwrap_or_else(|| HOST_GROUP_ID.to_string());
 
     conn.execute(
-        "INSERT INTO servers (id, name, host, port, username, auth_type, password, private_key_path, private_key_passphrase, agent_identity, certificate_path, ssh_key_id, tags, notes, connection_timeout, favorite, status, last_accessed_at, os_type, os_info, last_disconnected_at, last_error, target_type, protocol, protocols, rdp_port, vnc_port, vnc_password, bmc_port, bmc_allow_invalid_certs, proxy_ids, default_proxy_id, tunnel_ids, proxy_config, tunnels_config, keys_config, serial_config, group_id, created_at, updated_at, credentials_config, file_transfer_config, logon_scripts_config)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43)",
+        "INSERT INTO servers (id, name, host, port, username, auth_type, password, private_key_path, private_key_passphrase, agent_identity, certificate_path, ssh_key_id, forward_agent, x11_forwarding, auth_profile_id, tags, notes, connection_timeout, favorite, status, last_accessed_at, os_type, os_info, last_disconnected_at, last_error, target_type, protocol, protocols, rdp_port, vnc_port, vnc_password, bmc_port, bmc_allow_invalid_certs, proxy_ids, default_proxy_id, tunnel_ids, proxy_config, tunnels_config, keys_config, serial_config, group_id, created_at, updated_at, credentials_config, file_transfer_config, logon_scripts_config, terminal_type, session_logging_config, rdp_config)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49)",
         params![
             id,
             input.name,
@@ -1415,6 +1688,9 @@ pub fn servers_add(server: String) -> Result<String, String> {
             input.agent_identity,
             input.certificate_path,
             input.ssh_key_id,
+            forward_agent,
+            x11_forwarding,
+            auth_profile_id,
             tags,
             input.notes,
             connection_timeout,
@@ -1446,6 +1722,9 @@ pub fn servers_add(server: String) -> Result<String, String> {
             credentials_config_enc,
             file_transfer_config_enc,
             logon_scripts_config_enc,
+            terminal_type,
+            session_logging_config,
+            rdp_config,
         ],
     )
     .map_err(|e| format!("Failed to insert server: {}", e))?;
@@ -1609,6 +1888,26 @@ pub fn servers_update(id: String, updates: String) -> Result<(), String> {
         let trimmed = ssh_key_id.trim();
         let value = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
         set_clauses.push("ssh_key_id = ?".to_string());
+        param_values.push(Box::new(value));
+    }
+    if let Some(forward_agent) = update.forward_agent {
+        set_clauses.push("forward_agent = ?".to_string());
+        param_values.push(Box::new(if forward_agent { 1 } else { 0 }));
+    }
+    if let Some(x11_forwarding) = update.x11_forwarding {
+        set_clauses.push("x11_forwarding = ?".to_string());
+        param_values.push(Box::new(if x11_forwarding { 1 } else { 0 }));
+    }
+    if let Some(ref auth_profile_id) = update.auth_profile_id {
+        let trimmed = auth_profile_id.trim();
+        let value = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
+        set_clauses.push("auth_profile_id = ?".to_string());
+        param_values.push(Box::new(value));
+    }
+    if let Some(ref terminal_type) = update.terminal_type {
+        let trimmed = terminal_type.trim();
+        let value: Option<String> = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
+        set_clauses.push("terminal_type = ?".to_string());
         param_values.push(Box::new(value));
     }
     if let Some(ref tags) = update.tags {
@@ -1878,6 +2177,28 @@ pub fn servers_update(id: String, updates: String) -> Result<(), String> {
         set_clauses.push("logon_scripts_config = ?".to_string());
         param_values.push(Box::new(value));
     }
+    // 自动化会话日志落盘配置（JSON 字符串；空字符串表示清除）
+    if let Some(ref session_logging_config) = update.session_logging_config {
+        let trimmed = session_logging_config.trim();
+        let value: Option<String> = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        };
+        set_clauses.push("session_logging_config = ?".to_string());
+        param_values.push(Box::new(value));
+    }
+    // RDP 高级连接与重定向配置（JSON 字符串；空字符串表示清除）
+    if let Some(ref rdp_config) = update.rdp_config {
+        let trimmed = rdp_config.trim();
+        let value: Option<String> = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        };
+        set_clauses.push("rdp_config = ?".to_string());
+        param_values.push(Box::new(value));
+    }
     // 所属分组 ID（空字符串表示挂到「主机」根分组）
     if let Some(ref group_id) = update.group_id {
         let trimmed = group_id.trim();
@@ -1918,6 +2239,209 @@ pub fn servers_delete(id: String) -> Result<(), String> {
     .map_err(|e| format!("Failed to delete server: {}", e))?;
 
     Ok(())
+}
+
+/// 在单事务内原子合并并更新多台服务器的公共属性（分组 / 标签 / 超时 / Agent 转发 / 全局身份凭证）。
+pub fn servers_batch_update(ids: Vec<String>, patch: ServerBatchPatch) -> Result<usize, String> {
+    let conn = get_conn()?;
+    servers_batch_update_on_conn(&conn, ids, patch)
+}
+
+fn servers_batch_update_on_conn(
+    conn: &Connection,
+    ids: Vec<String>,
+    patch: ServerBatchPatch,
+) -> Result<usize, String> {
+    use std::collections::HashSet;
+
+    let mut unique_ids: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for raw in ids {
+        let trimmed = raw.trim().to_string();
+        if !trimmed.is_empty() && seen.insert(trimmed.clone()) {
+            unique_ids.push(trimmed);
+        }
+    }
+    if unique_ids.is_empty() {
+        return Ok(0);
+    }
+
+    if let Some(timeout) = patch.connection_timeout {
+        if !(1..=300).contains(&timeout) {
+            return Err("连接超时需在 1 到 300 秒之间".to_string());
+        }
+    }
+
+    if let Some(ref mode) = patch.tags_mode {
+        if !matches!(mode.as_str(), "add" | "remove" | "replace") {
+            return Err(format!("不支持的标签操作模式: {}", mode));
+        }
+    }
+
+    let resolved_group_id: Option<String> = match patch.group_id {
+        Some(ref gid) => {
+            let trimmed = gid.trim();
+            let target = if trimmed.is_empty() {
+                HOST_GROUP_ID.to_string()
+            } else {
+                trimmed.to_string()
+            };
+            let exists: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM server_groups WHERE id = ?1",
+                    params![target],
+                    |row| row.get(0),
+                )
+                .map_err(|e| format!("Failed to verify target group: {}", e))?;
+            if exists == 0 {
+                return Err(format!("目标分组不存在: {}", target));
+            }
+            Some(target)
+        }
+        None => None,
+    };
+
+    let resolved_auth_profile_id: Option<Option<String>> = match patch.auth_profile_id {
+        Some(ref pid) => {
+            let trimmed = pid.trim();
+            if trimmed.is_empty() {
+                Some(None)
+            } else {
+                let exists: i64 = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM auth_profiles WHERE id = ?1",
+                        params![trimmed],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| format!("Failed to verify auth profile: {}", e))?;
+                if exists == 0 {
+                    return Err(format!("身份凭证不存在: {}", trimmed));
+                }
+                Some(Some(trimmed.to_string()))
+            }
+        }
+        None => None,
+    };
+
+    let patch_tags: Vec<String> = patch
+        .tags
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let now = Utc::now().timestamp_millis();
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("Failed to start batch update transaction: {}", e))?;
+
+    let mut updated_count = 0usize;
+    for id in &unique_ids {
+        let mut set_clauses: Vec<String> = Vec::new();
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(ref gid) = resolved_group_id {
+            set_clauses.push("group_id = ?".to_string());
+            param_values.push(Box::new(gid.clone()));
+        }
+        if let Some(timeout) = patch.connection_timeout {
+            set_clauses.push("connection_timeout = ?".to_string());
+            param_values.push(Box::new(timeout));
+        }
+        if let Some(forward_agent) = patch.forward_agent {
+            set_clauses.push("forward_agent = ?".to_string());
+            param_values.push(Box::new(if forward_agent { 1 } else { 0 }));
+        }
+        if let Some(x11_forwarding) = patch.x11_forwarding {
+            set_clauses.push("x11_forwarding = ?".to_string());
+            param_values.push(Box::new(if x11_forwarding { 1 } else { 0 }));
+        }
+        if let Some(ref profile_opt) = resolved_auth_profile_id {
+            set_clauses.push("auth_profile_id = ?".to_string());
+            param_values.push(Box::new(profile_opt.clone()));
+        }
+        if let Some(ref term_type) = patch.terminal_type {
+            let trimmed = term_type.trim();
+            let value: Option<String> = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
+            set_clauses.push("terminal_type = ?".to_string());
+            param_values.push(Box::new(value));
+        }
+
+        if let Some(ref mode) = patch.tags_mode {
+            let current_raw: String = tx
+                .query_row(
+                    "SELECT COALESCE(tags, '[]') FROM servers WHERE id = ?1 AND deleted_at IS NULL",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| format!("批量编辑目标服务器 {} 不存在或已删除: {}", id, e))?;
+            let current_tags: Vec<String> = serde_json::from_str(&current_raw).unwrap_or_default();
+            let next_tags = merge_batch_tags(current_tags, &patch_tags, mode);
+            let encoded = serde_json::to_string(&next_tags)
+                .map_err(|e| format!("Failed to encode tags: {}", e))?;
+            set_clauses.push("tags = ?".to_string());
+            param_values.push(Box::new(encoded));
+        }
+
+        if set_clauses.is_empty() {
+            continue;
+        }
+
+        set_clauses.push("updated_at = ?".to_string());
+        param_values.push(Box::new(now));
+        param_values.push(Box::new(id.clone()));
+
+        let sql = format!(
+            "UPDATE servers SET {} WHERE id = ? AND deleted_at IS NULL",
+            set_clauses.join(", ")
+        );
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
+        let affected = tx
+            .execute(&sql, param_refs.as_slice())
+            .map_err(|e| format!("Failed to update server {} in batch: {}", id, e))?;
+        if affected == 0 {
+            return Err(format!("批量编辑目标服务器 {} 不存在或已删除", id));
+        }
+        updated_count += affected;
+    }
+
+    tx.commit()
+        .map_err(|e| format!("Failed to commit batch update: {}", e))?;
+    Ok(updated_count)
+}
+
+fn merge_batch_tags(current: Vec<String>, incoming: &[String], mode: &str) -> Vec<String> {
+    use std::collections::HashSet;
+    match mode {
+        "replace" => {
+            let mut seen = HashSet::new();
+            incoming
+                .iter()
+                .filter(|t| seen.insert((*t).clone()))
+                .cloned()
+                .collect()
+        }
+        "remove" => {
+            let remove_set: HashSet<&str> = incoming.iter().map(String::as_str).collect();
+            current
+                .into_iter()
+                .filter(|t| !remove_set.contains(t.as_str()))
+                .collect()
+        }
+        _ => {
+            // "add"
+            let mut out = Vec::new();
+            let mut seen = HashSet::new();
+            for t in current.into_iter().chain(incoming.iter().cloned()) {
+                if seen.insert(t.clone()) {
+                    out.push(t);
+                }
+            }
+            out
+        }
+    }
 }
 
 /// 列出回收站中的服务器（deleted_at IS NOT NULL），按删除时间倒序。密码掩码。
@@ -3308,6 +3832,419 @@ pub fn ssh_keys_delete(id: &str) -> Result<(), String> {
 }
 
 // ============================================================================
+// 全局身份凭证（Auth Profiles）—— 跨主机复用认证配置（P1-11）
+// ============================================================================
+
+fn default_auth_profile_type() -> String {
+    "password".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthProfile {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default = "default_auth_profile_type")]
+    pub auth_type: String,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub ssh_key_id: Option<String>,
+    #[serde(default)]
+    pub private_key_path: Option<String>,
+    #[serde(default)]
+    pub private_key_passphrase: Option<String>,
+    #[serde(default)]
+    pub agent_identity: Option<String>,
+    #[serde(default)]
+    pub certificate_path: Option<String>,
+    #[serde(default)]
+    pub forward_agent: bool,
+    #[serde(default)]
+    pub notes: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthProfileInput {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub name: String,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub auth_type: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub ssh_key_id: Option<String>,
+    #[serde(default)]
+    pub private_key_path: Option<String>,
+    #[serde(default)]
+    pub private_key_passphrase: Option<String>,
+    #[serde(default)]
+    pub agent_identity: Option<String>,
+    #[serde(default)]
+    pub certificate_path: Option<String>,
+    #[serde(default)]
+    pub forward_agent: Option<bool>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthProfileUpdate {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub auth_type: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub ssh_key_id: Option<String>,
+    #[serde(default)]
+    pub private_key_path: Option<String>,
+    #[serde(default)]
+    pub private_key_passphrase: Option<String>,
+    #[serde(default)]
+    pub agent_identity: Option<String>,
+    #[serde(default)]
+    pub certificate_path: Option<String>,
+    #[serde(default)]
+    pub forward_agent: Option<bool>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+fn encrypt_opt_secret(plain: &Option<String>) -> Result<Option<String>, String> {
+    match plain {
+        Some(s) if !s.is_empty() && s != PASSWORD_PLACEHOLDER => crypto::encrypt_password(s, master_key())
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        _ => Ok(None),
+    }
+}
+
+fn encrypt_opt_secret_for_update(field: &Option<String>) -> Result<Option<Option<String>>, String> {
+    match field {
+        None => Ok(None),
+        Some(s) if s == PASSWORD_PLACEHOLDER => Ok(None),
+        Some(s) if s.is_empty() => Ok(Some(None)),
+        Some(s) => crypto::encrypt_password(s, master_key())
+            .map(|c| Some(Some(c)))
+            .map_err(|e| e.to_string()),
+    }
+}
+
+fn decrypt_opt_secret(cipher: &Option<String>) -> Result<Option<String>, String> {
+    match cipher {
+        Some(s) if !s.is_empty() => crypto::decrypt_password(s, master_key())
+            .map(Some)
+            .map_err(|e| e.to_string()),
+        _ => Ok(None),
+    }
+}
+
+fn mask_secret_opt(field: Option<String>) -> Option<String> {
+    field.filter(|s| !s.is_empty()).map(|_| PASSWORD_PLACEHOLDER.to_string())
+}
+
+fn row_to_auth_profile(row: &rusqlite::Row<'_>) -> SqliteResult<AuthProfile> {
+    Ok(AuthProfile {
+        id: row.get("id")?,
+        name: row.get("name")?,
+        username: row.get::<_, Option<String>>("username")?.unwrap_or_default(),
+        auth_type: row
+            .get::<_, Option<String>>("auth_type")?
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "password".to_string()),
+        password: row.get("password")?,
+        ssh_key_id: row.get::<_, Option<String>>("ssh_key_id")?.filter(|s| !s.trim().is_empty()),
+        private_key_path: row.get::<_, Option<String>>("private_key_path")?.filter(|s| !s.trim().is_empty()),
+        private_key_passphrase: row.get("private_key_passphrase")?,
+        agent_identity: row.get::<_, Option<String>>("agent_identity")?.filter(|s| !s.trim().is_empty()),
+        certificate_path: row.get::<_, Option<String>>("certificate_path")?.filter(|s| !s.trim().is_empty()),
+        forward_agent: row.get::<_, Option<i32>>("forward_agent")?.unwrap_or(0) != 0,
+        notes: row.get::<_, Option<String>>("notes")?.filter(|s| !s.trim().is_empty()),
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+    })
+}
+
+fn mask_auth_profile_secrets(mut p: AuthProfile) -> AuthProfile {
+    p.password = mask_secret_opt(p.password);
+    p.private_key_passphrase = mask_secret_opt(p.private_key_passphrase);
+    p
+}
+
+/// 列出所有全局身份凭证（密码 / Passphrase 掩码为 `•••••`）。
+pub fn auth_profiles_list() -> Result<String, String> {
+    let conn = get_conn()?;
+    auth_profiles_list_on_conn(&conn)
+}
+
+/// 列出所有全局身份凭证（包含解密后的密码 / Passphrase，仅用于端到端加密云同步）。
+pub fn auth_profiles_list_for_sync() -> Result<String, String> {
+    let conn = get_conn()?;
+    auth_profiles_list_for_sync_on_conn(&conn)
+}
+
+fn auth_profiles_list_for_sync_on_conn(conn: &Connection) -> Result<String, String> {
+    let mut stmt = conn
+        .prepare("SELECT * FROM auth_profiles ORDER BY name ASC")
+        .map_err(|e| format!("Failed to prepare auth_profiles sync query: {}", e))?;
+    let mut list: Vec<AuthProfile> = Vec::new();
+    let rows = stmt
+        .query_map([], row_to_auth_profile)
+        .map_err(|e| format!("Query auth_profiles for sync failed: {}", e))?;
+    for row in rows {
+        let mut p = row.map_err(|e| format!("Read auth_profile row failed: {}", e))?;
+        p.password = decrypt_opt_secret(&p.password)?;
+        p.private_key_passphrase = decrypt_opt_secret(&p.private_key_passphrase)?;
+        list.push(p);
+    }
+    serde_json::to_string(&list).map_err(|e| format!("Serialization failed: {}", e))
+}
+
+/// 检查指定 ID 的全局身份凭证是否存在。
+pub fn auth_profiles_exists(id: &str) -> Result<bool, String> {
+    let conn = get_conn()?;
+    auth_profiles_exists_on_conn(&conn, id)
+}
+
+fn auth_profiles_exists_on_conn(conn: &Connection, id: &str) -> Result<bool, String> {
+    let exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM auth_profiles WHERE id = ?1)",
+            params![id],
+            |r| r.get(0),
+        )
+        .map_err(|e| format!("Failed to check auth_profile existence: {}", e))?;
+    Ok(exists)
+}
+
+/// 查询引用指定全局身份凭证的活跃服务器 ID 列表（用于凭证变更/删除后联动断开旧连接）。
+pub fn servers_ids_by_auth_profile(profile_id: &str) -> Result<Vec<String>, String> {
+    let conn = get_conn()?;
+    servers_ids_by_auth_profile_on_conn(&conn, profile_id)
+}
+
+fn servers_ids_by_auth_profile_on_conn(
+    conn: &Connection,
+    profile_id: &str,
+) -> Result<Vec<String>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id FROM servers WHERE auth_profile_id = ?1 AND deleted_at IS NULL")
+        .map_err(|e| format!("Failed to query servers by auth_profile_id: {}", e))?;
+    let ids = stmt
+        .query_map(params![profile_id], |r| r.get::<_, String>(0))
+        .map_err(|e| format!("Query servers by auth_profile_id failed: {}", e))?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(ids)
+}
+
+fn auth_profiles_list_on_conn(conn: &Connection) -> Result<String, String> {
+    let mut stmt = conn
+        .prepare("SELECT * FROM auth_profiles ORDER BY name ASC")
+        .map_err(|e| format!("Failed to prepare auth_profiles query: {}", e))?;
+    let list: Vec<AuthProfile> = stmt
+        .query_map([], row_to_auth_profile)
+        .map_err(|e| format!("Query auth_profiles failed: {}", e))?
+        .filter_map(|r| r.ok())
+        .map(mask_auth_profile_secrets)
+        .collect();
+    serde_json::to_string(&list).map_err(|e| format!("Serialization failed: {}", e))
+}
+
+/// 获取单个全局身份凭证（密码 / Passphrase 解密后），仅供后端连接内部使用。
+pub fn auth_profiles_get_raw(id: &str) -> Result<AuthProfile, String> {
+    let conn = get_conn()?;
+    auth_profiles_get_raw_on_conn(&conn, id)
+}
+
+fn auth_profiles_get_raw_on_conn(conn: &Connection, id: &str) -> Result<AuthProfile, String> {
+    let mut stmt = conn
+        .prepare("SELECT * FROM auth_profiles WHERE id = ?1")
+        .map_err(|e| format!("Failed to prepare auth_profile query: {}", e))?;
+    let mut profile = stmt
+        .query_row(params![id], row_to_auth_profile)
+        .map_err(|e| format!("Auth profile not found: {}", e))?;
+    profile.password = decrypt_opt_secret(&profile.password)?;
+    profile.private_key_passphrase = decrypt_opt_secret(&profile.private_key_passphrase)?;
+    Ok(profile)
+}
+
+/// 新增全局身份凭证。
+pub fn auth_profiles_add(input: AuthProfileInput) -> Result<String, String> {
+    let conn = get_conn()?;
+    auth_profiles_add_on_conn(&conn, input)
+}
+
+fn auth_profiles_add_on_conn(conn: &Connection, input: AuthProfileInput) -> Result<String, String> {
+    let name = input.name.trim().to_string();
+    if name.is_empty() {
+        return Err("身份凭证名称不能为空".to_string());
+    }
+    let id = input
+        .id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("auth-{}", uuid::Uuid::new_v4()));
+    let now = Utc::now().timestamp_millis();
+    let username = input.username.as_deref().map(str::trim).unwrap_or("").to_string();
+    let auth_type = input
+        .auth_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("password")
+        .to_string();
+    let encrypted_password = encrypt_opt_secret(&input.password)?;
+    let encrypted_passphrase = encrypt_opt_secret(&input.private_key_passphrase)?;
+    let trim_opt = |opt: &Option<String>| -> Option<String> {
+        opt.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)
+    };
+
+    conn.execute(
+        "INSERT INTO auth_profiles (id, name, username, auth_type, password, ssh_key_id, private_key_path, private_key_passphrase, agent_identity, certificate_path, forward_agent, notes, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        params![
+            id,
+            name,
+            username,
+            auth_type,
+            encrypted_password,
+            trim_opt(&input.ssh_key_id),
+            trim_opt(&input.private_key_path),
+            encrypted_passphrase,
+            trim_opt(&input.agent_identity),
+            trim_opt(&input.certificate_path),
+            if input.forward_agent.unwrap_or(false) { 1 } else { 0 },
+            trim_opt(&input.notes),
+            now,
+            now,
+        ],
+    )
+    .map_err(|e| format!("Failed to insert auth profile: {}", e))?;
+
+    Ok(id)
+}
+
+/// 更新全局身份凭证。
+pub fn auth_profiles_update(id: &str, update: AuthProfileUpdate) -> Result<(), String> {
+    let conn = get_conn()?;
+    auth_profiles_update_on_conn(&conn, id, update)
+}
+
+fn auth_profiles_update_on_conn(
+    conn: &Connection,
+    id: &str,
+    update: AuthProfileUpdate,
+) -> Result<(), String> {
+    let now = Utc::now().timestamp_millis();
+    let mut set_clauses: Vec<String> = Vec::new();
+    let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+    if let Some(ref name) = update.name {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err("身份凭证名称不能为空".to_string());
+        }
+        set_clauses.push("name = ?".to_string());
+        param_values.push(Box::new(trimmed.to_string()));
+    }
+    if let Some(ref username) = update.username {
+        set_clauses.push("username = ?".to_string());
+        param_values.push(Box::new(username.trim().to_string()));
+    }
+    if let Some(ref auth_type) = update.auth_type {
+        let trimmed = auth_type.trim();
+        if !trimmed.is_empty() {
+            set_clauses.push("auth_type = ?".to_string());
+            param_values.push(Box::new(trimmed.to_string()));
+        }
+    }
+    if let Some(v) = encrypt_opt_secret_for_update(&update.password)? {
+        set_clauses.push("password = ?".to_string());
+        param_values.push(Box::new(v));
+    }
+    if let Some(v) = encrypt_opt_secret_for_update(&update.private_key_passphrase)? {
+        set_clauses.push("private_key_passphrase = ?".to_string());
+        param_values.push(Box::new(v));
+    }
+
+    let push_trimmed_opt = |col: &str,
+                            field: &Option<String>,
+                            clauses: &mut Vec<String>,
+                            values: &mut Vec<Box<dyn rusqlite::types::ToSql>>| {
+        if let Some(raw) = field {
+            let trimmed = raw.trim();
+            let val: Option<String> = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
+            clauses.push(format!("{} = ?", col));
+            values.push(Box::new(val));
+        }
+    };
+
+    push_trimmed_opt("ssh_key_id", &update.ssh_key_id, &mut set_clauses, &mut param_values);
+    push_trimmed_opt("private_key_path", &update.private_key_path, &mut set_clauses, &mut param_values);
+    push_trimmed_opt("agent_identity", &update.agent_identity, &mut set_clauses, &mut param_values);
+    push_trimmed_opt("certificate_path", &update.certificate_path, &mut set_clauses, &mut param_values);
+    push_trimmed_opt("notes", &update.notes, &mut set_clauses, &mut param_values);
+
+    if let Some(forward_agent) = update.forward_agent {
+        set_clauses.push("forward_agent = ?".to_string());
+        param_values.push(Box::new(if forward_agent { 1 } else { 0 }));
+    }
+
+    set_clauses.push("updated_at = ?".to_string());
+    param_values.push(Box::new(now));
+    param_values.push(Box::new(id.to_string()));
+
+    let sql = format!("UPDATE auth_profiles SET {} WHERE id = ?", set_clauses.join(", "));
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+        param_values.iter().map(|p| p.as_ref()).collect();
+    let affected = conn
+        .execute(&sql, param_refs.as_slice())
+        .map_err(|e| format!("Failed to update auth profile: {}", e))?;
+    if affected == 0 {
+        return Err(format!("Auth profile not found: {}", id));
+    }
+    Ok(())
+}
+
+/// 删除全局身份凭证，并在单事务内清空引用该凭证的服务器关联列 `servers.auth_profile_id`。
+pub fn auth_profiles_delete(id: &str) -> Result<(), String> {
+    let conn = get_conn()?;
+    auth_profiles_delete_on_conn(&conn, id)
+}
+
+fn auth_profiles_delete_on_conn(conn: &Connection, id: &str) -> Result<(), String> {
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("Failed to start auth_profile delete transaction: {}", e))?;
+    tx.execute(
+        "UPDATE servers SET auth_profile_id = NULL WHERE auth_profile_id = ?1",
+        params![id],
+    )
+    .map_err(|e| format!("Failed to detach auth profile from servers: {}", e))?;
+    tx.execute("DELETE FROM auth_profiles WHERE id = ?1", params![id])
+        .map_err(|e| format!("Failed to delete auth profile: {}", e))?;
+    tx.commit()
+        .map_err(|e| format!("Failed to commit auth_profile delete: {}", e))?;
+    Ok(())
+}
+
+// ============================================================================
 // 代理（Proxy）CRUD —— P0-1 重构
 // ============================================================================
 
@@ -3973,6 +4910,328 @@ mod schema_migration_tests {
             .prepare("SELECT group_id FROM servers LIMIT 1")
             .is_ok();
         assert!(has_group_id, "legacy servers table should gain group_id column");
+        let has_auth_profile_id: bool = conn
+            .prepare("SELECT auth_profile_id FROM servers LIMIT 1")
+            .is_ok();
+        assert!(has_auth_profile_id, "legacy servers table should gain auth_profile_id column");
+    }
+
+    #[test]
+    fn v1_database_migrates_atomically_to_v2() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        create_tables(&conn).expect("bootstrap");
+        // 回退模拟 v1 结构：移除 servers.auth_profile_id 较难，改为直接构造最小 v1 表并设 user_version = 1
+        drop(conn);
+        let conn = Connection::open_in_memory().expect("open v1 memory db");
+        conn.execute_batch(
+            "
+            CREATE TABLE servers (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                host TEXT NOT NULL,
+                port INTEGER DEFAULT 22,
+                username TEXT NOT NULL,
+                group_id TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE TABLE ssh_keys (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+            CREATE TABLE proxies (id TEXT PRIMARY KEY, name TEXT NOT NULL, host TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+            CREATE TABLE server_groups (id TEXT PRIMARY KEY, name TEXT NOT NULL, parent_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+            PRAGMA user_version = 1;
+            ",
+        )
+        .expect("setup v1 schema");
+
+        create_tables(&conn).expect("migrate v1 -> v4");
+        assert_eq!(read_schema_version(&conn).unwrap(), CURRENT_SCHEMA_VERSION);
+        assert!(column_exists(&conn, "servers", "auth_profile_id").unwrap());
+        assert!(column_exists(&conn, "servers", "forward_agent").unwrap());
+        assert!(column_exists(&conn, "servers", "terminal_type").unwrap());
+        assert!(conn.prepare("SELECT id, forward_agent FROM auth_profiles LIMIT 1").is_ok());
+    }
+
+    #[test]
+    fn v2_and_v3_databases_migrate_to_v4_and_backfill_forward_agent() {
+        for start_version in [2, 3] {
+            let conn = Connection::open_in_memory().expect("open legacy versioned memory db");
+            conn.execute_batch(&format!(
+                "
+                CREATE TABLE servers (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    host TEXT NOT NULL,
+                    port INTEGER DEFAULT 22,
+                    username TEXT NOT NULL,
+                    group_id TEXT,
+                    auth_profile_id TEXT,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
+                CREATE TABLE ssh_keys (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+                CREATE TABLE proxies (id TEXT PRIMARY KEY, name TEXT NOT NULL, host TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+                CREATE TABLE server_groups (id TEXT PRIMARY KEY, name TEXT NOT NULL, parent_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+                CREATE TABLE auth_profiles (id TEXT PRIMARY KEY, name TEXT NOT NULL, username TEXT NOT NULL DEFAULT '', auth_type TEXT NOT NULL DEFAULT 'password', password TEXT, ssh_key_id TEXT, private_key_path TEXT, private_key_passphrase TEXT, agent_identity TEXT, certificate_path TEXT, forward_agent INTEGER DEFAULT 0, notes TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+                PRAGMA user_version = {};
+                ",
+                start_version
+            ))
+            .expect("setup legacy schema");
+
+            create_tables(&conn).expect("migrate legacy -> v4");
+            assert_eq!(read_schema_version(&conn).unwrap(), CURRENT_SCHEMA_VERSION);
+            assert!(column_exists(&conn, "servers", "forward_agent").unwrap());
+            assert!(column_exists(&conn, "servers", "terminal_type").unwrap());
+        }
+    }
+
+    #[test]
+    fn auth_profiles_crud_encrypts_masks_and_detaches_on_delete() {
+        set_master_key([7u8; 32]);
+        let conn = Connection::open_in_memory().expect("open memory db");
+        create_tables(&conn).expect("create_tables");
+
+        let id = auth_profiles_add_on_conn(
+            &conn,
+            AuthProfileInput {
+                id: Some("prof-1".into()),
+                name: "Prod Bastion".into(),
+                username: Some("deploy".into()),
+                auth_type: Some("password".into()),
+                password: Some("s3cr3t-pwd".into()),
+                ssh_key_id: None,
+                private_key_path: None,
+                private_key_passphrase: Some("key-pass".into()),
+                agent_identity: None,
+                certificate_path: None,
+                forward_agent: Some(true),
+                notes: Some("shared prod".into()),
+            },
+        )
+        .expect("add auth profile");
+
+        // DB 存储必须为 v1 密文
+        let stored_pwd: String = conn
+            .query_row("SELECT password FROM auth_profiles WHERE id = ?1", params![&id], |r| r.get(0))
+            .unwrap();
+        assert!(stored_pwd.starts_with("v1:"), "password must be encrypted at rest");
+
+        // list 返回占位符掩码
+        let list_json = auth_profiles_list_on_conn(&conn).expect("list");
+        let list: Vec<AuthProfile> = serde_json::from_str(&list_json).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].password.as_deref(), Some(PASSWORD_PLACEHOLDER));
+        assert_eq!(list[0].private_key_passphrase.as_deref(), Some(PASSWORD_PLACEHOLDER));
+        assert!(list[0].forward_agent);
+
+        // get_raw 返回解密后明文
+        let raw = auth_profiles_get_raw_on_conn(&conn, &id).expect("get_raw");
+        assert_eq!(raw.password.as_deref(), Some("s3cr3t-pwd"));
+        assert_eq!(raw.private_key_passphrase.as_deref(), Some("key-pass"));
+
+        // 更新传入占位符时保留原密码
+        auth_profiles_update_on_conn(
+            &conn,
+            &id,
+            AuthProfileUpdate {
+                name: Some("Prod Updated".into()),
+                username: Some("ops".into()),
+                auth_type: None,
+                password: Some(PASSWORD_PLACEHOLDER.into()),
+                ssh_key_id: None,
+                private_key_path: None,
+                private_key_passphrase: None,
+                agent_identity: None,
+                certificate_path: None,
+                forward_agent: None,
+                notes: None,
+            },
+        )
+        .expect("update profile");
+        let raw_after = auth_profiles_get_raw_on_conn(&conn, &id).expect("get_raw after update");
+        assert_eq!(raw_after.name, "Prod Updated");
+        assert_eq!(raw_after.username, "ops");
+        assert_eq!(raw_after.password.as_deref(), Some("s3cr3t-pwd"));
+
+        // 插入绑定此 profile 的服务器后删除 profile，应原子解除绑定
+        let now = Utc::now().timestamp_millis();
+        conn.execute(
+            "INSERT INTO servers (id, name, host, port, username, auth_type, auth_profile_id, group_id, created_at, updated_at)
+             VALUES ('srv-a', 'A', '10.0.0.1', 22, 'root', 'password', ?1, ?2, ?3, ?3)",
+            params![&id, HOST_GROUP_ID, now],
+        )
+        .unwrap();
+        assert!(auth_profiles_exists_on_conn(&conn, &id).unwrap());
+        assert_eq!(
+            servers_ids_by_auth_profile_on_conn(&conn, &id).unwrap(),
+            vec!["srv-a".to_string()]
+        );
+        let sync_json = auth_profiles_list_for_sync_on_conn(&conn).unwrap();
+        let sync_profiles: Vec<AuthProfile> = serde_json::from_str(&sync_json).unwrap();
+        assert_eq!(sync_profiles[0].password.as_deref(), Some("s3cr3t-pwd"));
+        auth_profiles_delete_on_conn(&conn, &id).expect("delete profile");
+        assert!(!auth_profiles_exists_on_conn(&conn, &id).unwrap());
+
+        let bound: Option<String> = conn
+            .query_row("SELECT auth_profile_id FROM servers WHERE id = 'srv-a'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(bound, None, "deleting auth profile must detach bound servers");
+    }
+
+    #[test]
+    fn servers_batch_update_is_atomic_and_updates_fields() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        create_tables(&conn).expect("create_tables");
+        let now = Utc::now().timestamp_millis();
+
+        conn.execute(
+            "INSERT INTO server_groups (id, name, parent_id, created_at, updated_at) VALUES ('grp-prod', 'Prod', ?1, ?2, ?2)",
+            params![HOST_GROUP_ID, now],
+        )
+        .unwrap();
+        auth_profiles_add_on_conn(
+            &conn,
+            AuthProfileInput {
+                id: Some("prof-batch".into()),
+                name: "Batch Cred".into(),
+                username: Some("deploy".into()),
+                auth_type: Some("password".into()),
+                password: Some("pwd".into()),
+                ssh_key_id: None,
+                private_key_path: None,
+                private_key_passphrase: None,
+                agent_identity: None,
+                certificate_path: None,
+                forward_agent: Some(false),
+                notes: None,
+            },
+        )
+        .unwrap();
+
+        for (id, tags) in [("s1", r#"["web","blue"]"#), ("s2", r#"["db"]"#)] {
+            conn.execute(
+                "INSERT INTO servers (id, name, host, port, username, auth_type, tags, connection_timeout, forward_agent, group_id, created_at, updated_at)
+                 VALUES (?1, ?1, '10.0.0.1', 22, 'root', 'password', ?2, 15, 0, ?3, ?4, ?4)",
+                params![id, tags, HOST_GROUP_ID, now],
+            )
+            .unwrap();
+        }
+
+        // 事务回滚校验：包含一个不存在的 ID，s1 与 s2 都不能被部分写入
+        let err = servers_batch_update_on_conn(
+            &conn,
+            vec!["s1".into(), "missing-id".into()],
+            ServerBatchPatch {
+                group_id: Some("grp-prod".into()),
+                tags_mode: Some("add".into()),
+                tags: Some(vec!["canary".into()]),
+                connection_timeout: Some(45),
+                forward_agent: Some(true),
+                x11_forwarding: None,
+                auth_profile_id: Some("prof-batch".into()),
+                terminal_type: Some("xterm".into()),
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("missing-id"));
+
+        let s1_group: String = conn
+            .query_row("SELECT group_id FROM servers WHERE id = 's1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(s1_group, HOST_GROUP_ID, "rolled back on missing target");
+
+        // 正常批量更新
+        let count = servers_batch_update_on_conn(
+            &conn,
+            vec!["s1".into(), "s2".into()],
+            ServerBatchPatch {
+                group_id: Some("grp-prod".into()),
+                tags_mode: Some("add".into()),
+                tags: Some(vec!["prod".into(), "web".into()]),
+                connection_timeout: Some(45),
+                forward_agent: Some(true),
+                x11_forwarding: None,
+                auth_profile_id: Some("prof-batch".into()),
+                terminal_type: Some("vt100".into()),
+            },
+        )
+        .expect("batch update succeeds");
+        assert_eq!(count, 2);
+
+        let (g2, t2, to2, fa2, ap2, tt2): (String, String, i32, i32, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT group_id, tags, connection_timeout, forward_agent, auth_profile_id, terminal_type FROM servers WHERE id = 's2'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            )
+            .unwrap();
+        assert_eq!(g2, "grp-prod");
+        assert_eq!(t2, r#"["db","prod","web"]"#);
+        assert_eq!(to2, 45);
+        assert_eq!(fa2, 1);
+        assert_eq!(ap2.as_deref(), Some("prof-batch"));
+        assert_eq!(tt2.as_deref(), Some("vt100"));
+    }
+
+    #[test]
+    fn v4_database_migrates_to_v5_and_heals_missing_server_columns() {
+        let conn = Connection::open_in_memory().expect("open v4 memory db");
+        conn.execute_batch(
+            "
+            CREATE TABLE servers (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                host TEXT NOT NULL,
+                port INTEGER DEFAULT 22,
+                username TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE TABLE ssh_keys (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+            CREATE TABLE proxies (id TEXT PRIMARY KEY, name TEXT NOT NULL, host TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+            CREATE TABLE server_groups (id TEXT PRIMARY KEY, name TEXT NOT NULL, parent_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+            CREATE TABLE auth_profiles (id TEXT PRIMARY KEY, name TEXT NOT NULL, username TEXT NOT NULL DEFAULT '', auth_type TEXT NOT NULL DEFAULT 'password', password TEXT, ssh_key_id TEXT, private_key_path TEXT, private_key_passphrase TEXT, agent_identity TEXT, certificate_path TEXT, forward_agent INTEGER DEFAULT 0, notes TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+            PRAGMA user_version = 4;
+            ",
+        )
+        .expect("setup incomplete v4 schema");
+
+        create_tables(&conn).expect("migrate v4 -> v5");
+        assert_eq!(read_schema_version(&conn).unwrap(), CURRENT_SCHEMA_VERSION);
+        for col in [
+            "ssh_key_id",
+            "tunnel_ids",
+            "forward_agent",
+            "x11_forwarding",
+            "auth_profile_id",
+            "terminal_type",
+            "session_logging_config",
+            "rdp_config",
+            "group_id",
+        ] {
+            assert!(
+                column_exists(&conn, "servers", col).unwrap(),
+                "expected column servers.{} to exist after v7 migration",
+                col
+            );
+        }
+
+        // Verify SELECT + row_to_server round-trips session_logging_config, rdp_config and x11_forwarding after migration
+        let sample_log = r#"{"enabled":true,"format":"plain"}"#;
+        let sample_rdp = r#"{"useMultimon":true,"redirectClipboard":true,"redirectDrives":true,"enableCredssp":true,"audioMode":0}"#;
+        conn.execute(
+            "INSERT INTO servers (id, name, host, port, username, session_logging_config, rdp_config, x11_forwarding, created_at, updated_at)
+             VALUES ('s-log', 'LogSrv', '10.0.0.10', 22, 'root', ?1, ?2, 1, 1, 1)",
+            params![sample_log, sample_rdp],
+        )
+        .expect("insert server with session_logging_config, rdp_config and x11_forwarding");
+
+        let server: Server = conn
+            .query_row("SELECT * FROM servers WHERE id = 's-log'", [], row_to_server)
+            .expect("row_to_server");
+        assert_eq!(server.session_logging_config.as_deref(), Some(sample_log));
+        assert_eq!(server.rdp_config.as_deref(), Some(sample_rdp));
+        assert!(server.x11_forwarding);
     }
 }
 

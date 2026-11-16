@@ -71,19 +71,32 @@ describe("SFTP 外部编辑器联动自动同步 (External Editor Auto-Sync)", (
     expect(remaining[0].sessionId).toBe("session-2");
   });
 
-  it("当远程文件大于 2MB 时，外部编辑器应拦截并拒绝打开", () => {
-    const MAX_EXTERNAL_EDIT_SIZE = 2 * 1024 * 1024;
-    const testCases = [
-      { size: 1024 * 500, expectedAllowed: true }, // 500KB
-      { size: 2 * 1024 * 1024, expectedAllowed: true }, // 2MB 边界
-      { size: 2 * 1024 * 1024 + 1, expectedAllowed: false }, // 2MB + 1字节
-      { size: 5 * 1024 * 1024, expectedAllowed: false }, // 5MB
-      { size: 50 * 1024 * 1024, expectedAllowed: false }, // 50MB
-    ];
+  it("外部编辑器文件大小限制应按 externalEditMaxSizeMb 配置计算（0 表示 100MB 安全上限）", () => {
+    const resolveLimit = (externalEditMaxSizeMb: number) => {
+      const effectiveMaxMb = externalEditMaxSizeMb === 0 ? 100 : externalEditMaxSizeMb;
+      const maxBytes = effectiveMaxMb * 1024 * 1024;
+      const limitArg = externalEditMaxSizeMb === 0 ? 0 : maxBytes;
+      return { maxBytes, limitArg };
+    };
 
-    for (const tc of testCases) {
-      const isAllowed = tc.size <= MAX_EXTERNAL_EDIT_SIZE;
-      expect(isAllowed).toBe(tc.expectedAllowed);
-    }
+    // 默认 10MB 配置
+    const defaultCfg = resolveLimit(10);
+    expect(defaultCfg.maxBytes).toBe(10 * 1024 * 1024);
+    expect(defaultCfg.limitArg).toBe(10 * 1024 * 1024);
+    expect(5 * 1024 * 1024 <= defaultCfg.maxBytes).toBe(true);
+    expect(10 * 1024 * 1024 <= defaultCfg.maxBytes).toBe(true);
+    expect(10 * 1024 * 1024 + 1 <= defaultCfg.maxBytes).toBe(false);
+
+    // 2MB 自定义配置
+    const smallCfg = resolveLimit(2);
+    expect(smallCfg.limitArg).toBe(2 * 1024 * 1024);
+    expect(2 * 1024 * 1024 + 1 <= smallCfg.maxBytes).toBe(false);
+
+    // 0 = 无限制（受后端 100MB 安全上限约束，透传 0 给后端）
+    const unlimitedCfg = resolveLimit(0);
+    expect(unlimitedCfg.limitArg).toBe(0);
+    expect(unlimitedCfg.maxBytes).toBe(100 * 1024 * 1024);
+    expect(50 * 1024 * 1024 <= unlimitedCfg.maxBytes).toBe(true);
+    expect(100 * 1024 * 1024 + 1 <= unlimitedCfg.maxBytes).toBe(false);
   });
 });

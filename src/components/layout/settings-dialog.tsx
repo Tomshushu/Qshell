@@ -67,8 +67,6 @@ import {
   Grid2X2,
   Grid3X3,
   Shapes,
-  Laptop,
-  Server,
   FileX,
   RotateCcw,
   GitBranch,
@@ -86,6 +84,7 @@ import { Z_LAYER } from "@/lib/z-layer";
 import { useAppVersion } from "@/utils/version";
 import { getAllFileIconThemes } from "@/components/file-icons";
 import { KnownHostsPanel } from "./known-hosts-panel";
+import { AuthProfilesPanel } from "./auth-profiles-panel";
 import { SyncSettingsPanel } from "./sync-settings-panel";
 import { ShortcutSettingsPanel } from "./shortcut-settings-panel";
 import { AISettingsPanel } from "./ai-settings-panel";
@@ -466,7 +465,8 @@ interface SettingsDialogProps {
     | "sftp"
     | "logs"
     | "shortcuts"
-    | "known_hosts";
+    | "known_hosts"
+    | "auth_profiles";
 }
 
 export function SettingsDialog({ open, onOpenChange, defaultTab }: SettingsDialogProps) {
@@ -863,11 +863,12 @@ function SettingsPanel({
     | "sftp"
     | "logs"
     | "shortcuts"
-    | "known_hosts";
+    | "known_hosts"
+    | "auth_profiles";
   onOpenThemeDialog: () => void;
 }) {
   const [subTab, setSubTab] = useState<
-    "general" | "security" | "account" | "ai" | "terminal" | "sftp" | "logs" | "shortcuts" | "known_hosts"
+    "general" | "security" | "account" | "ai" | "terminal" | "sftp" | "logs" | "shortcuts" | "known_hosts" | "auth_profiles"
   >(defaultTab);
 
   useEffect(() => {
@@ -1075,18 +1076,18 @@ function SettingsPanel({
     setTerminalSessionLogFormat,
     terminalEncoding,
     setTerminalEncoding,
+    terminalType,
+    setTerminalType,
+    terminalBracketedPaste,
+    setTerminalBracketedPaste,
     sftpTransferConcurrency,
     setSftpTransferConcurrency,
     transferRateLimit,
     setTransferRateLimit,
-    sftpLocalViewMode,
-    setSftpLocalViewMode,
-    sftpRemoteViewMode,
-    setSftpRemoteViewMode,
-    sftpLocalShowHidden,
-    setSftpLocalShowHidden,
-    sftpRemoteShowHidden,
-    setSftpRemoteShowHidden,
+    sftpDefaultViewMode,
+    setSftpDefaultViewMode,
+    sftpShowHidden,
+    setSftpShowHidden,
     sftpFileIconTheme,
     setSftpFileIconTheme,
     sftpExclusionEnabled,
@@ -1095,6 +1096,16 @@ function SettingsPanel({
     setSftpExclusionPatterns,
     sftpRespectGitignore,
     setSftpRespectGitignore,
+    sftpSymlinkPolicy,
+    setSftpSymlinkPolicy,
+    externalEditMaxSizeMb,
+    setExternalEditMaxSizeMb,
+    sftpIncludePatterns,
+    setSftpIncludePatterns,
+    sftpMinSizeKb,
+    setSftpMinSizeKb,
+    sftpMaxSizeKb,
+    setSftpMaxSizeKb,
     appLockEnabled,
     appLockType,
     appLockPasswordHash,
@@ -1108,8 +1119,55 @@ function SettingsPanel({
 
   // 限速单位：UI 显示用，后端始终存储 KB/s
   const [rateLimitUnit, setRateLimitUnit] = useState<"KB" | "MB">("KB");
+  const formatRateDisplay = (kbps: number, unit: "KB" | "MB") => {
+    if (kbps === 0) return "";
+    if (unit === "KB") return String(kbps);
+    const mb = Math.round((kbps / 1024) * 10000) / 10000;
+    return String(mb > 0 ? mb : Number((kbps / 1024).toPrecision(2)));
+  };
+  const [rateLimitDraft, setRateLimitDraft] = useState<string>(() =>
+    formatRateDisplay(transferRateLimit, "KB"),
+  );
+  const [rateLimitPrevSyncKey, setRateLimitPrevSyncKey] = useState(
+    `${transferRateLimit}:KB`,
+  );
+  const nextRateSyncKey = `${transferRateLimit}:${rateLimitUnit}`;
+  if (rateLimitPrevSyncKey !== nextRateSyncKey) {
+    setRateLimitPrevSyncKey(nextRateSyncKey);
+    const parsedDraft = Number(rateLimitDraft);
+    const currentKbpsFromDraft =
+      rateLimitDraft.trim() !== "" && Number.isFinite(parsedDraft) && parsedDraft > 0
+        ? rateLimitUnit === "MB"
+          ? Math.round(parsedDraft * 1024)
+          : Math.floor(parsedDraft)
+        : 0;
+    if (transferRateLimit === 0 || currentKbpsFromDraft !== transferRateLimit) {
+      setRateLimitDraft(formatRateDisplay(transferRateLimit, rateLimitUnit));
+    }
+  }
   // 自定义传输排除规则输入框状态
   const [customExclusionInput, setCustomExclusionInput] = useState("");
+  // 包含白名单草稿文本（渲染期与 store 同步，避免输入逗号/换行时破坏光标）
+  const [includePatternsDraft, setIncludePatternsDraft] = useState(() =>
+    sftpIncludePatterns.join(", "),
+  );
+  const [prevIncludePatterns, setPrevIncludePatterns] = useState<string[]>(
+    sftpIncludePatterns,
+  );
+  if (prevIncludePatterns !== sftpIncludePatterns) {
+    setPrevIncludePatterns(sftpIncludePatterns);
+    const normalizedDraft = Array.from(
+      new Set(
+        includePatternsDraft
+          .split(/[\n,]+/)
+          .map((s) => s.trim())
+          .filter(Boolean),
+      ),
+    );
+    if (normalizedDraft.join("\0") !== sftpIncludePatterns.join("\0")) {
+      setIncludePatternsDraft(sftpIncludePatterns.join(", "));
+    }
+  }
 
   const allThemes = [...PRESET_TERMINAL_THEMES, ...customTerminalThemes].map(
     (t) => getTerminalTheme(t.id, customTerminalThemes),
@@ -1220,6 +1278,17 @@ function SettingsPanel({
             >
               <Keyboard className="h-3.5 w-3.5 flex-shrink-0" />
               <span className="flex-1 truncate">{t("sidebar_shortcuts")}</span>
+            </button>
+            <button
+              onClick={() => setSubTab("auth_profiles")}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs transition-all active:scale-[0.98] cursor-pointer text-left shrink-0 ${
+                subTab === "auth_profiles"
+                  ? "bg-background text-foreground font-medium shadow-xs border border-border/40"
+                  : "text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+              }`}
+            >
+              <KeyRound className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="flex-1 truncate">{t("sidebar_auth_profiles")}</span>
             </button>
             <button
               onClick={() => setSubTab("known_hosts")}
@@ -1737,6 +1806,21 @@ function SettingsPanel({
                   />
                 </div>
 
+                {/* Bracketed Paste Mode */}
+                <div className="flex items-center justify-between">
+                  <SettingLabelWithHint
+                    label={t("term_bracketed_paste_title") || "括号粘贴模式 (Bracketed Paste)"}
+                    desc={
+                      t("term_bracketed_paste_desc") ||
+                      "多行代码/脚本精确保护，关闭可避免 Bash 5.1+ 粘贴时触发灰底反显选中"
+                    }
+                  />
+                  <Switch
+                    checked={terminalBracketedPaste ?? false}
+                    onCheckedChange={setTerminalBracketedPaste}
+                  />
+                </div>
+
                 {/* Selection Quick Floating Toolbar */}
                 <div className="flex items-center justify-between">
                   <SettingLabelWithHint
@@ -1872,6 +1956,30 @@ function SettingsPanel({
                         onChange={setTerminalEncoding}
                       />
                     </div>
+                  </div>
+                  <div className="flex items-center justify-between gap-3 py-2.5">
+                    <SettingLabelWithHint
+                      label={t("term_type_title") || "终端类型 (TERM)"}
+                      desc={
+                        t("term_type_desc") ||
+                        "SSH PTY 与 Telnet 协商使用的终端仿真标识，老旧网络设备可选 vt100 / ansi"
+                      }
+                    />
+                    <select
+                      value={terminalType}
+                      onChange={(e) => setTerminalType(e.target.value)}
+                      aria-label={t("term_type_title") || "终端类型 (TERM)"}
+                      className="h-7 w-56 rounded-md border border-border bg-background px-2 text-xs font-mono outline-none focus:ring-1 focus:ring-primary"
+                    >
+                      <option value="xterm-256color">{t("term_type_recommended")}</option>
+                      <option value="xterm">xterm</option>
+                      <option value="vt100">vt100</option>
+                      <option value="vt220">vt220</option>
+                      <option value="vt320">vt320</option>
+                      <option value="linux">linux</option>
+                      <option value="ansi">ansi</option>
+                      <option value="scoansi">scoansi</option>
+                    </select>
                   </div>
                   <div className="flex items-center justify-between gap-3 py-2.5">
                     <SettingLabelWithHint
@@ -2293,6 +2401,8 @@ function SettingsPanel({
           </div>
         ) : subTab === "shortcuts" ? (
           <ShortcutSettingsPanel />
+        ) : subTab === "auth_profiles" ? (
+          <AuthProfilesPanel />
         ) : subTab === "known_hosts" ? (
           <KnownHostsPanel />
         ) : subTab === "logs" ? (
@@ -2368,24 +2478,40 @@ function SettingsPanel({
                       <div className="flex items-center gap-1.5 animate-in fade-in-0 duration-150">
                         <input
                           type="number"
-                          min={1}
-                          step={rateLimitUnit === "MB" ? 1 : 100}
-                          // 单位转换：MB 模式显示 KB/1024，KB 模式直接显示
-                          value={
-                            rateLimitUnit === "MB"
-                              ? Math.round((transferRateLimit / 1024) * 100) / 100
-                              : transferRateLimit
-                          }
+                          min={rateLimitUnit === "MB" ? 0.001 : 1}
+                          step={rateLimitUnit === "MB" ? 0.5 : 100}
+                          // 单位转换：保留字符串草稿，支持退格清空与输入小数（如 0.5 MB/s）
+                          value={rateLimitDraft}
                           onChange={(e) => {
-                            const inputVal = Math.max(
-                              1,
-                              Number(e.target.value) || 0,
-                            );
+                            const raw = e.target.value;
+                            setRateLimitDraft(raw);
+                            if (raw.trim() === "") return;
+                            const num = Number(raw);
+                            if (!Number.isFinite(num) || num <= 0) return;
                             const kbps =
                               rateLimitUnit === "MB"
-                                ? Math.round(inputVal * 1024)
-                                : Math.floor(inputVal);
-                            setTransferRateLimit(Math.max(1, kbps));
+                                ? Math.round(num * 1024)
+                                : Math.floor(num);
+                            if (kbps >= 1) {
+                              setTransferRateLimit(kbps);
+                            }
+                          }}
+                          onBlur={() => {
+                            const num = Number(rateLimitDraft);
+                            if (!Number.isFinite(num) || num <= 0) {
+                              setRateLimitDraft(
+                                formatRateDisplay(transferRateLimit, rateLimitUnit),
+                              );
+                            } else {
+                              const kbps = Math.max(
+                                1,
+                                rateLimitUnit === "MB"
+                                  ? Math.round(num * 1024)
+                                  : Math.floor(num),
+                              );
+                              setTransferRateLimit(kbps);
+                              setRateLimitDraft(formatRateDisplay(kbps, rateLimitUnit));
+                            }
                           }}
                           className="w-20 h-7 px-2 text-xs bg-background border border-border rounded-md outline-none focus:ring-1 focus:ring-primary text-right font-mono"
                         />
@@ -2438,131 +2564,116 @@ function SettingsPanel({
                     </label>
                   </div>
                 </div>
+
+                {/* 外部编辑大小上限 (MB) */}
+                <div className="flex items-center justify-between min-h-[32px] pt-2 border-t border-border/40">
+                  <SettingLabelWithHint
+                    label={t("sftp_external_edit_max_size_label")}
+                    desc={t("sftp_external_edit_max_size_desc")}
+                    className="text-xs"
+                  />
+
+                  <div className="flex items-center gap-3">
+                    {externalEditMaxSizeMb !== 0 && (
+                      <div className="flex items-center gap-1.5 animate-in fade-in-0 duration-150">
+                        <input
+                          type="number"
+                          min={1}
+                          max={100}
+                          step={1}
+                          aria-label={t("sftp_external_edit_max_size_label")}
+                          value={externalEditMaxSizeMb}
+                          onChange={(e) => {
+                            const raw = Number(e.target.value);
+                            if (!Number.isFinite(raw)) return;
+                            const clamped = Math.min(100, Math.max(1, Math.floor(raw)));
+                            setExternalEditMaxSizeMb(clamped);
+                          }}
+                          className="w-20 h-7 px-2 text-xs bg-background border border-border rounded-md outline-none focus:ring-1 focus:ring-primary text-right font-mono"
+                        />
+                        <span className="text-[11px] font-medium text-muted-foreground">
+                          MB
+                        </span>
+                      </div>
+                    )}
+
+                    <label className="flex items-center gap-1.5 cursor-pointer select-none text-muted-foreground hover:text-foreground transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={externalEditMaxSizeMb === 0}
+                        onChange={(e) => {
+                          setExternalEditMaxSizeMb(e.target.checked ? 0 : 10);
+                        }}
+                        className="h-3.5 w-3.5 rounded border-border accent-primary cursor-pointer"
+                      />
+                      <span className="text-xs">
+                        {t("sftp_external_edit_unlimited")}
+                      </span>
+                    </label>
+                  </div>
+                </div>
               </CardContent>
             </Card>
 
-            {/* SFTP 视图与显示设置卡片 */}
+            {/* 统一文件视图与显示设置卡片（同时作用于 SFTP/FTP 面板与工作台文件模块） */}
             <Card className="border/50 bg-background shadow-sm rounded-lg overflow-hidden">
               <CardContent className="p-5 flex flex-col gap-4 text-xs">
-                <span className="text-xs font-bold text-foreground">
-                  {t("sftp_settings_view")}
-                </span>
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs font-bold text-foreground">
+                    {t("sftp_settings_view")}
+                  </span>
+                  <span className="text-[11px] text-muted-foreground">
+                    {t("sftp_view_unified_desc")}
+                  </span>
+                </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {/* 本地面板 */}
-                  <div className="flex flex-col gap-2.5 rounded-lg border border-border/50 bg-muted/10 p-3">
-                    <div className="flex items-center gap-1.5">
-                      <Laptop className="w-3.5 h-3.5 text-primary" />
-                      <span className="font-medium text-foreground text-xs">
-                        {t("sftp_local_defaults")}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-4 gap-1.5">
-                      {[
-                        { id: "list", label: t("sftp_view_list"), icon: List },
-                        { id: "large", label: t("sftp_view_large"), icon: LayoutGrid },
-                        { id: "medium", label: t("sftp_view_medium"), icon: Grid2X2 },
-                        { id: "small", label: t("sftp_view_small"), icon: Grid3X3 },
-                      ].map((item) => {
-                        const Icon = item.icon;
-                        const isSelected = sftpLocalViewMode === item.id;
-                        return (
-                          <button
-                            key={`local-${item.id}`}
-                            type="button"
-                            onClick={() => {
-                              setSftpLocalViewMode(
-                                item.id as "list" | "large" | "medium" | "small"
-                              );
-                              playSound(SoundType.CLICK);
-                            }}
-                            className={cn(
-                              "flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-md border text-center transition-all cursor-pointer select-none",
-                              isSelected
-                                ? "border-primary bg-primary/10 text-primary font-medium shadow-2xs"
-                                : "border-border/60 bg-muted/20 hover:bg-muted/50 hover:border-border text-foreground"
-                            )}
-                          >
-                            <Icon className="w-3.5 h-3.5 shrink-0" />
-                            <span className="text-[11px] truncate">
-                              {item.label}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    <div className="flex items-center justify-between pt-2 border-t border-border/30">
-                      <span className="text-xs text-foreground">
-                        {t("sftp_show_hidden_files")}
-                      </span>
-                      <Switch
-                        checked={sftpLocalShowHidden}
-                        onCheckedChange={(checked) => {
-                          setSftpLocalShowHidden(checked);
-                          playSound(SoundType.SWITCH);
-                        }}
-                      />
-                    </div>
+                <div className="flex flex-col gap-3 rounded-lg border border-border/50 bg-muted/10 p-3.5">
+                  <div className="grid grid-cols-4 gap-2">
+                    {[
+                      { id: "list", label: t("sftp_view_list"), icon: List },
+                      { id: "large", label: t("sftp_view_large"), icon: Grid2X2 },
+                      { id: "medium", label: t("sftp_view_medium"), icon: LayoutGrid },
+                      { id: "small", label: t("sftp_view_small"), icon: Grid3X3 },
+                    ].map((item) => {
+                      const Icon = item.icon;
+                      const isSelected = sftpDefaultViewMode === item.id;
+                      return (
+                        <button
+                          key={`unified-${item.id}`}
+                          type="button"
+                          onClick={() => {
+                            setSftpDefaultViewMode(
+                              item.id as "list" | "large" | "medium" | "small"
+                            );
+                            playSound(SoundType.CLICK);
+                          }}
+                          className={cn(
+                            "flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-md border text-center transition-all cursor-pointer select-none",
+                            isSelected
+                              ? "border-primary bg-primary/10 text-primary font-medium shadow-2xs"
+                              : "border-border/60 bg-muted/20 hover:bg-muted/50 hover:border-border text-foreground"
+                          )}
+                        >
+                          <Icon className="w-3.5 h-3.5 shrink-0" />
+                          <span className="text-[11px] truncate">
+                            {item.label}
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
 
-                  {/* 远程面板 */}
-                  <div className="flex flex-col gap-2.5 rounded-lg border border-border/50 bg-muted/10 p-3">
-                    <div className="flex items-center gap-1.5">
-                      <Server className="w-3.5 h-3.5 text-primary" />
-                      <span className="font-medium text-foreground text-xs">
-                        {t("sftp_remote_defaults")}
-                      </span>
-                    </div>
-
-                    <div className="grid grid-cols-4 gap-1.5">
-                      {[
-                        { id: "list", label: t("sftp_view_list"), icon: List },
-                        { id: "large", label: t("sftp_view_large"), icon: LayoutGrid },
-                        { id: "medium", label: t("sftp_view_medium"), icon: Grid2X2 },
-                        { id: "small", label: t("sftp_view_small"), icon: Grid3X3 },
-                      ].map((item) => {
-                        const Icon = item.icon;
-                        const isSelected = sftpRemoteViewMode === item.id;
-                        return (
-                          <button
-                            key={`remote-${item.id}`}
-                            type="button"
-                            onClick={() => {
-                              setSftpRemoteViewMode(
-                                item.id as "list" | "large" | "medium" | "small"
-                              );
-                              playSound(SoundType.CLICK);
-                            }}
-                            className={cn(
-                              "flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-md border text-center transition-all cursor-pointer select-none",
-                              isSelected
-                                ? "border-primary bg-primary/10 text-primary font-medium shadow-2xs"
-                                : "border-border/60 bg-muted/20 hover:bg-muted/50 hover:border-border text-foreground"
-                            )}
-                          >
-                            <Icon className="w-3.5 h-3.5 shrink-0" />
-                            <span className="text-[11px] truncate">
-                              {item.label}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    <div className="flex items-center justify-between pt-2 border-t border-border/30">
-                      <span className="text-xs text-foreground">
-                        {t("sftp_show_hidden_files")}
-                      </span>
-                      <Switch
-                        checked={sftpRemoteShowHidden}
-                        onCheckedChange={(checked) => {
-                          setSftpRemoteShowHidden(checked);
-                          playSound(SoundType.SWITCH);
-                        }}
-                      />
-                    </div>
+                  <div className="flex items-center justify-between pt-2.5 border-t border-border/30">
+                    <span className="text-xs text-foreground">
+                      {t("sftp_show_hidden_files")}
+                    </span>
+                    <Switch
+                      checked={sftpShowHidden}
+                      onCheckedChange={(checked) => {
+                        setSftpShowHidden(checked);
+                        playSound(SoundType.SWITCH);
+                      }}
+                    />
                   </div>
                 </div>
 
@@ -2798,6 +2909,154 @@ function SettingsPanel({
                       }}
                     />
                   </div>
+
+                  {/* 3. 扩展包含过滤白名单 (Include Glob) */}
+                  <div className="flex flex-col gap-2 rounded-lg border border-border/50 bg-muted/10 p-3.5">
+                    <div className="flex items-center justify-between">
+                      <SettingLabelWithHint
+                        label={t("sftp_include_patterns_label")}
+                        desc={t("sftp_include_patterns_desc")}
+                        className="text-xs"
+                      />
+                      {sftpIncludePatterns.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIncludePatternsDraft("");
+                            setSftpIncludePatterns([]);
+                            playSound(SoundType.CLICK);
+                          }}
+                          className="text-[11px] text-muted-foreground hover:text-destructive transition-colors cursor-pointer"
+                        >
+                          {t("common_clear")}
+                        </button>
+                      )}
+                    </div>
+                    <textarea
+                      rows={2}
+                      value={includePatternsDraft}
+                      aria-label={t("sftp_include_patterns_label")}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        setIncludePatternsDraft(raw);
+                        const parsed = Array.from(
+                          new Set(
+                            raw
+                              .split(/[\n,]+/)
+                              .map((s) => s.trim())
+                              .filter(Boolean),
+                          ),
+                        );
+                        setSftpIncludePatterns(parsed);
+                      }}
+                      placeholder={t("sftp_include_patterns_placeholder")}
+                      className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-mono outline-none focus:ring-1 focus:ring-primary resize-y min-h-[54px]"
+                    />
+                  </div>
+
+                  {/* 4. 文件大小范围过滤 (KB) */}
+                  <div className="flex flex-col gap-2 rounded-lg border border-border/50 bg-muted/10 p-3.5">
+                    <SettingLabelWithHint
+                      label={t("sftp_size_range_label")}
+                      desc={t("sftp_size_range_desc")}
+                      className="text-xs"
+                    />
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5 flex-1">
+                        <Input
+                          type="number"
+                          min={0}
+                          step={1}
+                          aria-label={t("sftp_size_min_placeholder")}
+                          value={sftpMinSizeKb ?? ""}
+                          onChange={(e) => {
+                            const raw = e.target.value.trim();
+                            if (raw === "") {
+                              setSftpMinSizeKb(null);
+                              return;
+                            }
+                            const num = Number(raw);
+                            if (Number.isFinite(num)) {
+                              setSftpMinSizeKb(Math.max(0, Math.floor(num)));
+                            }
+                          }}
+                          placeholder={t("sftp_size_min_placeholder")}
+                          className="h-8 text-xs font-mono bg-background"
+                        />
+                        <span className="text-[11px] text-muted-foreground shrink-0">KB</span>
+                      </div>
+                      <span className="text-muted-foreground text-xs">-</span>
+                      <div className="flex items-center gap-1.5 flex-1">
+                        <Input
+                          type="number"
+                          min={0}
+                          step={1}
+                          aria-label={t("sftp_size_max_placeholder")}
+                          value={sftpMaxSizeKb ?? ""}
+                          onChange={(e) => {
+                            const raw = e.target.value.trim();
+                            if (raw === "") {
+                              setSftpMaxSizeKb(null);
+                              return;
+                            }
+                            const num = Number(raw);
+                            if (Number.isFinite(num)) {
+                              setSftpMaxSizeKb(Math.max(0, Math.floor(num)));
+                            }
+                          }}
+                          placeholder={t("sftp_size_max_placeholder")}
+                          className="h-8 text-xs font-mono bg-background"
+                        />
+                        <span className="text-[11px] text-muted-foreground shrink-0">KB</span>
+                      </div>
+                    </div>
+                    {sftpMinSizeKb !== null &&
+                      sftpMaxSizeKb !== null &&
+                      sftpMinSizeKb > sftpMaxSizeKb && (
+                        <span className="text-[11px] text-amber-500">
+                          {t("sftp_size_range_invalid")}
+                        </span>
+                      )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* 符号链接处理策略（独立于排除规则总开关，始终可交互） */}
+            <Card className="border/50 bg-background shadow-sm rounded-lg overflow-hidden">
+              <CardContent className="p-6 flex flex-col gap-3 text-xs">
+                <SettingLabelWithHint
+                  label={t("sftp_symlink_policy_label")}
+                  desc={t("sftp_symlink_policy_desc")}
+                  className="text-xs"
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  {(
+                    [
+                      { id: "skip", label: t("sftp_symlink_skip") },
+                      { id: "follow", label: t("sftp_symlink_follow") },
+                    ] as const
+                  ).map((opt) => {
+                    const selected = sftpSymlinkPolicy === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => {
+                          setSftpSymlinkPolicy(opt.id);
+                          playSound(SoundType.CLICK);
+                        }}
+                        className={cn(
+                          "px-2.5 py-2 rounded-md border text-xs transition-all cursor-pointer select-none text-center",
+                          selected
+                            ? "border-primary bg-primary/10 text-primary font-medium shadow-2xs"
+                            : "border-border/60 bg-background/60 hover:bg-muted/50 text-foreground",
+                        )}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
                 </div>
               </CardContent>
             </Card>
@@ -2811,9 +3070,6 @@ function SettingsPanel({
             {/* 其它分类占位符 */}
             <Card className="border/50 bg-background shadow-sm rounded-lg overflow-hidden p-8 text-center select-none">
               <Settings className="h-10 w-10 mx-auto text-muted-foreground/50 mb-3" />
-              <h3 className="text-sm font-medium mb-1">
-                {subTab === "account" && t("sidebar_account")}
-              </h3>
               <p className="text-xs text-muted-foreground">
                 {t("placeholder_desc")}
               </p>
@@ -2836,9 +3092,20 @@ function AuditLogsPanel() {
   const [loading, setLoading] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const limit = 12;
+  const mountedRef = useRef(true);
+  const fetchReqIdRef = useRef(0);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      fetchReqIdRef.current += 1;
+    };
+  }, []);
 
   const fetchLogs = useCallback(async () => {
     if (!backend) return;
+    const reqId = ++fetchReqIdRef.current;
     setLoading(true);
     try {
       const offset = (page - 1) * limit;
@@ -2851,12 +3118,17 @@ function AuditLogsPanel() {
         ),
         backend.auditLogs.count(logType || undefined, search || undefined),
       ]);
+      if (!mountedRef.current || fetchReqIdRef.current !== reqId) return;
       setLogs(list);
       setTotal(count);
     } catch (err) {
-      console.error("Failed to fetch audit logs:", err);
+      if (mountedRef.current && fetchReqIdRef.current === reqId) {
+        console.error("Failed to fetch audit logs:", err);
+      }
     } finally {
-      setLoading(false);
+      if (mountedRef.current && fetchReqIdRef.current === reqId) {
+        setLoading(false);
+      }
     }
   }, [logType, search, page]);
 
@@ -2913,6 +3185,12 @@ function AuditLogsPanel() {
             {t("logs_filter_backend")}
           </span>
         );
+      case "transfer":
+        return (
+          <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-sky-500/10 text-sky-500 border border-sky-500/15 whitespace-nowrap">
+            {t("logs_filter_transfer")}
+          </span>
+        );
       default:
         return (
           <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-slate-500/10 text-slate-500 border border-slate-500/15 whitespace-nowrap">
@@ -2963,6 +3241,7 @@ function AuditLogsPanel() {
                 { value: '', label: t('logs_filter_all') },
                 { value: 'frontend', label: t('logs_filter_frontend') },
                 { value: 'backend', label: t('logs_filter_backend') },
+                { value: 'transfer', label: t('logs_filter_transfer') },
               ]}
               className="h-9"
               ariaLabel={t('logs_filter_all')}

@@ -82,11 +82,12 @@ export function validateConnectionConfiguration(server: Server, allServers?: Ser
 
   if (!server.host?.trim()) issues.push('host')
   if (!Number.isInteger(server.port) || server.port < 1 || server.port > 65535) issues.push('port')
-  if (!server.username?.trim()) issues.push('username')
+  const hasAuthProfile = Boolean(server.authProfileId?.trim())
+  if (!hasAuthProfile && !server.username?.trim()) issues.push('username')
 
-  if (server.authType === 'password' && !server.password) issues.push('password')
-  if (server.authType === 'privateKey' && !server.sshKeyId && !server.privateKeyPath) issues.push('privateKey')
-  if (server.authType === 'certificate' && !server.sshKeyId && (!server.privateKeyPath || !server.certificatePath)) {
+  if (!hasAuthProfile && server.authType === 'password' && !server.password) issues.push('password')
+  if (!hasAuthProfile && server.authType === 'privateKey' && !server.sshKeyId && !server.privateKeyPath) issues.push('privateKey')
+  if (!hasAuthProfile && server.authType === 'certificate' && !server.sshKeyId && (!server.privateKeyPath || !server.certificatePath)) {
     issues.push('certificate')
   }
 

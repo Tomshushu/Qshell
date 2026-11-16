@@ -21,6 +21,8 @@ import { Input } from "@/components/ui/input";
 import { Z_LAYER } from "@/lib/z-layer";
 import { Switch } from "@/components/ui/switch";
 import { useTranslation } from "@/i18n";
+import { useAppStore } from "@/store";
+import { useTerminalLockStore } from "@/store/terminal-lock-store";
 import { useShortcutStore } from "@/store/shortcut-store";
 import { cn } from "@/lib/utils";
 import { sshService } from "@/services/ssh-service";
@@ -141,11 +143,21 @@ export function QuickCommandPaletteModal() {
   // 快捷键处理：capture 阶段拦截以阻止冒泡到全局 useKeyboardShortcuts 造成
   // 重复 toggle；同时尊重用户自定义绑定，并放过输入框内的 AltGr+C 等字符输入。
   useEffect(() => {
+    const isCurrentTabLocked = () => {
+      const currentActiveTabId = useAppStore.getState().activeTabId;
+      return Boolean(
+        currentActiveTabId &&
+          useTerminalLockStore.getState().isTabLocked(currentActiveTabId),
+      );
+    };
+
     const handleToggle = () => {
+      if (isCurrentTabLocked()) return;
       setOpen((prev) => !prev);
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (isCurrentTabLocked()) return;
       const el = e.target as HTMLElement | null;
       if (
         el &&

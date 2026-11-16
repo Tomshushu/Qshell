@@ -20,12 +20,21 @@ import {
   Loader2,
   Bookmark,
   EyeOff,
+  ExternalLink,
+  Code,
+  GitCompare,
+  Replace,
 } from 'lucide-react'
 import { ArchiveFileIcon } from '@/components/ui/file-icons'
 import { ContextMenuShortcut } from '@/components/ui/context-menu'
 import { isSupportedArchiveName } from '@/components/sftp/sftp-utils'
 import { cn } from '@/lib/utils'
-import { clampMenuToViewport, computeSubMenuPosition } from '@/lib/menu-position'
+import { useModalStack } from '@/hooks/use-modal-stack'
+import {
+  clampMenuToViewport,
+  computeSubMenuPosition,
+  computeSubmenuVerticalClamp,
+} from '@/lib/menu-position'
 import type { FileEntry } from '@/types'
 import type { ContextMenuState } from './types'
 
@@ -34,9 +43,14 @@ interface FileContextMenuProps {
   ctxMenuRef: React.RefObject<HTMLDivElement | null>
   currentPath: string
   selectedFiles: string[]
+  batchRenameCount?: number
+  canCompareFiles?: boolean
+  compareFileCount?: number
+  comparePairLabel?: string
   transferLoading: string | null
   extractingArchive?: string | null
   isWindows: boolean
+  isFtp?: boolean
   onClose: () => void
   showHidden?: boolean
   onToggleShowHidden?: () => void
@@ -44,9 +58,12 @@ interface FileContextMenuProps {
   onNewItem: (type: 'file' | 'dir') => void
   onNativeUpload: (isFolder: boolean) => void
   onDownloadMultiple: (paths: string[]) => void
+  onBatchRename?: () => void
+  onCompareSelected?: () => void
   onPreview: (file: FileEntry) => void
   onNavigateTo: (path: string) => void
   onOpenEditor: (file: FileEntry) => void
+  onStartExternalEdit?: (file: FileEntry, editorCmd?: string) => void
   onStartRename: (file: FileEntry) => void
   onDownload: (file: FileEntry) => void
   onDownloadArchive: (file: FileEntry, format: string) => void
@@ -63,14 +80,100 @@ interface FileContextMenuProps {
 const itemClass =
   'relative flex w-full cursor-pointer select-none items-center rounded-lg px-2.5 py-1.5 text-xs outline-none hover:bg-accent hover:text-accent-foreground transition-all active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50 text-left'
 
+interface FileSubmenuProps {
+  isOpen: boolean
+  side: 'left' | 'right'
+  estimatedHeight: number
+  minWidthClass: string
+  trigger: React.ReactNode
+  onMouseEnterTrigger: () => void
+  onMouseLeaveTrigger: () => void
+  onMouseEnterPanel: () => void
+  onMouseLeavePanel: () => void
+  children: React.ReactNode
+}
+
+/** 文件右键菜单的二级子菜单容器：支持视口底部自动向上收拢及无死区悬停桥接 */
+function FileSubmenu({
+  isOpen,
+  side,
+  estimatedHeight,
+  minWidthClass,
+  trigger,
+  onMouseEnterTrigger,
+  onMouseLeaveTrigger,
+  onMouseEnterPanel,
+  onMouseLeavePanel,
+  children,
+}: FileSubmenuProps) {
+  const triggerRef = React.useRef<HTMLDivElement>(null)
+  const panelRef = React.useRef<HTMLDivElement>(null)
+  const [offsetTop, setOffsetTop] = React.useState(-6)
+  const [maxHeight, setMaxHeight] = React.useState<number | undefined>(undefined)
+
+  React.useLayoutEffect(() => {
+    if (!isOpen || !triggerRef.current || typeof window === 'undefined' || window.innerHeight <= 0) {
+      return
+    }
+    const rect = triggerRef.current.getBoundingClientRect()
+    const clamped = computeSubmenuVerticalClamp(
+      rect.top,
+      panelRef.current?.offsetHeight || estimatedHeight,
+      6,
+      -6,
+    )
+    setOffsetTop(clamped.offsetTop)
+    setMaxHeight(clamped.maxHeight)
+  }, [isOpen, estimatedHeight])
+
+  return (
+    <div
+      ref={triggerRef}
+      className="relative"
+      onMouseEnter={onMouseEnterTrigger}
+      onMouseLeave={onMouseLeaveTrigger}
+    >
+      {trigger}
+      {isOpen && (
+        <div
+          data-testid="file-submenu-wrapper"
+          className={cn(
+            'absolute z-popup',
+            side === 'right' ? 'left-full pl-1 origin-top-left' : 'right-full pr-1 origin-top-right',
+          )}
+          style={{ top: offsetTop }}
+          onMouseEnter={onMouseEnterPanel}
+          onMouseLeave={onMouseLeavePanel}
+        >
+          <div
+            ref={panelRef}
+            className={cn(
+              'flex flex-col overflow-y-auto overflow-x-hidden rounded-xl border border-slate-200/90 dark:border-white/15 bg-white/98 dark:bg-[#13141f]/98 backdrop-blur-2xl shadow-[0_16px_36px_-6px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.9)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-1 text-xs text-popover-foreground select-none animate-in fade-in-0 zoom-in-95 duration-100',
+              minWidthClass,
+            )}
+            style={{ maxHeight }}
+          >
+            {children}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function FileContextMenu({
   ctxMenu,
   ctxMenuRef,
   currentPath,
   selectedFiles,
+  batchRenameCount,
+  canCompareFiles = false,
+  compareFileCount = 0,
+  comparePairLabel,
   transferLoading,
   extractingArchive,
   isWindows,
+  isFtp = false,
   onClose,
   showHidden,
   onToggleShowHidden,
@@ -78,9 +181,12 @@ export function FileContextMenu({
   onNewItem,
   onNativeUpload,
   onDownloadMultiple,
+  onBatchRename,
+  onCompareSelected,
   onPreview,
   onNavigateTo,
   onOpenEditor,
+  onStartExternalEdit,
   onStartRename,
   onDownload,
   onDownloadArchive,
@@ -94,14 +200,20 @@ export function FileContextMenu({
   t,
 }: FileContextMenuProps) {
   const [copied, setCopied] = React.useState(false)
-  const [activeSubMenu, setActiveSubMenu] = React.useState<'new' | 'upload' | 'archive' | null>(null)
+  const [activeSubMenu, setActiveSubMenu] = React.useState<'new' | 'upload' | 'archive' | 'externalEdit' | null>(null)
   const closeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  const copyTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useModalStack('files-context-menu', Boolean(ctxMenu), onClose)
 
   // 组件卸载时清理定时器
   React.useEffect(() => {
     return () => {
       if (closeTimerRef.current) {
         clearTimeout(closeTimerRef.current)
+      }
+      if (copyTimerRef.current) {
+        clearTimeout(copyTimerRef.current)
       }
     }
   }, [])
@@ -113,25 +225,30 @@ export function FileContextMenu({
   const multiSelect = !!file && selectedFiles.length > 1 && selectedFiles.includes(file.path)
 
   // 动态根据菜单类型估算高度，避免把条目少的菜单误判为 480 导致在视口下方被过度上推
-  const estimatedH = multiSelect ? 160 : !file ? 150 : isDirectory ? 380 : 340
+  const estimatedH = multiSelect ? 240 : !file ? 150 : isDirectory ? 430 : 390
   // 边界检测: 主菜单预估宽度 220（含 padding）
   const mainPos = clampMenuToViewport(ctxMenu.x, ctxMenu.y, 220, estimatedH)
   // 子菜单方向: 根据父菜单右侧剩余空间决定向右/向左展开
   const newSub = computeSubMenuPosition(mainPos.left, mainPos.top, 220, 160, 80)
   const uploadSub = computeSubMenuPosition(mainPos.left, mainPos.top, 220, 160, 80)
   const archiveSub = computeSubMenuPosition(mainPos.left, mainPos.top, 220, 180, 200)
+  const externalEditSub = computeSubMenuPosition(mainPos.left, mainPos.top, 220, 180, 80)
 
   const handleCopyPath = () => {
     const pathToCopy = file?.path || currentPath
-    navigator.clipboard.writeText(pathToCopy)
+    void navigator.clipboard.writeText(pathToCopy).catch(() => {})
     setCopied(true)
-    setTimeout(() => {
+    if (copyTimerRef.current) {
+      clearTimeout(copyTimerRef.current)
+    }
+    copyTimerRef.current = setTimeout(() => {
+      copyTimerRef.current = null
       setCopied(false)
       onClose()
     }, 800)
   }
 
-  const openSubMenu = (menu: 'new' | 'upload' | 'archive') => {
+  const openSubMenu = (menu: 'new' | 'upload' | 'archive' | 'externalEdit') => {
     if (closeTimerRef.current) {
       clearTimeout(closeTimerRef.current)
       closeTimerRef.current = null
@@ -218,97 +335,89 @@ export function FileContextMenu({
 
       {!multiSelect && (
         <>
-          <div
-            className="relative"
-            onMouseEnter={() => openSubMenu('new')}
-            onMouseLeave={scheduleCloseSubMenu}
+          <FileSubmenu
+            isOpen={activeSubMenu === 'new'}
+            side={newSub.side}
+            estimatedHeight={80}
+            minWidthClass="min-w-[12rem]"
+            onMouseEnterTrigger={() => openSubMenu('new')}
+            onMouseLeaveTrigger={scheduleCloseSubMenu}
+            onMouseEnterPanel={keepSubMenuOpen}
+            onMouseLeavePanel={scheduleCloseSubMenu}
+            trigger={
+              <button className={itemClass}>
+                <Plus className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+                <span>{t('fs_new')}</span>
+                <ChevronRight className="ml-auto h-3.5 w-3.5 text-muted-foreground" />
+              </button>
+            }
           >
-            <button className={itemClass}>
-              <Plus className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
-              <span>{t('fs_new')}</span>
-              <ChevronRight className="ml-auto h-3.5 w-3.5 text-muted-foreground" />
+            <button
+              className={itemClass}
+              onClick={() => {
+                onNewItem('dir')
+                onClose()
+              }}
+            >
+              <FolderPlus className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+              <span className="whitespace-nowrap">{t('fs_new_folder')}</span>
+              <ContextMenuShortcut className="shrink-0">Ctrl+Shift+N</ContextMenuShortcut>
             </button>
-            {activeSubMenu === 'new' && (
-              <div
-                className={cn(
-                  'absolute -top-1.5 flex flex-col min-w-[12rem] rounded-xl border border-slate-200/90 dark:border-white/15 bg-white/98 dark:bg-[#13141f]/98 backdrop-blur-2xl shadow-[0_16px_36px_-6px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.9)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-1 text-xs text-popover-foreground select-none animate-in fade-in-0 zoom-in-95 duration-100',
-                  newSub.side === 'right' ? 'left-full ml-1 origin-top-left' : 'right-full mr-1 origin-top-right'
-                )}
-                onMouseEnter={keepSubMenuOpen}
-                onMouseLeave={scheduleCloseSubMenu}
-              >
-                <button
-                  className={itemClass}
-                  onClick={() => {
-                    onNewItem('dir')
-                    onClose()
-                  }}
-                >
-                  <FolderPlus className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span className="whitespace-nowrap">{t('fs_new_folder')}</span>
-                  <ContextMenuShortcut className="shrink-0">Ctrl+Shift+N</ContextMenuShortcut>
-                </button>
-                <button
-                  className={itemClass}
-                  onClick={() => {
-                    onNewItem('file')
-                    onClose()
-                  }}
-                >
-                  <FilePlus className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span>{t('fs_new_file')}</span>
-                </button>
-              </div>
-            )}
-          </div>
+            <button
+              className={itemClass}
+              onClick={() => {
+                onNewItem('file')
+                onClose()
+              }}
+            >
+              <FilePlus className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+              <span>{t('fs_new_file')}</span>
+            </button>
+          </FileSubmenu>
 
-          <div
-            className="relative"
-            onMouseEnter={() => openSubMenu('upload')}
-            onMouseLeave={scheduleCloseSubMenu}
+          <FileSubmenu
+            isOpen={activeSubMenu === 'upload'}
+            side={uploadSub.side}
+            estimatedHeight={80}
+            minWidthClass="min-w-[10rem]"
+            onMouseEnterTrigger={() => openSubMenu('upload')}
+            onMouseLeaveTrigger={scheduleCloseSubMenu}
+            onMouseEnterPanel={keepSubMenuOpen}
+            onMouseLeavePanel={scheduleCloseSubMenu}
+            trigger={
+              <button
+                className={itemClass}
+                disabled={transferLoading === 'upload'}
+              >
+                <Upload className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+                <span>{t('fs_upload_here')}</span>
+                <ChevronRight className="ml-auto h-3.5 w-3.5 text-muted-foreground" />
+              </button>
+            }
           >
             <button
               className={itemClass}
               disabled={transferLoading === 'upload'}
+              onClick={() => {
+                onNativeUpload(false)
+                onClose()
+              }}
             >
               <Upload className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
-              <span>{t('fs_upload_here')}</span>
-              <ChevronRight className="ml-auto h-3.5 w-3.5 text-muted-foreground" />
+              <span>{t('fs_upload_file')}</span>
             </button>
-            {activeSubMenu === 'upload' && (
-              <div
-                className={cn(
-                  'absolute -top-1.5 flex flex-col min-w-[10rem] rounded-xl border border-slate-200/90 dark:border-white/15 bg-white/98 dark:bg-[#13141f]/98 backdrop-blur-2xl shadow-[0_16px_36px_-6px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.9)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-1 text-xs text-popover-foreground select-none animate-in fade-in-0 zoom-in-95 duration-100',
-                  uploadSub.side === 'right' ? 'left-full ml-1 origin-top-left' : 'right-full mr-1 origin-top-right'
-                )}
-                onMouseEnter={keepSubMenuOpen}
-                onMouseLeave={scheduleCloseSubMenu}
-              >
-                <button
-                  className={itemClass}
-                  disabled={transferLoading === 'upload'}
-                  onClick={() => {
-                    onNativeUpload(false)
-                    onClose()
-                  }}
-                >
-                  <Upload className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span>{t('fs_upload_file')}</span>
-                </button>
-                <button
-                  className={itemClass}
-                  disabled={transferLoading === 'upload'}
-                  onClick={() => {
-                    onNativeUpload(true)
-                    onClose()
-                  }}
-                >
-                  <FolderInput className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span>{t('fs_upload_folder')}</span>
-                </button>
-              </div>
-            )}
-          </div>
+            <button
+              className={itemClass}
+              disabled={transferLoading === 'upload'}
+              onClick={() => {
+                onNativeUpload(true)
+                onClose()
+              }}
+            >
+              <FolderInput className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+              <span>{t('fs_upload_folder')}</span>
+            </button>
+          </FileSubmenu>
         </>
       )}
 
@@ -317,19 +426,59 @@ export function FileContextMenu({
           <div className="-mx-1 my-1 h-px bg-border/50" />
 
           {multiSelect ? (
-            /* 多选模式: 批量下载 */
-            <button
-              className={itemClass}
-              disabled={transferLoading === 'download'}
-              onMouseEnter={() => setActiveSubMenu(null)}
-              onClick={() => {
-                onDownloadMultiple(selectedFiles)
-                onClose()
-              }}
-            >
-              <Download className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
-              <span>{t('fs_download_local')}</span>
-            </button>
+            /* 多选模式: 批量下载 / 批量重命名 / 文件对比 */
+            <>
+              <button
+                className={itemClass}
+                disabled={transferLoading === 'download'}
+                onMouseEnter={() => setActiveSubMenu(null)}
+                onClick={() => {
+                  onDownloadMultiple(selectedFiles)
+                  onClose()
+                }}
+              >
+                <Download className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+                <span>{t('fs_download_local')}</span>
+              </button>
+              {onBatchRename && (batchRenameCount ?? selectedFiles.length) >= 2 && (
+                <button
+                  className={itemClass}
+                  onMouseEnter={() => setActiveSubMenu(null)}
+                  onClick={() => {
+                    onBatchRename()
+                    onClose()
+                  }}
+                >
+                  <Replace className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span>{t('batch_rename_title')}</span>
+                </button>
+              )}
+              {onCompareSelected && canCompareFiles && (
+                <button
+                  className={itemClass}
+                  onMouseEnter={() => setActiveSubMenu(null)}
+                  onClick={() => {
+                    onCompareSelected()
+                    onClose()
+                  }}
+                >
+                  <GitCompare className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span>对比选中文件</span>
+                  {compareFileCount >= 3 ? (
+                    <span className="ml-auto pl-2 text-[10px] text-muted-foreground shrink-0">
+                      已选 {compareFileCount} 个 · 可切换
+                    </span>
+                  ) : comparePairLabel ? (
+                    <span
+                      className="ml-auto pl-2 max-w-[140px] truncate text-[10px] text-muted-foreground"
+                      title={comparePairLabel}
+                    >
+                      {comparePairLabel}
+                    </span>
+                  ) : null}
+                </button>
+              )}
+            </>
           ) : (
             <>
               {!isDirectory && (
@@ -388,17 +537,65 @@ export function FileContextMenu({
                   )}
                 </>
               ) : (
-                <button
-                  className={itemClass}
-                  onMouseEnter={() => setActiveSubMenu(null)}
-                  onClick={() => {
-                    onOpenEditor(file)
-                    onClose()
-                  }}
-                >
-                  <Edit3 className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
-                  <span>{t('fs_edit_file')}</span>
-                </button>
+                <>
+                  <button
+                    className={itemClass}
+                    onMouseEnter={() => setActiveSubMenu(null)}
+                    onClick={() => {
+                      onOpenEditor(file)
+                      onClose()
+                    }}
+                  >
+                    <Edit3 className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span>{t('fs_edit_file')}</span>
+                  </button>
+                  {onStartExternalEdit && (
+                    <FileSubmenu
+                      isOpen={activeSubMenu === 'externalEdit'}
+                      side={externalEditSub.side}
+                      estimatedHeight={80}
+                      minWidthClass="min-w-[11rem]"
+                      onMouseEnterTrigger={() => openSubMenu('externalEdit')}
+                      onMouseLeaveTrigger={scheduleCloseSubMenu}
+                      onMouseEnterPanel={keepSubMenuOpen}
+                      onMouseLeavePanel={scheduleCloseSubMenu}
+                      trigger={
+                        <button
+                          className={itemClass}
+                          onClick={() => {
+                            onStartExternalEdit(file, 'default')
+                            onClose()
+                          }}
+                        >
+                          <ExternalLink className="mr-2 h-4 w-4 shrink-0 text-primary" />
+                          <span>使用外部编辑器打开</span>
+                          <ChevronRight className="ml-auto h-3.5 w-3.5 text-muted-foreground" />
+                        </button>
+                      }
+                    >
+                      <button
+                        className={itemClass}
+                        onClick={() => {
+                          onStartExternalEdit(file, 'default')
+                          onClose()
+                        }}
+                      >
+                        <ExternalLink className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+                        <span>系统默认关联程序</span>
+                      </button>
+                      <button
+                        className={itemClass}
+                        onClick={() => {
+                          onStartExternalEdit(file, 'code')
+                          onClose()
+                        }}
+                      >
+                        <Code className="mr-2 h-4 w-4 shrink-0 text-blue-500" />
+                        <span>Visual Studio Code</span>
+                      </button>
+                    </FileSubmenu>
+                  )}
+                </>
               )}
 
               <button
@@ -427,7 +624,7 @@ export function FileContextMenu({
                 <span>{isDirectory ? t('fs_download_dir') : t('fs_download_local')}</span>
               </button>
 
-              {!isDirectory && isSupportedArchiveName(file.name) && onExtractArchive && (
+              {!isFtp && !isDirectory && isSupportedArchiveName(file.name) && onExtractArchive && (
                 <button
                   className={itemClass}
                   disabled={transferLoading === file.path || extractingArchive === file.path}
@@ -446,52 +643,49 @@ export function FileContextMenu({
                 </button>
               )}
 
-              {isDirectory && (
-                <div
-                  className="relative"
-                  onMouseEnter={() => openSubMenu('archive')}
-                  onMouseLeave={scheduleCloseSubMenu}
-                >
-                  <button
-                    className={itemClass}
-                    disabled={transferLoading === file.path}
-                  >
-                    <ArchiveFileIcon className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
-                    <span>{t('fs_pack_download')}</span>
-                    <ChevronRight className="ml-auto h-3.5 w-3.5 text-muted-foreground" />
-                  </button>
-                  {activeSubMenu === 'archive' && (
-                    <div
-                      className={cn(
-                        'absolute -top-1.5 flex flex-col min-w-[12rem] max-h-[300px] overflow-y-auto rounded-xl border border-slate-200/90 dark:border-white/15 bg-white/98 dark:bg-[#13141f]/98 backdrop-blur-2xl shadow-[0_16px_36px_-6px_rgba(0,0,0,0.22),inset_0_1px_0_0_rgba(255,255,255,0.9)] dark:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.8),inset_0_1px_0_0_rgba(255,255,255,0.12)] p-1 text-xs text-popover-foreground select-none animate-in fade-in-0 zoom-in-95 duration-100',
-                        archiveSub.side === 'right' ? 'left-full ml-1 origin-top-left' : 'right-full mr-1 origin-top-right'
-                      )}
-                      onMouseEnter={keepSubMenuOpen}
-                      onMouseLeave={scheduleCloseSubMenu}
+              {!isFtp && isDirectory && (
+                <FileSubmenu
+                  isOpen={activeSubMenu === 'archive'}
+                  side={archiveSub.side}
+                  estimatedHeight={200}
+                  minWidthClass="min-w-[12rem]"
+                  onMouseEnterTrigger={() => openSubMenu('archive')}
+                  onMouseLeaveTrigger={scheduleCloseSubMenu}
+                  onMouseEnterPanel={keepSubMenuOpen}
+                  onMouseLeavePanel={scheduleCloseSubMenu}
+                  trigger={
+                    <button
+                      data-testid="file-menu-archive-trigger"
+                      className={itemClass}
+                      disabled={transferLoading === file.path}
                     >
-                      {[
-                        { format: 'tar.gz', label: 'tar.gz', desc: t('fs_format_gzip') },
-                        { format: 'tar.bz2', label: 'tar.bz2', desc: t('fs_format_bzip2') },
-                        { format: 'tar.xz', label: 'tar.xz', desc: t('fs_format_xz') },
-                        { format: 'zip', label: 'zip', desc: t('fs_format_zip') },
-                        { format: 'tar', label: 'tar', desc: t('fs_format_tar') },
-                      ].map((item) => (
-                        <button
-                          key={item.format}
-                          className={itemClass}
-                          disabled={transferLoading === file.path}
-                          onClick={() => {
-                            onDownloadArchive(file, item.format)
-                            onClose()
-                          }}
-                        >
-                          <span>{item.label}</span>
-                          <span className="ml-auto text-[11px] text-muted-foreground/70">{item.desc}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                      <ArchiveFileIcon className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+                      <span>{t('fs_pack_download')}</span>
+                      <ChevronRight className="ml-auto h-3.5 w-3.5 text-muted-foreground" />
+                    </button>
+                  }
+                >
+                  {[
+                    { format: 'tar.gz', label: 'tar.gz', desc: t('fs_format_gzip') },
+                    { format: 'tar.bz2', label: 'tar.bz2', desc: t('fs_format_bzip2') },
+                    { format: 'tar.xz', label: 'tar.xz', desc: t('fs_format_xz') },
+                    { format: 'zip', label: 'zip', desc: t('fs_format_zip') },
+                    { format: 'tar', label: 'tar', desc: t('fs_format_tar') },
+                  ].map((item) => (
+                    <button
+                      key={item.format}
+                      className={itemClass}
+                      disabled={transferLoading === file.path}
+                      onClick={() => {
+                        onDownloadArchive(file, item.format)
+                        onClose()
+                      }}
+                    >
+                      <span>{item.label}</span>
+                      <span className="ml-auto text-[11px] text-muted-foreground/70">{item.desc}</span>
+                    </button>
+                  ))}
+                </FileSubmenu>
               )}
 
               {!isWindows && (

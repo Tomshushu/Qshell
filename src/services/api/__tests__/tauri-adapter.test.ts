@@ -397,6 +397,46 @@ describe('tauri-adapter IPC contract', () => {
         colorDepth: 32,
       })
     })
+
+    it('launch forwards advanced redirection and security options when provided', async () => {
+      invokeMock.mockResolvedValue({ success: true })
+
+      await tauriAdapter.rdp.launch({
+        serverId: 's1',
+        rdpPort: 3389,
+        width: 2560,
+        height: 1440,
+        fullscreen: false,
+        colorDepth: 32,
+        options: {
+          useMultimon: true,
+          redirectClipboard: true,
+          redirectDrives: true,
+          redirectPrinters: false,
+          smartSizing: true,
+          enableCredssp: true,
+          audioMode: 0,
+        },
+      })
+
+      expect(invokeMock).toHaveBeenCalledWith('rdp_launch', {
+        serverId: 's1',
+        rdpPort: 3389,
+        width: 2560,
+        height: 1440,
+        fullscreen: false,
+        colorDepth: 32,
+        options: {
+          useMultimon: true,
+          redirectClipboard: true,
+          redirectDrives: true,
+          redirectPrinters: false,
+          smartSizing: true,
+          enableCredssp: true,
+          audioMode: 0,
+        },
+      })
+    })
   })
 
   describe('bmc', () => {

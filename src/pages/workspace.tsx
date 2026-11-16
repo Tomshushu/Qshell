@@ -1,7 +1,9 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useAppStore } from "@/store";
 import { useMetricsStore } from "@/store/metrics-store";
-import { getServerConnectionFlags, isPureVncServer, hasFtpFileTransfer } from "@/services/connection-targets";
+import { useTerminalLockStore } from "@/store/terminal-lock-store";
+import { TerminalLockOverlay } from "@/components/terminal/terminal-lock-overlay";
+import { getServerConnectionFlags, isPureVncServer, hasFtpFileTransfer, resolveServerForTab } from "@/services/connection-targets";
 import { ModuleTabs, type SerialToolbarState } from "@/components/workspace/module-tabs";
 import { OverviewModule } from "@/components/workspace/modules/overview";
 import { FloatingMetricsHud } from "@/components/workspace/floating-metrics-hud";
@@ -42,6 +44,7 @@ import {
 import { WorkspaceModuleModal } from "@/components/workspace/workspace-module-modal";
 import { cn } from "@/lib/utils";
 import { sshService } from "@/services/ssh-service";
+import type { AuthInteractionRequest } from "@/services/api/types";
 import { ConnectionState, SshErrorKind } from "@/services/ssh-connection-state";
 import { reconnectManager, useReconnectState } from "@/services/reconnect-manager";
 import { backend } from "@/services/api";
@@ -76,6 +79,11 @@ function isMissingKeyFailure(error?: string | null): boolean {
   return /missing (?:private )?key|private key path is empty|not found|cannot be resolved|未存储私钥|未存储证书|内容为空/i.test(error);
 }
 
+function isInteractiveAuthFailure(error?: string | null): boolean {
+  if (!error) return false;
+  return /keyboard-interactive|交互式认证|mfa\/otp/i.test(error);
+}
+
 export function WorkspacePage({
   isActive,
   isVisible = true,
@@ -87,6 +95,10 @@ export function WorkspacePage({
   const tabs = useAppStore((s) => s.tabs);
   const switchModule = useAppStore((s) => s.switchModule);
   const setServerConnected = useAppStore((s) => s.setServerConnected);
+  const isActiveRef = useRef(isActive);
+  useEffect(() => {
+    isActiveRef.current = isActive;
+  }, [isActive]);
   const updateServer = useAppStore((s) => s.updateServer);
   const closeTab = useAppStore((s) => s.closeTab);
   const setServerState = useAppStore((s) => s.setServerState);
@@ -187,11 +199,33 @@ export function WorkspacePage({
   const [keyCredentialSubmitting, setKeyCredentialSubmitting] = useState(false);
   const keyCredentialSubmittingRef = useRef(false);
   const keyCredentialPromptDismissedRef = useRef(false);
+  const [authInteraction, setAuthInteraction] = useState<AuthInteractionRequest | null>(null);
+  const [authInteractionSubmitting, setAuthInteractionSubmitting] = useState(false);
+  const authInteractionSeenRef = useRef(false);
   const [terminalReady, setTerminalReady] = useState(false);
   const hasTriedConnect = useRef(false);
   const currentTab = tabs.find((t) => t.id === tabId);
+  const lockedByTermId = useTerminalLockStore((s) => s.lockedByTermId);
+  const unlockTerminal = useTerminalLockStore((s) => s.unlockTerminal);
+  const workspaceLockEntry = useMemo(() => {
+    const wsId = currentTab?.workspaceId;
+    return Object.values(lockedByTermId).find(
+      (entry) =>
+        entry.tabId === tabId ||
+        Boolean(wsId && entry.workspaceId === wsId) ||
+        Boolean(entry.memberTabIds?.includes(tabId)),
+    );
+  }, [lockedByTermId, tabId, currentTab?.workspaceId]);
+  // 分屏工作台由外层 SplitLayoutView 统一渲染整组锁屏遮罩；单页工作台由本组件直接锁定整个工作台
+  const standaloneLockEntry = !isSplitPane && !currentTab?.workspaceId ? workspaceLockEntry : undefined;
   const serverId = currentTab?.serverId ?? "";
-  const server = useAppStore((s) => s.servers.find((sv) => sv.id === serverId));
+  const persistedServer = useAppStore((s) =>
+    serverId ? s.servers.find((sv) => sv.id === serverId) : undefined,
+  );
+  const server = useMemo(
+    () => persistedServer ?? resolveServerForTab([], serverId, currentTab),
+    [persistedServer, serverId, currentTab],
+  );
   // Phase 0：形态判断统一查能力表；刻意不传 osType，保持与重构前的
   // targetType / protocol 字面量判断完全等价（只有标签条需要 osType 旧资产兜底）。
   const serverFlags = getServerConnectionFlags(server?.targetType, server?.protocol);
@@ -200,13 +234,14 @@ export function WorkspacePage({
   const isBmcServer = serverFlags.isDeviceManagedServer;
   const deviceTargetType = server?.targetType;
   const isSerialServer = serverFlags.isSerialServer;
+  const isLocalServer = serverFlags.isLocalServer;
   const isRdpServer = serverFlags.isRdpServer;
   const isPureVnc = isPureVncServer(server);
   const hasFtp = hasFtpFileTransfer(server);
-  const hasSsh = !isPureVnc && !isSerialServer && !isRdpServer && !isBmcServer && !serverFlags.isTelnetServer;
+  const hasSsh = !isPureVnc && !isSerialServer && !isLocalServer && !isRdpServer && !isBmcServer && !serverFlags.isTelnetServer;
   // 没有系统指标采集链路的设备（网络设备 / Telnet / 外部启动器）不展示监控，避免全 0 假值
   const supportsMetrics = serverFlags.supportsMetrics;
-  const connId = tabId && serverId && !isSerialServer && !isRdpServer && !isBmcServer && !isPureVnc
+  const connId = tabId && serverId && !isSerialServer && !isLocalServer && !isRdpServer && !isBmcServer && !isPureVnc
     ? `ws:${serverId}:${tabId}`
     : serverId;
   // 顶部「实时监控悬浮窗」开关只在确实有指标可展示时保留：
@@ -216,7 +251,7 @@ export function WorkspacePage({
     (s) => s.serverStates[connId]?.metrics?.metricsAvailable,
   );
   const floatingMonitorAvailable =
-    !isSerialServer && !isRdpServer && !isBmcServer && !isPureVnc && supportsMetrics &&
+    !isSerialServer && !isLocalServer && !isRdpServer && !isBmcServer && !isPureVnc && supportsMetrics &&
     metricsAvailable !== false;
 
   // 监听底栏胶囊点击切换监控卡片事件
@@ -250,8 +285,9 @@ export function WorkspacePage({
   const serverStateEntry = useAppStore((s) =>
     connId ? s.serverStates[connId] : undefined,
   );
-  const usesSshPasswordAuth = server?.protocol === 'ssh' && server?.authType === 'password';
-  const usesSshKeyAuth = server?.protocol === 'ssh'
+  const hasAuthProfile = Boolean(server?.authProfileId?.trim());
+  const usesSshPasswordAuth = !hasAuthProfile && server?.protocol === 'ssh' && server?.authType === 'password';
+  const usesSshKeyAuth = !hasAuthProfile && server?.protocol === 'ssh'
     && (server?.authType === 'privateKey' || server?.authType === 'certificate');
   const missingSshCredentials = Boolean(
     usesSshPasswordAuth && (!server?.username?.trim() || !server?.password?.trim()),
@@ -353,6 +389,9 @@ export function WorkspacePage({
     setKeyCredentialPromptOpen(false);
     setKeyCredentialPromptError(null);
     setKeyCredentialSubmitting(false);
+    setAuthInteraction(null);
+    setAuthInteractionSubmitting(false);
+    authInteractionSeenRef.current = false;
     setWasConnected(false);
   }, [serverId, tabId, connId]);
 
@@ -403,6 +442,18 @@ export function WorkspacePage({
     // 音效统一在此回调播放：无论从 workspace/terminal/sftp-panel 哪条路径连接，
     // 后端状态机变更都会触发此回调，保证连接音效全局一致
     const unsubStateChanged = sshService.onStateChanged((data) => {
+      const sftpSubId = `sftp:${serverId}`;
+      if (data.serverId === sftpSubId) {
+        if (
+          data.state === ConnectionState.Ready ||
+          data.state === ConnectionState.Failed ||
+          data.state === ConnectionState.Disconnected
+        ) {
+          setAuthInteraction(null);
+          setAuthInteractionSubmitting(false);
+        }
+        return;
+      }
       if (data.serverId !== connId) return;
       console.log(
         `[Workspace Event] ${connId} ssh:state-changed state=${data.state}, gen=${data.generation}`,
@@ -423,6 +474,8 @@ export function WorkspacePage({
         data.generation,
       );
       if (data.state === ConnectionState.Ready) {
+        setAuthInteraction(null);
+        setAuthInteractionSubmitting(false);
         setConnectError(null);
         wasConnectedRef.current = true;
         setWasConnected(true);
@@ -430,7 +483,11 @@ export function WorkspacePage({
         playSound(SoundType.Ping);
         lastConnSoundRef.current = { type: SoundType.Ping, time: Date.now() };
       } else if (data.state === ConnectionState.Failed) {
-        if (!routeAuthenticationFailure(data.error, data.errorKind)) {
+        setAuthInteraction(null);
+        setAuthInteractionSubmitting(false);
+        const suppressCredPrompt =
+          authInteractionSeenRef.current || isInteractiveAuthFailure(data.error);
+        if (suppressCredPrompt || !routeAuthenticationFailure(data.error, data.errorKind)) {
           setConnectError(data.error ?? t("ws_conn_failed"));
           const isHostKey = data.errorKind === SshErrorKind.HostKeyMismatch || data.error?.toLowerCase().includes("host key");
           if (isHostKey && (isActive || isSplitPane)) {
@@ -447,6 +504,8 @@ export function WorkspacePage({
           lastConnSoundRef.current = { type: SoundType.Basso, time: now };
         }
       } else if (data.state === ConnectionState.Disconnected) {
+        setAuthInteraction(null);
+        setAuthInteractionSubmitting(false);
         // 连接被远端/网络断开；保留 wasConnected 以触发自动重连
         setConnectError(data.error ?? null);
         // 被动断开：Submarine 深沉声纳
@@ -464,10 +523,27 @@ export function WorkspacePage({
       }
     });
 
+    const unsubAuthInteraction = sshService.onAuthInteractionRequired((req) => {
+      if (req.serverId === `sftp:${serverId}` && !isActiveRef.current) {
+        return;
+      }
+      if (
+        req.serverId !== connId &&
+        req.serverId !== serverId &&
+        req.serverId !== `sftp:${serverId}`
+      ) {
+        return;
+      }
+      authInteractionSeenRef.current = true;
+      setAuthInteractionSubmitting(false);
+      setAuthInteraction(req);
+    });
+
     return () => {
       unsubConnected?.();
       unsubDisconnected?.();
       unsubStateChanged?.();
+      unsubAuthInteraction?.();
     };
   }, [setServerConnected, setServerState, updateServer, serverId, connId, routeAuthenticationFailure, t]);
 
@@ -649,12 +725,36 @@ export function WorkspacePage({
       !isConnected &&
       !connecting &&
       sshService.isAvailable() &&
+      !isLocalServer &&
+      !isSerialServer &&
+      !isBmcServer &&
+      !isRdpServer &&
       !isPureVnc &&
       targetModule !== "rdp" &&
       targetModule !== "bmc"
     ) {
       reconnectManager.retryImmediately(connId);
       handleConnect();
+    }
+  };
+
+  // 从终端右键菜单请求打开 SFTP：单窗格工作台展开底部文件抽屉（不误折叠），分屏时打开独立 SFTP 标签页。
+  const handleOpenSftpFromTerminal = () => {
+    if (isTerminalFullscreen) {
+      setIsTerminalFullscreen(false);
+    }
+    if (filesPanelAvailable && !isPureVnc) {
+      if (!filesPanelOpen || isRdpModule || isBmcModule || isVncModule || isModalModule) {
+        handleModuleChange("files");
+      }
+      return;
+    }
+    if (isPureVnc) {
+      handleModuleChange("files");
+      return;
+    }
+    if (serverId) {
+      useAppStore.getState().openSftpWithServers([serverId]);
     }
   };
 
@@ -681,7 +781,7 @@ export function WorkspacePage({
 
   const handleConnect = useCallback(async () => {
     // 这些目标由各自模块建立连接，不能落入通用 SSH 连接链路。
-    if (isBmcServer || isSerialServer || isRdpServer || server?.protocol === 'vnc' || isPureVnc) return;
+    if (isBmcServer || isSerialServer || isLocalServer || isRdpServer || server?.protocol === 'vnc' || isPureVnc) return;
     const skipCredentialPrecheck = credentialJustSavedRef.current;
     credentialJustSavedRef.current = false;
     if (!skipCredentialPrecheck && !wasConnectedRef.current && serverStateEntry?.errorKind === SshErrorKind.AuthError) {
@@ -715,6 +815,9 @@ export function WorkspacePage({
     setConnecting(true);
     setConnectError(null);
     setTerminalReady(false);
+    setAuthInteraction(null);
+    setAuthInteractionSubmitting(false);
+    authInteractionSeenRef.current = false;
     // 手动重连时取消自动重试定时器并复位
     reconnectManager.cancelRetry(connId);
     // 清除手动断开标志，允许后续被动断开时自动重连
@@ -729,7 +832,13 @@ export function WorkspacePage({
         `[Workspace Connect] ${connId} IPC 返回: success=${result.success}, 耗时=${elapsed.toFixed(0)}ms`,
       );
       if (result.success === false) {
-        const authenticationFailure = routeAuthenticationFailure(result.error);
+        setAuthInteraction(null);
+        setAuthInteractionSubmitting(false);
+        const suppressCredPrompt =
+          authInteractionSeenRef.current || isInteractiveAuthFailure(result.error);
+        const authenticationFailure = suppressCredPrompt
+          ? false
+          : routeAuthenticationFailure(result.error);
         if (!authenticationFailure) {
           setConnectError(result.error || t("ws_conn_failed"));
           const isHostKey = result.error?.toLowerCase().includes("host key") || result.error?.toLowerCase().includes("mitm");
@@ -787,7 +896,7 @@ export function WorkspacePage({
         `[Workspace Connect] ${connId} handleConnect 完成, 总耗时=${(performance.now() - t0).toFixed(0)}ms`,
       );
     }
-  }, [serverId, connId, setServerState, setManualDisconnect, t, isBmcServer, isSerialServer, isRdpServer, missingSshCredentials, missingSshKeyCredentials, openCredentialPrompt, openKeyCredentialPrompt, routeAuthenticationFailure, isActive, isSplitPane, serverStateEntry?.errorKind, usesSshKeyAuth, usesSshPasswordAuth]);
+  }, [serverId, connId, setServerState, setManualDisconnect, t, isBmcServer, isSerialServer, isLocalServer, isRdpServer, missingSshCredentials, missingSshKeyCredentials, openCredentialPrompt, openKeyCredentialPrompt, routeAuthenticationFailure, isActive, isSplitPane, serverStateEntry?.errorKind, usesSshKeyAuth, usesSshPasswordAuth]);
 
   useEffect(() => {
     if (
@@ -948,10 +1057,10 @@ export function WorkspacePage({
       sshService.isAvailable()
     ) {
       hasTriedConnect.current = true;
-      // BMC 带外管理 / 串口连接：不依赖 SSH 连接，首次进入不自动发起 SSH 连接
-      // （由各模块内部自行初始化硬件/API 连接）
+      // BMC 带外管理 / 串口 / 本地 Shell：不依赖 SSH 连接，首次进入不自动发起 SSH 连接
+      // （由各模块内部自行初始化硬件/API/PTY 会话）
       if (isBmcServer) return;
-      if (isSerialServer) return;
+      if (isSerialServer || isLocalServer) return;
       // RDP / 纯 VNC 不应自动调用 ssh_connect（具备 SSH 能力的服务器在进入 VNC 标签时仍自动连接 SSH，以打通 Direct-TCPIP 隧道）。
       if (isRdpServer || server?.protocol === 'vnc' || isPureVnc) return;
       handleConnect();
@@ -962,6 +1071,7 @@ export function WorkspacePage({
     handleConnect,
     isBmcServer,
     isSerialServer,
+    isLocalServer,
     isRdpServer,
   ]);
 
@@ -1002,6 +1112,7 @@ export function WorkspacePage({
     isVncModule ||
     isBmcModule ||
     isSerialServer ||
+    isLocalServer ||
     (isConnected && (!isTerminalModule || terminalReady));
 
   // 是否开启附属功能弹窗（除终端、RDP、VNC、BMC、文件外的所有模块，点击后作为工作台附属弹窗弹出）
@@ -1224,7 +1335,7 @@ export function WorkspacePage({
   );
 
   return (
-    <div className="flex flex-col h-full bg-background">
+    <div className="relative flex flex-col h-full bg-background">
       {!isVncModule && moduleTabs}
       {/* Module content */}
       <div ref={contentAreaRef} className="flex-1 overflow-hidden relative bg-canvas/30 flex flex-col">
@@ -1268,6 +1379,7 @@ export function WorkspacePage({
               registerGetCwd={registerTerminalGetCwd}
               onCwdChange={notifyTerminalCwdChanged}
               onReconnect={handleConnect}
+              onOpenSftpPanel={handleOpenSftpFromTerminal}
             />
 
             {/* 实时性能悬浮监控卡片 (原生拖拽、FinalShell 经典监控、全交互波形与进程) */}
@@ -1397,7 +1509,7 @@ export function WorkspacePage({
         {/* 附属功能弹窗（监控、Docker、服务、进程、网络、端口等） */}
         {!isSplitPane && (
           <WorkspaceModuleModal
-            open={isModalModule}
+            open={isModalModule && !workspaceLockEntry}
             onClose={() => {
               handleModuleChange("terminal");
               window.dispatchEvent(new CustomEvent("focus-active-terminal"));
@@ -1519,6 +1631,35 @@ export function WorkspacePage({
           onRetry={() => void handleConnect()}
         />
       )}
+      {server && authInteraction && (
+        <SshCredentialDialog
+          mode="interaction"
+          open={true}
+          interactionRequest={authInteraction}
+          submitting={authInteractionSubmitting}
+          error={connectError}
+          onSubmitInteraction={(responses) => {
+            const reqId = authInteraction.requestId;
+            setAuthInteractionSubmitting(true);
+            void sshService
+              .submitAuthInteraction(reqId, responses)
+              .then((submitted) => {
+                if (!submitted) {
+                  setAuthInteractionSubmitting(false);
+                }
+              })
+              .catch(() => {
+                setAuthInteractionSubmitting(false);
+              });
+          }}
+          onCancel={() => {
+            const reqId = authInteraction.requestId;
+            setAuthInteraction(null);
+            setAuthInteractionSubmitting(false);
+            void sshService.submitAuthInteraction(reqId, null);
+          }}
+        />
+      )}
       {server && usesSshPasswordAuth && credentialPromptOpen && (
         <SshCredentialDialog
           open={credentialPromptOpen}
@@ -1548,6 +1689,14 @@ export function WorkspacePage({
             setKeyCredentialPromptOpen(false);
             setKeyCredentialPromptError(null);
           }}
+        />
+      )}
+      {/* 当前工作台整域交互锁遮罩：覆盖顶栏工具条、终端、底部文件管理器、悬浮监控等全部功能，后台连接照常保活 */}
+      {standaloneLockEntry && (
+        <TerminalLockOverlay
+          entry={standaloneLockEntry}
+          sessionTitle={currentTab?.tempTitle || currentTab?.serverName || server?.name || server?.host || undefined}
+          onUnlock={unlockTerminal}
         />
       )}
     </div>

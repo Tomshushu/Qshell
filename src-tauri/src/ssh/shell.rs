@@ -245,7 +245,9 @@ pub async fn shell_create(
     cols: u32,
     rows: u32,
     encoding: String,
+    term_type: Option<String>,
 ) -> Result<(String, Option<String>), String> {
+    let resolved_term_type = crate::session::normalize_term_type(term_type.as_deref());
     let session_id = format!("shell-{}", uuid::Uuid::new_v4());
 
     let (conn, _generation) = SshManager::global()
@@ -282,13 +284,43 @@ pub async fn shell_create(
             return Err(err_msg);
         }
     };
-    if let Err(e) = ch.request_pty(true, "xterm-256color", cols, rows, 0, 0, &[]).await {
+    if let Err(e) = ch.request_pty(true, &resolved_term_type, cols, rows, 0, 0, &[]).await {
         let err_msg = format!("PTY: {}", e);
         eprintln!("[SSH Shell] request_pty failed for {}: {}", server_id, err_msg);
         if !conn.is_connected() {
             SshManager::handle_connection_loss(&server_id, &conn, &err_msg).await;
         }
         return Err(err_msg);
+    }
+    if conn.forward_agent_enabled() {
+        if let Err(e) = ch.agent_forward(true).await {
+            tracing::warn!(
+                "[SSH Shell] agent_forward request failed or rejected by server for {}: {}",
+                server_id,
+                e
+            );
+        }
+    }
+    if conn.x11_forwarding_enabled() {
+        let x11_sess = crate::ssh::x11_forward::X11ForwardRegistry::global()
+            .get_or_create(&server_id)
+            .await;
+        if let Err(e) = ch
+            .request_x11(
+                false,
+                false,
+                &x11_sess.auth_protocol,
+                &x11_sess.auth_cookie_hex,
+                x11_sess.screen,
+            )
+            .await
+        {
+            tracing::warn!(
+                "[SSH Shell] x11_forwarding request failed or rejected by server for {}: {}",
+                server_id,
+                e
+            );
+        }
     }
     if let Err(e) = ch.request_shell(true).await {
         let err_msg = format!("shell: {}", e);
@@ -356,6 +388,12 @@ pub async fn shell_create(
         let mut pause_deadline: Option<tokio::time::Instant> = None;
         // 高频日志期间不要每个 SSH 数据包都锁全局连接表；活跃时间只需秒级精度。
         let mut last_active_touch = tokio::time::Instant::now();
+        // 终端会话流量统计：仅在变化时按 500ms 节流发射 session:traffic 事件
+        let mut rx_bytes_total: u64 = 0;
+        let mut tx_bytes_total: u64 = 0;
+        let mut last_emitted_rx: u64 = 0;
+        let mut last_emitted_tx: u64 = 0;
+        let mut last_traffic_emit = tokio::time::Instant::now();
 
         // Zmodem passthrough 状态：true 时所有 shell 输出以 base64 emit 到 shell:zmodem-data
         // 由 zmodem.rs::find_zmodem_start 检测到 `*\x18B` 时进入；由 ShellCmd::ZmodemEnd 退出
@@ -518,7 +556,9 @@ pub async fn shell_create(
                                     ch.data(&data[..]),
                                 ) => {
                                     match result {
-                                        Ok(Ok(())) => {}
+                                        Ok(Ok(())) => {
+                                            tx_bytes_total = tx_bytes_total.saturating_add(data.len() as u64);
+                                        }
                                         Ok(Err(_e)) => {
                                             #[cfg(debug_assertions)]
                                             eprintln!("[Shell] {} write error: {}", sid, _e);
@@ -561,7 +601,9 @@ pub async fn shell_create(
                                 Duration::from_secs(10),
                                 ch.data(&data[..]),
                             ).await {
-                                Ok(Ok(())) => {}
+                                Ok(Ok(())) => {
+                                    tx_bytes_total = tx_bytes_total.saturating_add(data.len() as u64);
+                                }
                                 Ok(Err(_e)) => {
                                     #[cfg(debug_assertions)]
                                     eprintln!("[Shell] {} zmodem write error: {}", sid, _e);
@@ -610,6 +652,7 @@ pub async fn shell_create(
                     },
                     msg = ch.wait(), if !paused => match msg {
                         Some(ChannelMsg::Data { data } | ChannelMsg::ExtendedData { data, .. }) => {
+                            rx_bytes_total = rx_bytes_total.saturating_add(data.len() as u64);
                             // 记录数据到达时刻，供中断丢弃状态的静默超时判断使用
                             last_data_at = Some(tokio::time::Instant::now());
                             if !zmodem_mode {
@@ -779,6 +822,14 @@ pub async fn shell_create(
                         if last_active_touch.elapsed() >= Duration::from_secs(10) {
                             SshManager::global().touch_last_active(&server_id_for_task);
                             last_active_touch = tokio::time::Instant::now();
+                        }
+                        if last_traffic_emit.elapsed() >= Duration::from_millis(500) {
+                            if rx_bytes_total != last_emitted_rx || tx_bytes_total != last_emitted_tx {
+                                crate::session::emit_session_traffic(&app_clone, &sid, rx_bytes_total, tx_bytes_total);
+                                last_emitted_rx = rx_bytes_total;
+                                last_emitted_tx = tx_bytes_total;
+                            }
+                            last_traffic_emit = tokio::time::Instant::now();
                         }
                         // 周期性检查取消
                         if cancel_for_task.load(Ordering::Relaxed) {

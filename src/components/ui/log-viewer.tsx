@@ -42,6 +42,16 @@ export function LogViewer({
 
   const parentRef = useRef<HTMLDivElement>(null)
   const hasAutoScrolledRef = useRef<boolean>(false)
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const mountedRef = useRef<boolean>(true)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
+    }
+  }, [])
 
   // 解析不同数据源为完整纯文本
   useEffect(() => {
@@ -163,12 +173,19 @@ export function LogViewer({
   }, [matchIndices, currentMatchIdx, rowVirtualizer])
 
   // 复制全文
-  const handleCopyAll = useCallback(() => {
+  const handleCopyAll = useCallback(async () => {
     if (!text) return
-    navigator.clipboard.writeText(text).then(() => {
+    try {
+      await navigator.clipboard?.writeText(text)
+      if (!mountedRef.current) return
       setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    })
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
+      copyTimerRef.current = setTimeout(() => {
+        if (mountedRef.current) setCopied(false)
+      }, 2000)
+    } catch {
+      // clipboard unavailable
+    }
   }, [text])
 
   // 格式化 / 紧凑 JSON

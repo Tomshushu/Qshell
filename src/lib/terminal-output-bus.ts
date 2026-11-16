@@ -101,6 +101,11 @@ class TerminalOutputBus {
     this.trafficByTerm.delete(termId);
   }
 
+  /** 清空所有终端的流量窗口状态（终端模块整体卸载时调用，防止全局总线残留） */
+  clearAllSessions(): void {
+    this.trafficByTerm.clear();
+  }
+
   /** 仅用于测试清理 */
   resetAll(): void {
     this.observers.clear();
@@ -143,4 +148,8 @@ export function dispatchTerminalOutputObservers(
 
 export function clearOutputBusSession(termId: string): void {
   terminalOutputBus.clearSession(termId);
+}
+
+export function clearAllOutputBusSessions(): void {
+  terminalOutputBus.clearAllSessions();
 }

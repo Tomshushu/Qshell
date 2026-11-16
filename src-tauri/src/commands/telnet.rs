@@ -38,6 +38,7 @@ pub async fn telnet_create_shell(
     rows: Option<u32>,
     timeout_secs: Option<u32>,
     encoding: Option<String>,
+    term_type: Option<String>,
 ) -> Result<CreateTelnetShellResult, String> {
     // 参数规范化
     let port = port.unwrap_or(23);
@@ -96,6 +97,7 @@ pub async fn telnet_create_shell(
         r,
         timeout,
         encoding.unwrap_or_else(|| "utf-8".to_string()),
+        term_type,
         login_username,
         login_password,
     )

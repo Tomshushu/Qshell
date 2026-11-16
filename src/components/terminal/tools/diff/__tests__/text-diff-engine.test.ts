@@ -75,4 +75,37 @@ describe("text-diff-engine (通用文本与字符串差异比对引擎)", () => 
     expect(removed).toContain("world");
     expect(added).toContain("universe");
   });
+
+  it("大文件 (25,000+ 行) 带锚点或重复块时快速完成比对且不卡死", () => {
+    const count = 25000;
+    const leftLines: string[] = [];
+    const rightLines: string[] = [];
+    for (let i = 0; i < count; i++) {
+      leftLines.push(`line-${i}`);
+      if (i === 12000) {
+        rightLines.push("inserted-banner-line");
+      }
+      rightLines.push(i === 18000 ? `line-${i}-modified` : `line-${i}`);
+    }
+
+    const start = performance.now();
+    const res = computeTextDiff(leftLines.join("\n"), rightLines.join("\n"));
+    const elapsed = performance.now() - start;
+
+    expect(res.isIdentical).toBe(false);
+    expect(res.diffCount).toBe(2);
+    expect(elapsed).toBeLessThan(2000);
+
+    // 全部为重复行（无唯一锚点）的大文件也应在有界窗口内快速完成
+    const repeatedLeft = Array.from({ length: 15000 }, (_, i) =>
+      i % 2 === 0 ? "{" : "}",
+    ).join("\n");
+    const repeatedRight = Array.from({ length: 15000 }, (_, i) =>
+      i === 7500 ? "changed" : i % 2 === 0 ? "{" : "}",
+    ).join("\n");
+    const startRepeated = performance.now();
+    const repeatedRes = computeTextDiff(repeatedLeft, repeatedRight);
+    expect(repeatedRes.diffCount).toBeGreaterThan(0);
+    expect(performance.now() - startRepeated).toBeLessThan(2000);
+  });
 });

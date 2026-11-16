@@ -9,10 +9,23 @@ import {
   Search,
   Eye,
   EyeOff,
+  ClipboardPaste,
+  SlidersHorizontal,
+  ExternalLink,
+  Square,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
-import { SftpBookmarkDropdown } from '@/components/sftp/sftp-dropdowns'
+import { SftpBookmarkDropdown, ViewModeDropdown } from '@/components/sftp/sftp-dropdowns'
+import { useAppStore } from '@/store'
+import { useSettingsDialogStore } from '@/store/settings-dialog-store'
+import type { SftpViewMode } from '@/types'
 
 interface FileToolbarProps {
   currentPath: string
@@ -21,8 +34,12 @@ interface FileToolbarProps {
   onAddBookmark: (path: string) => void
   onRemoveBookmark: (path: string) => void
   onToggleBookmark?: () => void
+  viewMode?: SftpViewMode
+  onViewModeChange?: (mode: SftpViewMode) => void
   showHidden?: boolean
   onToggleShowHidden?: () => void
+  onClipboardPathJump?: () => void
+  showTransferPolicy?: boolean
   onRefresh: () => void
   loading?: boolean
   transferLoading: string | null
@@ -35,7 +52,56 @@ interface FileToolbarProps {
   setNewItemName: (name: string) => void
   onNewItemConfirm: () => void
   onNewItemCancel: () => void
+  activeExternalEdits?: Array<{ sessionId: string; fileName: string; remotePath: string }>
+  onStopExternalEdit?: (sessionId: string) => void
   t: (key: string) => string
+}
+
+function formatRateLimitBadge(kbps: number): string {
+  if (kbps <= 0) return ''
+  if (kbps >= 1024) {
+    const mb = kbps / 1024
+    return `${Number.isInteger(mb) ? mb : mb.toFixed(1)}M/s`
+  }
+  return `${kbps}K/s`
+}
+
+/** 方案 B：工作台仅保留轻量只读状态与快捷入口，点击直达「设置 → SFTP」，避免重复配置表单 */
+function TransferSettingsShortcut({ t }: { t: (key: string) => string }) {
+  const transferRateLimit = useAppStore((s) => s.transferRateLimit)
+  const sftpExclusionEnabled = useAppStore((s) => s.sftpExclusionEnabled)
+  const hasActivePolicy = transferRateLimit > 0 || sftpExclusionEnabled
+  const tooltip = hasActivePolicy
+    ? t('sftp_transfer_policy_active')
+    : t('sftp_transfer_policy_shortcut')
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      onClick={() => useSettingsDialogStore.getState().openSettings('sftp')}
+      className={cn(
+        'h-7 px-1.5 gap-1 text-muted-foreground hover:text-foreground active:scale-95 transition-all cursor-pointer shrink-0 relative',
+        hasActivePolicy && 'text-primary bg-primary/10 hover:bg-primary/15',
+      )}
+      title={tooltip}
+      aria-label={tooltip}
+    >
+      <SlidersHorizontal className="h-3.5 w-3.5" />
+      {transferRateLimit > 0 && (
+        <span className="text-[10px] font-mono leading-none">
+          {formatRateLimitBadge(transferRateLimit)}
+        </span>
+      )}
+      {sftpExclusionEnabled && (
+        <span
+          className="h-1.5 w-1.5 rounded-full bg-primary shrink-0"
+          aria-hidden="true"
+        />
+      )}
+    </Button>
+  )
 }
 
 export function FileToolbar({
@@ -44,8 +110,12 @@ export function FileToolbar({
   bookmarks,
   onAddBookmark,
   onRemoveBookmark,
+  viewMode,
+  onViewModeChange,
   showHidden = true,
   onToggleShowHidden,
+  onClipboardPathJump,
+  showTransferPolicy = false,
   onRefresh,
   loading = false,
   transferLoading,
@@ -58,6 +128,8 @@ export function FileToolbar({
   setNewItemName,
   onNewItemConfirm,
   onNewItemCancel,
+  activeExternalEdits,
+  onStopExternalEdit,
   t,
 }: FileToolbarProps) {
   return (
@@ -107,6 +179,21 @@ export function FileToolbar({
               })}
         </div>
 
+        {/* 从剪贴板跳转路径 (P2-27) */}
+        {onClipboardPathJump && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground active:scale-95 transition-all cursor-pointer shrink-0"
+            onClick={onClipboardPathJump}
+            title={t('sftp_clipboard_path_jump')}
+            aria-label={t('sftp_clipboard_path_jump')}
+          >
+            <ClipboardPaste className="h-3.5 w-3.5" />
+          </Button>
+        )}
+
         {/* 路径书签分体下拉按钮（与 SFTP 样式交互完全一致） */}
         <SftpBookmarkDropdown
           currentPath={currentPath}
@@ -117,6 +204,38 @@ export function FileToolbar({
           t={t}
         />
 
+        {/* 传输策略快捷入口（跳转 设置 → SFTP，避免与全局设置重复表单） */}
+        {showTransferPolicy && (
+          <TransferSettingsShortcut t={t} />
+        )}
+
+        {/* 活跃外部编辑会话：可手动停止 watcher，避免 Files 模块启动的会话无人管理 */}
+        {activeExternalEdits && activeExternalEdits.length > 0 && onStopExternalEdit && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm" className="h-7 px-1.5 gap-1 text-emerald-600 shrink-0" title="外部编辑器正在监听的文件">
+                <ExternalLink className="h-3.5 w-3.5" />
+                <span className="text-[11px]">外部编辑 ({activeExternalEdits.length})</span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" style={{ zIndex: 1000 }}>
+              {activeExternalEdits.map((s) => (
+                <DropdownMenuItem key={s.sessionId} className="flex items-center justify-between gap-3 text-xs">
+                  <span className="truncate" title={s.remotePath}>{s.fileName}</span>
+                  <button
+                    type="button"
+                    className="shrink-0 text-muted-foreground hover:text-destructive"
+                    title="停止监听"
+                    onClick={(e) => { e.stopPropagation(); onStopExternalEdit(s.sessionId) }}
+                  >
+                    <Square className="h-3 w-3" />
+                  </button>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+
         <Button
           variant="ghost"
           size="sm"
@@ -126,6 +245,10 @@ export function FileToolbar({
         >
           <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
         </Button>
+
+        {viewMode && onViewModeChange && (
+          <ViewModeDropdown viewMode={viewMode} onChange={onViewModeChange} t={t} />
+        )}
 
         {onToggleShowHidden && (
           <Button

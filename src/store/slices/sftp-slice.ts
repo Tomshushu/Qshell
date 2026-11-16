@@ -1,5 +1,6 @@
 import type { StateCreator } from "zustand";
 import { sshService } from "@/services/ssh-service";
+import { useTransferQueueStore } from "../transfer-queue-store";
 import { DEFAULT_SFTP_EXCLUSIONS } from "../constants";
 import type { AppState, SftpSlice } from "../types";
 
@@ -100,31 +101,99 @@ const getInitialWorkspaceFileShowHidden = (): boolean => {
   return true;
 };
 
+const normalizeOptionalSizeKb = (kb: number | null): number | null => {
+  if (kb === null || !Number.isFinite(kb)) return null;
+  return Math.max(0, Math.floor(kb));
+};
+
+function syncExclusionConfig(state: {
+  sftpExclusionEnabled: boolean;
+  sftpExclusionPatterns: string[];
+  sftpRespectGitignore: boolean;
+  sftpIncludePatterns: string[];
+  sftpMinSizeKb: number | null;
+  sftpMaxSizeKb: number | null;
+}): void {
+  sshService
+    .setExclusionConfig(
+      state.sftpExclusionEnabled,
+      state.sftpExclusionPatterns,
+      state.sftpRespectGitignore,
+      {
+        includePatterns: state.sftpIncludePatterns,
+        minSizeBytes:
+          state.sftpMinSizeKb !== null ? state.sftpMinSizeKb * 1024 : null,
+        maxSizeBytes:
+          state.sftpMaxSizeKb !== null ? state.sftpMaxSizeKb * 1024 : null,
+      },
+    )
+    .catch((err) => {
+      console.error("Failed to sync exclusion config to backend:", err);
+    });
+}
+
 export const createSftpSlice: StateCreator<AppState, [], [], SftpSlice> = (
   set,
   get,
 ) => ({
   // SFTP Settings Defaults & Setters
-  // SFTP 本地面板默认视图模式：默认 'list'
+  // SFTP 统一文件视图模式：默认 'list'（兼容旧字段 sftpLocalViewMode / sftpRemoteViewMode，始终三字段同步）
   sftpLocalViewMode: "list",
-  setSftpLocalViewMode: (mode) => set({ sftpLocalViewMode: mode }),
-  // SFTP 远程面板默认视图模式：默认 'list'
+  setSftpLocalViewMode: (mode) =>
+    set({
+      sftpDefaultViewMode: mode,
+      sftpLocalViewMode: mode,
+      sftpRemoteViewMode: mode,
+    }),
   sftpRemoteViewMode: "list",
-  setSftpRemoteViewMode: (mode) => set({ sftpRemoteViewMode: mode }),
-  // SFTP 本地面板默认是否显示隐藏文件：默认 false
-  sftpLocalShowHidden: false,
-  setSftpLocalShowHidden: (show) => {
-    set({ sftpLocalShowHidden: show });
+  setSftpRemoteViewMode: (mode) =>
+    set({
+      sftpDefaultViewMode: mode,
+      sftpLocalViewMode: mode,
+      sftpRemoteViewMode: mode,
+    }),
+  // 统一隐藏文件开关：默认沿用工作台偏好（true），写入时同步 SFTP 与工作台偏好字段
+  sftpShowHidden: getInitialWorkspaceFileShowHidden(),
+  setSftpShowHidden: (show) => {
+    set({
+      sftpShowHidden: show,
+      sftpLocalShowHidden: show,
+      sftpRemoteShowHidden: show,
+      workspaceFileShowHidden: show,
+    });
     try {
       localStorage.setItem('qshell.sftp.local.showHidden', String(show));
+      localStorage.setItem('qshell.sftp.remote.showHidden', String(show));
+      localStorage.setItem('qshell.workspace.files.showHidden', String(show));
     } catch {}
   },
-  // SFTP 远程面板默认是否显示隐藏文件：默认 true
-  sftpRemoteShowHidden: true,
-  setSftpRemoteShowHidden: (show) => {
-    set({ sftpRemoteShowHidden: show });
+  // 以下两项保留向后兼容与云端同步字段形状，写入时统一触发全局同步
+  sftpLocalShowHidden: getInitialWorkspaceFileShowHidden(),
+  setSftpLocalShowHidden: (show) => {
+    set({
+      sftpShowHidden: show,
+      sftpLocalShowHidden: show,
+      sftpRemoteShowHidden: show,
+      workspaceFileShowHidden: show,
+    });
     try {
+      localStorage.setItem('qshell.sftp.local.showHidden', String(show));
       localStorage.setItem('qshell.sftp.remote.showHidden', String(show));
+      localStorage.setItem('qshell.workspace.files.showHidden', String(show));
+    } catch {}
+  },
+  sftpRemoteShowHidden: getInitialWorkspaceFileShowHidden(),
+  setSftpRemoteShowHidden: (show) => {
+    set({
+      sftpShowHidden: show,
+      sftpLocalShowHidden: show,
+      sftpRemoteShowHidden: show,
+      workspaceFileShowHidden: show,
+    });
+    try {
+      localStorage.setItem('qshell.sftp.local.showHidden', String(show));
+      localStorage.setItem('qshell.sftp.remote.showHidden', String(show));
+      localStorage.setItem('qshell.workspace.files.showHidden', String(show));
     } catch {}
   },
   // SFTP 本地面板默认排序：默认 'name' / 'asc'
@@ -170,13 +239,11 @@ export const createSftpSlice: StateCreator<AppState, [], [], SftpSlice> = (
   setSftpFileIconTheme: (theme) => set({ sftpFileIconTheme: theme }),
   // SFTP 传输并发量（1-8）：默认 3
   sftpTransferConcurrency: 3,
-  setSftpTransferConcurrency: (n) =>
-    set({
-      sftpTransferConcurrency: Math.max(
-        1,
-        Math.min(8, Math.floor(n) || 1),
-      ),
-    }),
+  setSftpTransferConcurrency: (n) => {
+    const normalized = Math.max(1, Math.min(8, Math.floor(n) || 1));
+    set({ sftpTransferConcurrency: normalized });
+    useTransferQueueStore.getState().setMaxConcurrent(normalized);
+  },
   // 传输限速（KB/s）：默认 0=不限速；负值归一化为 0
   transferRateLimit: 0,
   setTransferRateLimit: (kbps) => {
@@ -191,22 +258,12 @@ export const createSftpSlice: StateCreator<AppState, [], [], SftpSlice> = (
   sftpExclusionEnabled: false,
   setSftpExclusionEnabled: (enabled) => {
     set({ sftpExclusionEnabled: enabled });
-    const { sftpExclusionPatterns, sftpRespectGitignore } = get();
-    sshService
-      .setExclusionConfig(enabled, sftpExclusionPatterns, sftpRespectGitignore)
-      .catch((err) => {
-        console.error("Failed to sync exclusion config to backend:", err);
-      });
+    syncExclusionConfig({ ...get(), sftpExclusionEnabled: enabled });
   },
   sftpExclusionPatterns: DEFAULT_SFTP_EXCLUSIONS,
   setSftpExclusionPatterns: (patterns) => {
     set({ sftpExclusionPatterns: patterns });
-    const { sftpExclusionEnabled, sftpRespectGitignore } = get();
-    sshService
-      .setExclusionConfig(sftpExclusionEnabled, patterns, sftpRespectGitignore)
-      .catch((err) => {
-        console.error("Failed to sync exclusion config to backend:", err);
-      });
+    syncExclusionConfig({ ...get(), sftpExclusionPatterns: patterns });
   },
   sftpRespectGitignore: false,
   sftpSymlinkPolicy: 'skip',
@@ -218,12 +275,38 @@ export const createSftpSlice: StateCreator<AppState, [], [], SftpSlice> = (
   },
   setSftpRespectGitignore: (respect) => {
     set({ sftpRespectGitignore: respect });
-    const { sftpExclusionEnabled, sftpExclusionPatterns } = get();
-    sshService
-      .setExclusionConfig(sftpExclusionEnabled, sftpExclusionPatterns, respect)
-      .catch((err) => {
-        console.error("Failed to sync exclusion config to backend:", err);
-      });
+    syncExclusionConfig({ ...get(), sftpRespectGitignore: respect });
+  },
+  // SFTP 双栏布局模式与目录树偏好（P1-15）
+  sftpPaneMode: 'dual',
+  setSftpPaneMode: (mode) => set({ sftpPaneMode: mode }),
+  sftpShowDirectoryTree: false,
+  setSftpShowDirectoryTree: (show) => set({ sftpShowDirectoryTree: show }),
+  // 外部编辑大小上限（MB，0 表示不限，受后端天花板约束）（P2-18）
+  externalEditMaxSizeMb: 10,
+  setExternalEditMaxSizeMb: (mb) =>
+    set({
+      externalEditMaxSizeMb: Number.isFinite(mb)
+        ? Math.max(0, Math.floor(mb))
+        : 10,
+    }),
+  // 高级传输包含与大小过滤规则（P2-19）
+  sftpIncludePatterns: [],
+  setSftpIncludePatterns: (patterns) => {
+    set({ sftpIncludePatterns: patterns });
+    syncExclusionConfig({ ...get(), sftpIncludePatterns: patterns });
+  },
+  sftpMinSizeKb: null,
+  setSftpMinSizeKb: (kb) => {
+    const normalized = normalizeOptionalSizeKb(kb);
+    set({ sftpMinSizeKb: normalized });
+    syncExclusionConfig({ ...get(), sftpMinSizeKb: normalized });
+  },
+  sftpMaxSizeKb: null,
+  setSftpMaxSizeKb: (kb) => {
+    const normalized = normalizeOptionalSizeKb(kb);
+    set({ sftpMaxSizeKb: normalized });
+    syncExclusionConfig({ ...get(), sftpMaxSizeKb: normalized });
   },
 
   // 路径收藏统一管理：针对同一服务器，工作台文件与SFTP远程面板双向互通共享
@@ -337,8 +420,15 @@ export const createSftpSlice: StateCreator<AppState, [], [], SftpSlice> = (
   },
   workspaceFileShowHidden: getInitialWorkspaceFileShowHidden(),
   setWorkspaceFileShowHidden: (show) => {
-    set({ workspaceFileShowHidden: show });
+    set({
+      sftpShowHidden: show,
+      sftpLocalShowHidden: show,
+      sftpRemoteShowHidden: show,
+      workspaceFileShowHidden: show,
+    });
     try {
+      localStorage.setItem('qshell.sftp.local.showHidden', String(show));
+      localStorage.setItem('qshell.sftp.remote.showHidden', String(show));
       localStorage.setItem('qshell.workspace.files.showHidden', String(show));
     } catch {}
   },

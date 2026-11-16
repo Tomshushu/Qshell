@@ -91,27 +91,26 @@ export function useFileExplorerPreferences({
     [isBookmarked, removeBookmark, addBookmark]
   )
 
-  // Sort & Hidden File Selectors
+  // Sort & Unified View / Hidden File Selectors
   const sftpLocalSortField = useAppStore((s) => s.sftpLocalSortField)
   const setSftpLocalSortField = useAppStore((s) => s.setSftpLocalSortField)
   const sftpLocalSortOrder = useAppStore((s) => s.sftpLocalSortOrder)
   const setSftpLocalSortOrder = useAppStore((s) => s.setSftpLocalSortOrder)
-  const sftpLocalShowHidden = useAppStore((s) => s.sftpLocalShowHidden)
-  const setSftpLocalShowHidden = useAppStore((s) => s.setSftpLocalShowHidden)
 
   const sftpRemoteSortField = useAppStore((s) => s.sftpRemoteSortField)
   const setSftpRemoteSortField = useAppStore((s) => s.setSftpRemoteSortField)
   const sftpRemoteSortOrder = useAppStore((s) => s.sftpRemoteSortOrder)
   const setSftpRemoteSortOrder = useAppStore((s) => s.setSftpRemoteSortOrder)
-  const sftpRemoteShowHidden = useAppStore((s) => s.sftpRemoteShowHidden)
-  const setSftpRemoteShowHidden = useAppStore((s) => s.setSftpRemoteShowHidden)
 
   const workspaceFileSortField = useAppStore((s) => s.workspaceFileSortField)
   const setWorkspaceFileSortField = useAppStore((s) => s.setWorkspaceFileSortField)
   const workspaceFileSortDirection = useAppStore((s) => s.workspaceFileSortDirection)
   const setWorkspaceFileSortDirection = useAppStore((s) => s.setWorkspaceFileSortDirection)
-  const workspaceFileShowHidden = useAppStore((s) => s.workspaceFileShowHidden)
-  const setWorkspaceFileShowHidden = useAppStore((s) => s.setWorkspaceFileShowHidden)
+
+  const viewMode = useAppStore((s) => s.sftpDefaultViewMode)
+  const setViewMode = useAppStore((s) => s.setSftpDefaultViewMode)
+  const showHidden = useAppStore((s) => s.sftpShowHidden)
+  const setShowHidden = useAppStore((s) => s.setSftpShowHidden)
 
   // Unified resolution
   const sortField = useMemo(() => {
@@ -125,12 +124,6 @@ export function useFileExplorerPreferences({
     if (scope === 'sftp-remote') return sftpRemoteSortOrder
     return workspaceFileSortDirection
   }, [scope, sftpLocalSortOrder, sftpRemoteSortOrder, workspaceFileSortDirection])
-
-  const showHidden = useMemo(() => {
-    if (scope === 'sftp-local') return sftpLocalShowHidden
-    if (scope === 'sftp-remote') return sftpRemoteShowHidden
-    return workspaceFileShowHidden
-  }, [scope, sftpLocalShowHidden, sftpRemoteShowHidden, workspaceFileShowHidden])
 
   const setSortField = useCallback(
     (field: any) => {
@@ -163,15 +156,6 @@ export function useFileExplorerPreferences({
     [sortField, sortOrder, setSortField, setSortOrder]
   )
 
-  const setShowHidden = useCallback(
-    (show: boolean) => {
-      if (scope === 'sftp-local') setSftpLocalShowHidden(show)
-      else if (scope === 'sftp-remote') setSftpRemoteShowHidden(show)
-      else setWorkspaceFileShowHidden(show)
-    },
-    [scope, setSftpLocalShowHidden, setSftpRemoteShowHidden, setWorkspaceFileShowHidden]
-  )
-
   const toggleShowHidden = useCallback(() => {
     setShowHidden(!showHidden)
   }, [showHidden, setShowHidden])
@@ -188,6 +172,8 @@ export function useFileExplorerPreferences({
     setSortField,
     setSortOrder,
     handleSort,
+    viewMode,
+    setViewMode,
     showHidden,
     setShowHidden,
     toggleShowHidden,

@@ -1,4 +1,6 @@
 pub mod agent;
+pub mod agent_forward;
+pub mod auth_interaction;
 pub mod connection;
 pub mod keys;
 pub mod manager;
@@ -7,4 +9,5 @@ pub mod rate_limiter;
 pub mod shell;
 pub mod terminal_encoding;
 pub mod state;
+pub mod x11_forward;
 pub mod zmodem;

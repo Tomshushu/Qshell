@@ -18,6 +18,10 @@ const { mockRemote, mockSshService } = vi.hoisted(() => {
       listServersForSync: vi.fn(async () => [
         { id: 'srv-1', name: 'Test Server', host: '192.168.1.10', port: 22, username: 'root', authType: 'password', password: 'secretpassword', tags: '["prod"]' },
       ]),
+      listAuthProfiles: vi.fn(async () => [] as any[]),
+      listAuthProfilesForSync: vi.fn(async () => [] as any[]),
+      addAuthProfile: vi.fn(async () => ({ success: true, id: 'auth-1' })),
+      updateAuthProfile: vi.fn(async () => ({ success: true })),
       listGroups: vi.fn(async () => [{ id: 'grp-1', name: 'Production', parentId: null }]),
       listKeys: vi.fn(async () => []),
       listKeysForSync: vi.fn(async () => [{ id: 'key-1', name: 'My Key', keyType: 'private', privateKeyContent: 'PRIVATE KEY CONTENT' }]),
@@ -516,5 +520,140 @@ it('successfully backs up and restores serial macro sequences, serial send histo
     expect(JSON.parse(localStorage.getItem('serial-send-history') || '[]')).toEqual(mockSendHistory)
     expect(localStorage.getItem('qshell_floating_monitor_visible_v1')).toBe('false')
     expect(useAppStore.getState().terminalPasteWarnEnabled).toBe(true)
+  })
+
+  it('backs up authProfiles and restores them BEFORE servers referencing authProfileId', async () => {
+    mockSshService.listServersForSync.mockResolvedValueOnce([
+      { id: 'srv-1', name: 'Test Server', host: '192.168.1.10', port: 22, username: 'root', authType: 'password', password: 'secretpassword', authProfileId: 'auth-1', tags: '["prod"]' } as any,
+    ])
+    mockSshService.listAuthProfilesForSync.mockResolvedValueOnce([
+      { id: 'auth-1', name: 'Ops Profile', username: 'ops', authType: 'password' as const, password: 'profile-secret', forwardAgent: true, createdAt: 1000, updatedAt: 1000 },
+    ])
+    const callOrder: string[] = []
+    mockSshService.addAuthProfile.mockImplementationOnce(async () => {
+      callOrder.push('addAuthProfile')
+      return { success: true, id: 'auth-1' }
+    })
+    mockSshService.addServer.mockImplementationOnce(async () => {
+      callOrder.push('addServer')
+      return { success: true }
+    })
+
+    useSyncStore.setState({
+      provider: 'gitee',
+      currentToken: 'valid_gitee_token',
+      currentUser: { id: 1, login: 'gitee_user', name: 'Gitee Tester', avatar_url: '', html_url: '' },
+      masterPassword: 'sync_test_pwd_123456',
+    })
+
+    const backupRes = await useSyncStore.getState().backup()
+    expect(backupRes.success).toBe(true)
+
+    const restoreRes = await useSyncStore.getState().restore('sync_test_pwd_123456')
+    expect(restoreRes.success).toBe(true)
+    expect(restoreRes.stats?.authProfiles).toBe(1)
+    expect(mockSshService.addAuthProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'auth-1', name: 'Ops Profile', password: 'profile-secret' }),
+    )
+    expect(callOrder).toEqual(['addAuthProfile', 'addServer'])
+  })
+
+  it('autoSync detects changes to authProfile secrets/updatedAt and server terminalType', async () => {
+    const store = useSyncStore.getState()
+    await store.setToken('valid_gitee_token', 'gitee')
+    store.setMasterPassword('sync_test_pwd_123456')
+    store.setAutoSync(true)
+
+    const baselineServer = {
+      id: 'srv-1',
+      name: 'Test Server',
+      host: '10.0.0.1',
+      port: 22,
+      username: 'root',
+      authType: 'password',
+      password: 'pwd',
+      authProfileId: 'auth-1',
+      terminalType: 'xterm-256color',
+      tags: '[]',
+    }
+    const baselineProfile = {
+      id: 'auth-1',
+      name: 'Ops Profile',
+      username: 'ops',
+      authType: 'password' as const,
+      password: 'old-password',
+      forwardAgent: false,
+      createdAt: 1000,
+      updatedAt: 1000,
+    }
+
+    const encryptedCloud = await import('@/utils/crypto-sync').then((m) =>
+      m.encryptData(
+        JSON.stringify({
+          format: 'qshell-backup-package',
+          version: '2.0.0',
+          timestamp: new Date().toISOString(),
+          servers: [baselineServer],
+          groups: [{ id: 'grp-1', name: 'Production', parentId: null }],
+          sshKeys: [{ id: 'key-1', name: 'My Key', keyType: 'private' }],
+          authProfiles: [baselineProfile],
+        }),
+        'sync_test_pwd_123456',
+      ),
+    )
+
+    mockSshService.listServersForSync.mockResolvedValue([baselineServer] as any)
+    mockSshService.listAuthProfilesForSync.mockResolvedValue([baselineProfile])
+    useSyncStore.setState({ lastSyncTime: new Date(Date.now() + 60_000).toISOString() })
+
+    const backupSpy = vi.spyOn(useSyncStore.getState(), 'backup')
+    backupSpy.mockClear()
+
+    // 1. Exact match -> no backup triggered
+    vi.mocked(giteeAdapter.getBackupHistory).mockResolvedValueOnce({
+      success: true,
+      history: [{ sha: 'sha-base', message: 'base', date: new Date().toISOString() }],
+    })
+    vi.mocked(giteeAdapter.downloadBackupFile).mockResolvedValueOnce({
+      success: true,
+      content: encryptedCloud,
+    })
+    await useSyncStore.getState().checkStartupSync()
+    expect(backupSpy).not.toHaveBeenCalled()
+
+    // 2. Only AuthProfile secret / updatedAt mutated -> backup triggered
+    mockSshService.listAuthProfilesForSync.mockResolvedValue([
+      { ...baselineProfile, password: 'rotated-password', updatedAt: 2000 },
+    ])
+    vi.mocked(giteeAdapter.getBackupHistory).mockResolvedValueOnce({
+      success: true,
+      history: [{ sha: 'sha-base', message: 'base', date: new Date().toISOString() }],
+    })
+    vi.mocked(giteeAdapter.downloadBackupFile).mockResolvedValueOnce({
+      success: true,
+      content: encryptedCloud,
+    })
+    await useSyncStore.getState().checkStartupSync()
+    expect(backupSpy).toHaveBeenCalledTimes(1)
+
+    // 3. Revert profile, mutate only server.terminalType -> backup triggered
+    backupSpy.mockClear()
+    useSyncStore.setState({ lastSyncTime: new Date(Date.now() + 60_000).toISOString() })
+    mockSshService.listAuthProfilesForSync.mockResolvedValue([baselineProfile])
+    mockSshService.listServersForSync.mockResolvedValue([
+      { ...baselineServer, terminalType: 'vt100' },
+    ] as any)
+    vi.mocked(giteeAdapter.getBackupHistory).mockResolvedValueOnce({
+      success: true,
+      history: [{ sha: 'sha-base', message: 'base', date: new Date().toISOString() }],
+    })
+    vi.mocked(giteeAdapter.downloadBackupFile).mockResolvedValueOnce({
+      success: true,
+      content: encryptedCloud,
+    })
+    await useSyncStore.getState().checkStartupSync()
+    expect(backupSpy).toHaveBeenCalledTimes(1)
+
+    backupSpy.mockRestore()
   })
 })

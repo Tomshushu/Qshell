@@ -244,5 +244,57 @@ describe('workspace-slice', () => {
       state().clearBroadcast()
       expect(state().broadcastTabIds).toEqual([])
     })
+
+    it('broadcastAllTabs and toggleBroadcastTab exclude ephemeral and saved local shells', () => {
+      useAppStore.setState({
+        servers: [
+          makeServer('ssh-1'),
+          makeServer('local-saved', { targetType: 'local', protocol: 'local' }),
+        ],
+        tabs: [
+          makeTab({ id: 't-ssh', serverId: 'ssh-1' }),
+          makeTab({ id: 't-local-saved', serverId: 'local-saved' }),
+          makeTab({ id: 't-local-ephem', serverId: '__local__:powershell', localProfileId: 'powershell' }),
+        ],
+      })
+      state().broadcastAllTabs()
+      expect(state().broadcastTabIds).toEqual(['t-ssh'])
+
+      state().toggleBroadcastTab('t-local-ephem')
+      expect(state().broadcastTabIds).toEqual(['t-ssh'])
+    })
+  })
+
+  describe('openLocalTab', () => {
+    it('opens unique ephemeral local tabs without polluting saved servers', () => {
+      const id1 = state().openLocalTab('pwsh', 'PowerShell 7', 'D:\\Work')
+      const id2 = state().openLocalTab('pwsh', 'PowerShell 7')
+      expect(id1).not.toBe(id2)
+      expect(state().tabs).toHaveLength(2)
+      expect(state().tabs[0].serverId).toBe('__local__:pwsh')
+      expect(state().tabs[0].localProfileId).toBe('pwsh')
+      expect(state().tabs[0].localCwd).toBe('D:\\Work')
+      expect(state().tabs[0].module).toBe('terminal')
+      expect(state().servers).toHaveLength(0)
+    })
+  })
+
+  describe('openSftpWithServers', () => {
+    it('stores normalized target directories alongside pending server ids and clears both cleanly', () => {
+      state().openSftpWithServers(['ssh-1', 'ssh-2'], {
+        'ssh-1': '  /var/log/nginx  ',
+        'ssh-2': '   ',
+      })
+
+      expect(state().sftpPendingOpenServerIds).toEqual(['ssh-1', 'ssh-2'])
+      expect(state().sftpPendingOpenTargetDirs).toEqual({ 'ssh-1': '/var/log/nginx' })
+      const activeTab = state().tabs.find((t) => t.id === state().activeTabId)
+      expect(activeTab?.serverId).toBe('sftp')
+      expect(activeTab?.module).toBe('files')
+
+      state().clearSftpPendingOpenServers()
+      expect(state().sftpPendingOpenServerIds).toEqual([])
+      expect(state().sftpPendingOpenTargetDirs).toEqual({})
+    })
   })
 })

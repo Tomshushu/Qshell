@@ -168,6 +168,7 @@ export interface RightTab {
   syncBrowsing: boolean;
   syncPairRoot: { local: string; remote: string } | null;
   compareActive: boolean;
+  remoteDrives?: string[];
   disconnected?: boolean;
   disconnectedError?: string | null;
   viewMode?: SftpViewMode;

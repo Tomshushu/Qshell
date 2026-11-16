@@ -14,6 +14,7 @@ interface FileDirectoryTreeProps {
   expandedPaths: Set<string>
   currentPath: string
   onToggleTreeNode: (path: string) => void
+  onSelectDir?: (path: string) => void
   onRefreshRoot: () => void
   onStartResize: (e: React.MouseEvent) => void
   t: (key: string) => string
@@ -27,6 +28,7 @@ export function FileDirectoryTree({
   expandedPaths,
   currentPath,
   onToggleTreeNode,
+  onSelectDir,
   onRefreshRoot,
   onStartResize,
   t,
@@ -54,6 +56,13 @@ export function FileDirectoryTree({
             {visibleTreeNodes.map(({ node, depth }) => {
               const isExpanded = expandedPaths.has(node.path)
               const isActive = currentPath === node.path
+              const handleSelectRow = () => {
+                if (onSelectDir) {
+                  onSelectDir(node.path)
+                } else {
+                  onToggleTreeNode(node.path)
+                }
+              }
               return (
                 <div
                   key={node.path}
@@ -64,15 +73,34 @@ export function FileDirectoryTree({
                   style={{ paddingLeft: `${depth * 14 + 6}px` }}
                   onMouseDown={(e) => {
                     if (e.button !== 0) return
-                    onToggleTreeNode(node.path)
+                    if ((e.target as HTMLElement).closest('[data-tree-toggle="true"]')) return
+                    handleSelectRow()
                   }}
                   onClick={(e) => {
+                    if ((e.target as HTMLElement).closest('[data-tree-toggle="true"]')) return
                     if (e.detail === 0) {
-                      onToggleTreeNode(node.path)
+                      handleSelectRow()
                     }
                   }}
                 >
-                  <span className="shrink-0">
+                  <button
+                    type="button"
+                    data-tree-toggle="true"
+                    aria-label={isExpanded ? 'Collapse folder' : 'Expand folder'}
+                    aria-expanded={isExpanded}
+                    onMouseDown={(e) => {
+                      if (e.button !== 0) return
+                      e.stopPropagation()
+                      onToggleTreeNode(node.path)
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      if (e.detail === 0) {
+                        onToggleTreeNode(node.path)
+                      }
+                    }}
+                    className="shrink-0 flex items-center justify-center rounded p-0.5 hover:bg-muted/80 cursor-pointer"
+                  >
                     {node.loading ? (
                       <Loader2 className="h-3.5 w-3.5 text-muted-foreground animate-spin" />
                     ) : isExpanded ? (
@@ -80,7 +108,7 @@ export function FileDirectoryTree({
                     ) : (
                       <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
                     )}
-                  </span>
+                  </button>
                   {renderFileIcon(
                     { name: node.name, path: node.path, isDirectory: true, size: 0, modified: '' },
                     'h-4.5 w-4.5'

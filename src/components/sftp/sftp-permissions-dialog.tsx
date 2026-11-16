@@ -14,14 +14,19 @@ import type { PermissionsState } from "./sftp-types";
 export function Switch({
   checked,
   onCheckedChange,
+  disabled = false,
 }: {
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
-      onClick={() => onCheckedChange(!checked)}
+      disabled={disabled}
+      onClick={() => {
+        if (!disabled) onCheckedChange(!checked);
+      }}
       className={cn(
         "relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50",
         checked ? "bg-primary" : "bg-input",
@@ -50,6 +55,7 @@ export interface SftpPermissionsDialogProps {
   permissionsRecursive: boolean;
   setPermissionsRecursive: (val: boolean) => void;
   permSaving: boolean;
+  isFtpProtocol?: boolean;
   onClose: () => void;
   onSave: () => void;
   t: (key: string) => string;
@@ -68,6 +74,7 @@ export function SftpPermissionsDialog({
   permissionsRecursive,
   setPermissionsRecursive,
   permSaving,
+  isFtpProtocol = false,
   onClose,
   onSave,
   t,
@@ -245,41 +252,51 @@ export function SftpPermissionsDialog({
                 {t("sftp_perm_ownership")}
               </span>
 
-              <div className="flex justify-between items-center h-8">
-                <span className="text-muted-foreground">
-                  {t("sftp_perm_user")}
-                </span>
-                <input
-                  type="text"
-                  value={ownerUser}
-                  onChange={(e) => setOwnerUser(e.target.value)}
-                  className="bg-transparent text-right border-none outline-none font-mono text-[11px] text-foreground cursor-text max-w-[180px]"
-                />
-              </div>
-
-              <div className="flex justify-between items-center h-8">
-                <span className="text-muted-foreground">
-                  {t("sftp_perm_group")}
-                </span>
-                <input
-                  type="text"
-                  value={ownerGroup}
-                  onChange={(e) => setOwnerGroup(e.target.value)}
-                  className="bg-transparent text-right border-none outline-none font-mono text-[11px] text-foreground cursor-text max-w-[180px]"
-                />
-              </div>
-
-              {/* Recursive switch — 仅对文件夹显示 */}
-              {permissionsTarget.isDirectory && (
-                <div className="flex justify-between items-center h-8 border-t border-dashed pt-2.5 mt-1">
-                  <span className="text-muted-foreground">
-                    {t("sftp_perm_apply_recursively")}
-                  </span>
-                  <Switch
-                    checked={permissionsRecursive}
-                    onCheckedChange={setPermissionsRecursive}
-                  />
+              {isFtpProtocol && (
+                <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
+                  FTP/FTPS 仅支持修改权限位（SITE CHMOD），不支持更改所有者/所属组或递归应用。
                 </div>
+              )}
+
+              {!isFtpProtocol && (
+                <>
+                  <div className="flex justify-between items-center h-8">
+                    <span className="text-muted-foreground">
+                      {t("sftp_perm_user")}
+                    </span>
+                    <input
+                      type="text"
+                      value={ownerUser}
+                      onChange={(e) => setOwnerUser(e.target.value)}
+                      className="bg-transparent text-right border-none outline-none font-mono text-[11px] text-foreground cursor-text max-w-[180px]"
+                    />
+                  </div>
+
+                  <div className="flex justify-between items-center h-8">
+                    <span className="text-muted-foreground">
+                      {t("sftp_perm_group")}
+                    </span>
+                    <input
+                      type="text"
+                      value={ownerGroup}
+                      onChange={(e) => setOwnerGroup(e.target.value)}
+                      className="bg-transparent text-right border-none outline-none font-mono text-[11px] text-foreground cursor-text max-w-[180px]"
+                    />
+                  </div>
+
+                  {/* Recursive switch — 仅对文件夹显示 */}
+                  {permissionsTarget.isDirectory && (
+                    <div className="flex justify-between items-center h-8 border-t border-dashed pt-2.5 mt-1">
+                      <span className="text-muted-foreground">
+                        {t("sftp_perm_apply_recursively")}
+                      </span>
+                      <Switch
+                        checked={permissionsRecursive}
+                        onCheckedChange={setPermissionsRecursive}
+                      />
+                    </div>
+                  )}
+                </>
               )}
             </div>
 

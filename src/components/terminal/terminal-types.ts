@@ -68,6 +68,8 @@ export interface TerminalModuleProps {
   onCwdChange?: (cwd: string) => void;
   /** 用户在终端内触发手动重连（如断开状态下按回车）时的回调，用于唤醒工作台顶层连接流程与认证提示 */
   onReconnect?: () => void;
+  /** 从终端右键等内部入口请求展开 SFTP 文件管理面板（单窗格展开底部抽屉；分屏时回退打开 SFTP 标签） */
+  onOpenSftpPanel?: () => void;
 }
 
 // xterm.js 内部核心对象（ICharSizeService / IRenderService 未在公开类型中导出）
@@ -130,6 +132,8 @@ export interface ZmodemOfferLike {
 export interface ZmodemSessionLike {
   type?: string;
   abort?: () => void;
+  aborted?: () => boolean;
+  close?: () => Promise<unknown>;
   on?: {
     (event: "offer", handler: (offer: ZmodemOfferLike) => void): void;
     (event: string, handler: (arg?: unknown) => void): void;

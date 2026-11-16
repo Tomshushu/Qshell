@@ -274,6 +274,12 @@ export interface TerminalSlice {
   setTerminalRecordingDirectory: (path: string) => void;
   terminalEncoding: string;
   setTerminalEncoding: (encoding: string) => void;
+  /** 全局默认终端类型 (TERM)，如 xterm-256color / vt100 / xterm */
+  terminalType: string;
+  setTerminalType: (termType: string) => void;
+  /** 全局括号粘贴模式开关（默认 false，防 Bash 5.1 Readline 反显选中问题） */
+  terminalBracketedPaste: boolean;
+  setTerminalBracketedPaste: (enabled: boolean) => void;
   /** 单个终端录制分卷的最大文件大小（MB），范围 50-2048 */
   terminalRecordingMaxSizeMb: number;
   setTerminalRecordingMaxSizeMb: (size: number) => void;
@@ -331,10 +337,13 @@ export interface SftpSlice {
   /** SFTP 远程面板默认视图模式：'list' 列表 | 'large' 大图标 | 'medium' 中图标 | 'small' 小图标 */
   sftpRemoteViewMode: SftpViewMode;
   setSftpRemoteViewMode: (mode: SftpViewMode) => void;
-  /** SFTP 本地面板默认是否显示隐藏文件（默认 false） */
+  /** 统一文件浏览隐藏文件显示开关（覆盖 SFTP 双栏与工作台文件模块，默认 true） */
+  sftpShowHidden: boolean;
+  setSftpShowHidden: (show: boolean) => void;
+  /** SFTP 本地面板默认是否显示隐藏文件（保留向后兼容字段，写入时自动全局同步） */
   sftpLocalShowHidden: boolean;
   setSftpLocalShowHidden: (show: boolean) => void;
-  /** SFTP 远程面板默认是否显示隐藏文件（默认 true） */
+  /** SFTP 远程面板默认是否显示隐藏文件（保留向后兼容字段，写入时自动全局同步） */
   sftpRemoteShowHidden: boolean;
   setSftpRemoteShowHidden: (show: boolean) => void;
   /** SFTP 本地面板默认排序字段：'name' | 'size' | 'modified' */
@@ -373,6 +382,24 @@ export interface SftpSlice {
   /** SFTP 符号链接（软链接）处理策略：skip | follow */
   sftpSymlinkPolicy: 'skip' | 'follow';
   setSftpSymlinkPolicy: (policy: 'skip' | 'follow') => void;
+  /** SFTP 双栏布局模式：'dual' 双栏 | 'left' 仅本地 | 'right' 仅远程（P1-15） */
+  sftpPaneMode: 'dual' | 'left' | 'right';
+  setSftpPaneMode: (mode: 'dual' | 'left' | 'right') => void;
+  /** SFTP 是否展示侧边目录树（P1-15） */
+  sftpShowDirectoryTree: boolean;
+  setSftpShowDirectoryTree: (show: boolean) => void;
+  /** 外部编辑器打开远程文件的大小上限（MB），0 表示不限（受后端安全上限约束）（P2-18） */
+  externalEditMaxSizeMb: number;
+  setExternalEditMaxSizeMb: (mb: number) => void;
+  /** SFTP 传输包含规则列表（白名单 glob，留空表示不过滤）（P2-19） */
+  sftpIncludePatterns: string[];
+  setSftpIncludePatterns: (patterns: string[]) => void;
+  /** SFTP 传输最小文件大小过滤（KB），null 表示不限（P2-19） */
+  sftpMinSizeKb: number | null;
+  setSftpMinSizeKb: (kb: number | null) => void;
+  /** SFTP 传输最大文件大小过滤（KB），null 表示不限（P2-19） */
+  sftpMaxSizeKb: number | null;
+  setSftpMaxSizeKb: (kb: number | null) => void;
 
   // 路径收藏与工作台文件偏好（统一管理）
   pathBookmarks: Record<string, string[]>;
@@ -398,9 +425,10 @@ export interface WorkspaceSlice {
    *  重新打开工作台），但用户设置的颜色要记住 —— 以 serverId 为键存这里，打开同一
    *  服务器的新 tab 时自动套用。仅存 serverId→颜色，不存 tabId（tab 是临时的）。 */
   tabColors: Record<string, string>;
-  /** SFTP 批量打开联动：待在 SFTP 传输面板中批量连接打开的服务器 ID 列表 */
+  /** SFTP 批量打开联动：待在 SFTP 传输面板中批量连接打开的服务器 ID 列表与目标初始目录 */
   sftpPendingOpenServerIds: string[];
-  openSftpWithServers: (serverIds: string[]) => void;
+  sftpPendingOpenTargetDirs: Record<string, string>;
+  openSftpWithServers: (serverIds: string[], targetDirs?: Record<string, string>) => void;
   clearSftpPendingOpenServers: () => void;
   openTab: (
     serverId: string,
@@ -408,6 +436,12 @@ export interface WorkspaceSlice {
     module: WorkspaceModule,
     initialCommand?: string,
   ) => void;
+  /** 打开本地 Shell 瞬态终端标签页（不写入持久化服务器列表） */
+  openLocalTab: (
+    profileId?: string,
+    profileLabel?: string,
+    cwd?: string,
+  ) => string;
   /**
    * 批量打开多个服务器到同一个分屏工作台。
    * - 1 个：等价于 openTab

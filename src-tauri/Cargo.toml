@@ -66,6 +66,8 @@ hex = "0.4"
 dirs = "6"
 lazy_static = "1"
 serialport = "4.6"
+# portable-pty: 本地 Shell（Windows ConPTY / macOS & Linux PTY）跨平台伪终端后端
+portable-pty = "0.9"
 
 # Windows API（用于获取全局鼠标位置和按键状态，支持跨窗口拖拽合并；磁盘空间查询）
 [target.'cfg(target_os = "windows")'.dependencies]

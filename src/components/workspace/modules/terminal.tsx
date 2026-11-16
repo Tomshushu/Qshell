@@ -1,5 +1,10 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { useModalStack } from "@/hooks/use-modal-stack";
+import { useModalStackStore } from "@/store/modal-stack-store";
+import { Z_LAYER } from "@/lib/z-layer";
 import {
   Plus,
   Loader2,
@@ -22,7 +27,13 @@ import {
   Download,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getServerConnectionFlags } from "@/services/connection-targets";
+import {
+  extractLocalProfileId,
+  getServerConnectionFlags,
+  isEphemeralLocalServerId,
+  parseLocalShellConfig,
+  resolveServerForTab,
+} from "@/services/connection-targets";
 import {
   SerialSequenceDialog,
   type SerialSequenceItem,
@@ -32,6 +43,8 @@ import {
   createSendExpectState,
   processSendExpectChunk,
   cleanupSendExpectState,
+  mergeGlobalLogonConfig,
+  resolveScriptParameters,
   ProgrammableScriptController,
   type SendExpectExecutionState,
   type LogonScriptContext,
@@ -42,9 +55,10 @@ import {
 } from "@/lib/serial-checksum";
 import { decodeBase64Bytes, formatSerialHex } from "@/lib/serial-utils";
 import {
-  clearOutputBusSession,
+  clearAllOutputBusSessions,
   dispatchTerminalOutputObservers,
 } from "@/lib/terminal-output-bus";
+import { automationRegistry } from "@/lib/automation/automation-runner";
 import {
   applyDomRendererForeground,
   applyTerminalFontFamilyOption,
@@ -128,6 +142,13 @@ import ZmodemModule from "zmodem.js";
 // the browser helpers from the bundle at runtime.
 import "zmodem.js/dist/zmodem.devel.js";
 import "@xterm/xterm/css/xterm.css";
+import {
+  canSendZmodemBytes,
+  closeZmodemSendSession,
+  disposeAllZmodemSessions,
+  disposeZmodemSession,
+  type ZmodemActiveSessionEntry,
+} from "./terminal-zmodem";
 
 
 
@@ -180,6 +201,7 @@ import { friendlyError } from "@/lib/error-messages";
 import { EditServerDialog } from "@/components/server/edit-server-dialog";
 import { useAIStore } from "@/store/ai-store";
 import { useTextFormatterStore } from "@/store/text-formatter-store";
+import { useTerminalLockStore } from "@/store/terminal-lock-store";
 import {
   extractPathFromShellTitle,
   resolveRelativePath,
@@ -213,7 +235,7 @@ function isInteractiveOrInputElement(el: Element | null): boolean {
   // 3. 处于任何弹窗、菜单、下拉框、Portal 内部
   if (
     el.closest(
-      '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [role="combobox"], [data-radix-portal], [data-radix-popper-content-wrapper], .modal, .dialog'
+      '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [role="combobox"], [data-radix-portal], [data-radix-popper-content-wrapper], [data-automation-popover="true"], [data-automation-dialog="true"], .modal, .dialog'
     )
   ) {
     return true;
@@ -251,6 +273,7 @@ export function TerminalModule({
   registerGetCwd,
   onCwdChange,
   onReconnect,
+  onOpenSftpPanel,
 }: TerminalModuleProps) {
   const { t } = useTranslation();
   const { toast } = useToast();
@@ -263,9 +286,28 @@ export function TerminalModule({
     : serverId.startsWith("sftp:")
       ? serverId.slice(5)
       : serverId;
-  const server = useAppStore((s) => s.servers.find((sv) => sv.id === baseServerId));
+  const currentTabMeta = useAppStore((s) =>
+    tabId ? s.tabs.find((t) => t.id === tabId) : undefined,
+  );
+  const persistedServer = useAppStore((s) =>
+    baseServerId ? s.servers.find((sv) => sv.id === baseServerId) : undefined,
+  );
+  const server = useMemo(
+    () => persistedServer ?? resolveServerForTab([], baseServerId, currentTabMeta),
+    [persistedServer, baseServerId, currentTabMeta],
+  );
   // Phase 0：连接形态统一由能力表派生；此处刻意不传 osType，保持与原有 targetType/protocol 判断等价
   const serverFlags = getServerConnectionFlags(server?.targetType, server?.protocol);
+  const isLocalServerRef = useLatestRef(serverFlags.isLocalServer);
+  const canTransferFiles = Boolean(
+    baseServerId &&
+      server &&
+      !serverFlags.isLocalServer &&
+      !serverFlags.isSerialServer &&
+      server.protocol !== "telnet" &&
+      server.protocol !== "local",
+  );
+  const canTransferFilesRef = useLatestRef(canTransferFiles);
   const isSerialConsole = serverFlags.isSerialServer;
   const serialToolbarAvailable = (termId: string | null, terminalMap: Map<string, TerminalInstance>) =>
     Boolean(termId && terminalMap.get(termId)?.status === "connected");
@@ -343,6 +385,54 @@ export function TerminalModule({
       );
     }
   }, []);
+  const lockTerminal = useTerminalLockStore((s) => s.lockTerminal);
+  const unlockTabTerminals = useTerminalLockStore((s) => s.unlockTabTerminals);
+
+  useEffect(() => {
+    return () => {
+      if (tabId) {
+        unlockTabTerminals(tabId);
+      }
+    };
+  }, [tabId, unlockTabTerminals]);
+
+  const handleLockCurrentTerminal = useCallback(() => {
+    if (!activeTermId) return;
+    const targetTermId = activeTermId;
+    const targetTabId = tabId ?? serverId;
+    const applyWorkspaceLock = () => {
+      xtermInstances.current.get(targetTermId)?.term.blur();
+      const latestTabs = useAppStore.getState().tabs;
+      const currentTab = latestTabs.find((t) => t.id === targetTabId);
+      const workspaceId = currentTab?.workspaceId ?? undefined;
+      const memberTabIds = workspaceId
+        ? latestTabs.filter((t) => t.workspaceId === workspaceId).map((t) => t.id)
+        : [targetTabId];
+      lockTerminal({
+        termId: targetTermId,
+        tabId: targetTabId,
+        workspaceId,
+        memberTabIds,
+        serverId,
+      });
+    };
+
+    const { appLockEnabled, appLockPasswordHash } = useAppStore.getState();
+    if (appLockEnabled && appLockPasswordHash) {
+      applyWorkspaceLock();
+      return;
+    }
+    // 工作台锁与全局应用锁共用同一套密码/图案体系：若未配置过应用锁，先弹出统一设置窗，设完后自动锁定当前工作台
+    window.dispatchEvent(
+      new CustomEvent("open-app-lock-setup", {
+        detail: {
+          mode: "setup",
+          lockImmediately: false,
+          onSuccess: applyWorkspaceLock,
+        },
+      }),
+    );
+  }, [activeTermId, tabId, serverId, lockTerminal]);
   const [terminalDragOver, setTerminalDragOver] = useState(false);
   const [showTransferDialog, setShowTransferDialog] = useState(false);
   const [uploadRecords, setUploadRecords] = useState<
@@ -466,12 +556,13 @@ export function TerminalModule({
   const serialAutoSendTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const zmodemSessionsRef = useRef(
-    new Map<string, { session: ZmodemSessionLike; zmodem: ZmodemModuleLike }>(),
+    new Map<string, ZmodemActiveSessionEntry>(),
   );
   const zmodemSentriesRef = useRef(new Map<string, ZmodemSentryLike>());
+  const zmodemDisposingIdsRef = useRef(new Set<string>());
   const pendingZmodemPathsRef = useRef<string[] | null>(null);
   const zmodemTransferStarterRef = useRef<
-    ((paths: string[]) => Promise<boolean>) | null
+    ((paths: string[], targetSessionId?: string) => Promise<boolean>) | null
   >(null);
   const zmodemHandshakeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -620,6 +711,105 @@ export function TerminalModule({
   const commandMarkersRef = useRef<Map<string, CommandMarkerEntry[]>>(new Map());
   const [commandMarkerVersion, setCommandMarkerVersion] = useState(0);
   const commandMarkerCursorRef = useRef<Map<string, number>>(new Map());
+
+  type AutomationDialogRequest =
+    | {
+        id: number;
+        kind: "alert";
+        title?: string;
+        message: string;
+        resolve: () => void;
+      }
+    | {
+        id: number;
+        kind: "prompt";
+        title?: string;
+        message: string;
+        defaultValue: string;
+        secret?: boolean;
+        resolve: (value: string | null) => void;
+      };
+  const [automationDialogQueue, setAutomationDialogQueue] = useState<AutomationDialogRequest[]>([]);
+  const automationDialogQueueRef = useRef<AutomationDialogRequest[]>([]);
+  const automationDialogSeqRef = useRef(1);
+  const [automationPromptValue, setAutomationPromptValue] = useState("");
+  const activeAutomationDialog = automationDialogQueue[0] ?? null;
+
+  useEffect(() => {
+    automationDialogQueueRef.current = automationDialogQueue;
+    if (activeAutomationDialog?.kind === "prompt") {
+      setAutomationPromptValue(activeAutomationDialog.defaultValue);
+    } else {
+      setAutomationPromptValue("");
+    }
+  }, [automationDialogQueue, activeAutomationDialog]);
+
+  const requestAutomationAlert = useCallback((message: string, title?: string) => {
+    return new Promise<void>((resolve) => {
+      const id = automationDialogSeqRef.current++;
+      setAutomationDialogQueue((prev) => [
+        ...prev,
+        { id, kind: "alert", title, message, resolve },
+      ]);
+    });
+  }, []);
+
+  const requestAutomationPrompt = useCallback(
+    (
+      message: string,
+      defaultValue = "",
+      options?: { secret?: boolean; title?: string },
+    ) => {
+      return new Promise<string | null>((resolve) => {
+        const id = automationDialogSeqRef.current++;
+        setAutomationDialogQueue((prev) => [
+          ...prev,
+          {
+            id,
+            kind: "prompt",
+            title: options?.title,
+            message,
+            defaultValue,
+            secret: options?.secret,
+            resolve,
+          },
+        ]);
+      });
+    },
+    [],
+  );
+
+  const handleAutomationDialogConfirm = useCallback(() => {
+    setAutomationDialogQueue((prev) => {
+      const [head, ...rest] = prev;
+      if (!head) return prev;
+      if (head.kind === "alert") {
+        head.resolve();
+      } else {
+        head.resolve(automationPromptValue);
+      }
+      return rest;
+    });
+  }, [automationPromptValue]);
+
+  const handleAutomationDialogCancel = useCallback(() => {
+    setAutomationDialogQueue((prev) => {
+      const [head, ...rest] = prev;
+      if (!head) return prev;
+      if (head.kind === "alert") {
+        head.resolve();
+      } else {
+        head.resolve(null);
+      }
+      return rest;
+    });
+  }, []);
+
+  useModalStack(
+    "automation-dialog",
+    Boolean(activeAutomationDialog),
+    handleAutomationDialogCancel,
+  );
   const pendingOutputCountsRef = useRef<Map<string, number>>(new Map());
   // Ctrl+C 返回后端已发出的最后一个输出序号。Tauri/WebView 事件可能已经
   // 排在 IPC 队列里但尚未执行；序号过滤可以在回调层直接丢弃这些旧日志，
@@ -724,6 +914,10 @@ export function TerminalModule({
     (s) => s.terminalRecordingMaxSizeMb,
   );
   const terminalEncoding = useAppStore((s) => s.terminalEncoding);
+  const terminalType = useAppStore((s) => s.terminalType);
+  const terminalTypeRef = useLatestRef(terminalType);
+  const terminalBracketedPaste = useAppStore((s) => s.terminalBracketedPaste);
+  const terminalBracketedPasteRef = useLatestRef(terminalBracketedPaste);
   const terminalShowTimestamps = useAppStore((s) => s.terminalShowTimestamps);
   const terminalShowTimestampsRef = useLatestRef(terminalShowTimestamps);
   const terminalAutoLogSession = useAppStore((s) => s.terminalAutoLogSession);
@@ -1012,6 +1206,7 @@ export function TerminalModule({
     if (
       srvFlags.isSerialServer ||
       srvFlags.isTelnetServer ||
+      srvFlags.isLocalServer ||
       srvFlags.isNetworkServer ||
       srvFlags.isDeviceManagedServer
     ) {
@@ -1174,6 +1369,14 @@ export function TerminalModule({
       };
 
       const chainNames = result.commandChain.map((c) => c.cmd);
+      const curSrv = serverRef.current;
+      const curFlags = getServerConnectionFlags(curSrv?.targetType, curSrv?.protocol);
+      const canFetchRemoteHints =
+        Boolean(serverId) &&
+        !curFlags.isLocalServer &&
+        !curFlags.isSerialServer &&
+        !curFlags.isTelnetServer &&
+        !curFlags.isDeviceManagedServer;
 
       // 动态补全阶段：流式合成（先秒出匹配的连招/历史完整命令，再异步合入远端实时资源）
       if (result.phase === "dynamic" && result.dynamicProvider) {
@@ -1183,6 +1386,10 @@ export function TerminalModule({
         } else {
           setCmdHints([]);
           setHintVisible(false);
+        }
+        if (!canFetchRemoteHints) {
+          pathFetchIdRef.current += 1;
+          return;
         }
         pathFetchIdRef.current += 1;
         const myId = pathFetchIdRef.current;
@@ -1229,6 +1436,10 @@ export function TerminalModule({
         } else {
           setCmdHints([]);
           setHintVisible(false);
+        }
+        if (!canFetchRemoteHints) {
+          pathFetchIdRef.current += 1;
+          return;
         }
         const pathInput = input.match(/\S*$/)?.[0] ?? "";
         pathFetchIdRef.current += 1;
@@ -1424,6 +1635,12 @@ export function TerminalModule({
     const handler = (e: KeyboardEvent) => {
       // 终端模块非活跃时不响应（避免在文件管理器等其他模块中错误触发）
       if (!isActiveRef.current) return;
+      if (
+        isInteractiveOrInputElement(document.activeElement) ||
+        isInteractiveOrInputElement(e.target as Element | null)
+      ) {
+        return;
+      }
       // 仅在按下 Ctrl（Mac 上也支持 Cmd）时触发，且不与 Shift/Alt 组合
       const hasModifier =
         e.ctrlKey || (navigator.userAgent.includes("Mac") && e.metaKey);
@@ -1450,6 +1667,12 @@ export function TerminalModule({
     const handler = (e: KeyboardEvent) => {
       // 终端模块非活跃时不响应（避免在文件管理器等其他模块中错误触发）
       if (!isActiveRef.current) return;
+      if (
+        isInteractiveOrInputElement(document.activeElement) ||
+        isInteractiveOrInputElement(e.target as Element | null)
+      ) {
+        return;
+      }
       const hasModifier =
         e.ctrlKey || (navigator.userAgent.includes("Mac") && e.metaKey);
       if (!hasModifier || !e.shiftKey || e.altKey) return;
@@ -1829,8 +2052,12 @@ export function TerminalModule({
       return;
     }
 
-    // 处于模态弹窗或对话框内部时严禁抢夺焦点
-    if (activeEl?.closest?.('[role="dialog"], [role="alertdialog"], .modal, .dialog')) {
+    // 处于模态弹窗、对话框或局部终端锁遮罩内部时严禁抢夺焦点
+    if (
+      activeEl?.closest?.(
+        '[role="dialog"], [role="alertdialog"], .modal, .dialog, [data-terminal-lock-overlay], .terminal-lock-overlay',
+      )
+    ) {
       return;
     }
     // 非强制模式下，若焦点在其它合法表单输入控件中（且不是正在关闭的搜索栏），不得抢夺
@@ -1839,16 +2066,24 @@ export function TerminalModule({
 
     const targetId = activeTermIdRef.current || activeTermId;
     if (!targetId) return;
+    if (useTerminalLockStore.getState().isLockedTarget(targetId, tabId)) return;
     const info = xtermInstances.current.get(targetId);
     if (!info?.term) return;
 
     const doFocus = () => {
       if (isUnmountedRef.current) return;
+      if (useTerminalLockStore.getState().isLockedTarget(targetId, tabId)) return;
       const el = document.activeElement;
       // 同上：多帧 RAF 回调里也必须尊重搜索栏和撰写栏焦点，force 模式不能越过
       if (showSearchRef.current && el?.closest?.(".terminal-search-bar, [data-terminal-search]")) return;
       if (el?.closest?.(".terminal-compose-bar, [data-terminal-compose-bar]")) return;
-      if (el?.closest?.('[role="dialog"], [role="alertdialog"], .modal, .dialog')) return;
+      if (
+        el?.closest?.(
+          '[role="dialog"], [role="alertdialog"], .modal, .dialog, [data-terminal-lock-overlay], .terminal-lock-overlay',
+        )
+      ) {
+        return;
+      }
       if (!force && isInteractiveOrInputElement(el)) return;
       if (!force && (!isActiveRef.current || !isVisibleRef.current)) return;
       try {
@@ -2051,15 +2286,23 @@ export function TerminalModule({
       });
     }
     if (!tabId) return;
-    if (isSerial) return; // 串口源不广播
+    if (!serverFlags.supportsBroadcast) return; // 串口/本地终端源不广播
     const { broadcastTabIds, tabs, servers } = useAppStore.getState();
     if (!broadcastTabIds.includes(tabId)) return;
     for (const otherTabId of broadcastTabIds) {
       if (otherTabId === tabId) continue;
-      // 串口目标跳过广播
+      if (useTerminalLockStore.getState().isTabLocked(otherTabId)) continue;
+      // 非广播能力目标（如串口、本地终端）跳过广播
       const otherTab = tabs.find((t) => t.id === otherTabId);
-      const otherServer = otherTab ? servers.find((sv) => sv.id === otherTab.serverId) : undefined;
-      if (getServerConnectionFlags(otherServer?.targetType, otherServer?.protocol).isSerialServer) continue;
+      const otherServer = otherTab
+        ? resolveServerForTab(servers, otherTab.serverId, otherTab)
+        : undefined;
+      if (
+        !getServerConnectionFlags(otherServer?.targetType, otherServer?.protocol)
+          .supportsBroadcast
+      ) {
+        continue;
+      }
       const sid = sshService.getTabActiveSessionId(otherTabId);
       if (sid && sshService.isSessionAlive(sid)) {
         lastActivityTimesRef.current.set(sid, Date.now());
@@ -2077,12 +2320,19 @@ export function TerminalModule({
       // 保持 bracketedPaste: false 可避免触发 Bash 5.1+ Readline Active Region 灰底反显选中效果，
       // 既保证多行续行指令 100% 作为单一指令执行，又呈现出最干净的原生命令行视觉。
       const formatted = formatTerminalPasteData(text, {
-        bracketedPaste: false,
+        bracketedPaste: Boolean(terminalBracketedPasteRef.current),
         execute: options?.execute,
       });
 
       // 粘贴和键盘输入必须使用同一广播路由，避免粘贴时绕过广播策略。
       writePasteToShells(sessionId, formatted);
+      if (tabId) {
+        if (options?.execute) {
+          automationRegistry.recordSubmittedCommand(tabId, text);
+        } else {
+          automationRegistry.recordUserInput(tabId, formatted);
+        }
+      }
       // 问题 7 修复：快捷键/右键粘贴绕过 onData，currentInputRef 不会更新。
       // 粘贴后延迟从 buffer 重建 currentInputRef，确保后续补全/历史记录基于真实输入行。
       // 多行粘贴时 \n 会触发 shell 执行，buffer 只剩下一行的 prompt，重建结果为空——正确。
@@ -2178,10 +2428,20 @@ export function TerminalModule({
           const { broadcastTabIds, tabs, servers } = useAppStore.getState();
           for (const otherTabId of broadcastTabIds) {
             if (otherTabId === tabId) continue;
-            // 串口目标不支持 SIGINT，跳过
+            if (useTerminalLockStore.getState().isTabLocked(otherTabId)) continue;
+            // 非广播能力目标（如串口、本地终端）不支持 SIGINT 广播，跳过
             const otherTab = tabs.find((t) => t.id === otherTabId);
-            const otherServer = otherTab ? servers.find((sv) => sv.id === otherTab.serverId) : undefined;
-            if (getServerConnectionFlags(otherServer?.targetType, otherServer?.protocol).isSerialServer) continue;
+            const otherServer = otherTab
+              ? resolveServerForTab(servers, otherTab.serverId, otherTab)
+              : undefined;
+            if (
+              !getServerConnectionFlags(
+                otherServer?.targetType,
+                otherServer?.protocol,
+              ).supportsBroadcast
+            ) {
+              continue;
+            }
             const otherSid = sshService.getTabActiveSessionId(otherTabId);
             if (otherSid && sshService.isSessionAlive(otherSid)) {
               sigintActiveUntilRef.current.set(otherSid, Date.now() + 1000);
@@ -2519,6 +2779,95 @@ export function TerminalModule({
     registerSearchTrigger?.(toggleSearch);
     return () => registerSearchTrigger?.(null);
   }, [toggleSearch, registerSearchTrigger]);
+
+  // 将当前活动终端标签注册到统一 AutomationRunner（触发器 / 宏 / 脚本沙箱 / 动作录制）
+  useEffect(() => {
+    if (!tabId || !activeTermId) return;
+    return automationRegistry.registerHost({
+      tabId,
+      termId: activeTermId,
+      sessionId: xtermInstances.current.get(activeTermId)?.sessionId,
+      protocol: server?.protocol,
+      getContext: () => {
+        // 注入与登录脚本一致的宏参数，使触发器 %P{name} 可解析（UI 已宣传该能力）
+        let params: Record<string, string> = {};
+        const globalCfg = useAppStore.getState().globalLogonScriptsConfig;
+        const rawCfg = server?.logonScriptsConfig;
+        let parsed: ReturnType<typeof mergeGlobalLogonConfig> | null = null;
+        if (rawCfg) {
+          try { parsed = mergeGlobalLogonConfig(JSON.parse(rawCfg), globalCfg); } catch { parsed = null; }
+        } else if (globalCfg?.enabled) {
+          parsed = mergeGlobalLogonConfig(null, globalCfg);
+        }
+        if (parsed) params = resolveScriptParameters(parsed.parameters).params;
+        return {
+          username: server?.username || "",
+          host: server?.host || "",
+          port: server?.port || 22,
+          serverName: server?.name || "",
+          params,
+        };
+      },
+      sendText: async (text: string) => {
+        const xinst = xtermInstances.current.get(activeTermId);
+        if (!xinst?.sessionId) {
+          throw new Error("终端会话未连接");
+        }
+        await sshService.writeToShell(xinst.sessionId, text);
+      },
+      sendBytes: async (bytes: Uint8Array) => {
+        const xinst = xtermInstances.current.get(activeTermId);
+        if (!xinst?.sessionId) return false;
+        if (serverFlags.isSerialServer) {
+          const res = await sshService.writeSerialRaw(xinst.sessionId, Array.from(bytes));
+          if (!res.success) {
+            throw new Error(res.error || "串口原始字节发送失败");
+          }
+          return true;
+        }
+        let bin = "";
+        const CHUNK_SIZE = 8192;
+        for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+          bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK_SIZE));
+        }
+        await sshService.writeToShell(xinst.sessionId, bin);
+        return true;
+      },
+      toast: (msg, variant) => {
+        if (variant === "error") toastRef.current.error(msg);
+        else if (variant === "warning") toastRef.current.warning(msg);
+        else if (variant === "success") toastRef.current.success(msg);
+        else toastRef.current.info(msg);
+      },
+      ringBell: () => playSound(SoundType.Bell),
+      addMarker: (label: string) => {
+        const term = xtermInstances.current.get(activeTermId)?.term;
+        if (!term) return;
+        const xtermMarker = term.registerMarker(0);
+        if (xtermMarker) {
+          const entries = commandMarkersRef.current.get(activeTermId) ?? [];
+          entries.push({ marker: xtermMarker, command: label || "Trigger Marker" });
+          while (entries.length > 200) entries.shift()?.marker.dispose();
+          commandMarkersRef.current.set(activeTermId, entries);
+          setCommandMarkerVersion((version) => version + 1);
+        }
+      },
+      prompt: (message, defaultValue) =>
+        requestAutomationPrompt(message, defaultValue ?? "", { title: server?.name }),
+      alert: (message) => requestAutomationAlert(message, server?.name),
+    });
+  }, [
+    tabId,
+    activeTermId,
+    server?.protocol,
+    server?.username,
+    server?.host,
+    server?.port,
+    server?.name,
+    serverFlags.isSerialServer,
+    requestAutomationPrompt,
+    requestAutomationAlert,
+  ]);
 
   // 切换活动终端时，同步对应终端的检索状态
   useEffect(() => {
@@ -3152,8 +3501,7 @@ export function TerminalModule({
               if (step.type === "pause") {
                 await new Promise((resolve) => setTimeout(resolve, step.ms));
               } else if (step.type === "send") {
-                const payload = rule.sendEnter ? step.text + "\r" : step.text;
-                await sshService.writeToShell(xinst.sessionId, payload);
+                await sshService.writeToShell(xinst.sessionId, step.text);
               }
             }
           })().catch((err) => {
@@ -3424,15 +3772,30 @@ export function TerminalModule({
       const logonConfigStr = server?.logonScriptsConfig;
       if (!logonConfigStr && (!globalLogonConfig || !globalLogonConfig.enabled)) return;
 
+      let parsedLogon: ReturnType<typeof mergeGlobalLogonConfig> = null;
+      if (logonConfigStr) {
+        try {
+          parsedLogon = mergeGlobalLogonConfig(JSON.parse(logonConfigStr), globalLogonConfig);
+        } catch {
+          parsedLogon = null;
+        }
+      } else if (globalLogonConfig?.enabled) {
+        parsedLogon = mergeGlobalLogonConfig(null, globalLogonConfig);
+      }
+
+      if (!parsedLogon) return;
+
+      const resolvedParams = resolveScriptParameters(parsedLogon.parameters);
       const context: LogonScriptContext = {
         username: server?.username || "",
         host: server?.host || "",
         port: server?.port || 22,
         serverName: server?.name || "",
+        params: resolvedParams.params,
       };
 
       const seState = createSendExpectState(
-        logonConfigStr,
+        parsedLogon,
         context,
         (rule, action) => {
           if (action === "disconnect") {
@@ -3448,12 +3811,18 @@ export function TerminalModule({
         globalLogonConfig,
       );
 
-      if (seState) {
+      if (!seState) return;
+
+      let cancelled = false;
+      cleanups.push(() => {
+        cancelled = true;
+        cleanupSendExpectState(seState);
+        sendExpectStatesRef.current.delete(termId);
+      });
+
+      const activateState = () => {
+        if (cancelled || isUnmountedRef.current) return;
         sendExpectStatesRef.current.set(termId, seState);
-        cleanups.push(() => {
-          cleanupSendExpectState(seState);
-          sendExpectStatesRef.current.delete(termId);
-        });
 
         if (seState.config.mode === "script" && seState.config.customScript) {
           const controller = new ProgrammableScriptController(
@@ -3465,6 +3834,9 @@ export function TerminalModule({
             },
             context,
             {
+              alert: (msg: string) => requestAutomationAlert(msg, server?.name),
+              prompt: (msg: string, def?: string) =>
+                requestAutomationPrompt(msg, def ?? "", { title: server?.name }),
               toast: (msg: string, variant?: "info" | "success" | "warning" | "error") => {
                 if (variant === "error") toastRef.current.error(msg);
                 else if (variant === "warning") toastRef.current.warning(msg);
@@ -3478,9 +3850,40 @@ export function TerminalModule({
             console.error("[Programmable Logon Script Error]:", err);
           });
         }
+      };
+
+      if (resolvedParams.missingRequired.length > 0) {
+        void (async () => {
+          for (const reqParam of resolvedParams.missingRequired) {
+            if (cancelled || isUnmountedRef.current) return;
+            const entered = await requestAutomationPrompt(
+              `请输入登录脚本参数 "${reqParam.label || reqParam.name}"`,
+              reqParam.defaultValue || "",
+              { secret: reqParam.secret, title: server?.name },
+            );
+            if (cancelled || isUnmountedRef.current) return;
+            if (entered === null) {
+              toastRef.current.warning(`已取消登录脚本（缺少必填参数 ${reqParam.name}）`);
+              return;
+            }
+            context.params![reqParam.name] = entered;
+          }
+          activateState();
+        })();
+        return;
       }
+
+      activateState();
     },
-    [server?.logonScriptsConfig, server?.username, server?.host, server?.port, server?.name],
+    [
+      server?.logonScriptsConfig,
+      server?.username,
+      server?.host,
+      server?.port,
+      server?.name,
+      requestAutomationAlert,
+      requestAutomationPrompt,
+    ],
   );
 
   const toggleRecording = useCallback(
@@ -3609,13 +4012,19 @@ export function TerminalModule({
       if (reconnectingRef.current.has(termId)) return;
       reconnectingRef.current.add(termId);
 
-      const currentServer = server || useAppStore.getState().servers.find((s) => s.id === baseServerId);
+      const appState = useAppStore.getState();
+      const tabMeta = tabId
+        ? appState.tabs.find((t) => t.id === tabId)
+        : undefined;
+      const currentServer =
+        server || resolveServerForTab(appState.servers, baseServerId, tabMeta);
       const currentFlags = getServerConnectionFlags(currentServer?.targetType, currentServer?.protocol);
       const host = currentServer?.host;
       const port = currentServer?.port || 22;
       const username = currentServer?.username;
       const isTelnet = currentFlags.isTelnetServer;
       const isSerial = currentFlags.isSerialServer;
+      const isLocalShell = currentFlags.isLocalServer;
 
       // 手动重连：重置计数器与 autoReconnect 标记，并通知全局 ReconnectManager 立即重连
       if (!isAutoReconnect) {
@@ -3632,7 +4041,7 @@ export function TerminalModule({
           terminalsRef.current = next;
           return next;
         });
-        if (!isTelnet && !isSerial) {
+        if (!isTelnet && !isSerial && !isLocalShell) {
           reconnectManager.retryImmediately(serverId);
         }
       }
@@ -3670,7 +4079,9 @@ export function TerminalModule({
       }
 
       // E2：手动重连进度反馈在终端内输出进度信息
-      if (isSerial) {
+      if (isLocalShell) {
+        xtermInfo.term.writeln(`\r\n\x1b[90m${t("term_restarting_local")}\x1b[0m`);
+      } else if (isSerial) {
         xtermInfo.term.writeln(
           `\r\n\x1b[90m${t("term_connecting_serial", { port: serialCfg.portName, baud: serialCfg.baudRate })}\x1b[0m`,
         );
@@ -3709,7 +4120,7 @@ export function TerminalModule({
       const cleanups: Array<() => void> = [];
 
       try {
-        if (!isTelnet && !isSerial) {
+        if (!isTelnet && !isSerial && !isLocalShell) {
           // SSH 路径：确保 SSH 底层连接存在（若已连接，后端会立即返回 Ok）
           const connResult = await sshService.connect(serverId);
           if (isUnmountedRef.current || !xtermInstances.current.has(termId)) {
@@ -3737,7 +4148,26 @@ export function TerminalModule({
         }
         const cols = xtermInfo.term.cols > 0 ? xtermInfo.term.cols : 80;
         const rows = xtermInfo.term.rows > 0 ? xtermInfo.term.rows : 24;
-        const result = isSerial
+        const resolvedTerm =
+          server?.terminalType?.trim() || terminalTypeRef.current || "xterm-256color";
+        const localCfg = isLocalShell
+          ? parseLocalShellConfig(currentServer?.credentialsConfig)
+          : {};
+        const localProfileId =
+          tabMeta?.localProfileId ??
+          localCfg.profileId ??
+          extractLocalProfileId(serverId);
+        const localCwd = tabMeta?.localCwd ?? localCfg.cwd;
+        const result = isLocalShell
+          ? await sshService.createLocalShell(serverId, {
+              profileId: localProfileId,
+              cwd: localCwd,
+              cols,
+              rows,
+              encoding: terminalEncoding,
+              termType: resolvedTerm,
+            })
+          : isSerial
           ? await sshService.createSerialShell(
               serverId,
               serialCfg.portName,
@@ -3762,12 +4192,14 @@ export function TerminalModule({
               rows,
               15,
               terminalEncoding,
+              resolvedTerm,
             )
           : await sshService.createShell(
               serverId,
               cols,
               rows,
               terminalEncoding,
+              resolvedTerm,
             );
         if (isUnmountedRef.current || !xtermInstances.current.has(termId)) {
           if (result.success && result.sessionId) {
@@ -3805,7 +4237,7 @@ export function TerminalModule({
         }
 
         const sessionId = result.sessionId;
-        if (isSerial) {
+        if (isSerial || isLocalShell) {
           useAppStore.getState().setServerState(serverId, ConnectionState.Ready);
           if (baseServerId && baseServerId !== serverId) {
             useAppStore.getState().setServerState(baseServerId, ConnectionState.Ready);
@@ -3861,13 +4293,15 @@ export function TerminalModule({
           sigintDroppedCharsRef.current.delete(sessionId);
           lastActivityTimesRef.current.delete(sessionId);
           discardedShellOutputThroughRef.current.delete(sessionId);
-          const zmodem = zmodemSessionsRef.current.get(sessionId);
-          if (zmodem) {
-            try { zmodem.session.abort?.(); } catch { /* session may already be closed */ }
-            zmodemSessionsRef.current.delete(sessionId);
-            void sshService.shellZmodemEnd(sessionId).catch(() => {});
-          }
-          zmodemSentriesRef.current.delete(sessionId);
+          disposeZmodemSession({
+            sessionId,
+            zmodemSessions: zmodemSessionsRef.current,
+            zmodemSentries: zmodemSentriesRef.current,
+            disposingIds: zmodemDisposingIdsRef.current,
+            abort: true,
+            endBackend: true,
+            shellZmodemEnd: sshService.shellZmodemEnd,
+          });
           cleanups.slice().reverse().forEach((fn) => {
             try {
               fn();
@@ -3883,6 +4317,9 @@ export function TerminalModule({
               ...current,
               sessionId: undefined,
             });
+            if (tabId) {
+              automationRegistry.updateHostSessionId(tabId, termId, undefined);
+            }
           }
         };
 
@@ -3903,7 +4340,12 @@ export function TerminalModule({
         // 通过 xtermInstances.current.get(termId)?.sessionId 读取的场景使用。
         // 若不更新，重连后这些场景会拿到旧的（已关闭的）sessionId，导致输入丢失。
         const xinst = xtermInstances.current.get(termId);
-        if (xinst) xtermInstances.current.set(termId, { ...xinst, sessionId });
+        if (xinst) {
+          xtermInstances.current.set(termId, { ...xinst, sessionId });
+          if (tabId) {
+            automationRegistry.updateHostSessionId(tabId, termId, sessionId);
+          }
+        }
 
         // 重连得到的是全新 shell 进程，PWD 已回到 home：清空重连前的 cwd 缓存，
         // 否则相对路径补全会继续 ls 旧目录（表现为「cd 前缀什么都不提示」）。
@@ -3931,7 +4373,7 @@ export function TerminalModule({
         });
 
         // 重连成功：重置全局 ReconnectManager 状态；自动重连成功时弹 toast 提示
-        if (!isTelnet && !isSerial) {
+        if (!isTelnet && !isSerial && !isLocalShell) {
           reconnectManager.reset(serverId);
         }
         if (isAutoReconnect) {
@@ -3941,6 +4383,17 @@ export function TerminalModule({
         // 统一的安全无竞态 Shell 输出监听与历史获取流
         let historyWritten = false;
         let pendingBuffer = "";
+        let mainInputAttached = false;
+        const dsrEarlyDisposable = isLocalShell
+          ? xtermInfo.term.onData((dsrData) => {
+              if (!mainInputAttached && /^\x1b\[\d+;\d+R$/.test(dsrData)) {
+                void sshService.writeToShell(sessionId, dsrData).catch(() => {});
+              }
+            })
+          : null;
+        if (dsrEarlyDisposable) {
+          cleanups.push(() => dsrEarlyDisposable.dispose());
+        }
 
         const unsubscribe = sshService.onShellOutput((data) => {
           if (data.sessionId === sessionId) {
@@ -4013,7 +4466,11 @@ export function TerminalModule({
           const bufferToWrite = historyData && historyData.endsWith(pendingBuffer) ? "" : pendingBuffer;
           if (bufferToWrite) {
             if (isSerial) writeShellOutput(termId, xtermInfo.term, bufferToWrite);
-            else writeTerminalOutput(termId, xtermInfo.term, stripUnsafeEscapes(bufferToWrite));
+            else {
+              const safeBuffered = stripUnsafeEscapes(bufferToWrite);
+              writeTerminalOutput(termId, xtermInfo.term, safeBuffered);
+              dispatchTerminalOutputObservers(termId, bufferToWrite, safeBuffered, sessionId);
+            }
           }
         }
 
@@ -4026,13 +4483,14 @@ export function TerminalModule({
             // 只会触发有限次数的无意义重试与 toast 刷屏，等待用户重新插入后手动重连
             const inst = terminalsRef.current.get(termId);
             const shouldAuto =
+              !isLocalShell &&
               terminalAutoReconnectRef.current &&
               inst?.autoReconnect &&
               !isUnmountedRef.current &&
               !manualDisconnectRef.current &&
               data.reason !== "device_disconnected";
             if (shouldAuto) {
-              if (!isTelnet && !isSerial) {
+              if (!isTelnet && !isSerial && !isLocalShell) {
                 reconnectManager.scheduleNextAttempt(serverId, data.reason || "Shell closed", null);
               }
               setTerminals((prev) => {
@@ -4087,13 +4545,14 @@ export function TerminalModule({
             const inst = terminalsRef.current.get(termId);
             // 串口设备拔出（device_disconnected）：设备不在位时重连必然失败，跳过自动重连
             const shouldAuto =
+              !isLocalShell &&
               terminalAutoReconnectRef.current &&
               inst?.autoReconnect &&
               !isUnmountedRef.current &&
               data.reason !== "device_disconnected";
 
             if (shouldAuto) {
-              if (!isTelnet && !isSerial) {
+              if (!isTelnet && !isSerial && !isLocalShell) {
                 reconnectManager.scheduleNextAttempt(serverId, data.error, null);
               }
               setTerminals((prev) => {
@@ -4128,8 +4587,15 @@ export function TerminalModule({
         });
         cleanups.push(unsubscribeError);
 
+        mainInputAttached = true;
+        dsrEarlyDisposable?.dispose();
         const inputDataDisposable = xtermInfo.term.onData((data) => {
-          if (useAppStore.getState().isAppLocked) return;
+          if (
+            useAppStore.getState().isAppLocked ||
+            useTerminalLockStore.getState().isLockedTarget(termId, tabId)
+          ) {
+            return;
+          }
           if (sessionId) {
             lastActivityTimesRef.current.set(sessionId, Date.now());
           }
@@ -4156,6 +4622,9 @@ export function TerminalModule({
           }
 
           // 追踪当前输入行，用于指令提示
+          if (tabId) {
+            automationRegistry.recordUserInput(tabId, data);
+          }
           const submittedCommand =
             data === "\r" || data === "\n"
               ? currentInputRef.current.trim()
@@ -4287,6 +4756,15 @@ export function TerminalModule({
                 if (id === tabId) continue;
                 const tab = state.tabs.find((t) => t.id === id);
                 if (!tab) continue;
+                const targetServer = resolveServerForTab(state.servers, tab.serverId, tab);
+                if (
+                  !getServerConnectionFlags(
+                    targetServer?.targetType,
+                    targetServer?.protocol,
+                  ).supportsBroadcast
+                ) {
+                  continue;
+                }
                 if (!seenServers.has(tab.serverId)) {
                   seenServers.set(tab.serverId, tab.serverName || id);
                 }
@@ -4428,7 +4906,8 @@ export function TerminalModule({
     if (!serverId) return;
     const isTelnet = serverFlags.isTelnetServer;
     const isSerial = serverFlags.isSerialServer;
-    if (isTelnet || isSerial) return;
+    const isLocalShell = serverFlags.isLocalServer;
+    if (isTelnet || isSerial || isLocalShell) return;
 
     let lastStatus = "";
 
@@ -4953,7 +5432,12 @@ export function TerminalModule({
       // 终端级常驻兜底：若 DOM 级键盘拦截未捕获（如移动端虚拟键盘、IME 换行、剪贴板等），
       // 在断连状态下通过 onData 捕获回车并触发重连
       const fallbackDataDisposable = term.onData((data) => {
-        if (useAppStore.getState().isAppLocked) return;
+        if (
+          useAppStore.getState().isAppLocked ||
+          useTerminalLockStore.getState().isLockedTarget(termId, tabId)
+        ) {
+          return;
+        }
         const inst = terminalsRef.current.get(termId);
         const status = inst?.status;
         const currentSessionId = xtermInstances.current.get(termId)?.sessionId;
@@ -4963,7 +5447,7 @@ export function TerminalModule({
           status === "error" ||
           status === "reconnecting" ||
           !currentSessionId ||
-          !isConnectedRef.current;
+          (!isLocalServerRef.current && !isConnectedRef.current);
 
         if (isDisconnected && !reconnectingRef.current.has(termId)) {
           if (data === "\r" || data === "\n") {
@@ -4997,8 +5481,11 @@ export function TerminalModule({
             return false;
           }
 
-          // 若当前应用处于锁屏状态，拦截所有按键输入，阻止任何数据传输到远端
-          if (useAppStore.getState().isAppLocked) {
+          // 若当前应用处于锁屏状态，或当前工作台已锁定，拦截所有按键输入，阻止任何数据传输到远端
+          if (
+            useAppStore.getState().isAppLocked ||
+            useTerminalLockStore.getState().isLockedTarget(termId, tabId)
+          ) {
             event.preventDefault();
             event.stopPropagation();
             return false;
@@ -5021,7 +5508,7 @@ export function TerminalModule({
               status === "error" ||
               status === "reconnecting" ||
               !currentSessionId ||
-              !isConnectedRef.current;
+              (!isLocalServerRef.current && !isConnectedRef.current);
 
             if (isDisconnected) {
               event.preventDefault();
@@ -5760,15 +6247,86 @@ export function TerminalModule({
         let sessionId: string;
         let bannerText: string | undefined;
 
-        const currentServer = server || useAppStore.getState().servers.find((s) => s.id === baseServerId);
+        const initAppState = useAppStore.getState();
+        const initTabMeta = tabId
+          ? initAppState.tabs.find((t) => t.id === tabId)
+          : undefined;
+        const currentServer =
+          server || resolveServerForTab(initAppState.servers, baseServerId, initTabMeta);
         const currentFlags = getServerConnectionFlags(currentServer?.targetType, currentServer?.protocol);
         const host = currentServer?.host;
         const port = currentServer?.port || 22;
         const username = currentServer?.username || "root";
         const isTelnet = currentFlags.isTelnetServer;
         const isSerial = currentFlags.isSerialServer;
+        const isLocalShell = currentFlags.isLocalServer;
 
-        if (isSerial) {
+        if (isLocalShell) {
+          // ===== Local 本地终端路径：直接通过 portable-pty 拉起本机 Shell =====
+          const localCfg = parseLocalShellConfig(currentServer?.credentialsConfig);
+          const localProfileId =
+            initTabMeta?.localProfileId ??
+            localCfg.profileId ??
+            extractLocalProfileId(sId);
+          const localCwd = initTabMeta?.localCwd ?? localCfg.cwd;
+          const resolvedTerm =
+            currentServer?.terminalType?.trim() ||
+            terminalTypeRef.current ||
+            "xterm-256color";
+          const result = await sshService.createLocalShell(sId, {
+            profileId: localProfileId,
+            cwd: localCwd,
+            cols,
+            rows,
+            encoding: terminalEncoding,
+            termType: resolvedTerm,
+          });
+
+          if (isUnmountedRef.current) {
+            if (result.success && result.sessionId) {
+              sshService.closeShell(result.sessionId).catch(() => {});
+            }
+            throw new Error("Component unmounted during createLocalShell");
+          }
+
+          if (!result.success || !result.sessionId) {
+            setTerminals((prev) => {
+              const next = new Map(prev);
+              const inst = next.get(termId);
+              if (inst) {
+                next.set(termId, {
+                  ...inst,
+                  status: "error",
+                  error: result.error || t("tm_err_shell"),
+                });
+              }
+              terminalsRef.current = next;
+              return next;
+            });
+            term.writeln(
+              `\r\n\x1b[31mError: ${result.error || t("tm_err_shell")}\x1b[0m`,
+            );
+            term.writeln(
+              "\x1b[33m" + t("tm_disconnected_hint") + "\x1b[0m",
+            );
+            term.focus();
+            onShellReady?.();
+            cleanups.slice().reverse().forEach((fn) => {
+              try {
+                fn();
+              } catch {
+                // 忽略异常
+              }
+            });
+            return;
+          }
+          sessionId = result.sessionId;
+          terminalCwdRef.current.delete(termId);
+          useAppStore.getState().setServerState(sId, ConnectionState.Ready);
+          if (baseServerId && baseServerId !== sId) {
+            useAppStore.getState().setServerState(baseServerId, ConnectionState.Ready);
+          }
+        } else if (isSerial) {
           // ===== Serial 串口路径：直连本地/USB串口硬件，跳过 SSH 与 MOTD =====
           let serialCfg: SerialOpenConfig = {
             portName: host || "COM1",
@@ -5866,6 +6424,8 @@ export function TerminalModule({
           console.log(
             `[Terminal Init] ${sId} 调用 sshService.createTelnetShell(host=${host}, port=${port})...`,
           );
+          const resolvedTerm =
+            server?.terminalType?.trim() || terminalTypeRef.current || "xterm-256color";
           const result = await sshService.createTelnetShell(
             sId,
             host ?? "",
@@ -5874,6 +6434,7 @@ export function TerminalModule({
             rows,
             15,
             terminalEncoding,
+            resolvedTerm,
           );
           console.log(
             `[Terminal Init] ${sId} createTelnetShell 返回: success=${result.success}, sessionId=${result.sessionId?.slice(0, 8) ?? "none"}`,
@@ -5966,11 +6527,14 @@ export function TerminalModule({
           console.log(
             `[Terminal Init] ${sId} 调用 sshService.createShell(cols=${cols}, rows=${rows})...`,
           );
+          const resolvedTerm =
+            server?.terminalType?.trim() || terminalTypeRef.current || "xterm-256color";
           const result = await sshService.createShell(
             sId,
             cols,
             rows,
             terminalEncoding,
+            resolvedTerm,
           );
           console.log(
             `[Terminal Init] ${sId} createShell 返回: success=${result.success}, sessionId=${result.sessionId?.slice(0, 8) ?? "none"}`,
@@ -6072,13 +6636,15 @@ export function TerminalModule({
           sigintDroppedCharsRef.current.delete(sessionId);
           lastActivityTimesRef.current.delete(sessionId);
           discardedShellOutputThroughRef.current.delete(sessionId);
-          const zmodem = zmodemSessionsRef.current.get(sessionId);
-          if (zmodem) {
-            try { zmodem.session.abort?.(); } catch { /* session may already be closed */ }
-            zmodemSessionsRef.current.delete(sessionId);
-            void sshService.shellZmodemEnd(sessionId).catch(() => {});
-          }
-          zmodemSentriesRef.current.delete(sessionId);
+          disposeZmodemSession({
+            sessionId,
+            zmodemSessions: zmodemSessionsRef.current,
+            zmodemSentries: zmodemSentriesRef.current,
+            disposingIds: zmodemDisposingIdsRef.current,
+            abort: true,
+            endBackend: true,
+            shellZmodemEnd: sshService.shellZmodemEnd,
+          });
           cleanups.slice().reverse().forEach((fn) => {
             try {
               fn();
@@ -6094,10 +6660,15 @@ export function TerminalModule({
               ...current,
               sessionId: undefined,
             });
+            if (tabId) {
+              automationRegistry.updateHostSessionId(tabId, termId, undefined);
+            }
           }
         };
 
-        term.writeln(`\x1b[32mConnection established.\x1b[0m\r\n`);
+        if (!isLocalShell) {
+          term.writeln(`\x1b[32mConnection established.\x1b[0m\r\n`);
+        }
 
         // Send the initial command (e.g. docker exec) after the shell is ready
         if (initialCommand) {
@@ -6110,7 +6681,12 @@ export function TerminalModule({
 
         // 保存 sessionId 到 xtermInstances，供复制粘贴事件使用
         const xinst = xtermInstances.current.get(termId);
-        if (xinst) xtermInstances.current.set(termId, { ...xinst, sessionId });
+        if (xinst) {
+          xtermInstances.current.set(termId, { ...xinst, sessionId });
+          if (tabId) {
+            automationRegistry.updateHostSessionId(tabId, termId, sessionId);
+          }
+        }
 
         // 注册到 tab 会话管理（拖拽迁移时通过 tabId 获取会话列表）
         if (tabId) {
@@ -6136,6 +6712,17 @@ export function TerminalModule({
         // 统一的安全无竞态 Shell 输出监听与历史获取流
         let historyWritten = false;
         let pendingBuffer = "";
+        let mainInputAttached = false;
+        const dsrEarlyDisposable = isLocalShell
+          ? term.onData((dsrData) => {
+              if (!mainInputAttached && /^\x1b\[\d+;\d+R$/.test(dsrData)) {
+                void sshService.writeToShell(sessionId, dsrData).catch(() => {});
+              }
+            })
+          : null;
+        if (dsrEarlyDisposable) {
+          cleanups.push(() => dsrEarlyDisposable.dispose());
+        }
 
         // 监听 Shell 输出
         const unsubscribe = sshService.onShellOutput((data) => {
@@ -6231,7 +6818,11 @@ export function TerminalModule({
           const bufferToWrite = historyData && historyData.endsWith(pendingBuffer) ? "" : pendingBuffer;
           if (bufferToWrite) {
             if (isSerial) writeShellOutput(termId, term, bufferToWrite);
-            else writeTerminalOutput(termId, term, stripUnsafeEscapes(bufferToWrite));
+            else {
+              const safeBuffered = stripUnsafeEscapes(bufferToWrite);
+              writeTerminalOutput(termId, term, safeBuffered);
+              dispatchTerminalOutputObservers(termId, bufferToWrite, safeBuffered, sessionId);
+            }
           }
         }
         if (sessionId) {
@@ -6253,13 +6844,14 @@ export function TerminalModule({
             // 串口设备拔出（device_disconnected）除外：设备不在位时重连必然失败
             const inst = terminalsRef.current.get(termId);
             const shouldAuto =
+              !isLocalShell &&
               terminalAutoReconnectRef.current &&
               inst?.autoReconnect &&
               !isUnmountedRef.current &&
               !manualDisconnectRef.current &&
               data.reason !== "device_disconnected";
             if (shouldAuto) {
-              if (!isTelnet && !isSerial) {
+              if (!isTelnet && !isSerial && !isLocalShell) {
                 reconnectManager.scheduleNextAttempt(sId, data.reason || "Shell closed", null);
               }
               setTerminals((prev) => {
@@ -6324,13 +6916,14 @@ export function TerminalModule({
             const inst = terminalsRef.current.get(termId);
             // 串口设备拔出（device_disconnected）：设备不在位时重连必然失败，跳过自动重连
             const shouldAuto =
+              !isLocalShell &&
               terminalAutoReconnectRef.current &&
               inst?.autoReconnect &&
               !isUnmountedRef.current &&
               data.reason !== "device_disconnected";
 
             if (shouldAuto) {
-              if (!isTelnet && !isSerial) {
+              if (!isTelnet && !isSerial && !isLocalShell) {
                 reconnectManager.scheduleNextAttempt(sId, data.error, null);
               }
               setTerminals((prev) => {
@@ -6366,8 +6959,15 @@ export function TerminalModule({
         cleanups.push(unsubscribeError);
 
         // 监听终端输入
+        mainInputAttached = true;
+        dsrEarlyDisposable?.dispose();
         const inputDataDisposable = term.onData((data) => {
-          if (useAppStore.getState().isAppLocked) return;
+          if (
+            useAppStore.getState().isAppLocked ||
+            useTerminalLockStore.getState().isLockedTarget(termId, tabId)
+          ) {
+            return;
+          }
           if (sessionId) {
             lastActivityTimesRef.current.set(sessionId, Date.now());
           }
@@ -6394,6 +6994,9 @@ export function TerminalModule({
           }
 
           // 追踪当前输入行，用于指令提示与历史记录
+          if (tabId) {
+            automationRegistry.recordUserInput(tabId, data);
+          }
           if (data === "\r" || data === "\n") {
             // 回车执行命令：记录到历史（附带主机与工作目录上下文），再清空输入追踪
             if (currentInputRef.current.trim()) {
@@ -6981,7 +7584,17 @@ export function TerminalModule({
     (t) => t.status === "connected" && !!t.sessionId,
   );
   useEffect(() => {
-    if (!isConnected || !serverId || !hasConnectedShell) return;
+    if (
+      !isConnected ||
+      !serverId ||
+      !hasConnectedShell ||
+      serverFlags.isLocalServer ||
+      serverFlags.isSerialServer ||
+      serverFlags.isTelnetServer ||
+      serverFlags.isDeviceManagedServer
+    ) {
+      return;
+    }
     sshService
       .getHomeDirectory(serverId)
       .then((h) => {
@@ -6990,30 +7603,39 @@ export function TerminalModule({
         }
       })
       .catch(() => {});
-  }, [isConnected, serverId, hasConnectedShell]);
+  }, [
+    isConnected,
+    serverId,
+    hasConnectedShell,
+    serverFlags.isLocalServer,
+    serverFlags.isSerialServer,
+    serverFlags.isTelnetServer,
+    serverFlags.isDeviceManagedServer,
+  ]);
+
+  const resolveCurrentTerminalCwd = useCallback(() => {
+    if (!activeTermId) return homeDirRef.current || undefined;
+    const cwd = terminalCwdRef.current.get(activeTermId);
+    if (cwd && (cwd.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(cwd))) {
+      return cwd;
+    }
+    const term = terminals.get(activeTermId);
+    if (term?.shellTitle) {
+      const extracted = extractPathFromShellTitle(term.shellTitle, homeDirRef.current);
+      if (extracted) {
+        terminalCwdRef.current.set(activeTermId, extracted);
+        return extracted;
+      }
+    }
+    return homeDirRef.current || undefined;
+  }, [activeTermId, terminals]);
 
   // 向外层工作台注册获取当前终端 CWD 的回调
   useEffect(() => {
     if (!registerGetCwd) return;
-    const getCwd = () => {
-      if (!activeTermId) return undefined;
-      const cwd = terminalCwdRef.current.get(activeTermId);
-      if (cwd && (cwd.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(cwd))) {
-        return cwd;
-      }
-      const term = terminals.get(activeTermId);
-      if (term?.shellTitle) {
-        const extracted = extractPathFromShellTitle(term.shellTitle, homeDirRef.current);
-        if (extracted) {
-          terminalCwdRef.current.set(activeTermId, extracted);
-          return extracted;
-        }
-      }
-      return homeDirRef.current || undefined;
-    };
-    registerGetCwd(getCwd);
+    registerGetCwd(resolveCurrentTerminalCwd);
     return () => registerGetCwd(null);
-  }, [registerGetCwd, activeTermId, terminals]);
+  }, [registerGetCwd, resolveCurrentTerminalCwd]);
 
   const jumpToLatestOutput = useCallback(() => {
     if (!activeTermId) return;
@@ -7324,8 +7946,14 @@ export function TerminalModule({
       });
       // eslint-disable-next-line react-hooks/exhaustive-deps
       xtermInstances.current.clear();
-      zmodemSentriesRef.current.clear();
-      zmodemSessionsRef.current.clear();
+      disposeAllZmodemSessions({
+        zmodemSessions: zmodemSessionsRef.current,
+        zmodemSentries: zmodemSentriesRef.current,
+        disposingIds: zmodemDisposingIdsRef.current,
+        abort: true,
+        endBackend: true,
+        shellZmodemEnd: sshService.shellZmodemEnd,
+      });
       pendingZmodemPathsRef.current = null;
       pendingSftpRecordRef.current = null;
       sftpFileProgressRef.current.clear();
@@ -7362,14 +7990,21 @@ export function TerminalModule({
       commandMarkerCursorRef.current.clear();
       pendingOutputCountsRef.current.clear();
       discardedShellOutputThroughRef.current.clear();
+      for (const req of automationDialogQueueRef.current) {
+        if (req.kind === "alert") req.resolve();
+        else req.resolve(null);
+      }
+      automationDialogQueueRef.current = [];
       serialPausedOutputRef.current.clear();
       serialLineStartMapRef.current.clear();
       terminalLineStartMapRef.current.clear();
-      sendExpectStatesRef.current.forEach((st, tid) => {
+      sendExpectStatesRef.current.forEach((st) => {
         cleanupSendExpectState(st);
-        clearOutputBusSession(tid);
       });
       sendExpectStatesRef.current.clear();
+      // 输出总线的 trafficByTerm 按 termId 累积，绝大多数会话并没有 Send-Expect 状态；
+      // 模块整体卸载时无条件清空，避免全局总线随会话数缓慢泄漏。
+      clearAllOutputBusSessions();
       pausedShellsRef.current.clear();
       sigintActiveUntilRef.current.clear();
       sigintDroppedCharsRef.current.clear();
@@ -7526,6 +8161,14 @@ export function TerminalModule({
       if (!cmd) return;
 
       const activeId = activeTermIdRef.current || activeTermId;
+      const lockState = useTerminalLockStore.getState();
+      if (lockState.isLockedTarget(activeId, tabId)) {
+        toastRef.current?.warning(
+          t("tm_lock_overlay_title") || "当前工作台已锁定",
+        );
+        return;
+      }
+
       let targetSessionId: string | null = null;
 
       if (activeId) {
@@ -7535,10 +8178,14 @@ export function TerminalModule({
           null;
       }
 
-      // 兜底：若 activeId 未能对应活跃 session，从当前终端实例列表中寻找第一个有效连接的 sessionId
+      // 兜底：若 activeId 未能对应活跃 session，从当前终端实例列表中寻找第一个未锁定且有效连接的 sessionId
       if (!targetSessionId || !sshService.isSessionAlive(targetSessionId)) {
         for (const [id, inst] of terminalsRef.current.entries()) {
-          if (inst.sessionId && sshService.isSessionAlive(inst.sessionId)) {
+          if (
+            !lockState.isTermLocked(id) &&
+            inst.sessionId &&
+            sshService.isSessionAlive(inst.sessionId)
+          ) {
             targetSessionId = inst.sessionId;
             activeTermIdRef.current = id;
             setActiveTermId(id);
@@ -7549,7 +8196,11 @@ export function TerminalModule({
 
       if (!targetSessionId || !sshService.isSessionAlive(targetSessionId)) {
         for (const [id, inst] of xtermInstances.current.entries()) {
-          if (inst.sessionId && sshService.isSessionAlive(inst.sessionId)) {
+          if (
+            !lockState.isTermLocked(id) &&
+            inst.sessionId &&
+            sshService.isSessionAlive(inst.sessionId)
+          ) {
             targetSessionId = inst.sessionId;
             activeTermIdRef.current = id;
             setActiveTermId(id);
@@ -7614,11 +8265,18 @@ export function TerminalModule({
       const target = e.target as Element | null;
       if (!target) return;
 
-      // 1. 若点击在搜索栏或撰写栏内部，绝对不打扰输入
+      // 1. 若点击在搜索栏、撰写栏或局部终端锁遮罩内部，绝对不打扰输入
       if (
         target.closest?.(
-          ".terminal-search-bar, [data-terminal-search], .terminal-compose-bar, [data-terminal-compose-bar]"
+          ".terminal-search-bar, [data-terminal-search], .terminal-compose-bar, [data-terminal-compose-bar], [data-terminal-lock-overlay], .terminal-lock-overlay",
         )
+      ) {
+        return;
+      }
+
+      const curActiveTermId = activeTermIdRef.current || activeTermId;
+      if (
+        useTerminalLockStore.getState().isLockedTarget(curActiveTermId, tabId)
       ) {
         return;
       }
@@ -7664,6 +8322,12 @@ export function TerminalModule({
     const handleKeydownCapture = (e: KeyboardEvent) => {
       if (!isActiveRef.current || !isVisibleRef.current) return;
       if (useAppStore.getState().isAppLocked) return;
+      const curActiveTermId = activeTermIdRef.current;
+      if (
+        useTerminalLockStore.getState().isLockedTarget(curActiveTermId, tabId)
+      ) {
+        return;
+      }
 
       const activeEl = document.activeElement;
       const targetEl = e.target as Element | null;
@@ -7825,7 +8489,7 @@ export function TerminalModule({
           status === "error" ||
           status === "reconnecting" ||
           !currentSessionId ||
-          !isConnectedRef.current;
+          (!isLocalServerRef.current && !isConnectedRef.current);
 
         if (isDisconnected) {
           e.preventDefault();
@@ -7882,10 +8546,10 @@ export function TerminalModule({
         onToggleFullscreen();
         return;
       }
-      // Esc 退出全屏（仅全屏时，搜索栏未开启时优先退出全屏）
+      // Esc 退出全屏（仅全屏时，搜索栏和弹窗栈为空时才退出全屏）
       if (e.key === "Escape" && isFullscreen && onToggleFullscreen) {
-        if (showSearchRef.current) {
-          // 搜索栏打开时优先交由搜索栏关闭逻辑处理，避免误退全屏
+        if (showSearchRef.current || useModalStackStore.getState().stack.length > 0) {
+          // 搜索栏或弹窗/浮层打开时优先交由其关闭逻辑处理，避免误退全屏
           return;
         }
         e.preventDefault();
@@ -7903,6 +8567,18 @@ export function TerminalModule({
   // ZMODEM：服务器执行 rz 时，后端将二进制握手透传到这里；
   // 由 zmodem.js 协议栈处理，选中的本地文件通过同一 SSH channel 发送。
   useEffect(() => {
+    const endZmodemSafely = (sessionId: string, abort: boolean) => {
+      disposeZmodemSession({
+        sessionId,
+        zmodemSessions: zmodemSessionsRef.current,
+        zmodemSentries: zmodemSentriesRef.current,
+        disposingIds: zmodemDisposingIdsRef.current,
+        abort,
+        endBackend: true,
+        shellZmodemEnd: sshService.shellZmodemEnd,
+      });
+    };
+
     const detected = sshService.onShellZmodemDetected(
       ({ sessionId, data: initialData }) => {
         // Every terminal module subscribes to the global event stream. Only the
@@ -7913,7 +8589,21 @@ export function TerminalModule({
         if (!ownsSession) return;
         const Zmodem = ((globalThis as { Zmodem?: ZmodemModuleLike }).Zmodem ??
           (ZmodemModule as unknown)) as ZmodemModuleLike;
-        if (!Zmodem?.Sentry) return;
+        if (!Zmodem?.Sentry) {
+          toastRef.current.error(t("zmodem_module_unavailable"));
+          void sshService.shellZmodemEnd(sessionId).catch(() => {});
+          return;
+        }
+        // 若同会话之前存在残余状态，先彻底清理避免重复保活定时器并行。
+        disposeZmodemSession({
+          sessionId,
+          zmodemSessions: zmodemSessionsRef.current,
+          zmodemSentries: zmodemSentriesRef.current,
+          disposingIds: zmodemDisposingIdsRef.current,
+          abort: true,
+          endBackend: false,
+          shellZmodemEnd: sshService.shellZmodemEnd,
+        });
         const toBase64 = (octets: number[]) => {
           let out = "";
           for (let i = 0; i < octets.length; i += 0x8000) {
@@ -7930,6 +8620,17 @@ export function TerminalModule({
             if (termId) xtermInstances.current.get(termId)?.term.write(text);
           },
           sender: (octets: number[]) => {
+            // Sentry 已移除或会话已断开时，绝不再回写任何 ZMODEM 控制字节（防 ZSINIT 泄漏到 bash）。
+            if (
+              !canSendZmodemBytes(
+                sessionId,
+                sentry,
+                zmodemSentriesRef.current,
+                sshService.isSessionAlive,
+              )
+            ) {
+              return;
+            }
             const data = toBase64(octets);
             void sshService.shellZmodemWrite(sessionId, data);
           },
@@ -7952,13 +8653,23 @@ export function TerminalModule({
                   defaultPath: name,
                 })
                   .then(async (targetPath) => {
-                    if (!targetPath || isUnmountedRef.current) {
+                    const stillActive =
+                      !isUnmountedRef.current &&
+                      zmodemSessionsRef.current.get(sessionId)?.session ===
+                        session;
+                    if (!targetPath || !stillActive) {
                       offer.skip();
                       return;
                     }
                     try {
                       const payloads = await offer.accept();
-                      if (isUnmountedRef.current) return;
+                      if (
+                        isUnmountedRef.current ||
+                        zmodemSessionsRef.current.get(sessionId)?.session !==
+                          session
+                      ) {
+                        return;
+                      }
                       const totalLen = payloads.reduce(
                         (sum, p) => sum + p.length,
                         0,
@@ -7979,6 +8690,7 @@ export function TerminalModule({
                           ? error.message
                           : t("zmodem_transfer_failed"),
                       );
+                      endZmodemSafely(sessionId, true);
                     }
                   })
                   .catch(() => {
@@ -7990,29 +8702,43 @@ export function TerminalModule({
                   });
               });
               session.on?.("session_end", () => {
-                zmodemSessionsRef.current.delete(sessionId);
-                void sshService.shellZmodemEnd(sessionId);
+                endZmodemSafely(sessionId, false);
               });
               try {
-                void session.start?.();
+                void Promise.resolve(session.start?.()).catch((error: unknown) => {
+                  toastRef.current.error(
+                    error instanceof Error
+                      ? error.message
+                      : t("zmodem_transfer_failed"),
+                  );
+                  endZmodemSafely(sessionId, true);
+                });
               } catch {
-                /* ignore */
+                endZmodemSafely(sessionId, true);
               }
               return;
             }
             if (session.type !== "send") {
-              detection.deny();
+              try {
+                detection.deny();
+              } catch {
+                /* ignore */
+              }
+              endZmodemSafely(sessionId, true);
               return;
             }
             zmodemSessionsRef.current.set(sessionId, {
               session,
               zmodem: Zmodem,
             });
+            session.on?.("session_end", () => {
+              endZmodemSafely(sessionId, false);
+            });
             const droppedPaths = pendingZmodemPathsRef.current;
             if (droppedPaths?.length) {
               pendingZmodemPathsRef.current = null;
               queueMicrotask(() => {
-                void zmodemTransferStarterRef.current?.(droppedPaths);
+                void zmodemTransferStarterRef.current?.(droppedPaths, sessionId);
               });
               return;
             }
@@ -8022,79 +8748,98 @@ export function TerminalModule({
               title: t("zmodem_select_files"),
             })
               .then(async (selected) => {
-                if (isUnmountedRef.current) return;
+                if (
+                  isUnmountedRef.current ||
+                  zmodemSessionsRef.current.get(sessionId)?.session !== session
+                ) {
+                  return;
+                }
                 const paths = selected
                   ? Array.isArray(selected)
                     ? selected
                     : [selected]
                   : [];
                 if (paths.length === 0) {
-                  detection.deny();
+                  // 用户取消选文件：中止会话并停止 ZSINIT 保活，通知后端退出 zmodem_mode。
+                  endZmodemSafely(sessionId, true);
                   return;
                 }
-                const files = await Promise.all(
-                  paths.map(async (path) => {
-                    const bytes = await readFile(path);
-                    const name = path.split(/[\\/]/).pop() || "file";
-                    return new File([bytes], name, {
-                      lastModified: Date.now(),
-                    });
-                  }),
-                );
-                if (isUnmountedRef.current) return;
-                const sendFiles = Zmodem.Browser?.send_files;
-                if (!sendFiles) {
+                if (!Zmodem.Browser?.send_files) {
                   toastRef.current.error(t("zmodem_module_unavailable"));
+                  endZmodemSafely(sessionId, true);
                   return;
                 }
-                const result = sendFiles(session, files);
-                void result
-                  .then(() => zmodemSessionsRef.current.delete(sessionId))
-                  .catch((error: unknown) => {
-                    toastRef.current.error(
-                      error instanceof Error
-                        ? error.message
-                        : t("zmodem_transfer_failed"),
-                    );
-                  });
+                const started = await zmodemTransferStarterRef.current?.(
+                  paths,
+                  sessionId,
+                );
+                if (!started) {
+                  endZmodemSafely(sessionId, true);
+                }
               })
               .catch(() => {
-                try {
-                  detection.deny();
-                } catch {
-                  /* session already closed */
-                }
+                endZmodemSafely(sessionId, true);
               });
           },
           on_retract: () => {},
         });
         zmodemSentriesRef.current.set(sessionId, sentry);
         if (initialData) {
-          const bytes = Uint8Array.from(atob(initialData), (ch) =>
-            ch.charCodeAt(0),
-          );
-          sentry.consume?.(bytes);
+          try {
+            const bytes = Uint8Array.from(atob(initialData), (ch) =>
+              ch.charCodeAt(0),
+            );
+            sentry.consume?.(bytes);
+          } catch (error: unknown) {
+            toastRef.current.error(
+              error instanceof Error
+                ? error.message
+                : t("zmodem_transfer_failed"),
+            );
+            endZmodemSafely(sessionId, true);
+          }
         }
       },
     );
     const data = sshService.onShellZmodemData(({ sessionId, data }) => {
       const sentry = zmodemSentriesRef.current.get(sessionId);
       if (!sentry) return;
-      const bytes = Uint8Array.from(atob(data), (ch) => ch.charCodeAt(0));
-      sentry.consume?.(bytes);
+      try {
+        const bytes = Uint8Array.from(atob(data), (ch) => ch.charCodeAt(0));
+        sentry.consume?.(bytes);
+      } catch (error: unknown) {
+        toastRef.current.error(
+          error instanceof Error
+            ? error.message
+            : t("zmodem_transfer_failed"),
+        );
+        endZmodemSafely(sessionId, true);
+      }
     });
     const ended = sshService.onShellZmodemEnd(({ sessionId }) => {
-      zmodemSentriesRef.current.delete(sessionId);
-      zmodemSessionsRef.current.delete(sessionId);
-      void sshService.shellZmodemEnd(sessionId);
+      // 后端通知已退出 zmodem_mode：仅清理前端状态并停止保活，严禁再次调用 shellZmodemEnd 造成 IPC 死循环。
+      disposeZmodemSession({
+        sessionId,
+        zmodemSessions: zmodemSessionsRef.current,
+        zmodemSentries: zmodemSentriesRef.current,
+        disposingIds: zmodemDisposingIdsRef.current,
+        abort: false,
+        endBackend: false,
+        shellZmodemEnd: sshService.shellZmodemEnd,
+      });
     });
     return () => {
       detected();
       data();
       ended();
-      zmodemSentriesRef.current.clear();
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-      zmodemSessionsRef.current.clear();
+      disposeAllZmodemSessions({
+        zmodemSessions: zmodemSessionsRef.current,
+        zmodemSentries: zmodemSentriesRef.current,
+        disposingIds: zmodemDisposingIdsRef.current,
+        abort: true,
+        endBackend: true,
+        shellZmodemEnd: sshService.shellZmodemEnd,
+      });
       if (zmodemHandshakeTimerRef.current)
         clearTimeout(zmodemHandshakeTimerRef.current);
       if (transferAutoCloseTimerRef.current)
@@ -8103,98 +8848,154 @@ export function TerminalModule({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const sendZmodemDroppedPaths = useCallback(async (paths: string[]) => {
-    if (isUnmountedRef.current) return false;
-    const sessionEntry = Array.from(zmodemSessionsRef.current.entries())[0];
-    if (!sessionEntry) return false;
-    const [, entry] = sessionEntry;
-    const sendFiles = entry.zmodem?.Browser?.send_files;
-    if (typeof sendFiles !== "function") return false;
-    const files = await Promise.all(
-      paths.map(async (path) => {
-        const bytes = await readFile(path);
-        const name = path.split(/[\\/]/).pop() || "file";
-        return new File([bytes], name, { lastModified: Date.now() });
-      }),
-    );
-    if (isUnmountedRef.current) return false;
-    const recordId = crypto.randomUUID();
-    setShowTransferDialog(true);
-    const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
-    const startedAt = Date.now();
-    setUploadRecords([
-      {
-        id: recordId,
-        files: files.map((file) => file.name),
-        directory: t("transfer_current_session"),
-        protocol: "ZMODEM",
-        status: "uploading",
-        phase: "transferring",
-        at: startedAt,
-        bytes: 0,
-        totalBytes,
-        speed: 0,
-      },
-    ]);
-    let transferred = 0;
-    try {
-      await sendFiles(entry.session, files, {
-        on_progress: (_file: File, _transfer: unknown, piece: Uint8Array) => {
-          transferred += piece?.byteLength || 0;
-          if (isUnmountedRef.current) return;
-          const elapsedSeconds = Math.max((Date.now() - startedAt) / 1000, 0.1);
-          setUploadRecords((prev) =>
-            prev.map((record) =>
-              record.id === recordId
-                ? {
-                    ...record,
-                    bytes: Math.min(transferred, totalBytes),
-                    speed: transferred / elapsedSeconds,
-                  }
-                : record,
-            ),
-          );
-        },
-      });
-      if (isUnmountedRef.current) return true;
-      setUploadRecords((prev) =>
-        prev.map((record) =>
-          record.id === recordId
-            ? {
-                ...record,
-                status: "success",
-                bytes: totalBytes,
-                speed:
-                  transferred / Math.max((Date.now() - startedAt) / 1000, 0.1),
-              }
-            : record,
-        ),
-      );
-      transferAutoCloseTimerRef.current = setTimeout(() => {
-        setShowTransferDialog(false);
-        setUploadRecords([]);
+  const sendZmodemDroppedPaths = useCallback(
+    async (paths: string[], targetSessionId?: string) => {
+      if (isUnmountedRef.current || paths.length === 0) return false;
+      const entry = targetSessionId
+        ? zmodemSessionsRef.current.get(targetSessionId)
+        : Array.from(zmodemSessionsRef.current.values())[0];
+      const sessionId =
+        targetSessionId ||
+        Array.from(zmodemSessionsRef.current.keys())[0];
+      if (!sessionId || !entry) return false;
+      const sendFiles = entry.zmodem?.Browser?.send_files;
+      if (typeof sendFiles !== "function") return false;
+      let files: File[];
+      try {
+        files = await Promise.all(
+          paths.map(async (path) => {
+            const bytes = await readFile(path);
+            const name = path.split(/[\\/]/).pop() || "file";
+            return new File([bytes], name, { lastModified: Date.now() });
+          }),
+        );
+      } catch (error) {
+        disposeZmodemSession({
+          sessionId,
+          zmodemSessions: zmodemSessionsRef.current,
+          zmodemSentries: zmodemSentriesRef.current,
+          disposingIds: zmodemDisposingIdsRef.current,
+          abort: true,
+          endBackend: true,
+          shellZmodemEnd: sshService.shellZmodemEnd,
+        });
+        toastRef.current.error(
+          error instanceof Error ? error.message : t("zmodem_transfer_failed"),
+        );
+        return false;
+      }
+      if (
+        isUnmountedRef.current ||
+        zmodemSessionsRef.current.get(sessionId)?.session !== entry.session
+      ) {
+        return false;
+      }
+      if (transferAutoCloseTimerRef.current) {
+        clearTimeout(transferAutoCloseTimerRef.current);
         transferAutoCloseTimerRef.current = null;
-      }, 1400);
-    } catch (error) {
-      if (isUnmountedRef.current) return true;
-      setUploadRecords((prev) =>
-        prev.map((record) =>
-          record.id === recordId
-            ? {
-                ...record,
-                status: "failed",
-                error: error instanceof Error ? error.message : String(error),
-              }
-            : record,
-        ),
-      );
-      toastRef.current.error(
-        error instanceof Error ? error.message : t("zmodem_transfer_failed"),
-      );
-    }
-    return true;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      }
+      const recordId = crypto.randomUUID();
+      setShowTransferDialog(true);
+      const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+      const startedAt = Date.now();
+      setUploadRecords([
+        {
+          id: recordId,
+          files: files.map((file) => file.name),
+          directory: t("transfer_current_session"),
+          protocol: "ZMODEM",
+          status: "uploading",
+          phase: "transferring",
+          at: startedAt,
+          bytes: 0,
+          totalBytes,
+          speed: 0,
+        },
+      ]);
+      let transferred = 0;
+      try {
+        await sendFiles(entry.session, files, {
+          on_progress: (_file: File, _transfer: unknown, piece: Uint8Array) => {
+            transferred += piece?.byteLength || 0;
+            if (isUnmountedRef.current) return;
+            const elapsedSeconds = Math.max(
+              (Date.now() - startedAt) / 1000,
+              0.1,
+            );
+            setUploadRecords((prev) =>
+              prev.map((record) =>
+                record.id === recordId
+                  ? {
+                      ...record,
+                      bytes: Math.min(transferred, totalBytes),
+                      speed: transferred / elapsedSeconds,
+                    }
+                  : record,
+              ),
+            );
+          },
+        });
+        // send_files 完成后 session 仍处于开启状态且 ZSINIT 保活仍在运行，必须 close() 发送 ZFIN/OO 并退出后端 zmodem_mode。
+        await closeZmodemSendSession(entry.session);
+        disposeZmodemSession({
+          sessionId,
+          zmodemSessions: zmodemSessionsRef.current,
+          zmodemSentries: zmodemSentriesRef.current,
+          disposingIds: zmodemDisposingIdsRef.current,
+          abort: false,
+          endBackend: true,
+          shellZmodemEnd: sshService.shellZmodemEnd,
+        });
+        if (isUnmountedRef.current) return true;
+        setUploadRecords((prev) =>
+          prev.map((record) =>
+            record.id === recordId
+              ? {
+                  ...record,
+                  status: "success",
+                  bytes: totalBytes,
+                  speed:
+                    transferred / Math.max((Date.now() - startedAt) / 1000, 0.1),
+                }
+              : record,
+          ),
+        );
+        transferAutoCloseTimerRef.current = setTimeout(() => {
+          setShowTransferDialog(false);
+          setUploadRecords([]);
+          transferAutoCloseTimerRef.current = null;
+        }, 1400);
+      } catch (error) {
+        disposeZmodemSession({
+          sessionId,
+          zmodemSessions: zmodemSessionsRef.current,
+          zmodemSentries: zmodemSentriesRef.current,
+          disposingIds: zmodemDisposingIdsRef.current,
+          abort: true,
+          endBackend: true,
+          shellZmodemEnd: sshService.shellZmodemEnd,
+        });
+        if (isUnmountedRef.current) return true;
+        setUploadRecords((prev) =>
+          prev.map((record) =>
+            record.id === recordId
+              ? {
+                  ...record,
+                  status: "failed",
+                  error: error instanceof Error ? error.message : String(error),
+                }
+              : record,
+          ),
+        );
+        toastRef.current.error(
+          error instanceof Error ? error.message : t("zmodem_transfer_failed"),
+        );
+      }
+      return true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    },
+    [],
+  );
 
   zmodemTransferStarterRef.current = sendZmodemDroppedPaths;
 
@@ -8266,7 +9067,15 @@ export function TerminalModule({
 
   const uploadDroppedPathsViaSftp = useCallback(
     async (paths: string[]) => {
-      if (isUnmountedRef.current || !activeTermId || !serverId || paths.length === 0) return;
+      if (
+        isUnmountedRef.current ||
+        !canTransferFilesRef.current ||
+        !activeTermId ||
+        !serverId ||
+        paths.length === 0
+      ) {
+        return;
+      }
       let cwd = terminalCwdRef.current.get(activeTermId);
       if (!cwd?.startsWith("/")) {
         try {
@@ -8287,6 +9096,10 @@ export function TerminalModule({
         batchTotalBytes = undefined;
       }
       if (isUnmountedRef.current) return;
+      if (transferAutoCloseTimerRef.current) {
+        clearTimeout(transferAutoCloseTimerRef.current);
+        transferAutoCloseTimerRef.current = null;
+      }
       pendingSftpRecordRef.current = recordId;
       sftpFileProgressRef.current.set(recordId, new Map());
       setShowTransferDialog(true);
@@ -8307,7 +9120,14 @@ export function TerminalModule({
         },
       ]);
       try {
-        const result = await sshService.uploadFromPaths(serverId, cwd, paths);
+        const sftpConcurrency = useAppStore.getState().sftpTransferConcurrency;
+        const result = await sshService.uploadFromPaths(
+          serverId,
+          cwd,
+          paths,
+          undefined,
+          sftpConcurrency,
+        );
         if (isUnmountedRef.current) return;
         if (!result.success)
           throw new Error(result.error || t("sftp_upload_failed"));
@@ -8350,6 +9170,109 @@ export function TerminalModule({
     [activeTermId, serverId],
   );
 
+  const handleUploadFromMenu = useCallback(
+    async (directory: boolean) => {
+      if (!canTransferFiles || !activeTermId) return;
+      const sid = xtermInstances.current.get(activeTermId)?.sessionId;
+      if (!sid || !sshService.isSessionAlive(sid)) {
+        toastRef.current?.warning(t("tm_disconnected_hint") || "当前会话未连接");
+        return;
+      }
+      try {
+        const selected = await openDialog({
+          multiple: true,
+          directory,
+          title: directory
+            ? t("tm_upload_folder_sftp") || "上传文件夹到当前目录 (SFTP)"
+            : t("tm_upload_files_sftp") || "上传文件到当前目录 (SFTP)",
+        });
+        if (!selected) return;
+        const paths = Array.isArray(selected) ? selected : [selected];
+        if (paths.length > 0) {
+          await uploadDroppedPathsViaSftp(paths);
+        }
+      } catch (error) {
+        toastRef.current?.error(
+          error instanceof Error ? error.message : t("sftp_upload_failed"),
+        );
+      }
+    },
+    [canTransferFiles, activeTermId, t, uploadDroppedPathsViaSftp],
+  );
+
+  const handleUploadFilesFromMenu = useCallback(
+    () => handleUploadFromMenu(false),
+    [handleUploadFromMenu],
+  );
+
+  const handleUploadFolderFromMenu = useCallback(
+    () => handleUploadFromMenu(true),
+    [handleUploadFromMenu],
+  );
+
+  const handleOpenSftpFromMenu = useCallback(() => {
+    if (!canTransferFiles) return;
+    if (onOpenSftpPanel) {
+      onOpenSftpPanel();
+      return;
+    }
+    if (tabId) {
+      useAppStore.getState().switchModule(tabId, "files");
+      return;
+    }
+    if (!isEphemeralLocalServerId(baseServerId)) {
+      const cwd = resolveCurrentTerminalCwd();
+      if (cwd) {
+        useAppStore.getState().openSftpWithServers([baseServerId], { [baseServerId]: cwd });
+      } else {
+        useAppStore.getState().openSftpWithServers([baseServerId]);
+      }
+    }
+  }, [canTransferFiles, onOpenSftpPanel, baseServerId, tabId, resolveCurrentTerminalCwd]);
+
+  const handleOpenSftpTabFromMenu = useCallback(() => {
+    if (!canTransferFiles || isEphemeralLocalServerId(baseServerId)) return;
+    const cwd = resolveCurrentTerminalCwd();
+    if (cwd) {
+      useAppStore.getState().openSftpWithServers([baseServerId], { [baseServerId]: cwd });
+    } else {
+      useAppStore.getState().openSftpWithServers([baseServerId]);
+    }
+  }, [canTransferFiles, baseServerId, resolveCurrentTerminalCwd]);
+
+  const handleSendZmodemCommand = useCallback(() => {
+    if (!canTransferFiles || !activeTermId) return;
+    const sid = xtermInstances.current.get(activeTermId)?.sessionId;
+    if (!sid || !sshService.isSessionAlive(sid)) {
+      toastRef.current?.warning(t("tm_disconnected_hint") || "当前会话未连接");
+      return;
+    }
+    if (zmodemSessionsRef.current.has(sid) || zmodemSentriesRef.current.has(sid)) {
+      focusActiveTerm(true);
+      return;
+    }
+    focusActiveTerm(true);
+    void sshService.writeToShell(sid, "rz\r").catch((error: unknown) => {
+      toastRef.current?.error(
+        error instanceof Error ? error.message : t("zmodem_transfer_failed"),
+      );
+    });
+  }, [canTransferFiles, activeTermId, focusActiveTerm, t]);
+
+  const handleReceiveZmodemCommand = useCallback(() => {
+    if (!canTransferFiles || !activeTermId) return;
+    const sid = xtermInstances.current.get(activeTermId)?.sessionId;
+    if (!sid || !sshService.isSessionAlive(sid)) {
+      toastRef.current?.warning(t("tm_disconnected_hint") || "当前会话未连接");
+      return;
+    }
+    toastRef.current?.info(
+      t("tm_zmodem_receive_toast") ||
+        "请在终端输入 sz <文件名>，系统将自动唤起 ZMODEM 保存弹窗",
+    );
+    focusActiveTerm(true);
+  }, [canTransferFiles, activeTermId, focusActiveTerm, t]);
+
   const cancelActiveTransfer = useCallback(() => {
     if (zmodemHandshakeTimerRef.current) {
       clearTimeout(zmodemHandshakeTimerRef.current);
@@ -8360,16 +9283,18 @@ export function TerminalModule({
       transferAutoCloseTimerRef.current = null;
     }
     pendingZmodemPathsRef.current = null;
-    const active = Array.from(zmodemSessionsRef.current.entries())[0];
-    if (active) {
-      const [sessionId, entry] = active;
-      try {
-        entry.session?.abort?.();
-      } catch {
-        /* session may already be closed */
-      }
-      zmodemSessionsRef.current.delete(sessionId);
-      void sshService.shellZmodemEnd(sessionId);
+    if (
+      zmodemSessionsRef.current.size > 0 ||
+      zmodemSentriesRef.current.size > 0
+    ) {
+      disposeAllZmodemSessions({
+        zmodemSessions: zmodemSessionsRef.current,
+        zmodemSentries: zmodemSentriesRef.current,
+        disposingIds: zmodemDisposingIdsRef.current,
+        abort: true,
+        endBackend: true,
+        shellZmodemEnd: sshService.shellZmodemEnd,
+      });
       setUploadRecords((prev) =>
         prev.map((record) =>
           record.status === "uploading"
@@ -8413,6 +9338,7 @@ export function TerminalModule({
     async (event: React.DragEvent<HTMLDivElement>) => {
       event.preventDefault();
       setTerminalDragOver(false);
+      if (!canTransferFilesRef.current) return;
       const files = Array.from(event.dataTransfer.files) as Array<
         File & { path?: string }
       >;
@@ -8433,11 +9359,18 @@ export function TerminalModule({
     let cancelled = false;
     const promise = getCurrentWebview().onDragDropEvent((event) => {
       if (event.payload.type === "drop") {
-        if (!isActive || event.payload.paths.length === 0) return;
+        if (!isActive || !canTransferFilesRef.current || event.payload.paths.length === 0) return;
 
         const paths = event.payload.paths.filter(
           (path) => !path.toLowerCase().endsWith("inputfiles.lst"),
         );
+        if (paths.length === 0) {
+          toastRef.current?.warning(
+            t("tm_drag_folder_hint") ||
+              "暂不支持直接拖拽文件夹，请右键「传输与文件 → 上传文件夹到当前目录 (SFTP)」",
+          );
+          return;
+        }
         void uploadDroppedPathsViaSftp(paths);
       }
     });
@@ -9403,6 +10336,7 @@ export function TerminalModule({
           }
         }}
         onDragOver={(event) => {
+          if (!canTransferFiles) return;
           event.preventDefault();
           setTerminalDragOver(true);
         }}
@@ -9492,7 +10426,11 @@ export function TerminalModule({
               server={server}
               termName={inst.name}
               onReconnect={() => reconnectTerminal(termId)}
-              onEditServer={baseServerId ? () => setEditServerOpen(true) : undefined}
+              onEditServer={
+                baseServerId && !isEphemeralLocalServerId(baseServerId)
+                  ? () => setEditServerOpen(true)
+                  : undefined
+              }
               onBack={tabId ? () => useAppStore.getState().closeTab(tabId) : undefined}
             />
           </div>
@@ -9594,8 +10532,6 @@ export function TerminalModule({
           onFindNext={handleFindNext}
           onClose={closeSearch}
         />
-
-
 
         {/* 全屏退出按钮（悬浮在终端区域右上角，保持小尺寸避免遮挡内容） */}
         {isFullscreen && !isSplitPane && onToggleFullscreen && (
@@ -9701,7 +10637,19 @@ export function TerminalModule({
         recordingPausedIds={recordingPausedIds}
         isOpening={isOpening}
         isSplitPane={isSplitPane}
+        onLockTerminal={handleLockCurrentTerminal}
         onLockSession={handleTriggerAppLock}
+        canTransferFiles={canTransferFiles}
+        onUploadFiles={handleUploadFilesFromMenu}
+        onUploadFolder={handleUploadFolderFromMenu}
+        onOpenSftp={handleOpenSftpFromMenu}
+        onOpenSftpTab={
+          canTransferFiles && !isEphemeralLocalServerId(baseServerId)
+            ? handleOpenSftpTabFromMenu
+            : undefined
+        }
+        onSendZmodem={handleSendZmodemCommand}
+        onReceiveZmodem={handleReceiveZmodemCommand}
         onAIDiagnosis={enableAiGlobal ? handleAIDiagnosisFromContext : undefined}
         onAIDiagnoseRecent={enableAiGlobal ? handleAIDiagnoseRecentOutput : undefined}
         onAIExplainShell={enableAiGlobal ? handleAIExplainShellFromContext : undefined}
@@ -9727,7 +10675,7 @@ export function TerminalModule({
         onConfirm={handleConfirmPaste}
       />
 
-      {baseServerId && editServerOpen && (
+      {baseServerId && !isEphemeralLocalServerId(baseServerId) && editServerOpen && (
         <EditServerDialog
           open={editServerOpen}
           onClose={() => setEditServerOpen(false)}
@@ -9739,6 +10687,76 @@ export function TerminalModule({
           }}
         />
       )}
+
+      {activeAutomationDialog &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            className="fixed inset-0 flex items-center justify-center bg-black/50 backdrop-blur-[1px] p-4"
+            style={{ zIndex: Z_LAYER.MODAL }}
+            data-automation-dialog="true"
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget) {
+                handleAutomationDialogCancel();
+              }
+            }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              data-automation-dialog="true"
+              style={{ zIndex: Z_LAYER.MODAL_CONTENT }}
+              className="w-full max-w-sm rounded-xl border border-border bg-popover p-4 shadow-2xl text-xs space-y-3"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && activeAutomationDialog.kind === "prompt") {
+                  e.preventDefault();
+                  handleAutomationDialogConfirm();
+                }
+              }}
+            >
+              {activeAutomationDialog.title && (
+                <div className="font-semibold text-foreground text-sm truncate">
+                  {activeAutomationDialog.title}
+                </div>
+              )}
+              <div className="text-foreground/90 whitespace-pre-wrap break-words leading-relaxed">
+                {activeAutomationDialog.message}
+              </div>
+              {activeAutomationDialog.kind === "prompt" && (
+                <Input
+                  autoFocus
+                  type={activeAutomationDialog.secret ? "password" : "text"}
+                  value={automationPromptValue}
+                  onChange={(e) => setAutomationPromptValue(e.target.value)}
+                  className="h-8 text-xs"
+                />
+              )}
+              <div className="flex justify-end gap-2 pt-1">
+                {activeAutomationDialog.kind === "prompt" && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 text-xs"
+                    onClick={handleAutomationDialogCancel}
+                  >
+                    {t("common_cancel")}
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  size="sm"
+                  autoFocus={activeAutomationDialog.kind === "alert"}
+                  className="h-7 text-xs"
+                  onClick={handleAutomationDialogConfirm}
+                >
+                  {t("common_confirm")}
+                </Button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

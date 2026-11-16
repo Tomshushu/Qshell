@@ -57,7 +57,37 @@ pub async fn load_server_config(server_id: &str) -> Result<db::Server, String> {
             tracing::info!("[SSH Perf] {} load_server_config passphrase 解密: {:?}", server_id, dec_start.elapsed());
         }
     }
+    let server = apply_auth_profile(server).await?;
     tracing::info!("[SSH Perf] {} load_server_config 总耗时: {:?}", server_id, t0.elapsed());
+    Ok(server)
+}
+
+/// 若服务器绑定了全局身份凭证（`auth_profile_id`），读取解密后的凭证覆盖认证字段。
+pub async fn apply_auth_profile(mut server: db::Server) -> Result<db::Server, String> {
+    let Some(profile_id) = server
+        .auth_profile_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+    else {
+        return Ok(server);
+    };
+    let profile = tokio::task::spawn_blocking(move || db::auth_profiles_get_raw(&profile_id))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
+        .map_err(|_| "绑定的全局身份凭证不存在或已被删除".to_string())?;
+    if !profile.username.trim().is_empty() {
+        server.username = profile.username;
+    }
+    server.auth_type = profile.auth_type;
+    server.password = profile.password;
+    server.ssh_key_id = profile.ssh_key_id;
+    server.private_key_path = profile.private_key_path;
+    server.private_key_passphrase = profile.private_key_passphrase;
+    server.agent_identity = profile.agent_identity;
+    server.certificate_path = profile.certificate_path;
+    server.forward_agent = profile.forward_agent;
     Ok(server)
 }
 
@@ -187,6 +217,9 @@ async fn build_auth_method_for_server(
             certificate_path: server.certificate_path.clone().unwrap_or_default(),
             private_key_passphrase: server.private_key_passphrase.as_ref().filter(|s| !s.is_empty()).cloned(),
         }),
+        "keyboardInteractive" | "keyboard_interactive" | "keyboard-interactive" => {
+            Ok(AuthMethod::KeyboardInteractive)
+        }
         _ => Ok(AuthMethod::Password {
             password: server.password.clone().unwrap_or_default(),
         }),
@@ -246,6 +279,9 @@ async fn build_auth_method_for_proxy(
             certificate_path: proxy.certificate_path.clone().unwrap_or_default(),
             private_key_passphrase: proxy.private_key_passphrase.clone(),
         }),
+        "keyboardInteractive" | "keyboard_interactive" | "keyboard-interactive" => {
+            Ok(AuthMethod::KeyboardInteractive)
+        }
         _ => Ok(AuthMethod::Password {
             password: proxy.password.clone().unwrap_or_default(),
         }),
@@ -284,6 +320,9 @@ fn build_test_auth_from_fields(
             certificate_path: certificate_path.clone().unwrap_or_default(),
             private_key_passphrase: clean_pass,
         },
+        "keyboardInteractive" | "keyboard_interactive" | "keyboard-interactive" => {
+            AuthMethod::KeyboardInteractive
+        }
         _ => AuthMethod::Password {
             password: password.clone().unwrap_or_default(),
         },
@@ -377,6 +416,7 @@ pub async fn resolve_inline_proxy_routing(
 
                     let ref_server: db::Server = serde_json::from_str(&raw_json)
                         .map_err(|e| format!("解析第 {} 级跳板机配置失败: {}", idx + 1, e))?;
+                    let ref_server = apply_auth_profile(ref_server).await?;
 
                     let auth = build_auth_method_for_server(&ref_server).await
                         .map_err(|op| op.error.unwrap_or_else(|| format!("第 {} 级跳板机认证配置错误", idx + 1)))?;
@@ -556,13 +596,17 @@ async fn build_direct_connect(
                     match build_auth_method_from_key(auth_type, &key_raw) {
                         Ok(auth) => {
                             return SshManager::global()
-                                .connect_with_auth(
+                                .connect_configured(
                                     server_id.to_string(),
                                     server.host.clone(),
                                     port,
                                     server.username.clone(),
                                     auth,
                                     timeout,
+                                    None,
+                                    None,
+                                    server.forward_agent,
+                                    server.x11_forwarding,
                                 )
                                 .await;
                         }
@@ -583,20 +627,26 @@ async fn build_direct_connect(
             }
         }
     }
-    // 路径模式
+    if auth_type == "password" && server.password.is_none() {
+        return Err(crate::ssh::connection::SshError::AuthFailed("Missing password".into()));
+    }
+    let auth = build_auth_method_for_server(server)
+        .await
+        .map_err(|op| crate::ssh::connection::SshError::AuthFailed(
+            op.error.unwrap_or_else(|| "认证配置错误".to_string()),
+        ))?;
     SshManager::global()
-        .connect(
+        .connect_configured(
             server_id.to_string(),
             server.host.clone(),
             port,
             server.username.clone(),
-            auth_type.to_string(),
-            server.password.clone(),
-            server.private_key_path.clone(),
-            server.private_key_passphrase.as_ref().filter(|s| !s.is_empty()).cloned(),
+            auth,
             timeout,
-            server.agent_identity.clone(),
-            server.certificate_path.clone(),
+            None,
+            None,
+            server.forward_agent,
+            server.x11_forwarding,
         )
         .await
 }
@@ -646,14 +696,17 @@ pub async fn connect_server_entry(server: &db::Server, conn_id: &str) -> Result<
             let target_auth = build_auth_method_for_server(server).await
                 .map_err(|op| op.error.unwrap_or_else(|| "目标主机认证配置错误".to_string()))?;
             SshManager::global()
-                .connect_with_jump_chain(
+                .connect_configured(
                     server_id,
                     server.host.clone(),
                     port,
                     server.username.clone(),
                     target_auth,
                     timeout,
-                    hops,
+                    Some(hops),
+                    None,
+                    server.forward_agent,
+                    server.x11_forwarding,
                 )
                 .await
                 .map_err(|e| e.to_string())
@@ -662,14 +715,17 @@ pub async fn connect_server_entry(server: &db::Server, conn_id: &str) -> Result<
             let target_auth = build_auth_method_for_server(server).await
                 .map_err(|op| op.error.unwrap_or_else(|| "目标主机认证配置错误".to_string()))?;
             SshManager::global()
-                .connect_with_proxy(
+                .connect_configured(
                     server_id,
                     server.host.clone(),
                     port,
                     server.username.clone(),
                     target_auth,
                     timeout,
-                    proxy_cfg,
+                    None,
+                    Some(proxy_cfg),
+                    server.forward_agent,
+                    server.x11_forwarding,
                 )
                 .await
                 .map_err(|e| e.to_string())
@@ -680,6 +736,16 @@ pub async fn connect_server_entry(server: &db::Server, conn_id: &str) -> Result<
                 .map_err(|e| e.to_string())
         }
     }
+}
+
+/// 提交键盘交互式认证（OTP / MFA / Challenge-Response）用户输入；`responses = None` 表示取消。
+#[tauri::command]
+pub async fn ssh_submit_auth_interaction(
+    request_id: String,
+    responses: Option<Vec<String>>,
+) -> Result<bool, String> {
+    Ok(crate::ssh::auth_interaction::AuthInteractionRegistry::global()
+        .submit(&request_id, responses))
 }
 
 /// 连接到服务器
@@ -1535,21 +1601,7 @@ pub async fn ssh_test_connect_with_config(
     if let Err(e) = crate::connection::validate_target_protocol(target_type, protocol) {
         return Ok(OperationResult::fail(e));
     }
-    let requested_auth = config
-        .get("authType")
-        .and_then(|v| v.as_str())
-        .unwrap_or("password");
-    // 与 servers_add / servers_update 共用同一张协议认证能力表，
-    // 不再保留「非 SSH 一刀切强制 password」的旧判断。
     let parsed_protocol = crate::connection::ConnectionProtocol::from_str_lossy(protocol);
-    if !crate::connection::is_auth_allowed(parsed_protocol, requested_auth) {
-        return Ok(OperationResult::fail(format!(
-            "协议 {} 不支持认证方式 {}，可选：{}",
-            protocol,
-            requested_auth,
-            crate::connection::allowed_auth_types(parsed_protocol).join(", ")
-        )));
-    }
 
     let timeout = config
         .get("connectionTimeout")
@@ -1593,12 +1645,12 @@ pub async fn ssh_test_connect_with_config(
         ));
     }
 
-    let username = config
+    let mut username = config
         .get("username")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let auth_type = config
+    let mut auth_type = config
         .get("authType")
         .and_then(|v| v.as_str())
         .unwrap_or("password")
@@ -1623,11 +1675,58 @@ pub async fn ssh_test_connect_with_config(
         .get("certificatePath")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let ssh_key_id = config
+    let mut ssh_key_id = config
         .get("sshKeyId")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .filter(|s| !s.is_empty());
+
+    let has_auth_profile = config
+        .get("authProfileId")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .is_some();
+
+    if let Some(pid) = config
+        .get("authProfileId")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+    {
+        match tokio::task::spawn_blocking(move || db::auth_profiles_get_raw(&pid))
+            .await
+            .map_err(|e| format!("Task join error: {}", e))?
+        {
+            Ok(profile) => {
+                if !profile.username.trim().is_empty() {
+                    username = profile.username;
+                }
+                auth_type = profile.auth_type;
+                password = profile.password;
+                ssh_key_id = profile.ssh_key_id;
+                private_key_path = profile.private_key_path;
+                private_key_passphrase = profile.private_key_passphrase;
+                agent_identity = profile.agent_identity;
+                certificate_path = profile.certificate_path;
+            }
+            Err(_) => {
+                return Ok(OperationResult::fail(
+                    "绑定的全局身份凭证不存在或已被删除".to_string(),
+                ));
+            }
+        }
+    }
+
+    if !crate::connection::is_auth_allowed(parsed_protocol, &auth_type) {
+        return Ok(OperationResult::fail(format!(
+            "协议 {} 不支持认证方式 {}，可选：{}",
+            protocol,
+            auth_type,
+            crate::connection::allowed_auth_types(parsed_protocol).join(", ")
+        )));
+    }
 
     // FinalShell 模式：测试连接支持内联 proxyConfig（JSON 字符串）
     let proxy_config_json = config
@@ -1636,69 +1735,92 @@ pub async fn ssh_test_connect_with_config(
         .map(|s| s.to_string())
         .filter(|s| !s.trim().is_empty());
 
-    // 如果提供了 id（表示是在编辑已有服务器），且新凭据留空，则从数据库中读取并解密原凭据进行测试
+    if auth_type == "keyboardInteractive" {
+        if proxy_config_json.is_some() {
+            return Ok(OperationResult::ok_with_message(
+                "Keyboard-Interactive / 2FA 动态验证将在连接工作台时交互提示",
+            ));
+        }
+        let addr = format!("{}:{}", host, port);
+        return match tokio::time::timeout(
+            tokio::time::Duration::from_secs(timeout.max(1) as u64),
+            tokio::net::TcpStream::connect(&addr),
+        )
+        .await
+        {
+            Ok(Ok(_stream)) => Ok(OperationResult::ok_with_message(
+                "SSH 端口可达；Keyboard-Interactive / 2FA 动态验证将在连接工作台时交互提示",
+            )),
+            Ok(Err(e)) => Ok(OperationResult::fail(format!("SSH connect to {} failed: {}", addr, e))),
+            Err(_) => Ok(OperationResult::fail(format!("SSH connect to {} timed out after {}s", addr, timeout))),
+        };
+    }
+
+    // 如果提供了 id（表示是在编辑已有服务器），且未绑定 AuthProfile、新凭据留空，则从数据库中读取并解密原凭据进行测试
     let server_id = config
         .get("id")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    if let Some(id) = server_id {
-        if let Ok(Ok(json_str)) = tokio::task::spawn_blocking(move || db::servers_get_raw(id)).await {
-                if let Ok(original_server) = serde_json::from_str::<db::Server>(&json_str) {
-                    if auth_type == "password" && password.as_deref().unwrap_or("").is_empty() {
-                        if let Some(ref enc) = original_server.password {
-                            if !enc.is_empty() {
-                                if let Ok(dec) = crypto::decrypt_password(enc, db::master_key()) {
-                                    password = Some(dec);
-                                }
-                            }
-                        }
-                    }
-                    if auth_type == "privateKey" {
-                        if private_key_path.as_deref().unwrap_or("").is_empty() {
-                            // 注意：使用 clone 而非 move，避免后续 certificate 分支再次访问字段时 borrow-after-move
-                            private_key_path = original_server.private_key_path.clone();
-                        }
-                        if private_key_passphrase.as_deref().unwrap_or("").is_empty() {
-                            if let Some(ref enc) = original_server.private_key_passphrase {
+    if !has_auth_profile {
+        if let Some(id) = server_id {
+            if let Ok(Ok(json_str)) = tokio::task::spawn_blocking(move || db::servers_get_raw(id)).await {
+                    if let Ok(original_server) = serde_json::from_str::<db::Server>(&json_str) {
+                        if auth_type == "password" && password.as_deref().unwrap_or("").is_empty() {
+                            if let Some(ref enc) = original_server.password {
                                 if !enc.is_empty() {
                                     if let Ok(dec) = crypto::decrypt_password(enc, db::master_key()) {
-                                        private_key_passphrase = Some(dec);
+                                        password = Some(dec);
                                     }
                                 }
                             }
                         }
-                    }
-                    // sshAgent / certificate 认证：编辑场景下从原配置回填缺失字段
-                    if (auth_type == "sshAgent" || auth_type == "ssh_agent" || auth_type == "agent")
-                        && agent_identity.as_deref().unwrap_or("").is_empty()
-                    {
-                        if let Some(ref orig_id) = original_server.agent_identity {
-                            if !orig_id.is_empty() {
-                                agent_identity = Some(orig_id.clone());
+                        if auth_type == "privateKey" {
+                            if private_key_path.as_deref().unwrap_or("").is_empty() {
+                                // 注意：使用 clone 而非 move，避免后续 certificate 分支再次访问字段时 borrow-after-move
+                                private_key_path = original_server.private_key_path.clone();
                             }
-                        }
-                    }
-                    if auth_type == "certificate" || auth_type == "openssh_cert" || auth_type == "cert" {
-                        if private_key_path.as_deref().unwrap_or("").is_empty() {
-                            // 注意：此处使用 clone() 而非 move，避免编译器跨分支借用检查失败
-                            // （privateKey 分支也会用到 original_server.private_key_path）
-                            private_key_path = original_server.private_key_path.clone();
-                        }
-                        if private_key_passphrase.as_deref().unwrap_or("").is_empty() {
-                            if let Some(ref enc) = original_server.private_key_passphrase {
-                                if !enc.is_empty() {
-                                    if let Ok(dec) = crypto::decrypt_password(enc, db::master_key()) {
-                                        private_key_passphrase = Some(dec);
+                            if private_key_passphrase.as_deref().unwrap_or("").is_empty() {
+                                if let Some(ref enc) = original_server.private_key_passphrase {
+                                    if !enc.is_empty() {
+                                        if let Ok(dec) = crypto::decrypt_password(enc, db::master_key()) {
+                                            private_key_passphrase = Some(dec);
+                                        }
                                     }
                                 }
                             }
                         }
-                        if certificate_path.as_deref().unwrap_or("").is_empty() {
-                            certificate_path = original_server.certificate_path.clone();
+                        // sshAgent / certificate 认证：编辑场景下从原配置回填缺失字段
+                        if (auth_type == "sshAgent" || auth_type == "ssh_agent" || auth_type == "agent")
+                            && agent_identity.as_deref().unwrap_or("").is_empty()
+                        {
+                            if let Some(ref orig_id) = original_server.agent_identity {
+                                if !orig_id.is_empty() {
+                                    agent_identity = Some(orig_id.clone());
+                                }
+                            }
+                        }
+                        if auth_type == "certificate" || auth_type == "openssh_cert" || auth_type == "cert" {
+                            if private_key_path.as_deref().unwrap_or("").is_empty() {
+                                // 注意：此处使用 clone() 而非 move，避免编译器跨分支借用检查失败
+                                // （privateKey 分支也会用到 original_server.private_key_path）
+                                private_key_path = original_server.private_key_path.clone();
+                            }
+                            if private_key_passphrase.as_deref().unwrap_or("").is_empty() {
+                                if let Some(ref enc) = original_server.private_key_passphrase {
+                                    if !enc.is_empty() {
+                                        if let Ok(dec) = crypto::decrypt_password(enc, db::master_key()) {
+                                            private_key_passphrase = Some(dec);
+                                        }
+                                    }
+                                }
+                            }
+                            if certificate_path.as_deref().unwrap_or("").is_empty() {
+                                certificate_path = original_server.certificate_path.clone();
+                            }
                         }
                     }
-                }
+            }
         }
     }
 
@@ -2363,6 +2485,7 @@ pub async fn ssh_create_shell(
     cols: Option<u32>,
     rows: Option<u32>,
     encoding: Option<String>,
+    term_type: Option<String>,
 ) -> Result<CreateShellResult, String> {
     // 夹取合理上限，防止异常参数（如 u32::MAX）让服务端分配超大终端缓冲区
     let c = match cols {
@@ -2374,7 +2497,7 @@ pub async fn ssh_create_shell(
         _ => 24,
     };
     let window_label = window.label().to_string();
-    match crate::ssh::shell::shell_create(app, window_label, server_id, c, r, encoding.unwrap_or_else(|| "utf-8".to_string())).await {
+    match crate::ssh::shell::shell_create(app, window_label, server_id, c, r, encoding.unwrap_or_else(|| "utf-8".to_string()), term_type).await {
         Ok((session_id, banner)) => Ok(CreateShellResult {
             success: true,
             error: None,
@@ -2396,6 +2519,7 @@ pub async fn ssh_create_shell(
 #[tauri::command]
 pub async fn ssh_write_to_shell(session_id: String, data: String) -> Result<(), String> {
     match route(&session_id) {
+        SessionKind::Local => crate::local_shell::local_write(&session_id, &data),
         SessionKind::Serial => crate::serial::write_to_serial(&session_id, &data).await,
         SessionKind::Telnet => crate::telnet::telnet_write(session_id, data).await,
         SessionKind::Ssh => crate::ssh::shell::shell_write(String::new(), session_id, data).await,
@@ -2406,6 +2530,10 @@ pub async fn ssh_write_to_shell(session_id: String, data: String) -> Result<(), 
 #[tauri::command]
 pub async fn ssh_interrupt_shell(session_id: String) -> Result<u64, String> {
     match route(&session_id) {
+        SessionKind::Local => {
+            crate::local_shell::local_write(&session_id, "\x03")?;
+            Ok(0)
+        }
         SessionKind::Serial => {
             crate::serial::write_to_serial(&session_id, "\x03").await?;
             Ok(0)
@@ -2420,8 +2548,9 @@ pub async fn ssh_interrupt_shell(session_id: String) -> Result<u64, String> {
 
 #[tauri::command]
 pub async fn ssh_set_shell_encoding(session_id: String, encoding: String) -> Result<(), String> {
-    // 历史行为：仅 Telnet 有独立编码通道，串口仍走 SSH 侧实现
+    // 历史行为：仅 Local / Telnet 有独立编码通道，串口仍走 SSH 侧实现
     match route(&session_id) {
+        SessionKind::Local => crate::local_shell::local_set_encoding(&session_id, &encoding),
         SessionKind::Telnet => crate::telnet::telnet_set_encoding(session_id, encoding).await,
         _ => crate::ssh::shell::shell_set_encoding(session_id, encoding).await,
     }
@@ -2429,7 +2558,7 @@ pub async fn ssh_set_shell_encoding(session_id: String, encoding: String) -> Res
 
 /// 调整 Shell PTY 大小（fire-and-forget）
 ///
-/// 路由：Telnet 使用 NAWS，串口无需 resize，其余走 SSH PTY resize。
+/// 路由：Local 使用 ConPTY/PTY resize，Telnet 使用 NAWS，串口无需 resize，其余走 SSH PTY resize。
 #[tauri::command]
 pub async fn ssh_resize_shell(
     session_id: String,
@@ -2437,6 +2566,7 @@ pub async fn ssh_resize_shell(
     rows: u32,
 ) -> Result<(), String> {
     match route(&session_id) {
+        SessionKind::Local => crate::local_shell::local_resize(&session_id, cols, rows),
         SessionKind::Serial => Ok(()),
         SessionKind::Telnet => crate::telnet::telnet_resize(session_id, cols, rows).await,
         SessionKind::Ssh => crate::ssh::shell::shell_resize(String::new(), session_id, cols, rows).await,
@@ -2447,7 +2577,7 @@ pub async fn ssh_resize_shell(
 #[tauri::command]
 pub async fn ssh_pause_shell(session_id: String) -> Result<(), String> {
     match route(&session_id) {
-        SessionKind::Serial | SessionKind::Telnet => Ok(()),
+        SessionKind::Local | SessionKind::Serial | SessionKind::Telnet => Ok(()),
         SessionKind::Ssh => crate::ssh::shell::shell_pause(String::new(), session_id).await,
     }
 }
@@ -2456,7 +2586,7 @@ pub async fn ssh_pause_shell(session_id: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn ssh_resume_shell(session_id: String) -> Result<(), String> {
     match route(&session_id) {
-        SessionKind::Serial | SessionKind::Telnet => Ok(()),
+        SessionKind::Local | SessionKind::Serial | SessionKind::Telnet => Ok(()),
         SessionKind::Ssh => crate::ssh::shell::shell_resume(String::new(), session_id).await,
     }
 }
@@ -2470,8 +2600,9 @@ pub async fn ssh_shell_zmodem_write(
     session_id: String,
     data: String,
 ) -> Result<(), String> {
-    // 历史行为：仅串口有 raw 字节通道，Telnet 与 SSH 共用同一实现
+    // 历史行为：仅串口有 raw 字节通道，Telnet 与 SSH 共用同一实现；Local 不支持 Zmodem
     match route(&session_id) {
+        SessionKind::Local => Ok(()),
         SessionKind::Serial => {
             let bytes = base64::Engine::decode(
                 &base64::engine::general_purpose::STANDARD,
@@ -2491,7 +2622,7 @@ pub async fn ssh_shell_zmodem_write(
 pub async fn ssh_shell_zmodem_end(session_id: String) -> Result<OperationResult, String> {
     // 历史行为：仅串口直接退出 passthrough，Telnet 与 SSH 共用同一实现
     match route(&session_id) {
-        SessionKind::Serial => Ok(OperationResult::ok()),
+        SessionKind::Local | SessionKind::Serial => Ok(OperationResult::ok()),
         _ => match crate::ssh::shell::shell_zmodem_end(String::new(), session_id).await {
             Ok(()) => Ok(OperationResult::ok()),
             Err(e) => Ok(OperationResult::fail(e)),
@@ -2505,6 +2636,16 @@ pub async fn ssh_shell_zmodem_end(session_id: String) -> Result<OperationResult,
 #[tauri::command]
 pub async fn ssh_close_shell(session_id: String) -> Result<OperationResult, String> {
     match route(&session_id) {
+        SessionKind::Local => {
+            let sid = session_id;
+            match tokio::task::spawn_blocking(move || crate::local_shell::local_close(&sid))
+                .await
+                .map_err(|e| format!("Task join error: {}", e))?
+            {
+                Ok(()) => Ok(OperationResult::ok()),
+                Err(e) => Ok(OperationResult::fail(e)),
+            }
+        }
         SessionKind::Serial => match crate::serial::close_serial_shell(&session_id) {
             Ok(()) => Ok(OperationResult::ok()),
             Err(e) => Ok(OperationResult::fail(e)),
@@ -2526,6 +2667,7 @@ pub async fn ssh_close_shell(session_id: String) -> Result<OperationResult, Stri
 #[tauri::command]
 pub async fn ssh_get_shell_history(session_id: String) -> Result<String, String> {
     match route(&session_id) {
+        SessionKind::Local => crate::local_shell::local_get_history(&session_id),
         SessionKind::Serial => crate::serial::get_serial_history(&session_id),
         SessionKind::Telnet => crate::telnet::telnet_get_history(session_id).await,
         SessionKind::Ssh => crate::ssh::shell::shell_get_history(session_id).await,
@@ -2745,4 +2887,35 @@ pub async fn ssh_list_agent_identities() -> Result<Vec<crate::ssh::agent::Identi
     crate::ssh::agent::AgentConnection::list_identities_info()
         .await
         .map_err(|e| format!("{}", e))
+}
+
+/// 探测本机 X11 Server 运行环境与 `$APP_DATA/addons/xserver` 离线插件包。
+#[tauri::command]
+pub async fn x11_probe_environment(
+    app: tauri::AppHandle,
+) -> Result<crate::ssh::x11_forward::X11EnvironmentProbe, String> {
+    use tauri::Manager;
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app_data_dir: {}", e))?;
+    Ok(crate::ssh::x11_forward::probe_local_x11_environment(&app_data_dir))
+}
+
+/// 离线导入本地 X Server 插件包（.zip 或可执行文件）到 `$APP_DATA/addons/xserver`。
+#[tauri::command]
+pub async fn x11_import_addon(
+    app: tauri::AppHandle,
+    archive_path: String,
+) -> Result<crate::ssh::x11_forward::X11EnvironmentProbe, String> {
+    use tauri::Manager;
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app_data_dir: {}", e))?;
+    tokio::task::spawn_blocking(move || {
+        crate::ssh::x11_forward::import_x11_addon_archive(&app_data_dir, &archive_path)
+    })
+    .await
+    .map_err(|e| format!("X11 插件包导入任务异常: {}", e))?
 }
