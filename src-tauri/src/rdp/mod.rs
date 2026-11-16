@@ -81,23 +81,34 @@ impl Default for RdpLaunchConfig {
 
 /// 生成 .rdp 文件内容
 /// 格式：每行 `key:type:value`，type 为 s(string)/i(integer)
+/// 去除 RDP 配置文件值中的换行/回车，防止恶意 host/username 注入任意配置行
+fn sanitize_rdp_value(value: &str) -> String {
+    value.replace('\r', "").replace('\n', "")
+}
+
 fn build_rdp_file_content(config: &RdpLaunchConfig) -> String {
+    // host/username/domain 来自用户输入，写入 .rdp 前必须剥离 \r\n，
+    // 否则可注入 `foo\r\nprompt for credentials:i:0` 等任意配置行。
+    let host = sanitize_rdp_value(&config.host);
+    let username = sanitize_rdp_value(&config.username);
+    let domain = config.domain.as_deref().map(sanitize_rdp_value);
+
     let full_address = if config.port == 3389 {
-        config.host.clone()
+        host.clone()
     } else {
-        format!("{}:{}", config.host, config.port)
+        format!("{}:{}", host, config.port)
     };
 
     // username 行：DOMAIN\user 或 user 或空（让 mstsc 弹窗输入）
-    let username_line = if !config.username.is_empty() {
-        if let Some(ref domain) = config.domain {
+    let username_line = if !username.is_empty() {
+        if let Some(ref domain) = domain {
             if !domain.is_empty() {
-                format!("username:s:{}\\{}\n", domain, config.username)
+                format!("username:s:{}\\{}\n", domain, username)
             } else {
-                format!("username:s:{}\n", config.username)
+                format!("username:s:{}\n", username)
             }
         } else {
-            format!("username:s:{}\n", config.username)
+            format!("username:s:{}\n", username)
         }
     } else {
         String::new()

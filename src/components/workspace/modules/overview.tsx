@@ -722,6 +722,40 @@ export function OverviewModule({
     return items;
   }, [metrics]);
 
+  // 以下 useMemo 必须在所有提前 return 之前调用，保证 hooks 顺序稳定（rules-of-hooks）
+  const diskItems = useMemo(() => {
+    return metrics?.disks ?? [];
+  }, [metrics?.disks]);
+
+  const maxDiskUse = useMemo(
+    () => Math.max(...diskItems.map((d) => d.usePercent ?? 0), 0),
+    [diskItems],
+  );
+
+  const memUsedGB = metrics?.memoryUsed ?? 0;
+  const memTotalGB = metrics?.memoryTotal ?? 0;
+  const memAvailableGB = (metrics?.memAvailableBytes ?? 0) / 1073741824;
+
+  const memParts = useMemo(() => {
+    const bd = metrics?.memBreakdown;
+    const used = bd?.used ?? memUsedGB;
+    const cache = bd?.cache ?? 0;
+    const buffers = bd?.buffers ?? 0;
+    const free = bd?.free ?? memAvailableGB;
+    const total = memTotalGB > 0 ? memTotalGB : (used + cache + buffers + free) || 1;
+    return {
+      used,
+      cache,
+      buffers,
+      free,
+      total,
+      usedPct: Math.min(100, Math.round((used / total) * 100)),
+      cachePct: Math.min(100, Math.round((cache / total) * 100)),
+      buffersPct: Math.min(100, Math.round((buffers / total) * 100)),
+      freePct: Math.min(100, Math.round((free / total) * 100)),
+    };
+  }, [metrics?.memBreakdown, memUsedGB, memTotalGB, memAvailableGB]);
+
   // 采集失败/主机不支持时不渲染全 0 大盘，避免把占位数据当成诊断依据
   if (metrics?.metricsAvailable === false) {
     return (
@@ -770,19 +804,7 @@ export function OverviewModule({
     );
   }
 
-  const diskItems = useMemo(() => {
-    return metrics?.disks ?? [];
-  }, [metrics?.disks]);
-
-  const maxDiskUse = useMemo(
-    () => Math.max(...diskItems.map((d) => d.usePercent ?? 0), 0),
-    [diskItems],
-  );
-
   const memoryUse = metrics?.memPressure ?? (metrics?.memoryTotal && metrics.memoryTotal > 0 ? metrics.memoryUsed / metrics.memoryTotal : 0);
-  const memUsedGB = metrics?.memoryUsed ?? 0;
-  const memTotalGB = metrics?.memoryTotal ?? 0;
-  const memAvailableGB = (metrics?.memAvailableBytes ?? 0) / 1073741824;
 
   const swapUse =
     metrics && metrics.swapTotal > 0 ? metrics.swapUsed / metrics.swapTotal : 0;
@@ -790,26 +812,6 @@ export function OverviewModule({
   const swapTotalGB = metrics?.swapTotal ?? 0;
 
   const selectedNet = selectedNetData;
-
-  const memParts = useMemo(() => {
-    const bd = metrics?.memBreakdown;
-    const used = bd?.used ?? memUsedGB;
-    const cache = bd?.cache ?? 0;
-    const buffers = bd?.buffers ?? 0;
-    const free = bd?.free ?? memAvailableGB;
-    const total = memTotalGB > 0 ? memTotalGB : (used + cache + buffers + free) || 1;
-    return {
-      used,
-      cache,
-      buffers,
-      free,
-      total,
-      usedPct: Math.min(100, Math.round((used / total) * 100)),
-      cachePct: Math.min(100, Math.round((cache / total) * 100)),
-      buffersPct: Math.min(100, Math.round((buffers / total) * 100)),
-      freePct: Math.min(100, Math.round((free / total) * 100)),
-    };
-  }, [metrics?.memBreakdown, memUsedGB, memTotalGB, memAvailableGB]);
 
   const handleProcessSort = (key: "pid" | "cpu" | "memory") => {
     if (processSortKey === key) {

@@ -97,7 +97,11 @@ export class TriggerEngine {
   }
 
   public setRules(rules: TriggerRule[]): void {
-    this.rules = rules.filter((r) => r.enabled && Boolean(r.pattern));
+    // 规则也可能来自 UI / 云端同步，不能假设每个元素都完整；缺 id 或 pattern
+    // 的元素会让后面的 signature 计算与 new RegExp 直接抛错并中断终端输出流。
+    this.rules = (Array.isArray(rules) ? rules : []).filter(
+      (r) => Boolean(r) && typeof r.id === "string" && typeof r.pattern === "string" && r.enabled && Boolean(r.pattern),
+    );
     this.compiledCache.clear();
     const bufferEndOffset = this.bufferBaseOffset + this.cleanBuffer.length;
     const nextSignatures = new Map<string, string>();

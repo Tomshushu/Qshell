@@ -269,7 +269,7 @@ describe("useTransferQueueStore", () => {
       2000,
     );
 
-    let dl = useTransferQueueStore.getState().tasks.find((t) => t.id === "dl-1");
+    const dl = useTransferQueueStore.getState().tasks.find((t) => t.id === "dl-1");
     expect(dl?.speedBytesPerSec).toBe(4000);
     expect(dl?.etaSeconds).toBe(2); // ceil(6000 / 4000)
     expect(dl?.tmpPath).toBe("/tmp/data.bin.part");

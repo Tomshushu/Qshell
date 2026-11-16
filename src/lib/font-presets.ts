@@ -24,3 +24,18 @@ export const FONT_PRESETS = [
   { label: '幼圆 / YouYuan', value: 'YouYuan, "幼圆", monospace' },
   { label: '隶书 / LiSu', value: 'LiSu, "隶书", monospace' },
 ]
+
+// CJK / 非 ASCII 字体预设（双重字体第二段）。
+// 值只写字体族名，不追加 monospace（由 composeTerminalFontFamily 统一补齐），
+// 否则通用回退会抢先接管中文字形，独立 CJK 字体失效。
+export const CJK_FONT_PRESETS = [
+  { label: '微软雅黑 / Microsoft YaHei', value: '"Microsoft YaHei", "微软雅黑"' },
+  { label: '新宋体 / SimSun', value: 'SimSun, "新宋体"' },
+  { label: '黑体 / SimHei', value: 'SimHei, "黑体"' },
+  { label: '仿宋 / FangSong', value: 'FangSong, "仿宋"' },
+  { label: '楷体 / KaiTi', value: 'KaiTi, "楷体"' },
+  { label: '幼圆 / YouYuan', value: 'YouYuan, "幼圆"' },
+  { label: '苹方 / PingFang SC', value: '"PingFang SC"' },
+  { label: 'Noto Sans CJK SC', value: '"Noto Sans CJK SC"' },
+  { label: 'Sarasa Mono SC', value: '"Sarasa Mono SC"' },
+]

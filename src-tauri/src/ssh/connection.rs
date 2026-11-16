@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use russh::keys::PublicKey;
@@ -19,6 +19,10 @@ const IDLE_TIMEOUT_SECS: u64 = 60;
 const IDLE_TIMEOUT: Duration = Duration::from_secs(IDLE_TIMEOUT_SECS);
 /// 外层绝对上限兜底（秒）：固定 6h，防极端异常或资源泄漏导致永久挂起。
 const TRANSFER_ABSOLUTE_TIMEOUT_SECS: u64 = 6 * 3600;
+/// 并发 Agent/X11 桥接任务数量上限：超过后拒绝新通道，防止异常场景下 tokio::spawn 任务无限累积。
+const MAX_BRIDGE_TASKS: usize = 64;
+/// 当前活跃的 Agent/X11 桥接任务计数（spawn +1 / 结束 -1）。
+static ACTIVE_BRIDGE_TASKS: AtomicUsize = AtomicUsize::new(0);
 
 use super::agent::{AgentConnection, AgentSigner};
 use super::keys::{load_key_pair, load_key_pair_from_content};
@@ -342,10 +346,19 @@ impl russh::client::Handler for ClientHandler {
                 .await;
             return Ok(());
         }
+        // 限制并发桥接任务数量，超限直接拒绝通道，防止 tokio::spawn 任务无限累积
+        if ACTIVE_BRIDGE_TASKS.fetch_add(1, Ordering::SeqCst) >= MAX_BRIDGE_TASKS {
+            ACTIVE_BRIDGE_TASKS.fetch_sub(1, Ordering::SeqCst);
+            reply
+                .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
+        }
         reply.accept().await;
         let server_id = self.server_id.clone();
         tokio::spawn(async move {
             crate::ssh::agent_forward::bridge_agent_channel(channel, &server_id).await;
+            ACTIVE_BRIDGE_TASKS.fetch_sub(1, Ordering::SeqCst);
         });
         Ok(())
     }
@@ -369,18 +382,27 @@ impl russh::client::Handler for ClientHandler {
                 .await;
             return Ok(());
         }
+        // 限制并发桥接任务数量，超限直接拒绝通道，防止 tokio::spawn 任务无限累积
+        if ACTIVE_BRIDGE_TASKS.fetch_add(1, Ordering::SeqCst) >= MAX_BRIDGE_TASKS {
+            ACTIVE_BRIDGE_TASKS.fetch_sub(1, Ordering::SeqCst);
+            reply
+                .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
+        }
         reply.accept().await;
         let server_id = self.server_id.clone();
         let orig_addr = originator_address.to_string();
         tokio::spawn(async move {
-            if let Err(err) = crate::ssh::x11_forward::bridge_x11_channel(
+            let result = crate::ssh::x11_forward::bridge_x11_channel(
                 channel,
                 &server_id,
                 &orig_addr,
                 originator_port,
             )
-            .await
-            {
+            .await;
+            ACTIVE_BRIDGE_TASKS.fetch_sub(1, Ordering::SeqCst);
+            if let Err(err) = result {
                 tracing::warn!(
                     "[X11Forward] X11 转发通道失败 ({} <- {}:{}): {} (提示：Windows 请确认已启动 VcXsrv/Xming，macOS 请确认已启动 XQuartz，Linux 请确认 $DISPLAY 可达)",
                     server_id,

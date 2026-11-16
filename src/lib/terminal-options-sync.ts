@@ -115,3 +115,36 @@ export function applyTerminalFontFamilyOption(
   onResized?.(term.cols, term.rows);
   return true;
 }
+
+/**
+ * 双重字体：把 ASCII 主字体与 CJK 字体拼成一条 CSS 字体链。
+ * CJK 字体必须插在通用 `monospace` 之前，否则通用回退会抢先接管中文字形，
+ * 导致独立 CJK 字体失效。主字体为空时回退到 monospace。
+ */
+export function composeTerminalFontFamily(
+  asciiFont: string,
+  cjkFont?: string,
+): string {
+  const primary = (asciiFont ?? "monospace").trim() || "monospace";
+  const cjk = cjkFont?.trim();
+  if (!cjk) return primary;
+  // 仅剥离「, monospace」后缀；若主字体本身就是裸 monospace（未指定具体字体），
+  // 视为空，避免产出「monospace, CJK, monospace」这类冗余链。
+  const base =
+    primary === "monospace"
+      ? ""
+      : primary.replace(/,\s*monospace\s*$/i, "").trim();
+  return base ? `${base}, ${cjk}, monospace` : `${cjk}, monospace`;
+}
+
+/**
+ * 应用双击选词分隔符（xterm `wordSeparator`）。仅影响双击选词边界，无需重测字号。
+ */
+export function applyTerminalWordSeparatorOption(
+  term: Terminal,
+  wordSeparator: string,
+): boolean {
+  if (term.options.wordSeparator === wordSeparator) return false;
+  term.options.wordSeparator = wordSeparator;
+  return true;
+}

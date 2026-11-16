@@ -32,6 +32,14 @@ interface PendingWaiter {
 export function buildSandboxWorkerSource(userCode: string): string {
   const escapedCode = JSON.stringify(userCode);
   return `"use strict";
+// CSP 为脚本引擎保留了 'unsafe-eval'，因此要主动封死 Worker 全局上的网络/存储逃逸通道。
+// new Function 的形参遮蔽只能挡住同名标识符，self.fetch 等仍可直接访问；
+// 这里在用户代码执行前把它们置为不可写的 undefined，缩小脚本被注入时的外传面。
+for (const blockedKey of ["fetch", "XMLHttpRequest", "WebSocket", "EventSource", "importScripts", "indexedDB", "caches"]) {
+  try {
+    Object.defineProperty(self, blockedKey, { value: undefined, writable: false, configurable: false });
+  } catch { /* 宿主已冻结该属性时忽略 */ }
+}
 const pendingRpc = new Map();
 let nextRpcId = 1;
 
@@ -367,8 +375,10 @@ export class ScriptSandbox {
       }
       case "sleep": {
         const ms = Math.max(0, Number(args[0]) || 0);
-        await new Promise((r) => setTimeout(r, ms));
-        return true;
+        if (ms <= 0) return true;
+        // 纳入 waiters，使 stop()/cleanup 能统一 clearTimeout 并 resolve，
+        // 避免长 sleep 定时器在脚本被中止后仍悬挂在主线程上。
+        return this.registerWait(id, ms, true, () => null);
       }
       case "alert":
         if (this.options.dialogCallbacks?.alert) {

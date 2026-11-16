@@ -468,7 +468,7 @@ pub async fn bridge_x11_channel(
         }
     }
 
-    match tokio::io::copy_bidirectional(&mut ssh_stream, &mut local_stream).await {
+    match copy_bidirectional_with_grace(&mut ssh_stream, &mut local_stream).await {
         Ok((to_local, to_remote)) => {
             tracing::debug!(
                 "[X11Forward] {} 转发通道结束: remote->x11={}B, x11->remote={}B",
@@ -482,6 +482,55 @@ pub async fn bridge_x11_channel(
         }
     }
     Ok(())
+}
+
+/// 带半关闭排空窗口的双向桥接。
+///
+/// 裸 `tokio::io::copy_bidirectional` 在单侧 EOF、对端不关闭时会永久挂起；
+/// 这里对齐 Agent 转发侧的做法：先完成的方向给另一方向 250ms 排空窗口，
+/// 超时即放弃，避免 X11 通道桥接任务随断连不断累积。
+async fn copy_bidirectional_with_grace<A, B>(
+    a: &mut A,
+    b: &mut B,
+) -> std::io::Result<(u64, u64)>
+where
+    A: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + ?Sized,
+    B: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + ?Sized,
+{
+    let (mut a_read, mut a_write) = tokio::io::split(a);
+    let (mut b_read, mut b_write) = tokio::io::split(b);
+
+    let mut a_to_b = Box::pin(async {
+        let copied = tokio::io::copy(&mut a_read, &mut b_write).await;
+        let _ = b_write.shutdown().await;
+        copied
+    });
+    let mut b_to_a = Box::pin(async {
+        let copied = tokio::io::copy(&mut b_read, &mut a_write).await;
+        let _ = a_write.shutdown().await;
+        copied
+    });
+
+    tokio::select! {
+        r1 = &mut a_to_b => {
+            let to_local = r1?;
+            let to_remote = match tokio::time::timeout(Duration::from_millis(250), &mut b_to_a).await {
+                Ok(Ok(n)) => n,
+                Ok(Err(e)) => return Err(e),
+                Err(_) => 0,
+            };
+            Ok((to_local, to_remote))
+        }
+        r2 = &mut b_to_a => {
+            let to_remote = r2?;
+            let to_local = match tokio::time::timeout(Duration::from_millis(250), &mut a_to_b).await {
+                Ok(Ok(n)) => n,
+                Ok(Err(e)) => return Err(e),
+                Err(_) => 0,
+            };
+            Ok((to_local, to_remote))
+        }
+    }
 }
 
 /// 前端展示的本地 X11 环境与离线插件包探测结果
@@ -689,37 +738,64 @@ pub fn import_x11_addon_archive(
         .unwrap_or_default();
 
     if ext == "zip" {
-        // 使用系统内置 tar (Windows 10+/macOS/Linux 均原生支持 zip 解压) 或 unzip 解压
-        let status = std::process::Command::new("tar")
-            .arg("-xf")
-            .arg(src)
-            .arg("-C")
-            .arg(&addon_dir)
-            .status();
-        let extracted = match status {
-            Ok(s) if s.success() => true,
-            _ => {
-                #[cfg(unix)]
-                {
-                    matches!(
-                        std::process::Command::new("unzip")
-                            .arg("-q")
-                            .arg("-o")
-                            .arg(src)
-                            .arg("-d")
-                            .arg(&addon_dir)
-                            .status(),
-                        Ok(s) if s.success()
-                    )
-                }
-                #[cfg(not(unix))]
-                {
-                    false
-                }
+        // 不再委托外部 `tar -xf`：GNU tar 与 Windows bsdtar 对 zip / 路径条目的行为不一致，
+        // 且调用方无法逐条校验 `..`、绝对路径与符号链接，存在 zip-slip 把文件写出
+        // addons 目录（甚至写出为可执行程序）的风险。改为纯 Rust 逐条目解压。
+        const MAX_ENTRIES: usize = 2_000;
+        const MAX_TOTAL_BYTES: u64 = 512 * 1024 * 1024;
+        const S_IFMT: u32 = 0o170000;
+        const S_IFLNK: u32 = 0o120000;
+
+        let file = std::fs::File::open(src)
+            .map_err(|e| format!("打开 .zip 插件包失败: {}", e))?;
+        let mut archive = zip::ZipArchive::new(file)
+            .map_err(|e| format!("解析 .zip 插件包失败，请确认压缩包完整有效: {}", e))?;
+        if archive.len() > MAX_ENTRIES {
+            return Err("插件包条目过多，疑似异常压缩包，已拒绝导入".to_string());
+        }
+
+        let mut total_bytes: u64 = 0;
+        for i in 0..archive.len() {
+            let mut entry = archive
+                .by_index(i)
+                .map_err(|e| format!("读取插件包条目失败: {}", e))?;
+            let raw_name = entry.name();
+            // 拒绝盘符 / UNC / 反斜杠形式：Windows 上可能被解释为绝对路径
+            if raw_name.contains('\\') || raw_name.contains(':') || raw_name.contains('\0') {
+                return Err("插件包包含非法条目路径，已拒绝导入".to_string());
             }
-        };
-        if !extracted {
-            return Err("解压 .zip 插件包失败，请确认压缩包完整有效".to_string());
+            // 拒绝符号链接条目，避免后续写入指向 addon_dir 之外
+            if entry
+                .unix_mode()
+                .map(|mode| mode & S_IFMT == S_IFLNK)
+                .unwrap_or(false)
+            {
+                return Err("插件包包含符号链接，出于安全考虑已拒绝导入".to_string());
+            }
+            let rel = entry
+                .enclosed_name()
+                .ok_or_else(|| "插件包包含越界路径（.. 或绝对路径），已拒绝导入".to_string())?;
+            if rel.as_os_str().is_empty() {
+                return Err("插件包包含无效条目名，已拒绝导入".to_string());
+            }
+            let dest = addon_dir.join(&rel);
+            if entry.is_dir() {
+                std::fs::create_dir_all(&dest)
+                    .map_err(|e| format!("创建插件目录失败: {}", e))?;
+                continue;
+            }
+            total_bytes = total_bytes.saturating_add(entry.size());
+            if total_bytes > MAX_TOTAL_BYTES {
+                return Err("插件包解压体积超过 512MB 上限，已拒绝导入".to_string());
+            }
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("创建插件目录失败: {}", e))?;
+            }
+            let mut out = std::fs::File::create(&dest)
+                .map_err(|e| format!("写入插件文件失败: {}", e))?;
+            std::io::copy(&mut entry, &mut out)
+                .map_err(|e| format!("解压插件文件失败: {}", e))?;
         }
     } else if src.is_file() {
         let file_name = src
@@ -864,5 +940,67 @@ mod tests {
         assert_eq!(u16::from_le_bytes([rewritten[6], rewritten[7]]), 18);
         assert_eq!(u16::from_le_bytes([rewritten[8], rewritten[9]]), 16);
         assert!(rewritten.ends_with(&[0xde, 0xad]));
+    }
+
+    #[test]
+    fn import_addon_rejects_zip_slip_and_absolute_paths() {
+        use std::io::Write;
+
+        let base = std::env::temp_dir().join(format!(
+            "qshell-x11-import-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let app_data = base.join("app");
+        std::fs::create_dir_all(&app_data).unwrap();
+
+        // 1) ../ 越界条目：旧实现直接交给 tar -xf，会写出 addons 目录
+        let evil = base.join("evil.zip");
+        {
+            let mut writer =
+                zip::ZipWriter::new(std::fs::File::create(&evil).unwrap());
+            writer
+                .start_file(
+                    "../escaped.txt",
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+            writer.write_all(b"evil").unwrap();
+            writer.finish().unwrap();
+        }
+        let err = import_x11_addon_archive(&app_data, evil.to_str().unwrap())
+            .expect_err("zip-slip entry must be rejected");
+        assert!(
+            err.contains("越界") || err.contains("非法"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !base.join("escaped.txt").exists(),
+            "entry escaped the addon directory"
+        );
+
+        // 2) Windows 盘符 / 反斜杠路径
+        let evil2 = base.join("evil2.zip");
+        {
+            let mut writer =
+                zip::ZipWriter::new(std::fs::File::create(&evil2).unwrap());
+            writer
+                .start_file(
+                    "C:\\Windows\\evil.txt",
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+            writer.write_all(b"evil").unwrap();
+            writer.finish().unwrap();
+        }
+        let err2 = import_x11_addon_archive(&app_data, evil2.to_str().unwrap())
+            .expect_err("absolute Windows path must be rejected");
+        assert!(err2.contains("非法"), "unexpected error: {err2}");
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

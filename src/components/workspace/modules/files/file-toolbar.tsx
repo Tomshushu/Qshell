@@ -26,6 +26,7 @@ import { SftpBookmarkDropdown, ViewModeDropdown } from '@/components/sftp/sftp-d
 import { useAppStore } from '@/store'
 import { useSettingsDialogStore } from '@/store/settings-dialog-store'
 import type { SftpViewMode } from '@/types'
+import { Z_LAYER } from '@/lib/z-layer'
 
 interface FileToolbarProps {
   currentPath: string
@@ -218,7 +219,7 @@ export function FileToolbar({
                 <span className="text-[11px]">外部编辑 ({activeExternalEdits.length})</span>
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" style={{ zIndex: 1000 }}>
+            <DropdownMenuContent align="end" style={{ zIndex: Z_LAYER.POPUP }}>
               {activeExternalEdits.map((s) => (
                 <DropdownMenuItem key={s.sessionId} className="flex items-center justify-between gap-3 text-xs">
                   <span className="truncate" title={s.remotePath}>{s.fileName}</span>

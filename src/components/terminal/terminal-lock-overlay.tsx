@@ -148,7 +148,7 @@ export function TerminalLockOverlay({
       data-terminal-lock-overlay="true"
       role="dialog"
       aria-modal="true"
-      className="terminal-lock-overlay absolute inset-0 z-[150] flex items-center justify-center bg-background/80 backdrop-blur-md p-4 select-none"
+      className="terminal-lock-overlay absolute inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-md p-4 select-none"
       onClick={() => {
         if (hasAppLock && !isPattern) {
           inputRef.current?.focus();

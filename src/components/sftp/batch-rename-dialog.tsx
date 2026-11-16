@@ -140,6 +140,7 @@ export function BatchRenameDialog({
   const [succeededOldPaths, setSucceededOldPaths] = useState<Set<string>>(() => new Set());
   const mountedRef = useRef(true);
   const sessionEpochRef = useRef(0);
+  const prevOpenRef = useRef(open);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -151,12 +152,31 @@ export function BatchRenameDialog({
 
   useEffect(() => {
     sessionEpochRef.current += 1;
-    if (open) {
-      setSubmitting(false);
-      setSubmitError(null);
-      setExecutionResult(null);
-      setSucceededOldPaths(new Set());
+    const wasOpen = prevOpenRef.current;
+    prevOpenRef.current = open;
+    if (!open) return;
+
+    // 每次「重新打开」都必须清空上一轮的规则，否则上一次的查找/替换串或序号模板
+    // 会被直接套用到新选中的文件上，用户点「应用重命名」就会误改文件名。
+    // 只在 false -> true 时重置；同一轮打开中 items 变化不应抹掉正在编辑的规则。
+    if (!wasOpen) {
+      setMode("replace");
+      setFindPattern("");
+      setReplaceWith("");
+      setUseRegex(false);
+      setCaseSensitive(true);
+      setPrefix("");
+      setSuffix("");
+      setAffixPreserveExt(false);
+      setSequenceTemplate("{name}_{n}");
+      setStartIndex(1);
+      setPadLength(2);
+      setSequencePreserveExt(true);
     }
+    setSubmitting(false);
+    setSubmitError(null);
+    setExecutionResult(null);
+    setSucceededOldPaths(new Set());
   }, [open, items]);
 
   const activeItems = useMemo(
@@ -338,8 +358,19 @@ export function BatchRenameDialog({
     setSubmitting(true);
     setSubmitError(null);
     setExecutionResult(null);
+    // 后端无响应时不能把弹窗永久锁在 submitting 状态（所有关闭入口都被禁用）。
+    // 超时只解除 UI 锁定并提示，迟到的结果仍由 sessionEpochRef 兜底，不会串台。
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
-      const result = await onExecuteRename(pendingRenames);
+      const result = await Promise.race([
+        Promise.resolve(onExecuteRename(pendingRenames)),
+        new Promise<never>((_resolve, reject) => {
+          timeoutId = setTimeout(
+            () => reject(new Error("批量重命名执行超时，请刷新文件列表确认结果")),
+            120_000,
+          );
+        }),
+      ]);
       if (!mountedRef.current || sessionEpochRef.current !== epoch) return;
       if (result.failed.length === 0) {
         toast.success(`已成功重命名 ${result.succeeded} 项`);
@@ -365,6 +396,7 @@ export function BatchRenameDialog({
       setSubmitError(msg || "批量重命名执行失败");
       toast.error(`批量重命名失败: ${msg}`);
     } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
       if (mountedRef.current && sessionEpochRef.current === epoch) {
         setSubmitting(false);
       }
@@ -379,7 +411,10 @@ export function BatchRenameDialog({
         onClose();
       }}
     >
-      <DialogContent className="w-[calc(100vw-2rem)] max-w-2xl max-h-[85vh] flex flex-col p-6 gap-4 overflow-hidden">
+      <DialogContent
+        showCloseButton={!submitting}
+        className="w-[calc(100vw-2rem)] max-w-2xl max-h-[85vh] flex flex-col p-6 gap-4 overflow-hidden"
+      >
         <DialogHeader className="pr-6 space-y-1 text-left sm:text-left shrink-0">
           <DialogTitle className="text-base font-semibold tracking-tight">
             {title}

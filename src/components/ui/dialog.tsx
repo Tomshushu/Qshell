@@ -6,9 +6,14 @@ import { useAppStore } from "@/store"
 import { useModalStack } from "@/hooks/use-modal-stack"
 import { useModalStackStore } from "@/store/modal-stack-store"
 
+/** 把 Root 的 modal 标志传给 Content：窗口模式（modal=false）不应登记为阻塞式模态 */
+const DialogModalContext = React.createContext(true)
+
 /** 默认仍是模态；传 modal={false} 可把配置类弹框变成可交互窗口（不锁背景、无 focus trap） */
 const Dialog = ({ modal = true, ...props }: React.ComponentProps<typeof DialogPrimitive.Root>) => (
-  <DialogPrimitive.Root modal={modal} {...props} />
+  <DialogModalContext.Provider value={modal}>
+    <DialogPrimitive.Root modal={modal} {...props} />
+  </DialogModalContext.Provider>
 )
 const DialogTrigger = DialogPrimitive.Trigger
 const DialogClose = DialogPrimitive.Close
@@ -46,7 +51,10 @@ const DialogContent = React.forwardRef<
 >(function DialogContentInner({ className, children, onPointerDownOutside, onCloseAutoFocus, onEscapeKeyDown, showCloseButton = true, showOverlay = true, layerZIndex, ...props }, ref) {
   const uiStyle = useAppStore(s => s.uiStyle)
   const isAnime = uiStyle === 'anime'
-  const modalId = useModalStack("radix-dialog", true)
+  const isModal = React.useContext(DialogModalContext)
+  // 窗口模式不占模态栈：否则「打开主题浮窗后按 Esc 无法退出终端全屏」这类
+  // 全局快捷键会被 stack.length > 0 误判为有模态弹窗而屏蔽。
+  const modalId = useModalStack("radix-dialog", isModal)
 
   React.useEffect(() => {
     return () => {
@@ -126,9 +134,12 @@ const DialogContent = React.forwardRef<
           }
         }}
         onEscapeKeyDown={(event) => {
-          // 若当前之上还叠有非 Radix 模态（如确认遮罩/命令面板），禁止底层 Radix 对话框抢先关掉
-          if (!useModalStackStore.getState().isTopModal(modalId)) {
+          // 若当前之上还叠有非 Radix 模态（如确认遮罩/命令面板），禁止底层 Radix 对话框抢先关掉。
+          // 这里打标记是为了让 use-modal-stack 知道：本次 preventDefault 只是「阻止底层关闭」，
+          // 并非 Escape 已被消费，栈顶的自定义模态仍应响应这次按键。
+          if (isModal && !useModalStackStore.getState().isTopModal(modalId)) {
             event.preventDefault()
+            ;(event as unknown as { __qshellLowerLayerBlocked?: boolean }).__qshellLowerLayerBlocked = true
             return
           }
           onEscapeKeyDown?.(event)

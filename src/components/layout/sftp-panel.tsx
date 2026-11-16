@@ -2546,15 +2546,16 @@ export function SftpPanel() {
         return updated
       })
     } finally {
-      if (!mountedRef.current) return
-      if (activeRightTabIdRef.current === tid) {
-        setConnectingServerId('')
+      if (mountedRef.current) {
+        if (activeRightTabIdRef.current === tid) {
+          setConnectingServerId('')
+        }
+        setRightTabs(prev => {
+          const updated = prev.map(t => t.id === tid ? { ...t, connectingId: '', loading: false } : t)
+          rightTabsRef.current = updated
+          return updated
+        })
       }
-      setRightTabs(prev => {
-        const updated = prev.map(t => t.id === tid ? { ...t, connectingId: '', loading: false } : t)
-        rightTabsRef.current = updated
-        return updated
-      })
     }
   }
 
@@ -4205,6 +4206,9 @@ export function SftpPanel() {
         return
       }
       if (action === 'cancel') {
+        // 未到时的定时任务被取消后永远不会执行 runTask，必须在这里释放 runner 闭包，
+        // 否则 startFn / 文件列表 / 路径参数会一直被 scheduledRunnersRef 持有。
+        scheduledRunnersRef.current.delete(taskId)
         setTransferRecords(prev => prev.map(t =>
           t.transferId === taskId && (t.status === 'transferring' || t.status === 'paused')
             ? { ...t, status: 'failed' as const, error: tRef.current('sftp_transfer_canceled') || 'Canceled', completedAt: Date.now(), rate: 0 }
@@ -6264,12 +6268,11 @@ export function SftpPanel() {
     const taskId = `sched-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const scheduledAt = Date.now() + Math.max(1000, params.delayMs)
     const runTask = async () => {
-      try {
-        await params.runner()
-      } finally {
-        scheduledRunnersRef.current.delete(taskId)
-        useTransferQueueStore.getState().removeTask(taskId)
-      }
+      // 成功 / 失败状态由 store 的 tickScheduler 完成回调统一写入（completed / failed）。
+      // 这里不能再 removeTask：finally 会先于回调执行，任务会直接从队列消失，
+      // 用户看不到「已完成」，重试/统计也随之丢失。只释放 runner 闭包引用即可。
+      scheduledRunnersRef.current.delete(taskId)
+      await params.runner()
     }
     scheduledRunnersRef.current.set(taskId, runTask)
     const targetSrv = servers.find(s => s.id === toBaseServerId(params.serverId))

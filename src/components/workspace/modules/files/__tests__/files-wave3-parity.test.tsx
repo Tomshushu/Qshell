@@ -464,7 +464,10 @@ describe('Wave 3 Phase 2 Track C1: Workspace Files Parity', () => {
     await waitFor(() => {
       expect(mockSshService.listFiles).toHaveBeenCalledWith('srv-1', '/var/log')
     })
-  })
+    // 该用例串联了 4 组异步 findByText/waitFor（预览、外部编辑、差异对比、
+    // 批量重命名、剪贴板跳转），全量并行跑 139 个文件时 5s 默认超时偶发触发；
+    // 单文件运行稳定通过，放宽到 20s 避免 CI 因调度抖动误报。
+  }, 20_000)
 
   it('FilesModule supports Ctrl+A (excluding ..), Shift+Click range select, Ctrl+Shift+N, and prunes hidden selections when showHidden toggles off', async () => {
     const filesWithParentAndHidden: FileEntry[] = [

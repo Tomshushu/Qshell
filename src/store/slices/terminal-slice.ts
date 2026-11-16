@@ -23,6 +23,10 @@ export const createTerminalSlice: StateCreator<
   terminalFontFamily: '"Cascadia Code", monospace',
   setTerminalFontFamily: (font) => set({ terminalFontFamily: font }),
 
+  // CJK / 非 ASCII 字体（双重字体第二段），默认空 = 跟随主字体
+  terminalCjkFontFamily: "",
+  setTerminalCjkFontFamily: (font) => set({ terminalCjkFontFamily: font }),
+
   // Terminal Theme
   terminalThemeId: "termius-dark",
   setTerminalThemeId: (id) => set({ terminalThemeId: id }),
@@ -151,6 +155,9 @@ export const createTerminalSlice: StateCreator<
     set({ terminalSelectionToolbar: enabled }),
   terminalBellSound: false,
   setTerminalBellSound: (enabled) => set({ terminalBellSound: enabled }),
+  terminalWordSeparator: ' ()[]{}\'"',
+  setTerminalWordSeparator: (separator) =>
+    set({ terminalWordSeparator: separator }),
   terminalDrawBoldInBrightColors: true,
   setTerminalDrawBoldInBrightColors: (enabled) =>
     set({ terminalDrawBoldInBrightColors: enabled }),

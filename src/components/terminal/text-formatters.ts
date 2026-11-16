@@ -334,13 +334,13 @@ const FORMATTERS: TextFormatter[] = [
       // 形式 1: 八进制数字（3 或 4 位，如 755 或 0755）
       if (/^[0-7]{3,4}$/.test(s)) return true;
       // 形式 2: 符号权限字符串（9 或 10 位，如 rwxr-xr-x 或 -rwxr-xr-x 或 drwxrwxrwx）
-      if (/^[-dlcbsp]?([r\-][w\-][xsS\-]){2}[r\-][w\-][xtT\-]$/.test(s)) return true;
+      if (/^[-dlcbsp]?([r-][w-][xsS-]){2}[r-][w-][xtT-]$/.test(s)) return true;
       return false;
     },
     format: (t) => {
       const s = t.trim();
       // Case 1: 符号权限串转八进制（如 -rwxr-xr-x -> 0755）
-      const symMatch = s.match(/^([-dlcbsp])?([r\-][w\-][xsS\-])([r\-][w\-][xsS\-])([r\-][w\-][xtT\-])$/);
+      const symMatch = s.match(/^([-dlcbsp])?([r-][w-][xsS-])([r-][w-][xsS-])([r-][w-][xtT-])$/);
       if (symMatch) {
         const fileTypeChar = symMatch[1];
         const triplets = [symMatch[2], symMatch[3], symMatch[4]];

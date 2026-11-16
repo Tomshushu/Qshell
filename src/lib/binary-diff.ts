@@ -57,6 +57,8 @@ const DEFAULT_BYTES_PER_ROW = 16;
 const DEFAULT_CHUNK_SIZE = 64 * 1024;
 const DEFAULT_YIELD_EVERY_CHUNKS = 4;
 const DEFAULT_MAX_DIFF_OFFSETS = 100_000;
+/** 差异行索引收集上限：100MB 全异文件按 16B/行会产生约 650 万项，需截断防止内存爆炸 */
+const MAX_CHANGED_ROW_INDICES = 200_000;
 
 function toUint8Array(input: Uint8Array | ArrayBuffer): Uint8Array {
   return input instanceof Uint8Array ? input : new Uint8Array(input);
@@ -317,6 +319,8 @@ export interface BinaryDiffSummary {
   totalRows: number;
   bytesPerRow: number;
   changedRowIndices: number[];
+  /** changedRowIndices 达到收集上限被截断时置 true，消费方可据此提示差异导航不完整 */
+  changedRowIndicesTruncated?: boolean;
 }
 
 export interface BinaryDiffScanOptions {
@@ -428,6 +432,7 @@ export async function scanBinaryBuffersSummary(
   let equalBytes = 0;
   let diffBytes = 0;
   const changedRowIndices: number[] = [];
+  let changedRowIndicesTruncated = false;
   let chunkIndex = 0;
 
   for (let chunkOffset = 0; chunkOffset < maxLen; chunkOffset += chunkSize) {
@@ -450,7 +455,11 @@ export async function scanBinaryBuffersSummary(
       }
 
       if (rowHasDiff) {
-        changedRowIndices.push(rowOffset / bytesPerRow);
+        if (changedRowIndices.length < MAX_CHANGED_ROW_INDICES) {
+          changedRowIndices.push(rowOffset / bytesPerRow);
+        } else {
+          changedRowIndicesTruncated = true;
+        }
       }
     }
 
@@ -471,6 +480,7 @@ export async function scanBinaryBuffersSummary(
     totalRows,
     bytesPerRow,
     changedRowIndices,
+    changedRowIndicesTruncated,
   };
 }
 

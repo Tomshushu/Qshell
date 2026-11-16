@@ -195,6 +195,13 @@ export interface TerminalSlice {
   // Terminal Font Family
   terminalFontFamily: string;
   setTerminalFontFamily: (font: string) => void;
+  /**
+   * CJK / 非 ASCII 字体（双重字体第二段）。
+   * 为空表示跟随主字体；非空时拼接为「ASCII 字体, CJK 字体, monospace」字体链，
+   * 让中文/全角符号用独立字体渲染，缓解与 ASCII 混排时的跳格。
+   */
+  terminalCjkFontFamily: string;
+  setTerminalCjkFontFamily: (font: string) => void;
 
   // Terminal Theme
   terminalThemeId: string;
@@ -255,6 +262,9 @@ export interface TerminalSlice {
   setTerminalSelectionToolbar: (enabled: boolean) => void;
   terminalBellSound: boolean;
   setTerminalBellSound: (enabled: boolean) => void;
+  /** 双击选词的分隔符集合（对应 xterm wordSeparator，控制双击选中词边界） */
+  terminalWordSeparator: string;
+  setTerminalWordSeparator: (separator: string) => void;
   terminalDrawBoldInBrightColors: boolean;
   setTerminalDrawBoldInBrightColors: (enabled: boolean) => void;
   /** 终端指令提示开关（命令/参数/路径/动态补全总开关） */

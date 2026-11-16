@@ -5,6 +5,8 @@ import {
   applyDomRendererForeground,
   applyTerminalFontFamilyOption,
   applyTerminalFontSizeOption,
+  applyTerminalWordSeparatorOption,
+  composeTerminalFontFamily,
   resolveBellStyle,
   resolveMinimumContrastRatio,
   syncTerminalBellStyle,
@@ -100,5 +102,36 @@ describe("terminal-options-sync", () => {
     expect(clearRenderMock).toHaveBeenCalledTimes(1);
     expect(clearTextureAtlasMock).toHaveBeenCalledTimes(1);
     expect(fitFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("composes ASCII + CJK font chain with CJK inserted before monospace fallback", () => {
+    // 无 CJK 字体时原样返回主字体
+    expect(composeTerminalFontFamily('"Cascadia Code", monospace', "")).toBe(
+      '"Cascadia Code", monospace',
+    );
+    expect(
+      composeTerminalFontFamily('"Cascadia Code", monospace', undefined),
+    ).toBe('"Cascadia Code", monospace');
+
+    // CJK 字体必须插到通用 monospace 之前
+    expect(
+      composeTerminalFontFamily(
+        '"Cascadia Code", monospace',
+        '"Microsoft YaHei", "微软雅黑"',
+      ),
+    ).toBe('"Cascadia Code", "Microsoft YaHei", "微软雅黑", monospace');
+
+    // 主字体为空时回退 monospace
+    expect(composeTerminalFontFamily("", "SimSun")).toBe("SimSun, monospace");
+    expect(composeTerminalFontFamily("   ", "SimSun")).toBe("SimSun, monospace");
+  });
+
+  it("applies word separator only on change", () => {
+    const { term } = createFakeTerminal();
+    const opts = term.options as unknown as { wordSeparator?: string };
+    opts.wordSeparator = ' ()[]{}\'"';
+    expect(applyTerminalWordSeparatorOption(term, ' ()[]{}\'"')).toBe(false);
+    expect(applyTerminalWordSeparatorOption(term, " -_")).toBe(true);
+    expect(opts.wordSeparator).toBe(" -_");
   });
 });

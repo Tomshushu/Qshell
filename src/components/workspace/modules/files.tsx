@@ -48,7 +48,7 @@ import { Z_LAYER } from '@/lib/z-layer'
 import { useShortcutStore } from '@/store/shortcut-store'
 import { CodeEditor } from '@/components/ui/code-editor'
 import { sshService } from '@/services/ssh-service'
-import { backend } from '@/services/api'
+import { backend, isTauri } from '@/services/api'
 import { FilePermissionsModal } from './file-permissions-modal'
 import { ErrorDialog } from '@/components/ui/error-dialog'
 import { formatSftpError, isSftpConnectionError } from '@/lib/sftp-error'
@@ -1433,35 +1433,59 @@ export function FilesModule({
   // 活跃外部编辑会话：监听后端广播的启动/停止事件，支持在本模块内停止 watcher。
   // 这样即便未打开 SFTP 面板，从 Files 启动的外部编辑也不会成为无人管理的孤儿会话。
   useEffect(() => {
+    // 非 Tauri 环境（浏览器预览 / Vitest）没有 window.__TAURI_INTERNALS__，
+    // @tauri-apps/api/event 的 listen() 会同步抛 TypeError。此处必须在注册前拦截，
+    // 否则会产生未处理的 Promise rejection 并污染整个测试进程。
+    if (!isTauri) return
     let disposed = false
     let unlistenStarted: (() => void) | undefined
     let unlistenStopped: (() => void) | undefined
-    // 初始加载当前服务器的活跃会话
-    void backend?.files?.listActiveExternalEdits?.().then((list) => {
-      if (disposed || !Array.isArray(list)) return
-      setActiveExternalEdits(
-        list
-          .filter((s) => s.serverId === serverId)
-          .map((s) => ({ sessionId: s.sessionId, fileName: s.fileName, remotePath: s.remotePath })),
-      )
-    }).catch(() => {})
-    void import('@tauri-apps/api/event').then(({ listen }) => {
-      if (disposed) return
-      void listen<{ sessionId: string; fileName: string; remotePath: string; serverId: string }>(
-        'files:external-file-started',
-        (ev) => {
-          if (disposed || ev.payload.serverId !== serverId) return
-          setActiveExternalEdits((prev) => [
-            ...prev.filter((s) => s.sessionId !== ev.payload.sessionId),
-            { sessionId: ev.payload.sessionId, fileName: ev.payload.fileName, remotePath: ev.payload.remotePath },
-          ])
-        },
-      ).then((un) => { if (disposed) un(); else unlistenStarted = un })
-      void listen<{ sessionId: string }>('files:external-file-stopped', (ev) => {
+
+    void (async () => {
+      // 初始加载当前服务器的活跃会话
+      try {
+        const list = await backend?.files?.listActiveExternalEdits?.()
+        if (disposed || !Array.isArray(list)) return
+        setActiveExternalEdits(
+          list
+            .filter((s) => s && s.serverId === serverId)
+            .map((s) => ({ sessionId: s.sessionId, fileName: s.fileName, remotePath: s.remotePath })),
+        )
+      } catch {
+        // 后端暂不可用（启动竞态 / 断连），保持空列表即可，不影响文件模块本身
+      }
+
+      try {
+        const { listen } = await import('@tauri-apps/api/event')
         if (disposed) return
-        setActiveExternalEdits((prev) => prev.filter((s) => s.sessionId !== ev.payload.sessionId))
-      }).then((un) => { if (disposed) un(); else unlistenStopped = un })
-    })
+        const results = await Promise.allSettled([
+          listen<{ sessionId: string; fileName: string; remotePath: string; serverId: string }>(
+            'files:external-file-started',
+            (ev) => {
+              if (disposed || ev.payload?.serverId !== serverId) return
+              setActiveExternalEdits((prev) => [
+                ...prev.filter((s) => s.sessionId !== ev.payload.sessionId),
+                { sessionId: ev.payload.sessionId, fileName: ev.payload.fileName, remotePath: ev.payload.remotePath },
+              ])
+            },
+          ),
+          listen<{ sessionId: string }>('files:external-file-stopped', (ev) => {
+            if (disposed) return
+            setActiveExternalEdits((prev) => prev.filter((s) => s.sessionId !== ev.payload?.sessionId))
+          }),
+        ])
+        if (disposed) {
+          // cleanup 早于注册完成：拿到句柄后立刻注销，避免监听器泄漏
+          for (const r of results) if (r.status === 'fulfilled') r.value()
+          return
+        }
+        if (results[0].status === 'fulfilled') unlistenStarted = results[0].value
+        if (results[1].status === 'fulfilled') unlistenStopped = results[1].value
+      } catch {
+        // WebView 尚未注入 Tauri IPC 时静默降级，下次挂载会重新注册
+      }
+    })()
+
     return () => {
       disposed = true
       unlistenStarted?.()

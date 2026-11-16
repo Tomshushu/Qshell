@@ -191,6 +191,14 @@ export const useAppStore = create<AppState>()(
           // 迁移：补充新增的高亮规则（IPv6 / URL / Email / Port）。按 id 去重追加到
           // 老用户已持久化的规则之后，不影响其自定义规则；全新用户已在默认数组里带上。
           if (Array.isArray(state.terminalHighlightRules)) {
+            // 持久化/同步数据可能含 null 或缺字段元素，terminal.tsx 会直接拿
+            // rule.regex 构造 RegExp，脏元素会让冷启动崩溃。先做元素级清洗。
+            state.terminalHighlightRules = state.terminalHighlightRules.filter(
+              (r) =>
+                Boolean(r) &&
+                typeof r.id === "string" &&
+                typeof r.regex === "string",
+            );
             const existingIds = new Set(
               state.terminalHighlightRules.map((r) => r.id),
             );
@@ -353,7 +361,7 @@ export const useAppStore = create<AppState>()(
                   if (sshService.isAvailable()) {
                     console.error("Failed to sync transfer rate limit on rehydrate:", err);
                   }
-                } catch {}
+                } catch { /* 忽略后端未就绪时的同步失败 */ }
               });
           }
           if (typeof sshService.setExclusionConfig === "function") {
@@ -379,7 +387,7 @@ export const useAppStore = create<AppState>()(
                   if (sshService.isAvailable()) {
                     console.error("Failed to sync exclusion config on rehydrate:", err);
                   }
-                } catch {}
+                } catch { /* 忽略后端未就绪时的同步失败 */ }
               });
           }
           if (typeof sshService.setSymlinkPolicy === "function") {
@@ -390,7 +398,7 @@ export const useAppStore = create<AppState>()(
                   if (sshService.isAvailable()) {
                     console.error("Failed to sync symlink policy on rehydrate:", err);
                   }
-                } catch {}
+                } catch { /* 忽略后端未就绪时的同步失败 */ }
               });
           }
           const rawConcurrency = state.sftpTransferConcurrency;

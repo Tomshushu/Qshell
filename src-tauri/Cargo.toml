@@ -68,6 +68,9 @@ lazy_static = "1"
 serialport = "4.6"
 # portable-pty: 本地 Shell（Windows ConPTY / macOS & Linux PTY）跨平台伪终端后端
 portable-pty = "0.9"
+# zip: X Server 插件包离线导入。仅启用 deflate（最常见压缩方式），避免使用外部
+# `tar -xf` 带来的 zip-slip 与 Windows/Unix 行为差异；路径由 enclosed_name 校验。
+zip = { version = "4.6", default-features = false, features = ["deflate-flate2"] }
 
 # Windows API（用于获取全局鼠标位置和按键状态，支持跨窗口拖拽合并；磁盘空间查询）
 [target.'cfg(target_os = "windows")'.dependencies]

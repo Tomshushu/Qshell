@@ -1,6 +1,7 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { SlidersHorizontal, Loader2, Shield, Plus, X } from 'lucide-react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
@@ -35,6 +36,8 @@ function BatchEditForm({
 
   const [authProfiles, setAuthProfiles] = useState<AuthProfile[]>([])
   const [saving, setSaving] = useState(false)
+  const [confirmUnlinkOpen, setConfirmUnlinkOpen] = useState(false)
+  const pendingPatchRef = useRef<ServerBatchPatch | null>(null)
 
   // 字段启用开关（未勾选的字段不会出现在 patch 中）
   const [applyTags, setApplyTags] = useState(false)
@@ -98,6 +101,27 @@ function BatchEditForm({
     (applyAuthProfile && Boolean(authProfileId)) ||
     (!applyAuthProfile && servers.some((s) => Boolean(s.authProfileId)))
 
+  const doSave = async (patch: ServerBatchPatch) => {
+    setSaving(true)
+    try {
+      const res = await sshService.batchUpdateServers(
+        servers.map((s) => s.id),
+        patch,
+      )
+      if (!res.success) {
+        toast.error(res.error || t('batch_edit_failed'))
+        return
+      }
+      await loadServers()
+      toast.success(t('batch_edit_success', { count: servers.length }))
+      onClose()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!hasAnyField || servers.length === 0) return
@@ -120,12 +144,11 @@ function BatchEditForm({
     }
     if (applyAuthProfile) {
       // 下拉默认首项是「解除绑定」（空串）。勾选了开关却忘记选具体凭证时，
-      // 会造成批量解绑误操作；这里要求二次确认，避免一次性清空所有选中服务器的绑定。
+      // 会造成批量解绑误操作；这里用自定义 ConfirmDialog 二次确认，替代原生 window.confirm。
       if (!authProfileId) {
-        const ok = window.confirm(
-          `${t('batch_edit_auth_unlink')} · ${t('batch_edit_title')} (${servers.length})\n${t('batch_edit_auth_profile')}`,
-        )
-        if (!ok) return
+        pendingPatchRef.current = patch
+        setConfirmUnlinkOpen(true)
+        return
       }
       patch.authProfileId = authProfileId
     }
@@ -133,28 +156,12 @@ function BatchEditForm({
       patch.terminalType = terminalType
     }
 
-    setSaving(true)
-    try {
-      const res = await sshService.batchUpdateServers(
-        servers.map((s) => s.id),
-        patch,
-      )
-      if (!res.success) {
-        toast.error(res.error || t('batch_edit_failed'))
-        return
-      }
-      await loadServers()
-      toast.success(t('batch_edit_success', { count: servers.length }))
-      onClose()
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : String(err))
-    } finally {
-      setSaving(false)
-    }
+    await doSave(patch)
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-3 mt-1">
+    <>
+      <form onSubmit={handleSubmit} className="space-y-3 mt-1">
       {/* 1. 标签 */}
       <div className="rounded-md border border-border/60 bg-muted/20 p-2.5 space-y-2">
         <div className="flex items-center justify-between gap-2">
@@ -369,7 +376,27 @@ function BatchEditForm({
           {t('batch_edit_apply', { count: servers.length })}
         </Button>
       </div>
-    </form>
+      </form>
+      <ConfirmDialog
+        open={confirmUnlinkOpen}
+        variant="destructive"
+        title={t('batch_edit_auth_unlink')}
+        description={`${t('batch_edit_title')} (${servers.length}) · ${t('batch_edit_auth_profile')}`}
+        onConfirm={() => {
+          const patch = pendingPatchRef.current
+          pendingPatchRef.current = null
+          setConfirmUnlinkOpen(false)
+          if (patch) {
+            patch.authProfileId = ''
+            void doSave(patch)
+          }
+        }}
+        onCancel={() => {
+          pendingPatchRef.current = null
+          setConfirmUnlinkOpen(false)
+        }}
+      />
+    </>
   )
 }
 

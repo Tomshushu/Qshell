@@ -185,7 +185,7 @@ export function friendlyError(raw: string): FriendlyError {
   // 若原文本包含底层技术报错标志，绝不裸露给用户
   if (translated !== raw || /failed|error|connection|os error|refused|disconnect/i.test(raw)) {
     // 依然残留长串未翻译技术英文时，用通用友好连接失败文案兜底
-    const isStillTechnicalEnglish = /^[a-zA-Z0-9_\s:.,\(\)\/-]+$/.test(translated) && translated.length > 5
+    const isStillTechnicalEnglish = /^[a-zA-Z0-9_\s:.,()/-]+$/.test(translated) && translated.length > 5
     const finalMsg = isStillTechnicalEnglish
       ? translate('err_generic_conn_failed') || '连接建立失败：未能成功连接至远端主机，请检查网络与服务状态'
       : translated

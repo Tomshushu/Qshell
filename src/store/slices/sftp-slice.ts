@@ -49,7 +49,7 @@ export const loadLegacyBookmarks = (): Record<string, string[]> => {
               result[scopeKey] = parsed;
             }
           }
-        } catch {}
+        } catch { /* 忽略单条历史书签解析失败 */ }
       }
     }
     // 同一服务器的历史书签相互互通合并（SFTP 与工作台）
@@ -70,7 +70,7 @@ export const loadLegacyBookmarks = (): Record<string, string[]> => {
       result[sftpKey] = merged;
       result[wsKey] = merged;
     }
-  } catch {}
+  } catch { /* 忽略 localStorage 不可用 */ }
   return result;
 };
 
@@ -79,7 +79,7 @@ const getInitialWorkspaceFileSortField = (): 'name' | 'size' | 'modifiedTime' =>
   try {
     const saved = localStorage.getItem('qshell.workspace.files.sortField');
     if (saved === 'name' || saved === 'size' || saved === 'modifiedTime') return saved;
-  } catch {}
+  } catch { /* 忽略读取失败 */ }
   return 'name';
 };
 
@@ -88,7 +88,7 @@ const getInitialWorkspaceFileSortDirection = (): 'asc' | 'desc' => {
   try {
     const saved = localStorage.getItem('qshell.workspace.files.sortDirection');
     if (saved === 'asc' || saved === 'desc') return saved;
-  } catch {}
+  } catch { /* 忽略读取失败 */ }
   return 'asc';
 };
 
@@ -97,7 +97,7 @@ const getInitialWorkspaceFileShowHidden = (): boolean => {
   try {
     const saved = localStorage.getItem('qshell.workspace.files.showHidden');
     if (saved !== null) return saved === 'true';
-  } catch {}
+  } catch { /* 忽略读取失败 */ }
   return true;
 };
 
@@ -165,7 +165,7 @@ export const createSftpSlice: StateCreator<AppState, [], [], SftpSlice> = (
       localStorage.setItem('qshell.sftp.local.showHidden', String(show));
       localStorage.setItem('qshell.sftp.remote.showHidden', String(show));
       localStorage.setItem('qshell.workspace.files.showHidden', String(show));
-    } catch {}
+    } catch { /* 忽略读取失败 */ }
   },
   // 以下两项保留向后兼容与云端同步字段形状，写入时统一触发全局同步
   sftpLocalShowHidden: getInitialWorkspaceFileShowHidden(),
@@ -180,7 +180,7 @@ export const createSftpSlice: StateCreator<AppState, [], [], SftpSlice> = (
       localStorage.setItem('qshell.sftp.local.showHidden', String(show));
       localStorage.setItem('qshell.sftp.remote.showHidden', String(show));
       localStorage.setItem('qshell.workspace.files.showHidden', String(show));
-    } catch {}
+    } catch { /* 忽略读取失败 */ }
   },
   sftpRemoteShowHidden: getInitialWorkspaceFileShowHidden(),
   setSftpRemoteShowHidden: (show) => {
@@ -194,7 +194,7 @@ export const createSftpSlice: StateCreator<AppState, [], [], SftpSlice> = (
       localStorage.setItem('qshell.sftp.local.showHidden', String(show));
       localStorage.setItem('qshell.sftp.remote.showHidden', String(show));
       localStorage.setItem('qshell.workspace.files.showHidden', String(show));
-    } catch {}
+    } catch { /* 忽略读取失败 */ }
   },
   // SFTP 本地面板默认排序：默认 'name' / 'asc'
   sftpLocalSortField: 'name',
@@ -202,14 +202,14 @@ export const createSftpSlice: StateCreator<AppState, [], [], SftpSlice> = (
     set({ sftpLocalSortField: field });
     try {
       localStorage.setItem('qshell.sftp.local.sortField', field);
-    } catch {}
+    } catch { /* 忽略读取失败 */ }
   },
   sftpLocalSortOrder: 'asc',
   setSftpLocalSortOrder: (order) => {
     set({ sftpLocalSortOrder: order });
     try {
       localStorage.setItem('qshell.sftp.local.sortOrder', order);
-    } catch {}
+    } catch { /* 忽略读取失败 */ }
   },
   // SFTP 远程面板默认排序：默认 'name' / 'asc'
   sftpRemoteSortField: 'name',
@@ -217,14 +217,14 @@ export const createSftpSlice: StateCreator<AppState, [], [], SftpSlice> = (
     set({ sftpRemoteSortField: field });
     try {
       localStorage.setItem('qshell.sftp.remote.sortField', field);
-    } catch {}
+    } catch { /* 忽略读取失败 */ }
   },
   sftpRemoteSortOrder: 'asc',
   setSftpRemoteSortOrder: (order) => {
     set({ sftpRemoteSortOrder: order });
     try {
       localStorage.setItem('qshell.sftp.remote.sortOrder', order);
-    } catch {}
+    } catch { /* 忽略读取失败 */ }
   },
   // SFTP 默认视图模式（向后兼容）：默认 'list'
   sftpDefaultViewMode: "list",
@@ -330,7 +330,7 @@ export const createSftpSlice: StateCreator<AppState, [], [], SftpSlice> = (
       if (siblingKey) {
         localStorage.setItem(scopeKeyToLegacyKey(siblingKey), JSON.stringify(bookmarks));
       }
-    } catch {}
+    } catch { /* 忽略读取失败 */ }
   },
   setAllPathBookmarks: (all) => {
     set((prev) => ({
@@ -345,7 +345,7 @@ export const createSftpSlice: StateCreator<AppState, [], [], SftpSlice> = (
           localStorage.setItem(scopeKeyToLegacyKey(scopeKey), JSON.stringify(list));
         }
       }
-    } catch {}
+    } catch { /* 忽略读取失败 */ }
   },
   addPathBookmark: (scopeKey, path) => {
     if (!path) return false;
@@ -373,7 +373,7 @@ export const createSftpSlice: StateCreator<AppState, [], [], SftpSlice> = (
       if (siblingKey) {
         localStorage.setItem(scopeKeyToLegacyKey(siblingKey), JSON.stringify(next));
       }
-    } catch {}
+    } catch { /* 忽略读取失败 */ }
     return true;
   },
   removePathBookmark: (scopeKey, path) => {
@@ -400,7 +400,7 @@ export const createSftpSlice: StateCreator<AppState, [], [], SftpSlice> = (
       if (siblingKey) {
         localStorage.setItem(scopeKeyToLegacyKey(siblingKey), JSON.stringify(next));
       }
-    } catch {}
+    } catch { /* 忽略读取失败 */ }
   },
 
   // 工作台文件模块偏好
@@ -409,14 +409,14 @@ export const createSftpSlice: StateCreator<AppState, [], [], SftpSlice> = (
     set({ workspaceFileSortField: field });
     try {
       localStorage.setItem('qshell.workspace.files.sortField', field);
-    } catch {}
+    } catch { /* 忽略读取失败 */ }
   },
   workspaceFileSortDirection: getInitialWorkspaceFileSortDirection(),
   setWorkspaceFileSortDirection: (dir) => {
     set({ workspaceFileSortDirection: dir });
     try {
       localStorage.setItem('qshell.workspace.files.sortDirection', dir);
-    } catch {}
+    } catch { /* 忽略读取失败 */ }
   },
   workspaceFileShowHidden: getInitialWorkspaceFileShowHidden(),
   setWorkspaceFileShowHidden: (show) => {
@@ -430,6 +430,6 @@ export const createSftpSlice: StateCreator<AppState, [], [], SftpSlice> = (
       localStorage.setItem('qshell.sftp.local.showHidden', String(show));
       localStorage.setItem('qshell.sftp.remote.showHidden', String(show));
       localStorage.setItem('qshell.workspace.files.showHidden', String(show));
-    } catch {}
+    } catch { /* 忽略读取失败 */ }
   },
 });

@@ -182,12 +182,45 @@ export interface TransferQueueListenerService {
   onTransferFailures?: (
     callback: (data: TransferFailuresData) => void,
   ) => (() => void) | null | void;
+  /** 真正取消后端传输（按 transferId 触发 cancel flag）。可选，缺省时取消只改前端状态。 */
+  cancelTransfer?: (transferId: string) => Promise<unknown>;
 }
 
 let listenerRefCount = 0;
 let activeListenerService: TransferQueueListenerService | null = null;
 let activeProgressUnsub: (() => void) | null = null;
 let activeFailuresUnsub: (() => void) | null = null;
+let activeCancelTransfer: ((transferId: string) => Promise<unknown>) | null = null;
+
+// 高频字节级进度事件合批：Map 按 transferId 只保留最新一条，rAF 帧末统一 flush，
+// 避免逐事件全量 set() 导致主线程抖动（sftp-panel 本地记录已采用同样策略）。
+let progressBatch = new Map<string, TransferProgressData>();
+let progressRafId: number | null = null;
+
+function flushProgressBatch(): void {
+  progressRafId = null;
+  const batch = progressBatch;
+  progressBatch = new Map();
+  if (batch.size === 0) return;
+  const store = useTransferQueueStore.getState();
+  for (const data of batch.values()) {
+    store.upsertFromProgressEvent(data);
+  }
+}
+
+function scheduleProgressFlush(): void {
+  if (progressRafId !== null) return;
+  const isTestEnv =
+    typeof import.meta !== "undefined" &&
+    (import.meta as { env?: { MODE?: string } }).env?.MODE === "test";
+  if (!isTestEnv && typeof requestAnimationFrame === "function") {
+    progressRafId = requestAnimationFrame(flushProgressBatch);
+  } else {
+    // 测试环境（jsdom 可能 polyfill rAF）或无 rAF 环境：同步 flush，
+    // 保持进度事件同步更新语义，避免依赖同步断言的测试出现时序回归。
+    flushProgressBatch();
+  }
+}
 
 function emitQueueSync(
   action: "pause" | "resume" | "cancel" | "remove" | "clearCompleted",
@@ -201,6 +234,16 @@ function emitQueueSync(
       }),
     );
   }
+}
+
+function requestBackendCancel(id: string): void {
+  const cancel = activeCancelTransfer;
+  if (!cancel) return;
+  void Promise.resolve()
+    .then(() => cancel(id))
+    .catch(() => {
+      // 后端取消失败不影响前端状态，传输最终会以 failed 收尾
+    });
 }
 
 function pruneRegisteredMeta(now: number): void {
@@ -300,10 +343,13 @@ export function acquireTransferQueueListeners(
     }
     listenerRefCount = 0;
     activeListenerService = service;
+    activeCancelTransfer =
+      typeof service.cancelTransfer === "function" ? service.cancelTransfer : null;
 
     const unsubProgress = service.onTransferProgress((data) => {
       if (data.phase === "packing" || data.phase === "packed") return;
-      useTransferQueueStore.getState().upsertFromProgressEvent(data);
+      progressBatch.set(data.transferId, data);
+      scheduleProgressFlush();
     });
     activeProgressUnsub = typeof unsubProgress === "function" ? unsubProgress : null;
 
@@ -342,6 +388,7 @@ export function acquireTransferQueueListeners(
         activeFailuresUnsub = null;
       }
       activeListenerService = null;
+      activeCancelTransfer = null;
     }
   };
 }
@@ -1091,6 +1138,11 @@ export const useTransferQueueStore = create<TransferQueueState>((set, get) => ({
   pauseTask: (id, now = Date.now()) => {
     rateSamples.delete(id);
     activeRunTokens.delete(id);
+    // 暂停正在传输的任务需要真正取消后端传输（后端不支持挂起，只能 cancel flag），
+    // 否则带宽与临时文件会继续被占用。queued/scheduled 尚未启动，无需触碰后端。
+    if (get().tasks.some((t) => t.id === id && t.status === "transferring")) {
+      requestBackendCancel(id);
+    }
     let pausedStatus: UnifiedTransferStatus | undefined;
     set((state) => ({
       tasks: state.tasks.map((t) => {
@@ -1136,6 +1188,11 @@ export const useTransferQueueStore = create<TransferQueueState>((set, get) => ({
   cancelTask: (id, now = Date.now()) => {
     rateSamples.delete(id);
     activeRunTokens.delete(id);
+    // 取消进行中的传输要真正触达后端，否则仅前端标记为 cancelled，
+    // 后端 chunk 循环仍在占用带宽并保留临时文件。
+    if (get().tasks.some((t) => t.id === id && t.status === "transferring")) {
+      requestBackendCancel(id);
+    }
     let cancelledStatus: UnifiedTransferStatus | undefined;
     set((state) => ({
       tasks: state.tasks.map((t) => {
@@ -1193,11 +1250,14 @@ export const useTransferQueueStore = create<TransferQueueState>((set, get) => ({
   clearCompleted: () => {
     set((state) => {
       const next = state.tasks.filter((t) => {
+        // 「清空已完成」只清理成功/部分/跳过的任务。
+        // cancelled 与 failed 属于需要用户确认的失败态：UI 为它们提供逐项「移除」，
+        // 且按钮的可见条件也不包含这两种状态，故这里不能顺带删掉，
+        // 否则用户点一次「清空已完成」就会丢失所有已取消记录且无任何提示。
         if (
           t.status === "completed" ||
           t.status === "partial" ||
-          t.status === "skipped" ||
-          t.status === "cancelled"
+          t.status === "skipped"
         ) {
           rateSamples.delete(t.id);
           activeRunTokens.delete(t.id);

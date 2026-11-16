@@ -470,7 +470,7 @@ export function TransferPanel() {
 
       {/* 面板 */}
       {isOpen && (
-        <Card className="theme-floating-panel absolute top-full right-0 mt-1 z-popup w-96 border-border/60 h-[min(520px,calc(100vh-76px))] flex flex-col bg-popover/98 backdrop-blur-xl shadow-2xl">
+        <Card className="theme-floating-panel absolute top-full right-0 mt-1 z-popup w-96 max-w-[calc(100vw-1rem)] border-border/60 h-[min(520px,calc(100vh-76px))] flex flex-col bg-popover/98 backdrop-blur-xl shadow-2xl">
           {/* Tab 切换：upload / download / s2s */}
           <div className="flex border-b flex-shrink-0" role="tablist">
             <TabButton

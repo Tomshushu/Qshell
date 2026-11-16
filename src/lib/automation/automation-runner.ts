@@ -55,6 +55,8 @@ class AutomationRegistry {
   private sessions = new Map<string, SessionAutomationState>();
   private listeners = new Set<() => void>();
   private snapshotCache = new Map<string, AutomationRuntimeSnapshot>();
+  /** 每个 tabId 当前挂载的 host effect 数量（切换终端时会出现 1 -> 0 -> 1） */
+  private hostRefs = new Map<string, number>();
 
   public subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
@@ -64,14 +66,16 @@ class AutomationRegistry {
   }
 
   public registerHost(host: AutomationSessionHost): () => void {
-    const existing = this.sessions.get(host.tabId);
+    const tabId = host.tabId;
+    this.hostRefs.set(tabId, (this.hostRefs.get(tabId) ?? 0) + 1);
+    const existing = this.sessions.get(tabId);
     if (existing) {
       // termId 变化（切换活动终端）时只更新触发器上下文、保留 recorder 与运行中的脚本/宏，
       // 避免切换标签就静默丢失录制内容并中止自动化。
       existing.host = host;
       existing.triggerEngine.updateContext(host.termId, host.getContext);
-      this.notify(host.tabId);
-      return () => this.unregisterHost(host.tabId, existing);
+      this.notify(tabId);
+      return this.createHostRelease(tabId);
     }
 
     const rules = loadTriggerRules();
@@ -111,22 +115,41 @@ class AutomationRegistry {
     };
 
     state.triggerEngine.start();
-    this.sessions.set(host.tabId, state);
-    this.notify(host.tabId);
+    this.sessions.set(tabId, state);
+    this.notify(tabId);
 
-    return () => this.unregisterHost(host.tabId, state);
+    return this.createHostRelease(tabId);
   }
 
-  private unregisterHost(tabId: string, state: SessionAutomationState): void {
-    const cur = this.sessions.get(tabId);
-    if (cur === state) {
-      cur.triggerEngine.stop();
-      cur.activeSandbox?.stop();
-      cur.activeMacro?.stop();
-      this.sessions.delete(tabId);
-      this.snapshotCache.delete(tabId);
-      this.notify(tabId);
-    }
+  /**
+   * 释放一次 host 挂载。React 切换活动终端时会在同一个 passive-effect flush 内
+   * 先执行旧 cleanup、再执行新 setup，如果这里立刻销毁会话，下面「保留录制/脚本」
+   * 的 existing 分支就永远不会生效。因此引用计数归零后延迟到微任务再判定：
+   * 只要新的 registerHost 及时把引用补回，会话就继续存活。
+   */
+  private createHostRelease(tabId: string): () => void {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const next = (this.hostRefs.get(tabId) ?? 1) - 1;
+      if (next > 0) {
+        this.hostRefs.set(tabId, next);
+        return;
+      }
+      this.hostRefs.delete(tabId);
+      queueMicrotask(() => {
+        if (this.hostRefs.has(tabId)) return;
+        const cur = this.sessions.get(tabId);
+        if (!cur) return;
+        cur.triggerEngine.stop();
+        cur.activeSandbox?.stop();
+        cur.activeMacro?.stop();
+        this.sessions.delete(tabId);
+        this.snapshotCache.delete(tabId);
+        this.notify(tabId);
+      });
+    };
   }
 
   public updateHostSessionId(tabId: string, termId: string, sessionId?: string): void {

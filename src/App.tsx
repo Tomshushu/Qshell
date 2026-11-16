@@ -5,6 +5,7 @@ import { StatusBar } from '@/components/layout/status-bar'
 import { SplitLayoutView } from '@/components/layout/split-layout-view'
 import { Dashboard } from '@/pages/dashboard'
 import { useAppStore } from '@/store'
+import { acquireTransferQueueListeners, useTransferQueueStore } from '@/store/transfer-queue-store'
 import { useKeyboardShortcuts } from '@/hooks/use-keyboard-shortcuts'
 import { useOverflowTitle } from '@/hooks/use-overflow-title'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -56,6 +57,48 @@ function AppContent() {
   useKeyboardShortcuts()
   useOverflowTitle()
   useAppIdleLock()
+
+  // 统一传输队列的运行时必须常驻：进度订阅与 1s 调度器原先只挂在
+  // TransferPanel / SftpPanel 的 effect 里，关闭 SFTP 标签或文件面板后
+  // 后台传输进度会冻结、定时任务永远不会被启动。这里在应用根组件持有
+  // 一份引用并驱动调度，面板内的定时器只负责 UI 时钟（tickScheduler 幂等）。
+  useEffect(() => {
+    const releaseListeners = acquireTransferQueueListeners(sshService)
+    let timer: number | undefined
+    const stopTimer = () => {
+      if (timer !== undefined) {
+        window.clearInterval(timer)
+        timer = undefined
+      }
+    }
+    const syncTimer = () => {
+      const state = useTransferQueueStore.getState()
+      const needsScheduler = state.tasks.some(
+        (task) => task.status === 'scheduled' || task.status === 'queued',
+      )
+      const hasTransferring = state.tasks.some((task) => task.status === 'transferring')
+      if (!needsScheduler && !hasTransferring) {
+        stopTimer()
+        return
+      }
+      if (timer === undefined) {
+        state.tickScheduler(Date.now())
+        timer = window.setInterval(() => {
+          const now = Date.now()
+          const queue = useTransferQueueStore.getState()
+          queue.tickScheduler(now)
+          queue.decayStaleSpeeds(now)
+        }, 1000)
+      }
+    }
+    syncTimer()
+    const unsubscribe = useTransferQueueStore.subscribe(syncTimer)
+    return () => {
+      unsubscribe()
+      stopTimer()
+      releaseListeners()
+    }
+  }, [])
 
   // 全局设置弹框：唯一 Owner。TabBar / CommandPalette / open-settings 事件都写这个 store，
   // 避免两份 SettingsDialog 各自 Portal 到 body 后互不知情。

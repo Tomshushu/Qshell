@@ -171,7 +171,7 @@ export function tryParseJson(text: string): { success: boolean; data?: unknown; 
     const parsed = JSON.parse(clean);
     if (typeof parsed === "string") {
       const inner = parsed.trim();
-      if (/^[{\[]/.test(inner)) {
+      if (/^[{[]/.test(inner)) {
         try {
           return { success: true, data: JSON.parse(inner) };
         } catch {
@@ -191,7 +191,7 @@ export function tryParseJson(text: string): { success: boolean; data?: unknown; 
           break;
         }
         const trimmed = candidate.trim();
-        if (!/^[{\[]/.test(trimmed)) break;
+        if (!/^[{[]/.test(trimmed)) break;
         try {
           return { success: true, data: JSON.parse(trimmed) };
         } catch {

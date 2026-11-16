@@ -60,6 +60,11 @@ class TerminalOutputBus {
   unregister(id: string): void {
     if (this.observers.delete(id)) {
       this.rebuildSortedCache();
+      // 注销观察者后，各终端流量窗口的 lastDispatchByObserver 里不应再残留其节流时间戳，
+      // 否则会随 trafficByTerm 长期驻留。
+      for (const windowState of this.trafficByTerm.values()) {
+        windowState.lastDispatchByObserver.delete(id);
+      }
     }
   }
 

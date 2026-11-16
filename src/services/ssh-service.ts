@@ -208,17 +208,20 @@ async function withTransferCancelTimeout<T>(promise: Promise<T>, operation: stri
 const aliveSessions = new Set<string>();
 
 /** 带超时保护的 connect Promise 包装（支持交互式 OTP/MFA 动态续期，避免用户输入验证码期间触发 30s 超时） */
-const connectWatchdogs = new Map<string, (timeoutMs: number) => void>();
+// 同一 serverId 允许并发连接（多个 tab 同时连同一台服务器），因此 value 用 Set 保存每个连接的
+// 独立 arm，而不是单个函数。旧实现用 serverId -> arm 一对一时，前一个连接的 finally 会
+// `delete(serverId)` 误删后一个连接的 arm，导致后者的 MFA 续期失效、超时无法被续期。
+const connectWatchdogs = new Map<string, Set<(timeoutMs: number) => void>>();
 let authWatchdogRegistered = false;
 
 function ensureAuthInteractionWatchdog() {
   if (authWatchdogRegistered || !backend) return;
   authWatchdogRegistered = true;
   backend.ssh.onAuthInteractionRequired((req) => {
-    const bump = connectWatchdogs.get(req.serverId);
-    if (bump) {
+    const arms = connectWatchdogs.get(req.serverId);
+    if (arms) {
       const nextMs = Math.max(CONNECT_TIMEOUT_MS, ((req.timeoutSecs || 90) + 15) * 1000);
-      bump(nextMs);
+      for (const bump of arms) bump(nextMs);
     }
   });
 }
@@ -241,14 +244,23 @@ function connectWithTimeout(serverId: string): Promise<ConnectResult> {
     rejectFn = reject;
     arm(CONNECT_TIMEOUT_MS);
   });
-  connectWatchdogs.set(serverId, arm);
+  let arms = connectWatchdogs.get(serverId);
+  if (!arms) {
+    arms = new Set();
+    connectWatchdogs.set(serverId, arms);
+  }
+  arms.add(arm);
   const backendP = backend!.ssh.connect(serverId);
   // Promise.race settle 后，若 backendP 最终 reject 会产生 unhandledrejection。
   // 附加一个空的 catch handler 吞掉后续 rejection，防止全局错误。
   backendP.catch(() => {});
   return Promise.race([backendP, timeout]).finally(() => {
     if (timer) clearTimeout(timer);
-    connectWatchdogs.delete(serverId);
+    const live = connectWatchdogs.get(serverId);
+    if (live) {
+      live.delete(arm);
+      if (live.size === 0) connectWatchdogs.delete(serverId);
+    }
   });
 }
 

@@ -1280,6 +1280,9 @@ pub async fn scp_create_symlink(
     target: &str,
     link_path: &str,
 ) -> Result<CommandResult, String> {
+    if crate::files::remote::is_dangerous_root_path(link_path) {
+        return Ok(CommandResult::err("Refusing to create symlink at dangerous root path".to_string()));
+    }
     let res = ssh_execute_command(
         server_id,
         &format!(
@@ -1297,6 +1300,9 @@ pub async fn scp_create_symlink(
 }
 
 pub async fn scp_mkdir(server_id: &str, path: &str) -> Result<CommandResult, String> {
+    if crate::files::remote::is_dangerous_root_path(path) {
+        return Ok(CommandResult::err("Refusing to create directory at dangerous root path".to_string()));
+    }
     let res = ssh_execute_command(server_id, &format!("mkdir -p -- {}", escape_shell_arg(path.to_string()))).await;
     Ok(if res.exit_code == 0 {
         CommandResult::ok("Directory created")
@@ -1318,6 +1324,11 @@ pub async fn scp_delete(server_id: &str, path: &str) -> Result<CommandResult, St
 }
 
 pub async fn scp_rename(server_id: &str, old_path: &str, new_path: &str) -> Result<CommandResult, String> {
+    if crate::files::remote::is_dangerous_root_path(old_path)
+        || crate::files::remote::is_dangerous_root_path(new_path)
+    {
+        return Ok(CommandResult::err("Refusing to rename to/from dangerous root path".to_string()));
+    }
     let res = ssh_execute_command(
         server_id,
         &format!(

@@ -56,6 +56,7 @@ import {
 import { decodeBase64Bytes, formatSerialHex } from "@/lib/serial-utils";
 import {
   clearAllOutputBusSessions,
+  clearOutputBusSession,
   dispatchTerminalOutputObservers,
 } from "@/lib/terminal-output-bus";
 import { automationRegistry } from "@/lib/automation/automation-runner";
@@ -63,7 +64,9 @@ import {
   applyDomRendererForeground,
   applyTerminalFontFamilyOption,
   applyTerminalFontSizeOption,
+  applyTerminalWordSeparatorOption,
   clearTerminalTextureAtlasSafely,
+  composeTerminalFontFamily,
   resolveBellStyle,
   resolveMinimumContrastRatio,
   syncTerminalBellStyle,
@@ -873,6 +876,8 @@ export function TerminalModule({
   const terminalFontSize = useAppStore((s) => s.terminalFontSize);
   const setTerminalFontSize = useAppStore((s) => s.setTerminalFontSize);
   const terminalFontFamily = useAppStore((s) => s.terminalFontFamily);
+  const terminalCjkFontFamily = useAppStore((s) => s.terminalCjkFontFamily);
+  const terminalCjkFontFamilyRef = useLatestRef(terminalCjkFontFamily);
 
   // 终端主题与高亮配置
   const terminalThemeId = useAppStore((s) => s.terminalThemeId);
@@ -897,6 +902,8 @@ export function TerminalModule({
   const terminalBellSound = useAppStore((s) => s.terminalBellSound);
   // ref 镜像：onBell 回调只注册一次，直接用闭包变量会读到过期值，导致开关改了不生效
   const terminalBellSoundRef = useLatestRef(terminalBellSound ?? false);
+  const terminalWordSeparator = useAppStore((s) => s.terminalWordSeparator);
+  const terminalWordSeparatorRef = useLatestRef(terminalWordSeparator);
   const terminalDrawBoldInBrightColors = useAppStore(
     (s) => s.terminalDrawBoldInBrightColors,
   );
@@ -1702,11 +1709,16 @@ export function TerminalModule({
   // 监听字体类型变化，动态调整所有终端实例的字体并 resize 后端 PTY
   useEffect(() => {
     let cancelled = false;
+    // 双重字体：ASCII 主字体 + 独立 CJK 字体拼接成最终字体链
+    const resolvedFontFamily = composeTerminalFontFamily(
+      terminalFontFamily,
+      terminalCjkFontFamily,
+    );
     const updateFonts = async () => {
       try {
         if (document.fonts && typeof document.fonts.load === "function") {
           // 提取首个字体族名（逗号分隔的 fallback 列表中的第一个），避免 fonts.load 解析失败
-          const primaryFont = terminalFontFamily
+          const primaryFont = resolvedFontFamily
             .split(",")[0]
             .trim()
             .replace(/["']/g, "");
@@ -1724,7 +1736,7 @@ export function TerminalModule({
           applyTerminalFontFamilyOption(
             term,
             fitAddon,
-            terminalFontFamily,
+            resolvedFontFamily,
             fitTerminalSafely,
             (cols, rows) => {
               if (sessionId) sshService.resizeShell(sessionId, cols, rows);
@@ -1740,7 +1752,18 @@ export function TerminalModule({
     return () => {
       cancelled = true;
     };
-  }, [terminalFontFamily]);
+  }, [terminalFontFamily, terminalCjkFontFamily]);
+
+  // 监听双击选词分隔符变化，动态应用到所有终端实例（仅影响选词边界，无需 refit）
+  useEffect(() => {
+    xtermInstances.current.forEach(({ term }) => {
+      try {
+        applyTerminalWordSeparatorOption(term, terminalWordSeparator);
+      } catch (e) {
+        console.warn("[Terminal] Failed to apply word separator:", e);
+      }
+    });
+  }, [terminalWordSeparator]);
 
   // 监听主题变化，动态更新终端的颜色主题样式
   useEffect(() => {
@@ -4256,6 +4279,8 @@ export function TerminalModule({
         const sessionCleanup = () => {
           if (sessionCleanupDone) return;
           sessionCleanupDone = true;
+          // 会话结束时释放该终端在输出总线的流量窗口，避免 trafficByTerm 随开过的会话数无界增长
+          clearOutputBusSession(termId);
           // 会话结束时移除该终端的时间戳偏好，避免 Map 随开过的会话数无界增长
           setShowTimestampsMap((prev) => {
             if (!prev.has(termId)) return prev;
@@ -5068,7 +5093,11 @@ export function TerminalModule({
         cursorBlink: true,
         cursorStyle: "bar",
         fontSize: terminalFontSize,
-        fontFamily: terminalFontFamily,
+        fontFamily: composeTerminalFontFamily(
+          terminalFontFamily,
+          terminalCjkFontFamilyRef.current,
+        ),
+        wordSeparator: terminalWordSeparatorRef.current,
         allowProposedApi: true,
         scrollback: terminalScrollbackLinesRef.current,
         rightClickSelectsWord: true,
@@ -5164,8 +5193,30 @@ export function TerminalModule({
       const osc52Disposable = term.parser.registerOscHandler(52, (value) => {
         if (!terminalCopyPaste) return false;
         try {
-          const encoded = value.slice(value.indexOf(";") + 1);
-          if (!encoded || encoded === "?") return false;
+          const idx = value.indexOf(";");
+          const selection = idx >= 0 ? value.slice(0, idx) : "c";
+          const encoded = idx >= 0 ? value.slice(idx + 1) : value;
+          if (!encoded) return false;
+          // P2-07：读取查询（OSC 52;<sel>;?）—— 读剪贴板并回写 OSC 52 响应
+          if (encoded === "?") {
+            if (navigator.clipboard?.readText) {
+              navigator.clipboard
+                .readText()
+                .then((text) => {
+                  if (!text || !useAppStore.getState().terminalCopyPaste) return;
+                  try {
+                    const bytes = new TextEncoder().encode(text);
+                    let binary = "";
+                    bytes.forEach((b) => (binary += String.fromCharCode(b)));
+                    term.input(`\x1b]52;${selection};${btoa(binary)}\x07`, false);
+                  } catch {
+                    // 终端在剪贴板读取期间被销毁时静默忽略
+                  }
+                })
+                .catch(() => {});
+            }
+            return false;
+          }
           const bytes = Uint8Array.from(atob(encoded), (ch) =>
             ch.charCodeAt(0),
           );
@@ -6599,6 +6650,8 @@ export function TerminalModule({
         const sessionCleanup = () => {
           if (sessionCleanupDone) return;
           sessionCleanupDone = true;
+          // 会话结束时释放该终端在输出总线的流量窗口，避免 trafficByTerm 随开过的会话数无界增长
+          clearOutputBusSession(termId);
           // 会话结束时移除该终端的时间戳偏好，避免 Map 随开过的会话数无界增长
           setShowTimestampsMap((prev) => {
             if (!prev.has(termId)) return prev;

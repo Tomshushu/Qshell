@@ -34,6 +34,9 @@ export default defineConfig([
       'react-hooks/purity': 'off',
       'react-hooks/incompatible-library': 'off',
       'react-hooks/set-state-in-effect': 'off',
+      // React Compiler 会尝试保留手工 useMemo/useCallback，但依赖来自 zustand store
+      // 的可变对象（如 server/activeTab）时无法静态保证不被后续修改，仅属优化提示。
+      'react-hooks/preserve-manual-memoization': 'off',
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
       '@typescript-eslint/no-explicit-any': 'off',
     },

@@ -45,6 +45,7 @@ struct LocalShellSession {
     writer: Arc<Mutex<Option<Box<dyn Write + Send>>>>,
     master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
     child: Arc<Mutex<Option<Box<dyn Child + Send + Sync>>>>,
+    reader_thread: Arc<Mutex<Option<std::thread::JoinHandle<()>>>>,
     is_closed: Arc<AtomicBool>,
     rx_bytes: Arc<AtomicU64>,
     tx_bytes: Arc<AtomicU64>,
@@ -305,8 +306,27 @@ fn close_session_internal(session_id: &str, app: Option<&AppHandle>) -> Result<(
     let _ = sess.writer.lock().unwrap_or_else(|e| e.into_inner()).take();
     let _ = sess.master.lock().unwrap_or_else(|e| e.into_inner()).take();
 
+    // 释放 PTY 句柄后，读取线程会因 read 返回 EOF/Err 而退出；join 回收线程资源。
+    // 若当前即读取线程自身（线程结束时的自清理调用），跳过 join 避免自 join 死锁。
+    if let Some(handle) = sess
+        .reader_thread
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+    {
+        if handle.thread().id() != std::thread::current().id() {
+            let _ = handle.join();
+        }
+    }
+
     if !already_closed {
-        if let Some(app_handle) = app {
+        // 主动调用 ssh_close_shell / 窗口关闭时调用方不传 AppHandle，
+        // 旧实现因此永远不发 ssh:shell-closed，前端终端会停留在「已连接」状态。
+        // 事件发射与调用方解耦：优先用传入的句柄，否则回退到全局 AppHandle。
+        let emitter = app
+            .cloned()
+            .or_else(|| crate::ssh::manager::app_handle().cloned());
+        if let Some(app_handle) = emitter {
             let _ = app_handle.emit(
                 "ssh:shell-closed",
                 ShellOutputData {
@@ -369,20 +389,29 @@ pub fn create_local_shell(
         cmd.cwd(dir);
     }
 
-    let child = pair
+    let mut child = pair
         .slave
         .spawn_command(cmd)
         .map_err(|e| format!("启动本地 Shell '{}' 失败: {}", profile.label, e))?;
     drop(pair.slave);
 
-    let mut reader = pair
-        .master
-        .try_clone_reader()
-        .map_err(|e| format!("获取本地 PTY 读取句柄失败: {}", e))?;
-    let writer = pair
-        .master
-        .take_writer()
-        .map_err(|e| format!("获取本地 PTY 写入句柄失败: {}", e))?;
+    let mut reader = match pair.master.try_clone_reader() {
+        Ok(r) => r,
+        Err(e) => {
+            // 读取句柄获取失败时，已 spawn 的子进程需立即终止，避免遗留孤儿进程
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("获取本地 PTY 读取句柄失败: {}", e));
+        }
+    };
+    let writer = match pair.master.take_writer() {
+        Ok(w) => w,
+        Err(e) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("获取本地 PTY 写入句柄失败: {}", e));
+        }
+    };
 
     let session_id = format!("local-{}", Uuid::new_v4());
     let initial_encoding = TerminalCodec::new(&encoding)
@@ -397,6 +426,7 @@ pub fn create_local_shell(
         writer: Arc::new(Mutex::new(Some(writer))),
         master: Arc::new(Mutex::new(Some(pair.master))),
         child: Arc::new(Mutex::new(Some(child))),
+        reader_thread: Arc::new(Mutex::new(None)),
         is_closed: Arc::new(AtomicBool::new(false)),
         rx_bytes: Arc::new(AtomicU64::new(0)),
         tx_bytes: Arc::new(AtomicU64::new(0)),
@@ -443,7 +473,8 @@ pub fn create_local_shell(
         let sid = session_id.clone();
         let app_clone = app.clone();
         let sess_clone = session.clone();
-        if let Err(e) = std::thread::Builder::new()
+        let session_for_handle = session.clone();
+        match std::thread::Builder::new()
             .name(format!("local-pty-{}", &sid[..sid.len().min(14)]))
             .spawn(move || {
                 let mut codec = TerminalCodec::new(&initial_encoding)
@@ -524,8 +555,16 @@ pub fn create_local_shell(
                 let _ = close_session_internal(&sid, Some(&app_clone));
             })
         {
-            let _ = close_session_internal(&session_id, None);
-            return Err(format!("启动本地 Shell 读取线程失败: {}", e));
+            Ok(handle) => {
+                *session_for_handle
+                    .reader_thread
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(handle);
+            }
+            Err(e) => {
+                let _ = close_session_internal(&session_id, None);
+                return Err(format!("启动本地 Shell 读取线程失败: {}", e));
+            }
         }
     }
 

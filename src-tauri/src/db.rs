@@ -745,16 +745,38 @@ fn column_exists(conn: &Connection, table: &str, column: &str) -> SqliteResult<b
     Ok(false)
 }
 
+fn table_exists(conn: &Connection, table: &str) -> SqliteResult<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        params![table],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+/// 幂等补列：表不存在则跳过（老库可能无此表）；列已存在则跳过（duplicate column）；
+/// 仅真实失败（锁、磁盘满等）向上传播，避免静默留下缺列仍推进 user_version。
+fn add_column_if_missing(conn: &Connection, table: &str, column: &str, ddl: &str) -> SqliteResult<()> {
+    if !table_exists(conn, table)? {
+        return Ok(());
+    }
+    if column_exists(conn, table, column)? {
+        return Ok(());
+    }
+    conn.execute(ddl, [])?;
+    Ok(())
+}
+
 /// 版本化迁移调度入口（兼容 `user_version == 0` 的老库平滑接入）。
 fn apply_schema_migrations(conn: &Connection) -> SqliteResult<()> {
     let mut version = read_schema_version(conn)?;
 
     // v0 -> v1：兼容老版本未追踪版本号的数据库，幂等补齐所有历史列并标定为 v1。
     if version < 1 {
-        migrate_servers_table(conn);
-        migrate_ssh_keys_table(conn);
-        migrate_proxies_table(conn);
-        migrate_server_groups_table(conn);
+        migrate_servers_table(conn)?;
+        migrate_ssh_keys_table(conn)?;
+        migrate_proxies_table(conn)?;
+        migrate_server_groups_table(conn)?;
         write_schema_version(conn, 1)?;
         version = 1;
     }
@@ -834,10 +856,10 @@ fn apply_schema_migrations(conn: &Connection) -> SqliteResult<()> {
 
     // v4 -> v5：新增 servers.session_logging_config 并对历史库做一次完整幂等补列巡检。
     if version < 5 {
-        migrate_servers_table(conn);
-        migrate_ssh_keys_table(conn);
-        migrate_proxies_table(conn);
-        migrate_server_groups_table(conn);
+        migrate_servers_table(conn)?;
+        migrate_ssh_keys_table(conn)?;
+        migrate_proxies_table(conn)?;
+        migrate_server_groups_table(conn)?;
         let tx = conn.unchecked_transaction()?;
         if !column_exists(&tx, "servers", "forward_agent")? {
             tx.execute("ALTER TABLE servers ADD COLUMN forward_agent INTEGER DEFAULT 0", [])?;
@@ -983,8 +1005,8 @@ pub fn forget_compose_project(
 
 /// 老库升级：补齐 servers.group_id 列（服务器分组树）。
 /// 不建外键约束，删除分组时由 server_groups_delete 显式清理关联。
-fn migrate_server_groups_table(conn: &Connection) {
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN group_id TEXT", []);
+fn migrate_server_groups_table(conn: &Connection) -> SqliteResult<()> {
+    add_column_if_missing(conn, "servers", "group_id", "ALTER TABLE servers ADD COLUMN group_id TEXT")
 }
 
 /// 确保「主机」顶级分组存在，并把老库中未分组服务器 / 其它顶级分组挂到「主机」下，形成单一树根。
@@ -1017,72 +1039,71 @@ fn ensure_host_group(conn: &Connection) -> SqliteResult<()> {
 }
 
 /// 老库升级：补齐 ssh_keys 表的新列。
-/// SQLite 的 ALTER TABLE ADD COLUMN 是幂等的失败（重复添加会报错），所以用 try + ignore。
-fn migrate_ssh_keys_table(conn: &Connection) {
-    let _ = conn.execute("ALTER TABLE ssh_keys ADD COLUMN key_type TEXT DEFAULT 'private'", []);
-    let _ = conn.execute("ALTER TABLE ssh_keys ADD COLUMN private_key_content TEXT", []);
-    let _ = conn.execute("ALTER TABLE ssh_keys ADD COLUMN certificate_content TEXT", []);
+/// 表不存在（老库无此表）或列已存在时跳过，仅真实失败向上传播。
+fn migrate_ssh_keys_table(conn: &Connection) -> SqliteResult<()> {
+    add_column_if_missing(conn, "ssh_keys", "key_type", "ALTER TABLE ssh_keys ADD COLUMN key_type TEXT DEFAULT 'private'")?;
+    add_column_if_missing(conn, "ssh_keys", "private_key_content", "ALTER TABLE ssh_keys ADD COLUMN private_key_content TEXT")?;
+    add_column_if_missing(conn, "ssh_keys", "certificate_content", "ALTER TABLE ssh_keys ADD COLUMN certificate_content TEXT")
 }
 
 /// 老库升级：补齐 proxies 表的新列（仅旧库已建表但缺列时生效）。
-fn migrate_proxies_table(conn: &Connection) {
-    let _ = conn.execute("ALTER TABLE proxies ADD COLUMN proxy_type TEXT DEFAULT 'ssh_jump'", []);
-    let _ = conn.execute("ALTER TABLE proxies ADD COLUMN ssh_key_id TEXT", []);
-    let _ = conn.execute("ALTER TABLE proxies ADD COLUMN proxy_username TEXT", []);
-    let _ = conn.execute("ALTER TABLE proxies ADD COLUMN proxy_password TEXT", []);
-    let _ = conn.execute("ALTER TABLE proxies ADD COLUMN connection_timeout INTEGER DEFAULT 30", []);
+fn migrate_proxies_table(conn: &Connection) -> SqliteResult<()> {
+    add_column_if_missing(conn, "proxies", "proxy_type", "ALTER TABLE proxies ADD COLUMN proxy_type TEXT DEFAULT 'ssh_jump'")?;
+    add_column_if_missing(conn, "proxies", "ssh_key_id", "ALTER TABLE proxies ADD COLUMN ssh_key_id TEXT")?;
+    add_column_if_missing(conn, "proxies", "proxy_username", "ALTER TABLE proxies ADD COLUMN proxy_username TEXT")?;
+    add_column_if_missing(conn, "proxies", "proxy_password", "ALTER TABLE proxies ADD COLUMN proxy_password TEXT")?;
+    add_column_if_missing(conn, "proxies", "connection_timeout", "ALTER TABLE proxies ADD COLUMN connection_timeout INTEGER DEFAULT 30")
 }
 
 /// 老库升级：补齐 last_disconnected_at / last_error / target_type / protocol / protocols / rdp_port 列。
-/// SQLite 的 ALTER TABLE ADD COLUMN 是幂等的失败（重复添加会报错），所以用 try + ignore。
-fn migrate_servers_table(conn: &Connection) {
-    // rusqlite 不支持 IF NOT EXISTS for ADD COLUMN，只能 try 并忽略 duplicate column 错误
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN auth_type TEXT DEFAULT 'password'", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN password TEXT", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN private_key_path TEXT", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN private_key_passphrase TEXT", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN tags TEXT DEFAULT '[]'", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN notes TEXT", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN connection_timeout INTEGER DEFAULT 15", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN favorite INTEGER DEFAULT 0", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN status TEXT DEFAULT 'unknown'", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN last_accessed_at INTEGER", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN os_type TEXT", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN os_info TEXT", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN last_disconnected_at INTEGER", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN last_error TEXT", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN target_type TEXT DEFAULT 'linux'", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN protocol TEXT DEFAULT 'ssh'", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN protocols TEXT DEFAULT '[\"ssh\"]'", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN rdp_port INTEGER DEFAULT 3389", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN vnc_port INTEGER DEFAULT 5900", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN vnc_password TEXT", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN bmc_port INTEGER DEFAULT 443", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN bmc_allow_invalid_certs INTEGER DEFAULT 0", []);
+/// 表不存在或列已存在时跳过，仅真实失败（锁/磁盘满）向上传播。
+fn migrate_servers_table(conn: &Connection) -> SqliteResult<()> {
+    add_column_if_missing(conn, "servers", "auth_type", "ALTER TABLE servers ADD COLUMN auth_type TEXT DEFAULT 'password'")?;
+    add_column_if_missing(conn, "servers", "password", "ALTER TABLE servers ADD COLUMN password TEXT")?;
+    add_column_if_missing(conn, "servers", "private_key_path", "ALTER TABLE servers ADD COLUMN private_key_path TEXT")?;
+    add_column_if_missing(conn, "servers", "private_key_passphrase", "ALTER TABLE servers ADD COLUMN private_key_passphrase TEXT")?;
+    add_column_if_missing(conn, "servers", "tags", "ALTER TABLE servers ADD COLUMN tags TEXT DEFAULT '[]'")?;
+    add_column_if_missing(conn, "servers", "notes", "ALTER TABLE servers ADD COLUMN notes TEXT")?;
+    add_column_if_missing(conn, "servers", "connection_timeout", "ALTER TABLE servers ADD COLUMN connection_timeout INTEGER DEFAULT 15")?;
+    add_column_if_missing(conn, "servers", "favorite", "ALTER TABLE servers ADD COLUMN favorite INTEGER DEFAULT 0")?;
+    add_column_if_missing(conn, "servers", "status", "ALTER TABLE servers ADD COLUMN status TEXT DEFAULT 'unknown'")?;
+    add_column_if_missing(conn, "servers", "last_accessed_at", "ALTER TABLE servers ADD COLUMN last_accessed_at INTEGER")?;
+    add_column_if_missing(conn, "servers", "os_type", "ALTER TABLE servers ADD COLUMN os_type TEXT")?;
+    add_column_if_missing(conn, "servers", "os_info", "ALTER TABLE servers ADD COLUMN os_info TEXT")?;
+    add_column_if_missing(conn, "servers", "last_disconnected_at", "ALTER TABLE servers ADD COLUMN last_disconnected_at INTEGER")?;
+    add_column_if_missing(conn, "servers", "last_error", "ALTER TABLE servers ADD COLUMN last_error TEXT")?;
+    add_column_if_missing(conn, "servers", "target_type", "ALTER TABLE servers ADD COLUMN target_type TEXT DEFAULT 'linux'")?;
+    add_column_if_missing(conn, "servers", "protocol", "ALTER TABLE servers ADD COLUMN protocol TEXT DEFAULT 'ssh'")?;
+    add_column_if_missing(conn, "servers", "protocols", "ALTER TABLE servers ADD COLUMN protocols TEXT DEFAULT '[\"ssh\"]'")?;
+    add_column_if_missing(conn, "servers", "rdp_port", "ALTER TABLE servers ADD COLUMN rdp_port INTEGER DEFAULT 3389")?;
+    add_column_if_missing(conn, "servers", "vnc_port", "ALTER TABLE servers ADD COLUMN vnc_port INTEGER DEFAULT 5900")?;
+    add_column_if_missing(conn, "servers", "vnc_password", "ALTER TABLE servers ADD COLUMN vnc_password TEXT")?;
+    add_column_if_missing(conn, "servers", "bmc_port", "ALTER TABLE servers ADD COLUMN bmc_port INTEGER DEFAULT 443")?;
+    add_column_if_missing(conn, "servers", "bmc_allow_invalid_certs", "ALTER TABLE servers ADD COLUMN bmc_allow_invalid_certs INTEGER DEFAULT 0")?;
     // SSH Agent / OpenSSH 证书认证（对齐 Termius/MobaXterm/SecureCRT）
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN agent_identity TEXT", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN certificate_path TEXT", []);
+    add_column_if_missing(conn, "servers", "agent_identity", "ALTER TABLE servers ADD COLUMN agent_identity TEXT")?;
+    add_column_if_missing(conn, "servers", "certificate_path", "ALTER TABLE servers ADD COLUMN certificate_path TEXT")?;
     // 阶段 3：服务器关联 ssh_keys 表的密钥 id（content-based 连接）
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN ssh_key_id TEXT", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN forward_agent INTEGER DEFAULT 0", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN x11_forwarding INTEGER DEFAULT 0", []);
+    add_column_if_missing(conn, "servers", "ssh_key_id", "ALTER TABLE servers ADD COLUMN ssh_key_id TEXT")?;
+    add_column_if_missing(conn, "servers", "forward_agent", "ALTER TABLE servers ADD COLUMN forward_agent INTEGER DEFAULT 0")?;
+    add_column_if_missing(conn, "servers", "x11_forwarding", "ALTER TABLE servers ADD COLUMN x11_forwarding INTEGER DEFAULT 0")?;
     // P0-1 重构：跳板机改为独立 proxies 资源。servers 表存储关联的代理 ID 列表（JSON 数组）
     // 与默认使用的代理 ID。旧字段 jump_host_id 保留以兼容老数据读取，但新代码不再写入。
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN proxy_ids TEXT DEFAULT '[]'", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN default_proxy_id TEXT", []);
+    add_column_if_missing(conn, "servers", "proxy_ids", "ALTER TABLE servers ADD COLUMN proxy_ids TEXT DEFAULT '[]'")?;
+    add_column_if_missing(conn, "servers", "default_proxy_id", "ALTER TABLE servers ADD COLUMN default_proxy_id TEXT")?;
     // 隧道（端口转发）作为独立资源，服务器可关联多个隧道，连接后自动启动
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN tunnel_ids TEXT DEFAULT '[]'", []);
+    add_column_if_missing(conn, "servers", "tunnel_ids", "ALTER TABLE servers ADD COLUMN tunnel_ids TEXT DEFAULT '[]'")?;
     // FinalShell 模式：代理/隧道随服务器内联配置（加密/明文 JSON）
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN proxy_config TEXT", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN tunnels_config TEXT", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN keys_config TEXT", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN serial_config TEXT", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN file_transfer_config TEXT", []);
+    add_column_if_missing(conn, "servers", "proxy_config", "ALTER TABLE servers ADD COLUMN proxy_config TEXT")?;
+    add_column_if_missing(conn, "servers", "tunnels_config", "ALTER TABLE servers ADD COLUMN tunnels_config TEXT")?;
+    add_column_if_missing(conn, "servers", "keys_config", "ALTER TABLE servers ADD COLUMN keys_config TEXT")?;
+    add_column_if_missing(conn, "servers", "serial_config", "ALTER TABLE servers ADD COLUMN serial_config TEXT")?;
+    add_column_if_missing(conn, "servers", "file_transfer_config", "ALTER TABLE servers ADD COLUMN file_transfer_config TEXT")?;
     // Phase 0：设备专属凭据配置（JSON，加密存储），供未来 HTTPS / 容器 / 外部启动器设备使用
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN credentials_config TEXT", []);
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN logon_scripts_config TEXT", []);
+    add_column_if_missing(conn, "servers", "credentials_config", "ALTER TABLE servers ADD COLUMN credentials_config TEXT")?;
+    add_column_if_missing(conn, "servers", "logon_scripts_config", "ALTER TABLE servers ADD COLUMN logon_scripts_config TEXT")?;
     // 回收站：软删除时间戳（NULL=正常，非 NULL=待删除）
-    let _ = conn.execute("ALTER TABLE servers ADD COLUMN deleted_at INTEGER", []);
+    add_column_if_missing(conn, "servers", "deleted_at", "ALTER TABLE servers ADD COLUMN deleted_at INTEGER")?;
 
     // 协议与目标类型是枚举值，统一小写，避免导入数据使用 SSH/RDP 等大写时
     // 校验通过但运行时精确字符串分支落入错误传输层。
@@ -1188,6 +1209,8 @@ fn migrate_servers_table(conn: &Connection) {
             params![normalized, id],
         );
     }
+
+    Ok(())
 }
 
 /// 加密含凭据的 JSON 文本列（幂等：已是 v1 密文则原样返回，兼容导出后再次导入）

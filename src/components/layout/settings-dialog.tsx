@@ -23,7 +23,7 @@ import {
   PRESET_TERMINAL_THEMES,
   getTerminalTheme,
 } from "@/utils/terminal-themes";
-import { FONT_PRESETS } from "@/lib/font-presets";
+import { CJK_FONT_PRESETS, FONT_PRESETS } from "@/lib/font-presets";
 import { TerminalThemeDialog } from "@/components/workspace/modules/terminal-theme-dialog";
 import { TerminalThemePreview } from "@/components/workspace/modules/terminal-theme-preview";
 import { backend } from "@/services/api";
@@ -1025,6 +1025,10 @@ function SettingsPanel({
     setTerminalFontSize,
     terminalFontFamily,
     setTerminalFontFamily,
+    terminalCjkFontFamily,
+    setTerminalCjkFontFamily,
+    terminalWordSeparator,
+    setTerminalWordSeparator,
     terminalThemeId,
     setTerminalThemeId,
     customTerminalThemes,
@@ -2183,6 +2187,43 @@ function SettingsPanel({
                         document.body,
                       )}
                   </div>
+                </div>
+
+                {/* CJK / 非 ASCII 字体（双重字体第二段） */}
+                <div className="flex items-center justify-between gap-4 py-3">
+                  <span className="font-medium text-foreground">
+                    {t("term_cjk_font_family")}
+                  </span>
+                  <select
+                    className="h-8 w-56 border border-border/80 rounded-md bg-transparent px-2 text-xs outline-none focus:ring-1 focus:ring-primary cursor-pointer text-foreground hover:bg-accent/40 transition-colors"
+                    value={terminalCjkFontFamily}
+                    onChange={(e) => setTerminalCjkFontFamily(e.target.value)}
+                  >
+                    <option value="">{t("term_cjk_font_follow")}</option>
+                    {CJK_FONT_PRESETS.map((f) => (
+                      <option
+                        key={f.value}
+                        value={f.value}
+                        style={{ fontFamily: f.value }}
+                      >
+                        {f.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 双击选词分隔符 */}
+                <div className="flex items-center justify-between gap-4 py-3">
+                  <span className="font-medium text-foreground">
+                    {t("term_word_separator")}
+                  </span>
+                  <input
+                    className="h-8 w-56 border border-border/80 rounded-md bg-transparent px-2 text-xs outline-none focus:ring-1 focus:ring-primary text-foreground font-mono"
+                    value={terminalWordSeparator}
+                    onChange={(e) => setTerminalWordSeparator(e.target.value)}
+                    spellCheck={false}
+                    placeholder={' ()[]{}\'"'}
+                  />
                 </div>
 
                 {/* 字体字号 */}
