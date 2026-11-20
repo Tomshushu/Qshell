@@ -100,6 +100,9 @@ describe('SettingsDialog Switches Suite', () => {
       terminalAntiIdleEnabled: false,
       terminalAntiIdleInterval: 60,
       terminalCopyPaste: false,
+      terminalOsc52Read: false,
+      closeToTray: false,
+      systemNotificationsEnabled: true,
       terminalPasteWarnEnabled: true,
       terminalSelectionToolbar: true,
       terminalBellSound: false,
@@ -176,7 +179,6 @@ describe('SettingsDialog Switches Suite', () => {
 
     it('toggles customCursorEnabled', () => {
       renderSettingsDialog({ defaultTab: 'general' })
-
       // 主题专属个性化光标
       const cursorLabel = screen.getByText('主题专属个性化光标')
       const switchRow = cursorLabel.closest('.justify-between')!
@@ -196,6 +198,38 @@ describe('SettingsDialog Switches Suite', () => {
         fireEvent.click(switchBtn)
       })
       expect(useAppStore.getState().customCursorEnabled).toBe(true)
+    })
+
+    it('toggles closeToTray', () => {
+      renderSettingsDialog({ defaultTab: 'general' })
+
+      // 关闭时最小化到系统托盘（默认关闭）
+      const trayLabel = screen.getByText('关闭时最小化到系统托盘')
+      const switchRow = trayLabel.closest('.justify-between')!
+      const switchBtn = switchRow.querySelector('button[role="switch"]')!
+      expect(switchBtn.getAttribute('data-state')).toBe('unchecked')
+      expect(useAppStore.getState().closeToTray).toBe(false)
+
+      act(() => {
+        fireEvent.click(switchBtn)
+      })
+      expect(useAppStore.getState().closeToTray).toBe(true)
+    })
+
+    it('toggles systemNotificationsEnabled', () => {
+      renderSettingsDialog({ defaultTab: 'general' })
+
+      // 系统通知（默认开启）
+      const notifyLabel = screen.getByText('系统通知')
+      const switchRow = notifyLabel.closest('.justify-between')!
+      const switchBtn = switchRow.querySelector('button[role="switch"]')!
+      expect(switchBtn.getAttribute('data-state')).toBe('checked')
+      expect(useAppStore.getState().systemNotificationsEnabled).toBe(true)
+
+      act(() => {
+        fireEvent.click(switchBtn)
+      })
+      expect(useAppStore.getState().systemNotificationsEnabled).toBe(false)
     })
 
     it('toggles autoCheckOnStartup for OTA updates', () => {
@@ -378,6 +412,15 @@ describe('SettingsDialog Switches Suite', () => {
         fireEvent.click(toolbarSwitch)
       })
       expect(useAppStore.getState().terminalSelectionToolbar).toBe(false)
+
+      // 允许远端读取剪贴板 (OSC 52)
+      const osc52Label = screen.getByText('允许远端读取剪贴板 (OSC 52)')
+      const osc52Switch = osc52Label.closest('.justify-between')!.querySelector('button[role="switch"]')!
+      expect(osc52Switch.getAttribute('aria-checked')).toBe('false')
+      act(() => {
+        fireEvent.click(osc52Switch)
+      })
+      expect(useAppStore.getState().terminalOsc52Read).toBe(true)
     })
 
     it('toggles terminalBellSound, terminalDrawBoldInBrightColors, terminalHintEnabled, terminalHighlightEnabled', () => {

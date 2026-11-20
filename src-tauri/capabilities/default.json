@@ -74,6 +74,7 @@
     },
     "os:default",
     "process:default",
-    "updater:default"
+    "updater:default",
+    "notification:default"
   ]
 }

@@ -154,6 +154,10 @@ export const createSftpSlice: StateCreator<AppState, [], [], SftpSlice> = (
     }),
   // 统一隐藏文件开关：默认沿用工作台偏好（true），写入时同步 SFTP 与工作台偏好字段
   sftpShowHidden: getInitialWorkspaceFileShowHidden(),
+  sftpThumbnailsLocal: true,
+  setSftpThumbnailsLocal: (enabled) => set({ sftpThumbnailsLocal: enabled }),
+  sftpThumbnailsRemote: false,
+  setSftpThumbnailsRemote: (enabled) => set({ sftpThumbnailsRemote: enabled }),
   setSftpShowHidden: (show) => {
     set({
       sftpShowHidden: show,

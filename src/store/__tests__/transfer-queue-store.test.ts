@@ -5,12 +5,18 @@ import {
   registerTransferMeta,
   useTransferQueueStore,
 } from "../transfer-queue-store";
+import { notifySystem } from "@/services/system-notification";
+
+vi.mock("@/services/system-notification", () => ({
+  notifySystem: vi.fn().mockResolvedValue(undefined),
+}));
 
 describe("useTransferQueueStore", () => {
   beforeEach(() => {
     localStorage.clear();
     useTransferQueueStore.getState().clearAll();
     useTransferQueueStore.getState().setMaxConcurrent(3);
+    vi.mocked(notifySystem).mockClear();
   });
 
   it("never persists queue state to localStorage", () => {
@@ -711,5 +717,81 @@ describe("useTransferQueueStore", () => {
         .getState()
         .tasks.find((t) => t.id === "active-keep")?.speedBytesPerSec,
     ).toBe(0);
+  });
+
+  it("dispatches system notifications once for both direct and scheduled transfers without false positives", async () => {
+    const store = useTransferQueueStore.getState();
+
+    // 1) Direct upload completes via progress event
+    store.upsertFromProgressEvent({
+      transferId: "direct-up-1",
+      type: "upload",
+      current: 512,
+      total: 1024,
+      fileName: "app.tar.gz",
+    });
+    expect(notifySystem).not.toHaveBeenCalled();
+
+    store.upsertFromProgressEvent({
+      transferId: "direct-up-1",
+      type: "upload",
+      current: 1024,
+      total: 1024,
+      fileName: "app.tar.gz",
+      done: true,
+    });
+    expect(notifySystem).toHaveBeenCalledTimes(1);
+
+    // 2) Direct directory transfer hits partial failures
+    vi.mocked(notifySystem).mockClear();
+    store.upsertFromProgressEvent({
+      transferId: "direct-dir-1",
+      type: "download",
+      current: 1,
+      total: 2,
+      fileName: "logs",
+      totalType: "count",
+    });
+    store.applyFailuresEvent({
+      transferId: "direct-dir-1",
+      type: "download",
+      serverId: "srv-1",
+      succeeded: 1,
+      skipped: 0,
+      failures: [{ path: "/var/log/a.log", error: "denied" }],
+    });
+    expect(notifySystem).toHaveBeenCalledTimes(1);
+
+    // 3) Queued transfer that already transitioned to failed via progress event must not emit completion notice in tickScheduler().then()
+    vi.mocked(notifySystem).mockClear();
+    store.enqueueTask({
+      id: "queued-fail-1",
+      protocol: "sftp",
+      direction: "upload",
+      serverId: "srv-1",
+      fileName: "broken.bin",
+      totalBytes: 100,
+      startFn: async () => {
+        useTransferQueueStore.getState().upsertFromProgressEvent({
+          transferId: "queued-fail-1",
+          type: "upload",
+          current: 0,
+          total: 100,
+          fileName: "broken.bin",
+          done: false,
+          error: "permission denied",
+        });
+      },
+    });
+    store.tickScheduler();
+    await vi.waitFor(() => {
+      expect(
+        useTransferQueueStore
+          .getState()
+          .tasks.find((t) => t.id === "queued-fail-1")?.status,
+      ).toBe("failed");
+    });
+    expect(notifySystem).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(notifySystem).mock.calls[0]?.[1]).toContain("permission denied");
   });
 });

@@ -90,6 +90,9 @@ export function validateConnectionConfiguration(server: Server, allServers?: Ser
   if (!hasAuthProfile && server.authType === 'certificate' && !server.sshKeyId && (!server.privateKeyPath || !server.certificatePath)) {
     issues.push('certificate')
   }
+  if (!hasAuthProfile && server.authType === 'pkcs11' && !server.privateKeyPath?.trim()) {
+    issues.push('pkcs11Library')
+  }
 
   if (server.proxyConfig) {
     try {

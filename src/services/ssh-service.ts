@@ -84,6 +84,7 @@ import type {
   GenerateKeyRequest,
   GenerateKeyResult,
   SshAgentIdentity,
+  Pkcs11IdentityInfo,
   SshAgentStatus,
   SshKey,
   SshKeyInput,
@@ -2409,6 +2410,14 @@ export const sshService = {
   async listAgentIdentities(): Promise<SshAgentIdentity[]> {
     if (!backend) return [];
     return backend.ssh.keys.listAgentIdentities();
+  },
+
+  /**
+   * 枚举指定 PKCS#11 驱动库中的智能卡 / 硬件令牌密钥
+   */
+  async listPkcs11Identities(libraryPath: string, pin?: string): Promise<Pkcs11IdentityInfo[]> {
+    if (!backend) return [];
+    return backend.ssh.keys.listPkcs11Identities(libraryPath, pin);
   },
 
   // ==================== 串口 Serial / COM 协议（Xshell 级功能） ====================

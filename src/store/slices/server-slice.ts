@@ -164,22 +164,35 @@ export const createServerSlice: StateCreator<AppState, [], [], ServerSlice> = (
           }
           return t;
         });
-      const activeStillValid = validTabs.some(
-        (t) => t.id === state.activeTabId,
-      );
+      // state.activeTabId === null 表示用户当前停留在首页，刷新列表时必须保持在首页而非跳转到已有标签
+      const activeStillValid =
+        state.activeTabId === null ||
+        validTabs.some((t) => t.id === state.activeTabId);
       const pruned = pruneWorkspaces(
         validTabs,
         state.groups,
         state.workspaces,
       );
-      // 清理已删除服务器的连接状态
+      // 清理已删除服务器的连接状态（必须保留 ws:<serverId>:<tabId> 与 sftp:<serverId> 子连接键，
+      // 否则新建/编辑/恢复服务器触发 loadServers() 时会把所有已连接工作台和 SFTP 误清空成未连接）
+      const isValidConnKey = (key: string): boolean => {
+        if (serverIds.has(key)) return true;
+        if (key.startsWith("sftp:")) return serverIds.has(key.slice(5));
+        if (key.startsWith("ws:")) {
+          const rest = key.slice(3);
+          const sep = rest.indexOf(":");
+          const baseId = sep >= 0 ? rest.slice(0, sep) : rest;
+          return serverIds.has(baseId);
+        }
+        return false;
+      };
       const newConnected: Record<string, boolean> = {};
       const newServerStates: Record<string, ServerStateEntry> = {};
-      for (const sid of serverIds) {
-        if (state.connectedServers[sid] !== undefined)
-          newConnected[sid] = state.connectedServers[sid];
-        if (state.serverStates[sid] !== undefined)
-          newServerStates[sid] = state.serverStates[sid];
+      for (const [sid, val] of Object.entries(state.connectedServers)) {
+        if (isValidConnKey(sid)) newConnected[sid] = val;
+      }
+      for (const [sid, val] of Object.entries(state.serverStates)) {
+        if (isValidConnKey(sid)) newServerStates[sid] = val;
       }
       return {
         servers,

@@ -73,6 +73,7 @@ import type { FileStatInfo } from '@/services/api'
 import { useTranslation } from '@/i18n'
 import { useFileExplorerPreferences } from '@/hooks/use-file-explorer-preferences'
 import { useToast } from '@/components/ui/toast'
+import { FileThumbnailIcon } from '@/components/sftp/file-thumbnail-icon'
 import { useAppStore } from '@/store'
 import {
   useTransferQueueStore,
@@ -2577,7 +2578,16 @@ export function FilesModule({
                         {openingPath === file.path ? (
                           <Loader2 className="h-6 w-6 animate-spin text-primary shrink-0" />
                         ) : (
-                          renderFileIcon(toIconFile(file), iconSize)
+                          <FileThumbnailIcon
+                            name={file.name}
+                            path={file.path}
+                            isDirectory={file.isDirectory}
+                            size={file.size}
+                            modifiedTime={file.modifiedTime}
+                            source={{ serverId }}
+                            sizeClass={iconSize}
+                            fallback={renderFileIcon(toIconFile(file), iconSize)}
+                          />
                         )}
                       </div>
                       {renamingFile === file.path ? (

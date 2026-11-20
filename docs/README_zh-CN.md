@@ -42,7 +42,7 @@ Qshell 致力于打造一款**轻巧、敏捷、安全且全能**的新一代服
 - 🧠 **本地马尔可夫链指令预测与 OSC-7 目录感知**  
   基于一阶马尔可夫状态转移概率模型与终端 OSC-7 协议，**0ms 本地计算、0 Token 开销、100% 数据离线保密**。内置 Git、Docker、Systemd 等 7 大高频工程连招与动态参数槽位回填（如 `mkdir` 自动推断 `cd <dir>`），并伴随个人击键习惯自主在线学习，按 <kbd>Tab</kbd> 极速一键采纳。
 
-- 🎨 **对标顶奢的极客设计工程 (Linear, Raycast & Cursor UI Standards)**  
+- 🎨 **现代极客设计工程 (Linear, Raycast & Cursor 风格)**  
   全栈重构视觉与微交互体验：沉浸式 Raycast 触感 `<Kbd>` 实体按键卡片、Linear 级柔和微透状态徽章（Soft Badges）搭配 `status-dot-pulse` 动态呼吸指示灯、双层发丝级微光倒角与浮动 HUD 深度阴影；全局数字防抖（`tabular-nums`），彻底杜绝速率与性能指标的数值晃动。
 
 - 📁 **现代化 SFTP 目录重构与全格式开箱原生预览**  

@@ -220,6 +220,20 @@ async fn build_auth_method_for_server(
         "keyboardInteractive" | "keyboard_interactive" | "keyboard-interactive" => {
             Ok(AuthMethod::KeyboardInteractive)
         }
+        "pkcs11" | "smartcard" | "smart_card" => Ok(AuthMethod::Pkcs11 {
+            library_path: server.private_key_path.clone().unwrap_or_default(),
+            pin: server.private_key_passphrase.as_ref().filter(|s| !s.is_empty()).cloned(),
+            key_label: server.agent_identity.as_ref().filter(|s| !s.trim().is_empty()).cloned(),
+        }),
+        "gssapi" | "kerberos" | "krb5" => {
+            let cfg = crate::ssh::gssapi::parse_gssapi_config(server.agent_identity.as_deref());
+            Ok(AuthMethod::Gssapi {
+                target_spn: cfg.spn,
+                delegate_credentials: cfg.delegate,
+                principal: cfg.principal,
+                password: server.password.as_ref().filter(|s| !s.is_empty()).cloned(),
+            })
+        }
         _ => Ok(AuthMethod::Password {
             password: server.password.clone().unwrap_or_default(),
         }),
@@ -282,6 +296,20 @@ async fn build_auth_method_for_proxy(
         "keyboardInteractive" | "keyboard_interactive" | "keyboard-interactive" => {
             Ok(AuthMethod::KeyboardInteractive)
         }
+        "pkcs11" | "smartcard" | "smart_card" => Ok(AuthMethod::Pkcs11 {
+            library_path: proxy.private_key_path.clone().unwrap_or_default(),
+            pin: proxy.private_key_passphrase.as_ref().filter(|s| !s.is_empty()).cloned(),
+            key_label: proxy.agent_identity.as_ref().filter(|s| !s.trim().is_empty()).cloned(),
+        }),
+        "gssapi" | "kerberos" | "krb5" => {
+            let cfg = crate::ssh::gssapi::parse_gssapi_config(proxy.agent_identity.as_deref());
+            Ok(AuthMethod::Gssapi {
+                target_spn: cfg.spn,
+                delegate_credentials: cfg.delegate,
+                principal: cfg.principal,
+                password: proxy.password.as_ref().filter(|s| !s.is_empty()).cloned(),
+            })
+        }
         _ => Ok(AuthMethod::Password {
             password: proxy.password.clone().unwrap_or_default(),
         }),
@@ -322,6 +350,20 @@ fn build_test_auth_from_fields(
         },
         "keyboardInteractive" | "keyboard_interactive" | "keyboard-interactive" => {
             AuthMethod::KeyboardInteractive
+        }
+        "pkcs11" | "smartcard" | "smart_card" => AuthMethod::Pkcs11 {
+            library_path: private_key_path.clone().unwrap_or_default(),
+            pin: clean_pass,
+            key_label: agent_identity.as_ref().filter(|s| !s.trim().is_empty()).cloned(),
+        },
+        "gssapi" | "kerberos" | "krb5" => {
+            let cfg = crate::ssh::gssapi::parse_gssapi_config(agent_identity.as_deref());
+            AuthMethod::Gssapi {
+                target_spn: cfg.spn,
+                delegate_credentials: cfg.delegate,
+                principal: cfg.principal,
+                password: password.as_ref().filter(|s| !s.is_empty()).cloned(),
+            }
         }
         _ => AuthMethod::Password {
             password: password.clone().unwrap_or_default(),
@@ -2887,6 +2929,17 @@ pub async fn ssh_list_agent_identities() -> Result<Vec<crate::ssh::agent::Identi
     crate::ssh::agent::AgentConnection::list_identities_info()
         .await
         .map_err(|e| format!("{}", e))
+}
+
+/// 列出指定 PKCS#11 驱动库中的智能卡 / 硬件密钥身份信息
+///
+/// 供服务器配置与全局身份凭证界面扫描并点选硬件密钥标签（CKA_LABEL / CKA_ID）。
+#[tauri::command]
+pub async fn ssh_list_pkcs11_identities(
+    library_path: String,
+    pin: Option<String>,
+) -> Result<Vec<crate::ssh::pkcs11::Pkcs11IdentityInfo>, String> {
+    crate::ssh::pkcs11::list_pkcs11_identities(library_path, pin).await
 }
 
 /// 探测本机 X11 Server 运行环境与 `$APP_DATA/addons/xserver` 离线插件包。

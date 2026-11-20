@@ -59,6 +59,7 @@ import type {
   GenerateKeyRequest,
   GenerateKeyResult,
   SshAgentIdentity,
+  Pkcs11IdentityInfo,
   SshAgentStatus,
   ServiceResourceRawMap,
   BmcOverview,
@@ -983,6 +984,12 @@ export const tauriAdapter: BackendAdapter = {
       },
       async listAgentIdentities(): Promise<SshAgentIdentity[]> {
         return safeInvoke<SshAgentIdentity[]>("ssh_list_agent_identities");
+      },
+      async listPkcs11Identities(libraryPath: string, pin?: string): Promise<Pkcs11IdentityInfo[]> {
+        return safeInvoke<Pkcs11IdentityInfo[]>("ssh_list_pkcs11_identities", {
+          libraryPath,
+          pin: pin || null,
+        });
       },
     },
     async probeX11Environment(): Promise<X11EnvironmentProbe> {

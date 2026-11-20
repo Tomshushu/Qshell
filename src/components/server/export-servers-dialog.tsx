@@ -32,6 +32,7 @@ import { useAppStore } from '@/store'
 import { useTranslation } from '@/i18n'
 import { sshService } from '@/services/ssh-service'
 import { save } from '@tauri-apps/plugin-dialog'
+import { buildDefaultSavePath } from '@/lib/app-paths'
 import {
   Loader2,
   Search,
@@ -193,7 +194,7 @@ export function ExportServersDialog({ open, onClose, preselectIds }: ExportServe
     try {
       // 1. 让用户选择保存路径
       const filePath = await save({
-        defaultPath: `servers-${new Date().toISOString().slice(0, 10)}.json`,
+        defaultPath: await buildDefaultSavePath(`servers-${new Date().toISOString().slice(0, 10)}.json`),
         filters: [
           { name: 'Qshell JSON', extensions: ['json'] },
         ],

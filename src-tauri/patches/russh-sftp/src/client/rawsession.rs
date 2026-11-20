@@ -20,10 +20,14 @@ use crate::{
         self, FsyncExtension, HardlinkExtension, LimitsExtension, Statvfs, StatvfsExtension,
     },
     protocol::{
-        Attrs, Close, Data, Extended, ExtendedReply, FSetStat, FileAttributes, Fstat, Handle, Init,
-        Lstat, MkDir, Name, Open, OpenDir, OpenFlags, Packet, Read, ReadDir, ReadLink, RealPath,
-        Remove, Rename, RmDir, SetStat, Stat, Status, StatusCode, Symlink, Version, Write,
+        frame_raw_packet, Attrs, Close, Data, Extended, ExtendedReply, FSetStat, FileAttributes,
+        Fstat, Handle, Init, Lstat, MkDir, Name, Open, OpenDir, OpenFlags, Packet, Read, ReadDir,
+        ReadLink, RealPath, Remove, Rename, RmDir, SetStat, Stat, Status, StatusCode, Symlink,
+        Version, Write, SSH_FXP_LSTAT, SSH_FXP_MKDIR, SSH_FXP_OPEN, SSH_FXP_OPENDIR,
+        SSH_FXP_READLINK, SSH_FXP_REALPATH, SSH_FXP_REMOVE, SSH_FXP_RENAME, SSH_FXP_RMDIR,
+        SSH_FXP_SETSTAT, SSH_FXP_STAT, SSH_FXP_SYMLINK,
     },
+    ser,
 };
 
 pub type SftpResult<T> = Result<T, Error>;
@@ -184,16 +188,14 @@ impl RawSftpSession {
         self.limits = limits;
     }
 
-    fn send(
+    fn send_encoded(
         &self,
         id: Option<u32>,
-        packet: Packet,
+        bytes: Bytes,
     ) -> SftpResult<oneshot::Receiver<SftpResult<Packet>>> {
         if self.tx.is_closed() {
             return Err(Error::UnexpectedBehavior("session closed".into()));
         }
-
-        let bytes = Bytes::try_from(packet)?;
 
         if let Some(max_len) = self.limits.packet_len {
             if bytes.len() as u64 > max_len {
@@ -208,8 +210,20 @@ impl RawSftpSession {
         Ok(rx)
     }
 
-    async fn request(&self, id: Option<u32>, packet: Packet) -> SftpResult<Packet> {
-        let rx = self.send(id, packet)?;
+    fn send(
+        &self,
+        id: Option<u32>,
+        packet: Packet,
+    ) -> SftpResult<oneshot::Receiver<SftpResult<Packet>>> {
+        let bytes = Bytes::try_from(packet)?;
+        self.send_encoded(id, bytes)
+    }
+
+    async fn await_response(
+        &self,
+        id: Option<u32>,
+        rx: oneshot::Receiver<SftpResult<Packet>>,
+    ) -> SftpResult<Packet> {
         let timeout = self.timeout.load(Ordering::Relaxed);
 
         match runtime::timeout(Duration::from_secs(timeout), rx).await {
@@ -220,6 +234,33 @@ impl RawSftpSession {
                 Err(error)
             }
         }
+    }
+
+    async fn request(&self, id: Option<u32>, packet: Packet) -> SftpResult<Packet> {
+        let rx = self.send(id, packet)?;
+        self.await_response(id, rx).await
+    }
+
+    async fn request_raw_bytes(
+        &self,
+        id: Option<u32>,
+        packet_type: u8,
+        payload: Bytes,
+    ) -> SftpResult<Packet> {
+        let bytes = frame_raw_packet(packet_type, payload);
+        let rx = self.send_encoded(id, bytes)?;
+        self.await_response(id, rx).await
+    }
+
+    fn ensure_open_handle_available(&self, msg: &str) -> SftpResult<()> {
+        if self
+            .limits
+            .open_handles
+            .is_some_and(|h| self.handles.load(Ordering::SeqCst) >= h)
+        {
+            return Err(Error::Limited(msg.to_owned()));
+        }
+        Ok(())
     }
 
     fn use_next_id(&self) -> u32 {
@@ -687,6 +728,143 @@ impl RawSftpSession {
             )
             .await?;
 
+        into_status!(result)
+    }
+
+    /// Raw byte-path variant of [`Self::open`] supporting non-UTF-8 wire paths.
+    pub async fn open_bytes(
+        &self,
+        filename: &[u8],
+        flags: OpenFlags,
+        attrs: FileAttributes,
+    ) -> SftpResult<Handle> {
+        self.ensure_open_handle_available("handle limit reached")?;
+        let id = self.use_next_id();
+        let payload = ser::to_bytes(&(id, serde_bytes::Bytes::new(filename), flags, attrs))?;
+        let result = self.request_raw_bytes(Some(id), SSH_FXP_OPEN, payload).await?;
+        if let Packet::Handle(_) = result {
+            self.handles.fetch_add(1, Ordering::SeqCst);
+        }
+        into_with_status!(result, Handle)
+    }
+
+    /// Raw byte-path variant of [`Self::lstat`] supporting non-UTF-8 wire paths.
+    pub async fn lstat_bytes(&self, path: &[u8]) -> SftpResult<Attrs> {
+        let id = self.use_next_id();
+        let payload = ser::to_bytes(&(id, serde_bytes::Bytes::new(path)))?;
+        let result = self.request_raw_bytes(Some(id), SSH_FXP_LSTAT, payload).await?;
+        into_with_status!(result, Attrs)
+    }
+
+    /// Raw byte-path variant of [`Self::setstat`] supporting non-UTF-8 wire paths.
+    pub async fn setstat_bytes(&self, path: &[u8], attrs: FileAttributes) -> SftpResult<Status> {
+        let id = self.use_next_id();
+        let payload = ser::to_bytes(&(id, serde_bytes::Bytes::new(path), attrs))?;
+        let result = self
+            .request_raw_bytes(Some(id), SSH_FXP_SETSTAT, payload)
+            .await?;
+        into_status!(result)
+    }
+
+    /// Raw byte-path variant of [`Self::opendir`] supporting non-UTF-8 wire paths.
+    pub async fn opendir_bytes(&self, path: &[u8]) -> SftpResult<Handle> {
+        self.ensure_open_handle_available("Handle limit reached")?;
+        let id = self.use_next_id();
+        let payload = ser::to_bytes(&(id, serde_bytes::Bytes::new(path)))?;
+        let result = self
+            .request_raw_bytes(Some(id), SSH_FXP_OPENDIR, payload)
+            .await?;
+        if let Packet::Handle(_) = result {
+            self.handles.fetch_add(1, Ordering::SeqCst);
+        }
+        into_with_status!(result, Handle)
+    }
+
+    /// Raw byte-path variant of [`Self::remove`] supporting non-UTF-8 wire paths.
+    pub async fn remove_bytes(&self, filename: &[u8]) -> SftpResult<Status> {
+        let id = self.use_next_id();
+        let payload = ser::to_bytes(&(id, serde_bytes::Bytes::new(filename)))?;
+        let result = self
+            .request_raw_bytes(Some(id), SSH_FXP_REMOVE, payload)
+            .await?;
+        into_status!(result)
+    }
+
+    /// Raw byte-path variant of [`Self::mkdir`] supporting non-UTF-8 wire paths.
+    pub async fn mkdir_bytes(&self, path: &[u8], attrs: FileAttributes) -> SftpResult<Status> {
+        let id = self.use_next_id();
+        let payload = ser::to_bytes(&(id, serde_bytes::Bytes::new(path), attrs))?;
+        let result = self
+            .request_raw_bytes(Some(id), SSH_FXP_MKDIR, payload)
+            .await?;
+        into_status!(result)
+    }
+
+    /// Raw byte-path variant of [`Self::rmdir`] supporting non-UTF-8 wire paths.
+    pub async fn rmdir_bytes(&self, path: &[u8]) -> SftpResult<Status> {
+        let id = self.use_next_id();
+        let payload = ser::to_bytes(&(id, serde_bytes::Bytes::new(path)))?;
+        let result = self
+            .request_raw_bytes(Some(id), SSH_FXP_RMDIR, payload)
+            .await?;
+        into_status!(result)
+    }
+
+    /// Raw byte-path variant of [`Self::realpath`] supporting non-UTF-8 wire paths.
+    pub async fn realpath_bytes(&self, path: &[u8]) -> SftpResult<Name> {
+        let id = self.use_next_id();
+        let payload = ser::to_bytes(&(id, serde_bytes::Bytes::new(path)))?;
+        let result = self
+            .request_raw_bytes(Some(id), SSH_FXP_REALPATH, payload)
+            .await?;
+        into_with_status!(result, Name)
+    }
+
+    /// Raw byte-path variant of [`Self::stat`] supporting non-UTF-8 wire paths.
+    pub async fn stat_bytes(&self, path: &[u8]) -> SftpResult<Attrs> {
+        let id = self.use_next_id();
+        let payload = ser::to_bytes(&(id, serde_bytes::Bytes::new(path)))?;
+        let result = self
+            .request_raw_bytes(Some(id), SSH_FXP_STAT, payload)
+            .await?;
+        into_with_status!(result, Attrs)
+    }
+
+    /// Raw byte-path variant of [`Self::rename`] supporting non-UTF-8 wire paths.
+    pub async fn rename_bytes(&self, oldpath: &[u8], newpath: &[u8]) -> SftpResult<Status> {
+        let id = self.use_next_id();
+        let payload = ser::to_bytes(&(
+            id,
+            serde_bytes::Bytes::new(oldpath),
+            serde_bytes::Bytes::new(newpath),
+        ))?;
+        let result = self
+            .request_raw_bytes(Some(id), SSH_FXP_RENAME, payload)
+            .await?;
+        into_status!(result)
+    }
+
+    /// Raw byte-path variant of [`Self::readlink`] supporting non-UTF-8 wire paths.
+    pub async fn readlink_bytes(&self, path: &[u8]) -> SftpResult<Name> {
+        let id = self.use_next_id();
+        let payload = ser::to_bytes(&(id, serde_bytes::Bytes::new(path)))?;
+        let result = self
+            .request_raw_bytes(Some(id), SSH_FXP_READLINK, payload)
+            .await?;
+        into_with_status!(result, Name)
+    }
+
+    /// Raw byte-path variant of [`Self::symlink`] supporting non-UTF-8 wire paths.
+    pub async fn symlink_bytes(&self, path: &[u8], target: &[u8]) -> SftpResult<Status> {
+        let id = self.use_next_id();
+        let payload = ser::to_bytes(&(
+            id,
+            serde_bytes::Bytes::new(path),
+            serde_bytes::Bytes::new(target),
+        ))?;
+        let result = self
+            .request_raw_bytes(Some(id), SSH_FXP_SYMLINK, payload)
+            .await?;
         into_status!(result)
     }
 

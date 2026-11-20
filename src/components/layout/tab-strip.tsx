@@ -51,6 +51,43 @@ import {
   type GroupTreeNode,
 } from "@/lib/server-groups";
 import { OsIcon } from "@/pages/dashboard";
+import { ServerIconBadge } from "@/components/dashboard/server-cards/server-icon-badge";
+
+/** 标签/选择器统一图标：自定义会话图标优先，否则回退 OS/协议图标（P1-13） */
+function ServerTabIcon({
+  server,
+  isSerial,
+  className,
+  textClassName,
+}: {
+  server?: {
+    icon?: string | null;
+    osType?: string;
+    osInfo?: string;
+    targetType?: string;
+  } | null;
+  isSerial?: boolean;
+  className?: string;
+  textClassName?: string;
+}) {
+  if (server?.icon) {
+    return (
+      <ServerIconBadge
+        icon={server.icon}
+        className={className}
+        textClassName={textClassName}
+      />
+    );
+  }
+  return (
+    <OsIcon
+      osType={server?.osType}
+      osInfo={server?.osInfo}
+      targetType={isSerial ? "serial" : server?.targetType}
+      className={className}
+    />
+  );
+}
 import {
   deviceStatusKeys,
   getServerConnectionFlags,
@@ -1188,11 +1225,11 @@ export function TabStrip({ tabs, className }: TabStripProps) {
                       )}
                       title={wsStatusTitle}
                     >
-                      <OsIcon
-                        osType={wsServer?.osType}
-                        osInfo={wsServer?.osInfo}
-                        targetType={isWsSerial ? "serial" : wsServer?.targetType}
+                      <ServerTabIcon
+                        server={wsServer}
+                        isSerial={isWsSerial}
                         className="h-full w-full"
+                        textClassName="text-[10px]"
                       />
                     </span>
 
@@ -1361,11 +1398,11 @@ export function TabStrip({ tabs, className }: TabStripProps) {
                     )}
                     title={tabStatusTitle}
                   >
-                    <OsIcon
-                      osType={tabServer?.osType}
-                      osInfo={tabServer?.osInfo}
-                      targetType={isSerialTab ? "serial" : tabServer?.targetType}
+                    <ServerTabIcon
+                      server={tabServer}
+                      isSerial={isSerialTab}
                       className="h-full w-full"
+                      textClassName="text-[10px]"
                     />
                   </span>
                 )}
@@ -1676,11 +1713,10 @@ export function TabStrip({ tabs, className }: TabStripProps) {
                         onClick={() => setSelectedServerId(s.id)}
                         onDoubleClick={() => openSelectedServer(s.id)}
                       >
-                        <OsIcon
-                          osType={s.osType}
-                          osInfo={s.osInfo}
-                          targetType={s.targetType}
+                        <ServerTabIcon
+                          server={s}
                           className="h-4 w-4 shrink-0 overflow-hidden rounded"
+                          textClassName="text-[10px]"
                         />
                         {/* 名称 */}
                         <span
@@ -2074,11 +2110,11 @@ export function TabStrip({ tabs, className }: TabStripProps) {
                     !isWsOnline && "grayscale opacity-60 contrast-75",
                   )}
                 >
-                  <OsIcon
-                    osType={wsServer?.osType}
-                    osInfo={wsServer?.osInfo}
-                    targetType={isWsSerial ? "serial" : wsServer?.targetType}
+                  <ServerTabIcon
+                    server={wsServer}
+                    isSerial={isWsSerial}
                     className="h-full w-full"
+                    textClassName="text-[10px]"
                   />
                 </span>
 
@@ -2174,11 +2210,11 @@ export function TabStrip({ tabs, className }: TabStripProps) {
                         !isDragOnline && "grayscale opacity-60 contrast-75"
                       )}
                     >
-                      <OsIcon
-                        osType={dragServer?.osType}
-                        osInfo={dragServer?.osInfo}
-                        targetType={isDragSerial ? "serial" : dragServer?.targetType}
+                      <ServerTabIcon
+                        server={dragServer}
+                        isSerial={isDragSerial}
                         className="h-full w-full"
+                        textClassName="text-[10px]"
                       />
                     </span>
                   </>

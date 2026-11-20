@@ -21,11 +21,13 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { SelectPopover } from '@/components/ui/select-popover'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { HintTooltip } from '@/components/ui/hint-tooltip'
 import { useTranslation } from '@/i18n'
 import { useToast } from '@/components/ui/toast'
 import { useModalStack } from '@/hooks/use-modal-stack'
 import { useAppStore } from '@/store'
 import { sshService } from '@/services/ssh-service'
+import { Pkcs11IdentityPicker } from '@/components/server/pkcs11-identity-picker'
 import type { AuthProfile, AuthProfileInput, SshKey, SshAgentIdentity, SshAgentStatus } from '@/services/api'
 
 function getAuthTypeLabel(type: AuthProfile['authType'], t: (key: string) => string): string {
@@ -40,13 +42,17 @@ function getAuthTypeLabel(type: AuthProfile['authType'], t: (key: string) => str
       return t('auth_type_ssh_agent')
     case 'keyboardInteractive':
       return t('auth_type_keyboard_interactive')
+    case 'pkcs11':
+      return t('auth_type_pkcs11')
+    case 'gssapi':
+      return t('auth_type_gssapi')
     default:
       return type
   }
 }
 
 export function AuthProfilesPanel() {
-  const { t } = useTranslation()
+  const { t, language } = useTranslation()
   const { toast } = useToast()
 
   const [profiles, setProfiles] = useState<AuthProfile[]>([])
@@ -89,6 +95,8 @@ export function AuthProfilesPanel() {
       { value: 'certificate', label: t('auth_type_certificate') },
       { value: 'sshAgent', label: t('auth_type_ssh_agent') },
       { value: 'keyboardInteractive', label: t('auth_type_keyboard_interactive') },
+      { value: 'pkcs11', label: t('auth_type_pkcs11') },
+      { value: 'gssapi', label: t('auth_type_gssapi') },
     ],
     [t],
   )
@@ -277,14 +285,12 @@ export function AuthProfilesPanel() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-            <KeyRound className="h-4 w-4 text-primary" />
-            {t('auth_profiles_title')}
-          </h3>
-          <p className="text-xs text-muted-foreground mt-1">{t('auth_profiles_desc')}</p>
-        </div>
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+          <KeyRound className="h-4 w-4 text-primary" />
+          {t('auth_profiles_title')}
+          <HintTooltip content={t('auth_profiles_desc')} side="bottom" />
+        </h3>
         <Button size="sm" onClick={openCreate} className="h-7 text-xs gap-1.5 shrink-0">
           <Plus className="h-3.5 w-3.5" />
           {t('auth_profiles_add')}
@@ -583,12 +589,32 @@ export function AuthProfilesPanel() {
                   </div>
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-medium">{t('auth_profiles_passphrase_label')}</label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-medium">{t('auth_profiles_passphrase_label')}</label>
+                    {editingProfile?.privateKeyPassphrase && !privateKeyPassphrase && (
+                      <button
+                        type="button"
+                        onClick={() => setClearPassphrase((v) => !v)}
+                        className="text-[11px] text-amber-600 dark:text-amber-400 hover:underline cursor-pointer"
+                      >
+                        {clearPassphrase ? t('auth_profiles_will_clear') : t('auth_profiles_clear_saved')}
+                      </button>
+                    )}
+                  </div>
                   <Input
                     type="password"
                     value={privateKeyPassphrase}
-                    onChange={(e) => setPrivateKeyPassphrase(e.target.value)}
-                    placeholder={editingProfile ? t('auth_profiles_keep_saved') : t('auth_profiles_passphrase_optional')}
+                    onChange={(e) => {
+                      setPrivateKeyPassphrase(e.target.value)
+                      if (e.target.value) setClearPassphrase(false)
+                    }}
+                    placeholder={
+                      clearPassphrase
+                        ? t('auth_profiles_will_clear')
+                        : editingProfile
+                          ? t('auth_profiles_keep_saved')
+                          : t('auth_profiles_passphrase_optional')
+                    }
                     className="h-8 text-xs font-mono"
                   />
                 </div>
@@ -641,6 +667,81 @@ export function AuthProfilesPanel() {
               <p className="text-[11px] text-muted-foreground rounded-md bg-muted/40 px-2.5 py-2 border border-border/50">
                 {t('auth_profiles_kbi_hint')}
               </p>
+            )}
+
+            {authType === 'pkcs11' && (
+              <div className="space-y-2.5 rounded-md border border-border/60 bg-muted/20 p-3">
+                <div className="space-y-1">
+                  <label className="text-xs font-medium">PKCS#11 (.dll / .so / .dylib)</label>
+                  <Input
+                    value={privateKeyPath}
+                    onChange={(e) => setPrivateKeyPath(e.target.value)}
+                    placeholder="opensc-pkcs11.dll / libykcs11.dylib / opensc-pkcs11.so"
+                    className="h-8 text-xs font-mono"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-medium">PIN</label>
+                    {editingProfile?.privateKeyPassphrase && !privateKeyPassphrase && (
+                      <button
+                        type="button"
+                        onClick={() => setClearPassphrase((v) => !v)}
+                        className="text-[11px] text-amber-600 dark:text-amber-400 hover:underline cursor-pointer"
+                      >
+                        {clearPassphrase ? t('auth_profiles_will_clear') : t('auth_profiles_clear_saved')}
+                      </button>
+                    )}
+                  </div>
+                  <Input
+                    type="password"
+                    value={privateKeyPassphrase}
+                    onChange={(e) => {
+                      setPrivateKeyPassphrase(e.target.value)
+                      if (e.target.value) setClearPassphrase(false)
+                    }}
+                    placeholder={
+                      clearPassphrase
+                        ? t('auth_profiles_will_clear')
+                        : editingProfile
+                          ? t('auth_profiles_keep_saved')
+                          : t('auth_profiles_passphrase_optional')
+                    }
+                    className="h-8 text-xs font-mono"
+                    autoComplete="new-password"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium">Key Label / CKA_ID</label>
+                  <Input
+                    value={agentIdentity}
+                    onChange={(e) => setAgentIdentity(e.target.value)}
+                    placeholder="CKA_LABEL / CKA_ID (optional)"
+                    className="h-8 text-xs font-mono"
+                  />
+                  <Pkcs11IdentityPicker
+                    libraryPath={privateKeyPath}
+                    pin={privateKeyPassphrase}
+                    selectedValue={agentIdentity}
+                    onSelect={setAgentIdentity}
+                    tr={(zh, en) => (language.startsWith('zh') ? zh : en)}
+                  />
+                </div>
+              </div>
+            )}
+
+            {authType === 'gssapi' && (
+              <div className="space-y-2 rounded-md border border-border/60 bg-muted/20 p-3">
+                <div className="space-y-1">
+                  <label className="text-xs font-medium">SPN / Config (Optional)</label>
+                  <Input
+                    value={agentIdentity}
+                    onChange={(e) => setAgentIdentity(e.target.value)}
+                    placeholder='host/<hostname> or {"spn":"host/...","delegate":true}'
+                    className="h-8 text-xs font-mono"
+                  />
+                </div>
+              </div>
             )}
 
             <div className="flex items-center justify-between gap-3 rounded-md border border-border/60 bg-muted/20 px-3 py-2">

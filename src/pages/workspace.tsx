@@ -44,6 +44,7 @@ import {
 import { WorkspaceModuleModal } from "@/components/workspace/workspace-module-modal";
 import { cn } from "@/lib/utils";
 import { sshService } from "@/services/ssh-service";
+import { notifySystem } from "@/services/system-notification";
 import type { AuthInteractionRequest } from "@/services/api/types";
 import { ConnectionState, SshErrorKind } from "@/services/ssh-connection-state";
 import { reconnectManager, useReconnectState } from "@/services/reconnect-manager";
@@ -508,6 +509,11 @@ export function WorkspacePage({
         setAuthInteractionSubmitting(false);
         // 连接被远端/网络断开；保留 wasConnected 以触发自动重连
         setConnectError(data.error ?? null);
+        // P1-10：异常断线在后台时通过系统通知提示（前台仍有音效与错误条）
+        void notifySystem(
+          t("notify_disconnected"),
+          t("notify_disconnected_body", { name: server?.name ?? String(serverId) }),
+        );
         // 被动断开：Submarine 深沉声纳
         // 同样用 3 秒节流，避免网络抖动时反复响
         const now = Date.now();

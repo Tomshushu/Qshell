@@ -1132,6 +1132,41 @@ pub async fn files_mkdir(server_id: String, path: String) -> Result<CommandResul
 }
 
 /// 删除远程文件或目录
+/// 受限读取本地图片文件用于目录缩略图（仅允许图片扩展名且限制 5MB，避免开放 assetProtocol["**"]）。
+#[tauri::command]
+pub async fn files_read_local_thumbnail(path: String) -> Result<String, String> {
+    const MAX_LOCAL_THUMBNAIL_BYTES: u64 = 5 * 1024 * 1024;
+    let p = std::path::Path::new(&path);
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    if !matches!(
+        ext.as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "avif" | "svg"
+    ) {
+        return Err("Unsupported thumbnail extension".into());
+    }
+    let meta = tokio::fs::metadata(p)
+        .await
+        .map_err(|e| format!("Failed to stat thumbnail file: {}", e))?;
+    if !meta.is_file() {
+        return Err("Not a regular file".into());
+    }
+    if meta.len() > MAX_LOCAL_THUMBNAIL_BYTES {
+        return Err("Local thumbnail exceeds 5MB limit".into());
+    }
+    let bytes = tokio::fs::read(p)
+        .await
+        .map_err(|e| format!("Failed to read thumbnail file: {}", e))?;
+    if bytes.len() as u64 > MAX_LOCAL_THUMBNAIL_BYTES {
+        return Err("Local thumbnail exceeds 5MB limit".into());
+    }
+    use base64::Engine as _;
+    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+}
+
 #[tauri::command]
 pub async fn files_delete(server_id: String, path: String) -> Result<CommandResult, String> {
     let server_label = resolve_server_audit_label(&server_id).await;
@@ -1801,7 +1836,8 @@ pub async fn files_extract_archive(app: AppHandle, server_id: Option<String>, pa
         } else {
             let conn = crate::ssh::manager::SshManager::global().get_connection(&server_id).map_err(|e| e.to_string())?;
             let sftp = conn.create_sftp_session().await.map_err(|e| format!("SFTP session failed: {}", e))?;
-            let mut file = sftp.open(&normalized_archive).await.map_err(|e| format!("Cannot open archive: {}", e))?;
+            let archive_bytes = crate::ssh::sftp_encoding::encode_sftp_path(&server_id, &normalized_archive).await;
+            let mut file = sftp.open_bytes(&archive_bytes).await.map_err(|e| format!("Cannot open archive: {}", e))?;
             let mut header = vec![0u8; 512];
             let read = file.read(&mut header).await.map_err(|e| format!("Cannot read archive header: {}", e))?;
             let _ = file.shutdown().await;
@@ -1821,7 +1857,8 @@ pub async fn files_extract_archive(app: AppHandle, server_id: Option<String>, pa
             let normalized = candidate.replace('\\', "/");
             async move {
                 if let Some(session) = session_opt {
-                    session.metadata(&normalized).await.is_ok()
+                    let cand_bytes = crate::ssh::sftp_encoding::encode_sftp_path(&srv, &normalized).await;
+                    session.metadata_bytes(&cand_bytes).await.is_ok()
                 } else if is_windows {
                     let win_cand = crate::targets::windows::validators::posix_to_windows_path(&raw_candidate);
                     let ps_script = format!(
@@ -3266,6 +3303,7 @@ async fn download_file_with_auto_retry(
         let attempt = if let Some(sftp) = shared_sftp {
             crate::ssh::manager::sftp_download_file_with_session(
                 sftp,
+                server_id,
                 remote_path,
                 local_path,
                 &on_progress,
@@ -3367,13 +3405,15 @@ async fn upload_file_with_auto_retry(
     let mut last_session: Option<russh_sftp::client::SftpSession> = None;
     let cleanup_remote_tmp = async |session: Option<&russh_sftp::client::SftpSession>| {
         if let Some(s) = session {
-            let _ = s.remove_file(&sftp_tmp_posix).await;
+            let tmp_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id, &sftp_tmp_posix).await;
+            let _ = s.remove_file_bytes(&tmp_bytes).await;
         }
     };
     loop {
         let attempt = if let Some(sftp) = shared_sftp {
             crate::ssh::manager::sftp_upload_file_with_session(
                 sftp,
+                server_id,
                 local_path,
                 remote_path,
                 &on_progress,
@@ -3405,8 +3445,9 @@ async fn upload_file_with_auto_retry(
             };
             let mut tmp_size_opt = None;
             if retry_no > 0 {
+                let tmp_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id, &sftp_tmp_posix).await;
                 let tmp_size = session
-                    .metadata(&sftp_tmp_posix)
+                    .metadata_bytes(&tmp_bytes)
                     .await
                     .ok()
                     .map(|m| m.len())
@@ -3428,6 +3469,7 @@ async fn upload_file_with_auto_retry(
             let _ = tmp_size_opt;
             let res = crate::ssh::manager::sftp_upload_file_with_session(
                 &session,
+                server_id,
                 local_path,
                 remote_path,
                 &on_progress,
@@ -5120,7 +5162,8 @@ pub async fn files_upload_from_paths(
             }
         };
         // 目标目录不存在：metadata 失败
-        if probe_sftp.metadata(&target_remote_dir).await.is_err() {
+        let target_dir_bytes = crate::ssh::sftp_encoding::encode_sftp_path(&server_id, &target_remote_dir).await;
+        if probe_sftp.metadata_bytes(&target_dir_bytes).await.is_err() {
             let msg = format!("Target directory does not exist: '{}'", target_remote_dir);
             send_progress(&app, TransferProgress {
                 transfer_id: transfer_id.clone(),
@@ -5143,11 +5186,12 @@ pub async fn files_upload_from_paths(
         } else {
             format!("{}/{}", target_remote_dir, probe_name)
         };
-        match probe_sftp.create(&probe_path).await {
+        let probe_bytes = crate::ssh::sftp_encoding::encode_sftp_path(&server_id, &probe_path).await;
+        match probe_sftp.create_bytes(&probe_bytes).await {
             Ok(mut h) => {
                 let _ = h.shutdown().await;
                 drop(h);
-                let _ = probe_sftp.remove_file(&probe_path).await;
+                let _ = probe_sftp.remove_file_bytes(&probe_bytes).await;
             }
             Err(e) => {
                 let msg = format!("No write permission to '{}': {}", target_remote_dir, e);
@@ -6708,7 +6752,8 @@ pub async fn files_resume_upload(
     let effective_offset: Option<u64>;
     let need_reset_progress: bool;
 
-    match sftp.metadata(&tmp_remote_path).await {
+    let tmp_remote_bytes = crate::ssh::sftp_encoding::encode_sftp_path(&server_id, &tmp_remote_path).await;
+    match sftp.metadata_bytes(&tmp_remote_bytes).await {
         Ok(meta) => {
             let actual_size = meta.size.unwrap_or(0);
             // 使用 >= 而非 ==：暂停场景下后端实际写入可能略大于前端 lastOffset
@@ -6721,13 +6766,13 @@ pub async fn files_resume_upload(
                 need_reset_progress = false;
             } else if actual_size > 0 {
                 // 临时文件存在但比 offset 小（异常情况）→ 降级为全新传输
-                let _ = sftp.remove_file(&tmp_remote_path).await;
+                let _ = sftp.remove_file_bytes(&tmp_remote_bytes).await;
                 effective_tmp_path = format!("{}.sw-upload-tmp-{}", remote_path, uuid::Uuid::new_v4());
                 effective_offset = None;
                 need_reset_progress = true;
             } else {
                 // 临时文件大小为 0 → 全新传输
-                let _ = sftp.remove_file(&tmp_remote_path).await;
+                let _ = sftp.remove_file_bytes(&tmp_remote_bytes).await;
                 effective_tmp_path = format!("{}.sw-upload-tmp-{}", remote_path, uuid::Uuid::new_v4());
                 effective_offset = None;
                 need_reset_progress = true;
@@ -7126,7 +7171,8 @@ pub async fn files_cleanup_tmp_file(
             .create_sftp_session()
             .await
             .map_err(|e| format!("SFTP session failed: {}", e))?;
-        match sftp.remove_file(&tmp_path).await {
+        let tmp_bytes = crate::ssh::sftp_encoding::encode_sftp_path(&server_id, &tmp_path).await;
+        match sftp.remove_file_bytes(&tmp_bytes).await {
             Ok(_) => Ok(true),
             Err(e) => {
                 // 文件不存在视为已清理（可能已被 rename 或上次清理过）
@@ -7163,6 +7209,8 @@ pub async fn files_cleanup_tmp_file(
 async fn server_to_server_single_file(
     src_sftp: &russh_sftp::client::SftpSession,
     dest_sftp: &russh_sftp::client::SftpSession,
+    src_server_id: &str,
+    dest_server_id: &str,
     src_path: &str,
     dest_path: &str,
     total_bytes: u64,
@@ -7178,7 +7226,9 @@ async fn server_to_server_single_file(
     let sftp_src_path = src_path.replace('\\', "/");
     let sftp_dest_path = dest_path.replace('\\', "/");
     let tmp_dest_path = tmp_dest_path.replace('\\', "/");
-    let mut src_file = src_sftp.open(&sftp_src_path).await
+    let src_path_bytes = crate::ssh::sftp_encoding::encode_sftp_path(src_server_id, &sftp_src_path).await;
+    let tmp_dest_bytes = crate::ssh::sftp_encoding::encode_sftp_path(dest_server_id, &tmp_dest_path).await;
+    let mut src_file = src_sftp.open_bytes(&src_path_bytes).await
         .map_err(|e| format!("Failed to open source file: {}", e))?;
 
     // 续传模式：APPEND 打开目标 tmp；全新模式：CREATE+TRUNCATE
@@ -7192,13 +7242,13 @@ async fn server_to_server_single_file(
             ));
         }
         let f = dest_sftp
-            .open_with_flags(&tmp_dest_path, OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::APPEND)
+            .open_with_flags_bytes(&tmp_dest_bytes, OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::APPEND)
             .await
             .map_err(|e| format!("Failed to open destination temp file for resume: {}", e))?;
 
         // TOCTOU 防护：打开后校验目标 tmp 实际大小是否等于 offset
         let actual_size = dest_sftp
-            .metadata(&tmp_dest_path)
+            .metadata_bytes(&tmp_dest_bytes)
             .await
             .map_err(|e| format!("Cannot verify dest tmp size (TOCTOU): {}", e))?
             .len();
@@ -7231,7 +7281,7 @@ async fn server_to_server_single_file(
                 .map_err(|e| format!("Source seek failed after tail sample: {}", e))?;
 
             let mut tmp_read = dest_sftp
-                .open_with_flags(&tmp_dest_path, OpenFlags::READ)
+                .open_with_flags_bytes(&tmp_dest_bytes, OpenFlags::READ)
                 .await
                 .map_err(|e| format!("Failed to open dest tmp for tail sample: {}", e))?;
             tmp_read
@@ -7255,7 +7305,7 @@ async fn server_to_server_single_file(
         }
         (f, offset)
     } else {
-        let f = dest_sftp.create(&tmp_dest_path).await
+        let f = dest_sftp.create_bytes(&tmp_dest_bytes).await
             .map_err(|e| format!("Failed to create destination temp file: {}", e))?;
         (f, 0)
     };
@@ -7395,18 +7445,18 @@ async fn server_to_server_single_file(
 
     if let Err(e) = copy_result {
         if !keep_tmp_on_failure {
-            let _ = dest_sftp.remove_file(&tmp_dest_path).await;
+            let _ = dest_sftp.remove_file_bytes(&tmp_dest_bytes).await;
         }
         return Err(e);
     }
 
     // 原子覆盖：迁移到三步备份法 sftp_atomic_rename_overwrite（备份目标→rename tmp→失败回滚）。
-    let rename_result = crate::ssh::manager::sftp_atomic_rename_overwrite(dest_sftp, &tmp_dest_path, &sftp_dest_path).await;
+    let rename_result = crate::ssh::manager::sftp_atomic_rename_overwrite(dest_sftp, dest_server_id, &tmp_dest_path, &sftp_dest_path).await;
     if rename_result.is_err() {
-        let _ = dest_sftp.remove_file(&tmp_dest_path).await;
+        let _ = dest_sftp.remove_file_bytes(&tmp_dest_bytes).await;
     } else {
         // 元数据保留：目标文件沿用源文件 mtime（SETSTAT 不支持时静默忽略）
-        if let Ok(meta) = src_sftp.metadata(src_path).await {
+        if let Ok(meta) = src_sftp.metadata_bytes(&src_path_bytes).await {
             if let Some(mtime) = meta.mtime {
                 let attrs = russh_sftp::protocol::FileAttributes {
                     size: None,
@@ -7418,7 +7468,8 @@ async fn server_to_server_single_file(
                     atime: None,
                     mtime: Some(mtime),
                 };
-                let _ = dest_sftp.set_metadata(sftp_dest_path.clone(), attrs).await;
+                let dest_bytes = crate::ssh::sftp_encoding::encode_sftp_path(dest_server_id, &sftp_dest_path).await;
+                let _ = dest_sftp.set_metadata_bytes(&dest_bytes, attrs).await;
             }
         }
     }
@@ -7433,6 +7484,7 @@ struct ServerToServerItem {
 
 async fn walk_s2s_dir_to_channel(
     server_id_src: &str,
+    server_id_dest: &str,
     src_sftp: &russh_sftp::client::SftpSession,
     dest_sftp: &russh_sftp::client::SftpSession,
     src_path: &str,
@@ -7468,10 +7520,12 @@ async fn walk_s2s_dir_to_channel(
     };
 
     // 符号链接循环防护：按源端规范路径去重
-    let canonical_dir = src_sftp
-        .canonicalize(&src_sftp_dir)
-        .await
-        .unwrap_or_else(|_| src_sftp_dir.trim_end_matches('/').to_string());
+    let src_dir_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id_src, &src_sftp_dir).await;
+    let src_encoding = crate::ssh::sftp_encoding::resolve_sftp_filename_encoding(server_id_src).await;
+    let canonical_dir = match src_sftp.canonicalize_bytes(&src_dir_bytes).await {
+        Ok(raw) => crate::ssh::sftp_encoding::decode_sftp_bytes(&raw, src_encoding),
+        Err(_) => src_sftp_dir.trim_end_matches('/').to_string(),
+    };
     if !visited_dirs.insert(canonical_dir) {
         return Ok(());
     }
@@ -7481,8 +7535,9 @@ async fn walk_s2s_dir_to_channel(
     } else {
         dest_path.replace('\\', "/")
     };
-    if let Err(e) = dest_sftp.create_dir(&remote_dest_dir).await {
-        match dest_sftp.metadata(&remote_dest_dir).await {
+    let remote_dest_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id_dest, &remote_dest_dir).await;
+    if let Err(e) = dest_sftp.create_dir_bytes(&remote_dest_bytes).await {
+        match dest_sftp.metadata_bytes(&remote_dest_bytes).await {
             Ok(meta) if meta.is_dir() => {}
             _ => return Err(format!("SFTP mkdir failed on dest: {}", e)),
         }
@@ -7505,7 +7560,8 @@ async fn walk_s2s_dir_to_channel(
                 } else {
                     gi.path.clone()
                 };
-                if let Ok(mut file) = src_sftp.open(&gi_sftp_path).await {
+                let gi_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id_src, &gi_sftp_path).await;
+                if let Ok(mut file) = src_sftp.open_bytes(&gi_bytes).await {
                     let mut buf = Vec::new();
                     let mut chunk = [0u8; 8192];
                     while buf.len() < MAX_GITIGNORE_BYTES {
@@ -7551,7 +7607,8 @@ async fn walk_s2s_dir_to_channel(
                 skipped.fetch_add(1, Ordering::Relaxed);
                 continue;
             }
-            match src_sftp.metadata(&entry_sftp_path).await {
+            let entry_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id_src, &entry_sftp_path).await;
+            match src_sftp.metadata_bytes(&entry_bytes).await {
                 Ok(meta) => {
                     entry.is_directory = meta.is_dir();
                     if !entry.is_directory && meta.len() > 0 {
@@ -7584,6 +7641,7 @@ async fn walk_s2s_dir_to_channel(
             }
             Box::pin(walk_s2s_dir_to_channel(
                 server_id_src,
+                server_id_dest,
                 src_sftp,
                 dest_sftp,
                 &entry_sftp_path,
@@ -7617,7 +7675,8 @@ async fn walk_s2s_dir_to_channel(
 
             // 目录续传：目标已存在同名且大小一致的文件时直接跳过
             if skip_existing {
-                if let Ok(meta) = dest_sftp.metadata(&item_dest_path).await {
+                let item_dest_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id_dest, &item_dest_path).await;
+                if let Ok(meta) = dest_sftp.metadata_bytes(&item_dest_bytes).await {
                     if meta.len() == size {
                         skipped.fetch_add(1, Ordering::Relaxed);
                         continue;
@@ -7708,6 +7767,7 @@ async fn server_to_server_dir_recursive(
 
         let res = walk_s2s_dir_to_channel(
             &src_id_producer,
+            &dest_id_producer,
             &producer_src_sftp,
             &producer_dest_sftp,
             &s_path,
@@ -7853,6 +7913,8 @@ async fn server_to_server_dir_recursive(
                 let transfer_res = server_to_server_single_file(
                     src_sftp,
                     dest_sftp,
+                    &channel_server_src,
+                    &channel_server_dest,
                     &task.src_path,
                     &task.dest_path,
                     task.size,
@@ -8200,7 +8262,8 @@ pub async fn files_server_to_server_transfer(
 
         // 单文件传输：断连自动重连重试（双腿 1GiB rekey 均可能断）
         // tmp 路径只生成一次，重试间复用；续传偏移取目标 tmp 实际大小
-        let meta = src_sftp.metadata(&src_sftp_path).await.map_err(|e| e.to_string())?;
+        let src_path_bytes = crate::ssh::sftp_encoding::encode_sftp_path(&src_server_id, &src_sftp_path).await;
+        let meta = src_sftp.metadata_bytes(&src_path_bytes).await.map_err(|e| e.to_string())?;
         let mut size = meta.size.unwrap_or(0);
 
         send_progress_closure(0, size, &file_name, "bytes", None, None);
@@ -8210,6 +8273,7 @@ pub async fn files_server_to_server_transfer(
             final_dest_path.replace('\\', "/"),
             uuid::Uuid::new_v4()
         );
+        let tmp_dest_bytes = crate::ssh::sftp_encoding::encode_sftp_path(&dest_server_id, &tmp_dest_path).await;
         let mut src_sftp = src_sftp;
         let mut dest_sftp = dest_sftp;
         let mut budget = TransferRetryBudget::new(0);
@@ -8224,6 +8288,8 @@ pub async fn files_server_to_server_transfer(
             let attempt = server_to_server_single_file(
                 &src_sftp,
                 &dest_sftp,
+                &src_server_id,
+                &dest_server_id,
                 &src_sftp_path,
                 &final_dest_path,
                 size,
@@ -8249,7 +8315,7 @@ pub async fn files_server_to_server_transfer(
                 Ok(()) => break Ok(()),
                 Err(e) => {
                     if is_non_retryable_transfer_error(&e) {
-                        let _ = dest_sftp.remove_file(&tmp_dest_path).await;
+                        let _ = dest_sftp.remove_file_bytes(&tmp_dest_bytes).await;
                         break Err(e);
                     }
                     last_error = e.clone();
@@ -8259,15 +8325,15 @@ pub async fn files_server_to_server_transfer(
                     );
                     // 重连双腿（健康的一条会被 ensure_transfer_connection 短路复用）
                     if let Err(re) = ensure_transfer_connection(&src_server_id, &e).await {
-                        let _ = dest_sftp.remove_file(&tmp_dest_path).await;
+                        let _ = dest_sftp.remove_file_bytes(&tmp_dest_bytes).await;
                         break Err(format!("{} (auto-reconnect source failed: {})", e, re));
                     }
                     if let Err(re) = ensure_transfer_connection(&dest_server_id, &e).await {
-                        let _ = dest_sftp.remove_file(&tmp_dest_path).await;
+                        let _ = dest_sftp.remove_file_bytes(&tmp_dest_bytes).await;
                         break Err(format!("{} (auto-reconnect destination failed: {})", e, re));
                     }
                     if let Err(ce) = transfer_retry_wait(cancel_ref, retry_no).await {
-                        let _ = dest_sftp.remove_file(&tmp_dest_path).await;
+                        let _ = dest_sftp.remove_file_bytes(&tmp_dest_bytes).await;
                         break Err(ce);
                     }
                     retry_no += 1;

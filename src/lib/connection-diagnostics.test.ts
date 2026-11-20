@@ -30,6 +30,16 @@ describe('connection diagnostics', () => {
     expect(buildConnectionDiagnosticReport(profileBound, 'connection timed out').code).not.toBe('config')
   })
 
+  it('flags missing PKCS#11 library path when authType is pkcs11', () => {
+    const invalidPkcs11: Server = {
+      ...server,
+      authType: 'pkcs11',
+      privateKeyPath: '',
+    }
+    expect(validateConnectionConfiguration(invalidPkcs11)).toContain('pkcs11Library')
+    expect(buildConnectionDiagnosticReport(invalidPkcs11, 'Missing PKCS#11 driver library path').code).toBe('config')
+  })
+
   it('classifies host key mismatches as a non-retryable security issue', () => {
     const report = buildConnectionDiagnosticReport(server, 'Host key has changed', SshErrorKind.HostKeyMismatch)
     expect(report.code).toBe('hostKey')

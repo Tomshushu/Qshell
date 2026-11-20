@@ -14,6 +14,7 @@ import { TerminalModule } from '@/components/workspace/modules/terminal'
 import { RemoteFilePicker } from '@/components/workspace/modules/remote-file-picker'
 import { sshService } from '@/services/ssh-service'
 import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog'
+import { buildDefaultSavePath } from '@/lib/app-paths'
 import { listen } from '@tauri-apps/api/event'
 import { useAppStore } from '@/store'
 import { extractBaseServerId } from '@/services/ssh-connection-state'
@@ -1106,7 +1107,7 @@ export function DockerModule({ serverId, initialView, initialSearchQuery }: Dock
     const defaultName = refs.length === 1
       ? `${refs[0].replace(/[:/]/g, '_')}.tar`
       : `images-export-${Date.now()}.tar`
-    const picked = await saveDialog({ defaultPath: defaultName, filters: [{ name: 'TAR', extensions: ['tar'] }] })
+    const picked = await saveDialog({ defaultPath: await buildDefaultSavePath(defaultName), filters: [{ name: 'TAR', extensions: ['tar'] }] })
     if (!picked) return
     setSaveLoadDialog((m) => m ? { ...m, loading: true, progress: { transferred: 0, total: 0 }, remotePath: '', result: '' } : m)
     const unlisten = await listen<{ serverId: string; transferred: number; total: number }>('docker-image-save-progress', (e) => {

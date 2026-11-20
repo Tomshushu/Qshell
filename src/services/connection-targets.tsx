@@ -49,8 +49,8 @@ export type ConnectionTargetType =
 /** 连接协议（与后端 ConnectionProtocol 枚举的 lowercase 字符串对应） */
 export type ConnectionProtocol = 'ssh' | 'rdp' | 'winrm' | 'telnet' | 'vnc' | 'serial' | 'redfish' | 'https' | 'k8s' | 'local'
 
-/** 认证方式（SSH 支持密码、私钥、证书与 Agent；其他协议由各自客户端处理） */
-export type AuthMethod = 'password' | 'privateKey' | 'sshAgent' | 'certificate' | 'keyboardInteractive'
+/** 认证方式（SSH 支持密码、私钥、证书、Agent、2FA、PKCS#11 智能卡与 Kerberos/GSSAPI；其他协议由各自客户端处理） */
+export type AuthMethod = 'password' | 'privateKey' | 'sshAgent' | 'certificate' | 'keyboardInteractive' | 'pkcs11' | 'gssapi'
 
 /**
  * 能力位，与后端 `src-tauri/src/connection/mod.rs` 的 `CapabilityFlags` 一一对应。
@@ -668,7 +668,10 @@ export function parseFileTransferConfig(raw?: string | null): FileTransferConfig
       password: typeof parsed.password === 'string' ? parsed.password : '',
       hasPassword: Boolean(parsed.hasPassword),
       transferMode: parsed.transferMode === 'active' ? 'active' : 'passive',
-      encoding: parsed.encoding === 'gbk' ? 'gbk' : 'utf-8',
+      encoding:
+        parsed.encoding === 'gbk' || parsed.encoding === 'gb18030' || parsed.encoding === 'auto'
+          ? parsed.encoding
+          : 'utf-8',
       allowInvalidCerts: parsed.allowInvalidCerts === true,
     }
   } catch {

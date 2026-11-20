@@ -272,7 +272,7 @@ impl WindowsPageantClient {
         &mut self,
         public: &PublicKey,
         hash_alg: Option<russh::keys::HashAlg>,
-        data: Vec<u8>,
+        mut data: Vec<u8>,
     ) -> Result<Vec<u8>, SshError> {
         use russh::keys::PublicKeyBase64;
 
@@ -332,8 +332,11 @@ impl WindowsPageantClient {
         if resp.len() < 5 + sig_len {
             return Err(SshError::AuthFailed("Pageant 签名响应长度不匹配".into()));
         }
-        let sig = resp[5..5 + sig_len].to_vec();
-        Ok(sig)
+        let sig = &resp[5..5 + sig_len];
+        // russh::Signer::auth_sign 约定：必须把 `string(signature)` 追加到原 `data` 缓冲区末尾再返回
+        data.extend_from_slice(&(sig.len() as u32).to_be_bytes());
+        data.extend_from_slice(sig);
+        Ok(data)
     }
 }
 

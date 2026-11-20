@@ -99,6 +99,8 @@ export const stripAnsiForRecording = (s: string): string => {
       .replace(new RegExp(`${ESC}[=><78]`, "g"), "")
       // 避免 Windows/Unix 混合换行产生孤立回车
       .replace(/\r(?!\n)/g, "")
+      // 剔除 Tab 补全响铃 BEL (\x07)、退格 BS (\x08) 等独立 C0 控制符（保留 \t 与 \n/\r）
+      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "")
   );
 };
 

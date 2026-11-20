@@ -4,6 +4,7 @@ import { Input } from '@/components/ui/input'
 import { Star, Copy, Check, Monitor } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { OsIcon } from '@/components/dashboard/os-icon'
+import { ServerIconBadge } from './server-icon-badge'
 import type { ServerCardSkinProps } from './types'
 import { useServerCardActions } from './use-server-card-actions'
 
@@ -43,8 +44,15 @@ export const DefaultServerCard = memo(function DefaultServerCard({
       onDoubleClick={handleDoubleClick}
     >
       <div className="flex items-center gap-3 relative">
-        {/* Left Side: OS Icon */}
-        <OsIcon osType={server.osType} osInfo={server.osInfo} targetType={server.targetType} className="h-10 w-10 rounded-xl flex-shrink-0 shadow-sm" />
+        {/* Left Side: 自定义图标优先，否则回退到 OS 图标 */}
+        {server.icon ? (
+          <ServerIconBadge
+            icon={server.icon}
+            className="h-10 w-10 rounded-xl flex-shrink-0 shadow-sm"
+          />
+        ) : (
+          <OsIcon osType={server.osType} osInfo={server.osInfo} targetType={server.targetType} className="h-10 w-10 rounded-xl flex-shrink-0 shadow-sm" />
+        )}
 
         {/* Right Side: Name line & IP/Tags line */}
         <div className="flex-1 min-w-0">

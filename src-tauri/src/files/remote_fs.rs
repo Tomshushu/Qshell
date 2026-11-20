@@ -97,6 +97,51 @@ lazy_static::lazy_static! {
     static ref PROBE_FAILURE_COOLDOWN: RwLock<HashMap<String, tokio::time::Instant>> = RwLock::new(HashMap::new());
 }
 
+/// 记录每台服务器最近一次打印的传输后端日志签名，避免高频操作刷屏
+static LAST_LOGGED_BACKEND: std::sync::LazyLock<std::sync::Mutex<HashMap<String, String>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+fn log_resolved_backend_if_changed(server_id: &str, resolved: &ResolvedRemoteFs) {
+    let (sig, detail) = match resolved {
+        ResolvedRemoteFs::Ftp { cfg, is_ftps } => {
+            let proto = if *is_ftps { "ftps" } else { "ftp" };
+            let enc = if cfg.use_gbk { "gbk" } else { "utf-8/auto-gbk" };
+            (
+                format!("{}:{}:{}:{}", proto, cfg.host, cfg.port, enc),
+                format!(
+                    "backend={}, host={}:{}, encoding={}",
+                    proto, cfg.host, cfg.port, enc
+                ),
+            )
+        }
+        ResolvedRemoteFs::Scp {
+            fallback_from_sftp, ..
+        } => (
+            format!("scp:fallback={}", fallback_from_sftp),
+            format!(
+                "backend=scp, transport=ssh-exec(same-ssh-port), fallback_from_sftp={}",
+                fallback_from_sftp
+            ),
+        ),
+        ResolvedRemoteFs::Sftp { target_type, .. } => (
+            format!("sftp:{}", target_type),
+            format!(
+                "backend=sftp, transport=ssh-subsystem(same-ssh-port), target_type={}",
+                target_type
+            ),
+        ),
+    };
+
+    let key = canonical_server_key(server_id);
+    if let Ok(mut guard) = LAST_LOGGED_BACKEND.lock() {
+        if guard.get(&key).map(String::as_str) == Some(sig.as_str()) {
+            return;
+        }
+        guard.insert(key, sig);
+    }
+    tracing::info!("[RemoteFs] server={} active {}", server_id, detail);
+}
+
 /// 瞬时探测失败后的冷却时长：期间直接假定 SFTP，避免重复长超时探测
 const PROBE_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -116,6 +161,10 @@ pub async fn clear_protocol_cache(server_id: &str) {
     let mut cooldown = PROBE_FAILURE_COOLDOWN.write().await;
     cooldown.remove(&key);
     cooldown.remove(server_id);
+    if let Ok(mut logged) = LAST_LOGGED_BACKEND.lock() {
+        logged.remove(&key);
+        logged.remove(server_id);
+    }
 }
 
 fn emit_backend_changed(server_id: &str, backend: &str, fallback_from_sftp: bool) {
@@ -686,6 +735,12 @@ fn is_sftp_subsystem_error(err: &str) -> bool {
 
 /// 解析目标服务器当前生效的文件系统后端（支持 FTP/FTPS、显式 SCP、以及 SFTP -> SCP 自动降级缓存）
 pub async fn resolve_backend(server_id: &str) -> Result<ResolvedRemoteFs, String> {
+    let resolved = resolve_backend_inner(server_id).await?;
+    log_resolved_backend_if_changed(server_id, &resolved);
+    Ok(resolved)
+}
+
+async fn resolve_backend_inner(server_id: &str) -> Result<ResolvedRemoteFs, String> {
     if let Ok(Some(ftp_cfg)) = ftp::resolve_ftp_config_for_server(server_id).await {
         return Ok(ResolvedRemoteFs::Ftp {
             is_ftps: ftp_cfg.is_ftps,

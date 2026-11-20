@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { toast } from '@/components/ui/toast'
 import { save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { writeTextFile } from '@tauri-apps/plugin-fs'
+import { buildDefaultSavePath } from '@/lib/app-paths'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -173,7 +174,7 @@ export function SnapshotModal({ open, onClose, serverName, serverId }: SnapshotM
     try {
       const filePath = await saveDialog({
         title: t('snap_save_file') || '保存快照文件',
-        defaultPath: defaultName,
+        defaultPath: await buildDefaultSavePath(defaultName),
         filters: [
           { name: 'JSON (*.json)', extensions: ['json'] },
           { name: 'All Files (*.*)', extensions: ['*'] },

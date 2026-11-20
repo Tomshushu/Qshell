@@ -27,6 +27,7 @@ import {
   resolveServerForTab,
   isEphemeralLocalServerId,
   extractLocalProfileId,
+  parseFileTransferConfig,
   parseLocalShellConfig,
   getTargetTypeSpec,
   hasCapability,
@@ -762,5 +763,20 @@ describe('protocol inference and multi-protocol combinations', () => {
     })
     expect(getServerConnectionFlags(resolved?.targetType, resolved?.protocol).isLocalServer).toBe(true)
     expect(resolveServerForTab([], 'non-existent-server')).toBeUndefined()
+  })
+
+  it('parses fileTransferConfig filename encodings including gbk, gb18030 and auto', () => {
+    expect(
+      parseFileTransferConfig(JSON.stringify({ protocol: 'sftp', encoding: 'gbk' }))?.encoding,
+    ).toBe('gbk')
+    expect(
+      parseFileTransferConfig(JSON.stringify({ protocol: 'sftp', encoding: 'gb18030' }))?.encoding,
+    ).toBe('gb18030')
+    expect(
+      parseFileTransferConfig(JSON.stringify({ protocol: 'auto', encoding: 'auto' }))?.encoding,
+    ).toBe('auto')
+    expect(
+      parseFileTransferConfig(JSON.stringify({ protocol: 'sftp', encoding: 'unknown' }))?.encoding,
+    ).toBe('utf-8')
   })
 })

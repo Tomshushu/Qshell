@@ -122,6 +122,9 @@ pub struct Server {
     /// 单服务器终端 TERM 类型覆写（None 表示继承全局 `terminalType` 设置）
     #[serde(default)]
     pub terminal_type: Option<String>,
+    /// 自定义会话图标：预设图标 ID、emoji 或 `data:image/...` 数据 URL（None 表示按默认规则渲染）
+    #[serde(default)]
+    pub icon: Option<String>,
     pub tags: String,
     pub notes: Option<String>,
     pub connection_timeout: i32,
@@ -247,6 +250,9 @@ pub struct ServerInput {
     /// 单服务器终端 TERM 类型覆写
     #[serde(default)]
     pub terminal_type: Option<String>,
+    /// 自定义会话图标（预设 ID / emoji / data URL）
+    #[serde(default)]
+    pub icon: Option<String>,
     #[serde(deserialize_with = "deserialize_tags", default)]
     pub tags: Option<String>,
     pub notes: Option<String>,
@@ -338,6 +344,9 @@ pub struct ServerUpdate {
     /// 单服务器终端 TERM 类型覆写
     #[serde(default)]
     pub terminal_type: Option<String>,
+    /// 自定义会话图标（预设 ID / emoji / data URL）
+    #[serde(default)]
+    pub icon: Option<String>,
     #[serde(deserialize_with = "deserialize_tags", default)]
     pub tags: Option<String>,
     pub notes: Option<String>,
@@ -573,6 +582,7 @@ fn create_tables(conn: &Connection) -> SqliteResult<()> {
             session_logging_config TEXT,
             rdp_config TEXT,
             terminal_type TEXT,
+            icon TEXT,
             group_id TEXT,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
@@ -724,7 +734,7 @@ fn create_tables(conn: &Connection) -> SqliteResult<()> {
 /// v4：修复已处于 v1/v2/v3 的历史库补齐遗漏的 `servers.forward_agent` 等列。
 /// v6：新增 `servers.rdp_config` 列以持久化每台服务器的 RDP 高级启动与重定向配置。
 /// v7：新增 `servers.x11_forwarding` 列以支持每台服务器的 SSH X11 图形转发开关。
-pub const CURRENT_SCHEMA_VERSION: i32 = 7;
+pub const CURRENT_SCHEMA_VERSION: i32 = 8;
 
 pub(crate) fn read_schema_version(conn: &Connection) -> SqliteResult<i32> {
     conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i32>(0))
@@ -900,6 +910,18 @@ fn apply_schema_migrations(conn: &Connection) -> SqliteResult<()> {
             tx.execute("ALTER TABLE servers ADD COLUMN x11_forwarding INTEGER DEFAULT 0", [])?;
         }
         write_schema_version(&tx, 7)?;
+        tx.commit()?;
+    }
+
+    // v7 -> v8：新增 servers.icon 自定义会话图标列（预设 ID / emoji / data URL）。
+    // 单独成段而非塞进 migrate_servers_table，是因为该函数仅在 v0→v1、v4→v5 运行，
+    // 已经升到 v5+ 的历史库会漏补此列，导致服务器新增/编辑保存失败。
+    if version < 8 {
+        let tx = conn.unchecked_transaction()?;
+        if !column_exists(&tx, "servers", "icon")? {
+            tx.execute("ALTER TABLE servers ADD COLUMN icon TEXT", [])?;
+        }
+        write_schema_version(&tx, 8)?;
         tx.commit()?;
     }
 
@@ -1102,6 +1124,8 @@ fn migrate_servers_table(conn: &Connection) -> SqliteResult<()> {
     // Phase 0：设备专属凭据配置（JSON，加密存储），供未来 HTTPS / 容器 / 外部启动器设备使用
     add_column_if_missing(conn, "servers", "credentials_config", "ALTER TABLE servers ADD COLUMN credentials_config TEXT")?;
     add_column_if_missing(conn, "servers", "logon_scripts_config", "ALTER TABLE servers ADD COLUMN logon_scripts_config TEXT")?;
+    // 自定义会话图标：预设图标 ID、emoji 或 data URL
+    add_column_if_missing(conn, "servers", "icon", "ALTER TABLE servers ADD COLUMN icon TEXT")?;
     // 回收站：软删除时间戳（NULL=正常，非 NULL=待删除）
     add_column_if_missing(conn, "servers", "deleted_at", "ALTER TABLE servers ADD COLUMN deleted_at INTEGER")?;
 
@@ -1255,6 +1279,9 @@ fn row_to_server(row: &rusqlite::Row<'_>) -> SqliteResult<Server> {
         auth_profile_id: row.get::<_, Option<String>>("auth_profile_id").ok().flatten()
             .filter(|s| !s.trim().is_empty()),
         terminal_type: row.get::<_, Option<String>>("terminal_type").ok().flatten()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        icon: row.get::<_, Option<String>>("icon").ok().flatten()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
         // 列缺失时（旧版本数据库 / 回滚场景）安全降级为 None
@@ -1582,6 +1609,12 @@ pub fn servers_add(server: String) -> Result<String, String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
+    let icon = input
+        .icon
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     let tags = input.tags.unwrap_or_else(|| "[]".to_string());
     let connection_timeout = input.connection_timeout.unwrap_or(15);
     let favorite_int = if input.favorite.unwrap_or(false) { 1 } else { 0 };
@@ -1696,8 +1729,8 @@ pub fn servers_add(server: String) -> Result<String, String> {
         .unwrap_or_else(|| HOST_GROUP_ID.to_string());
 
     conn.execute(
-        "INSERT INTO servers (id, name, host, port, username, auth_type, password, private_key_path, private_key_passphrase, agent_identity, certificate_path, ssh_key_id, forward_agent, x11_forwarding, auth_profile_id, tags, notes, connection_timeout, favorite, status, last_accessed_at, os_type, os_info, last_disconnected_at, last_error, target_type, protocol, protocols, rdp_port, vnc_port, vnc_password, bmc_port, bmc_allow_invalid_certs, proxy_ids, default_proxy_id, tunnel_ids, proxy_config, tunnels_config, keys_config, serial_config, group_id, created_at, updated_at, credentials_config, file_transfer_config, logon_scripts_config, terminal_type, session_logging_config, rdp_config)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49)",
+        "INSERT INTO servers (id, name, host, port, username, auth_type, password, private_key_path, private_key_passphrase, agent_identity, certificate_path, ssh_key_id, forward_agent, x11_forwarding, auth_profile_id, tags, notes, connection_timeout, favorite, status, last_accessed_at, os_type, os_info, last_disconnected_at, last_error, target_type, protocol, protocols, rdp_port, vnc_port, vnc_password, bmc_port, bmc_allow_invalid_certs, proxy_ids, default_proxy_id, tunnel_ids, proxy_config, tunnels_config, keys_config, serial_config, group_id, created_at, updated_at, credentials_config, file_transfer_config, logon_scripts_config, terminal_type, icon, session_logging_config, rdp_config)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50)",
         params![
             id,
             input.name,
@@ -1746,6 +1779,7 @@ pub fn servers_add(server: String) -> Result<String, String> {
             file_transfer_config_enc,
             logon_scripts_config_enc,
             terminal_type,
+            icon,
             session_logging_config,
             rdp_config,
         ],
@@ -1931,6 +1965,12 @@ pub fn servers_update(id: String, updates: String) -> Result<(), String> {
         let trimmed = terminal_type.trim();
         let value: Option<String> = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
         set_clauses.push("terminal_type = ?".to_string());
+        param_values.push(Box::new(value));
+    }
+    if let Some(ref icon) = update.icon {
+        let trimmed = icon.trim();
+        let value: Option<String> = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
+        set_clauses.push("icon = ?".to_string());
         param_values.push(Box::new(value));
     }
     if let Some(ref tags) = update.tags {

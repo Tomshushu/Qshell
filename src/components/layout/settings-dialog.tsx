@@ -5,6 +5,7 @@ import React, {
   useRef,
 } from "react";
 import { createPortal } from "react-dom";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Dialog,
   DialogContent,
@@ -16,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useToast } from "@/components/ui/toast";
 import { useAppStore, DEFAULT_SFTP_EXCLUSIONS } from "@/store";
 import { useTranslation, LANGUAGES } from "@/i18n";
 import { UI_STYLES } from "@/styles/themes/registry";
@@ -33,6 +35,8 @@ import { Kbd } from "@/components/ui/kbd";
 import { QshellLoader } from "@/components/ui/qshell-loader";
 import { Switch } from "@/components/ui/switch";
 import { playSound, SoundType } from "@/lib/sound";
+import { resetNotificationPermissionCache } from "@/services/system-notification";
+import { resolveRecordingDirectory } from "@/lib/app-paths";
 import { SelectPopover } from '@/components/ui/select-popover'
 import {
   Tooltip,
@@ -1020,6 +1024,33 @@ function SettingsPanel({
     };
   }, [fontDropdownOpen]);
 
+  const { toast } = useToast();
+  const [desktopIntegration, setDesktopIntegration] = useState<{
+    supported: boolean;
+    contextMenuRegistered: boolean;
+  } | null>(null);
+  const [togglingContextMenu, setTogglingContextMenu] = useState(false);
+
+  useEffect(() => {
+    if (!open || !isTauri) return;
+    let active = true;
+    void invoke<{ supported: boolean; contextMenuRegistered: boolean }>(
+      "desktop_integration_status",
+    )
+      .then((res) => {
+        if (active && res) {
+          setDesktopIntegration({
+            supported: Boolean(res.supported),
+            contextMenuRegistered: Boolean(res.contextMenuRegistered),
+          });
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [open]);
+
   const {
     terminalFontSize,
     setTerminalFontSize,
@@ -1040,6 +1071,10 @@ function SettingsPanel({
     setUiStyle,
     customCursorEnabled,
     setCustomCursorEnabled,
+    closeToTray,
+    setCloseToTray,
+    systemNotificationsEnabled,
+    setSystemNotificationsEnabled,
     terminalAutoReconnect,
     setTerminalAutoReconnect,
     terminalAntiIdleEnabled,
@@ -1052,6 +1087,8 @@ function SettingsPanel({
     setTerminalAntiIdleCustomString,
     terminalCopyPaste,
     setTerminalCopyPaste,
+    terminalOsc52Read,
+    setTerminalOsc52Read,
     terminalPasteWarnEnabled,
     setTerminalPasteWarnEnabled,
     terminalSelectionToolbar,
@@ -1092,6 +1129,10 @@ function SettingsPanel({
     setSftpDefaultViewMode,
     sftpShowHidden,
     setSftpShowHidden,
+    sftpThumbnailsLocal,
+    setSftpThumbnailsLocal,
+    sftpThumbnailsRemote,
+    setSftpThumbnailsRemote,
     sftpFileIconTheme,
     setSftpFileIconTheme,
     sftpExclusionEnabled,
@@ -1118,6 +1159,14 @@ function SettingsPanel({
     globalLogonScriptsConfig,
     setGlobalLogonScriptsConfig,
   } = useAppStore();
+  const [defaultRecordingDir, setDefaultRecordingDir] = useState("");
+  const [showGlobalLogonTemplate, setShowGlobalLogonTemplate] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    void resolveRecordingDirectory(undefined, false).then((dir) => {
+      if (dir) setDefaultRecordingDir(dir);
+    });
+  }, [open]);
 
   const { t, language, setLanguage } = useTranslation();
 
@@ -1438,6 +1487,77 @@ function SettingsPanel({
                     />
                   </div>
                 </div>
+              </CardContent>
+            </Card>
+
+            {/* 窗口与托盘 (P2-30) */}
+            <Card className="border/50 bg-background shadow-sm rounded-lg overflow-hidden">
+              <CardContent className="p-5 flex flex-col gap-4 text-xs">
+                <span className="text-xs font-bold text-foreground">
+                  {t("general_window_tray")}
+                </span>
+                <div className="flex items-center justify-between">
+                  <SettingLabelWithHint
+                    label={t("general_close_to_tray")}
+                    desc={t("general_close_to_tray_desc")}
+                  />
+                  <Switch
+                    checked={closeToTray ?? false}
+                    onCheckedChange={(enabled) => {
+                      setCloseToTray(enabled);
+                      playSound(SoundType.Toggle);
+                    }}
+                  />
+                </div>
+                <div className="flex items-center justify-between">
+                  <SettingLabelWithHint
+                    label={t("general_system_notification")}
+                    desc={t("general_system_notification_desc")}
+                  />
+                  <Switch
+                    checked={systemNotificationsEnabled ?? true}
+                    onCheckedChange={(enabled) => {
+                      setSystemNotificationsEnabled(enabled);
+                      // 重新开启时允许重新申请系统通知权限
+                      if (enabled) resetNotificationPermissionCache();
+                      playSound(SoundType.Toggle);
+                    }}
+                  />
+                </div>
+                {desktopIntegration?.supported && (
+                  <div className="flex items-center justify-between">
+                    <SettingLabelWithHint
+                      label={t("general_windows_context_menu")}
+                      desc={t("general_windows_context_menu_desc")}
+                    />
+                    <Switch
+                      disabled={togglingContextMenu}
+                      checked={desktopIntegration.contextMenuRegistered}
+                      onCheckedChange={(enabled) => {
+                        setTogglingContextMenu(true);
+                        void invoke("desktop_integration_set_context_menu", {
+                          enabled,
+                        })
+                          .then(() => {
+                            setDesktopIntegration((prev) =>
+                              prev
+                                ? { ...prev, contextMenuRegistered: enabled }
+                                : null,
+                            );
+                            playSound(SoundType.Toggle);
+                          })
+                          .catch((err) => {
+                            toast.error(
+                              err instanceof Error ? err.message : String(err),
+                            );
+                          })
+                          .finally(() => {
+                            setTogglingContextMenu(false);
+                          });
+                      }}
+                    />
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -1798,6 +1918,18 @@ function SettingsPanel({
                   />
                 </div>
 
+                {/* P2-07: allow remote OSC 52 clipboard read (default off) */}
+                <div className="flex items-center justify-between">
+                  <SettingLabelWithHint
+                    label={t("term_osc52_read")}
+                    desc={t("term_osc52_read_desc")}
+                  />
+                  <Switch
+                    checked={terminalOsc52Read ?? false}
+                    onCheckedChange={setTerminalOsc52Read}
+                  />
+                </div>
+
                 {/* Large text paste warning */}
                 <div className="flex items-center justify-between">
                   <SettingLabelWithHint
@@ -1995,9 +2127,11 @@ function SettingsPanel({
                         readOnly
                         value={
                           terminalRecordingDirectory ||
+                          defaultRecordingDir ||
                           t("term_record_dir_unset")
                         }
-                        className="h-7 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs text-muted-foreground outline-none"
+                        title={terminalRecordingDirectory || defaultRecordingDir || undefined}
+                        className="h-7 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs font-mono text-muted-foreground outline-none"
                       />
                       <Button
                         type="button"
@@ -2005,9 +2139,11 @@ function SettingsPanel({
                         size="sm"
                         className="h-7 text-xs shrink-0"
                         onClick={async () => {
+                          const fallbackDir = defaultRecordingDir || (await resolveRecordingDirectory(undefined, false));
                           const selected = await openDialog({
                             directory: true,
                             multiple: false,
+                            defaultPath: terminalRecordingDirectory || fallbackDir || undefined,
                             title: t("term_record_dir_dialog_title"),
                           });
                           if (typeof selected === "string")
@@ -2015,6 +2151,31 @@ function SettingsPanel({
                         }}
                       >
                         {t("term_record_dir_choose_btn")}
+                      </Button>
+                      {terminalRecordingDirectory && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2 text-xs shrink-0"
+                          onClick={() => setTerminalRecordingDirectory("")}
+                          title={defaultRecordingDir || undefined}
+                        >
+                          {t("common_reset")}
+                        </Button>
+                      )}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs shrink-0"
+                        onClick={() => {
+                          window.dispatchEvent(
+                            new CustomEvent("open-session-replay"),
+                          );
+                        }}
+                      >
+                        {t("replay_open_btn")}
                       </Button>
                     </div>
                   </div>
@@ -2417,26 +2578,44 @@ function SettingsPanel({
               </CardContent>
             </Card>
 
-            {/* 全局默认登录脚本 (Global Default Logon Scripts) 卡片 */}
+            {/* 新建服务器默认登录脚本模板（默认折叠，详细说明收敛至小问号） */}
             <Card className="border/50 bg-background shadow-sm rounded-lg overflow-hidden">
-              <CardContent className="p-6 flex flex-col gap-4 text-xs">
-                <div className="flex items-center justify-between">
-                  <div className="flex flex-col gap-0.5">
-                    <span className="text-sm font-bold text-foreground flex items-center gap-2">
-                      <Zap className="h-4 w-4 text-amber-500 fill-amber-500/20" />
-                      {t("global_logon_scripts_title")}
-                    </span>
-                    <span className="text-[11px] text-muted-foreground">
-                      {t("global_logon_scripts_desc")}
-                    </span>
+              <CardContent className="p-4 flex flex-col gap-3 text-xs">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Zap className="h-4 w-4 text-amber-500 fill-amber-500/20 shrink-0" />
+                    <SettingLabelWithHint
+                      label={t("global_logon_scripts_title")}
+                      desc={t("global_logon_scripts_desc")}
+                    />
+                    {globalLogonScriptsConfig?.enabled && (
+                      <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400 shrink-0">
+                        {language === "en" ? "Enabled" : "已启用"}
+                      </span>
+                    )}
                   </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2.5 text-xs shrink-0"
+                    onClick={() => setShowGlobalLogonTemplate((v) => !v)}
+                  >
+                    {showGlobalLogonTemplate
+                      ? (language === "en" ? "Collapse" : "收起")
+                      : (language === "en" ? "Configure" : "配置模板")}
+                  </Button>
                 </div>
-                <LogonScriptsTab
-                  config={globalLogonScriptsConfig || { enabled: false, rules: [] }}
-                  onChange={setGlobalLogonScriptsConfig}
-                  tr={(zh, en) => (language === "en" ? en : zh)}
-                  isGlobalSettings={true}
-                />
+                {showGlobalLogonTemplate && (
+                  <div className="pt-2 border-t border-border/50">
+                    <LogonScriptsTab
+                      config={globalLogonScriptsConfig || { enabled: false, rules: [] }}
+                      onChange={setGlobalLogonScriptsConfig}
+                      tr={(zh, en) => (language === "en" ? en : zh)}
+                      isGlobalSettings={true}
+                    />
+                  </div>
+                )}
               </CardContent>
             </Card>
           </div>
@@ -2712,6 +2891,32 @@ function SettingsPanel({
                       checked={sftpShowHidden}
                       onCheckedChange={(checked) => {
                         setSftpShowHidden(checked);
+                        playSound(SoundType.SWITCH);
+                      }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between pt-2.5 border-t border-border/30">
+                    <SettingLabelWithHint
+                      label={t("sftp_thumbnails_local")}
+                      desc={t("sftp_thumbnails_local_desc")}
+                    />
+                    <Switch
+                      checked={sftpThumbnailsLocal ?? true}
+                      onCheckedChange={(checked) => {
+                        setSftpThumbnailsLocal(checked);
+                        playSound(SoundType.SWITCH);
+                      }}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between pt-2.5 border-t border-border/30">
+                    <SettingLabelWithHint
+                      label={t("sftp_thumbnails_remote")}
+                      desc={t("sftp_thumbnails_remote_desc")}
+                    />
+                    <Switch
+                      checked={sftpThumbnailsRemote ?? false}
+                      onCheckedChange={(checked) => {
+                        setSftpThumbnailsRemote(checked);
                         playSound(SoundType.SWITCH);
                       }}
                     />

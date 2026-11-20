@@ -45,6 +45,8 @@ pub mod tags;
 pub mod updater;
 pub mod backgrounds;
 pub mod mcp_client;
+pub mod tray;
+pub mod desktop_integration;
 
 // ============================================================================
 // 公共辅助类型与函数

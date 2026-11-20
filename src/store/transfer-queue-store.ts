@@ -3,6 +3,29 @@ import type {
   TransferFailuresData,
   TransferProgressData,
 } from "@/services/api/types";
+import { notifySystem } from "@/services/system-notification";
+import { translate } from "@/i18n";
+
+function notifyTransferOutcome(
+  status: UnifiedTransferStatus,
+  fileName: string,
+  error?: string,
+): void {
+  if (status === "completed") {
+    void notifySystem(
+      translate("notify_transfer_completed"),
+      translate("notify_transfer_completed_body", { name: fileName }),
+    );
+  } else if (status === "failed" || status === "partial") {
+    void notifySystem(
+      translate("notify_transfer_failed"),
+      translate("notify_transfer_failed_body", {
+        name: fileName,
+        error: error || "Transfer failed",
+      }),
+    );
+  }
+}
 
 export type UnifiedTransferProtocol = "sftp" | "ftp" | "scp" | "s2s";
 export type UnifiedTransferDirection = "upload" | "download" | "s2s";
@@ -690,6 +713,12 @@ export const useTransferQueueStore = create<TransferQueueState>((set, get) => ({
           }
         : undefined;
 
+    const notifyQueue: {
+      status: UnifiedTransferStatus;
+      fileName: string;
+      error?: string;
+    }[] = [];
+
     set((state) => {
       const existingIdx = state.tasks.findIndex((t) => t.id === transferId);
       const existing = existingIdx >= 0 ? state.tasks[existingIdx] : undefined;
@@ -807,6 +836,13 @@ export const useTransferQueueStore = create<TransferQueueState>((set, get) => ({
           createdAt: now,
           updatedAt: now,
         };
+        if (initialStatus === "completed" || initialStatus === "failed") {
+          notifyQueue.push({
+            status: initialStatus,
+            fileName: created.fileName,
+            error: created.error,
+          });
+        }
         return {
           tasks: enforceTaskCap([...state.tasks, created]),
           _incomingSeq: state._incomingSeq + 1,
@@ -912,11 +948,17 @@ export const useTransferQueueStore = create<TransferQueueState>((set, get) => ({
           tmpPath,
           inferred.protocol,
         );
+        const failError = error || existing.error || "Transfer failed";
+        notifyQueue.push({
+          status: "failed",
+          fileName: existing.fileName || fileName,
+          error: failError,
+        });
         const nextTasks = [...state.tasks];
         nextTasks[existingIdx] = {
           ...(backfilled ?? existing),
           status: "failed",
-          error: error || existing.error || "Transfer failed",
+          error: failError,
           speedBytesPerSec: 0,
           etaSeconds: undefined,
           startFn: undefined,
@@ -1028,6 +1070,12 @@ export const useTransferQueueStore = create<TransferQueueState>((set, get) => ({
         activeRunTokens.delete(transferId);
       }
 
+      if (done === true && existing.status !== "completed") {
+        notifyQueue.push({
+          status: "completed",
+          fileName: nextFileName,
+        });
+      }
       const nextTasks = [...state.tasks];
       nextTasks[existingIdx] = {
         ...existing,
@@ -1055,9 +1103,19 @@ export const useTransferQueueStore = create<TransferQueueState>((set, get) => ({
       };
       return { tasks: nextTasks };
     });
+
+    for (const item of notifyQueue) {
+      notifyTransferOutcome(item.status, item.fileName, item.error);
+    }
   },
 
   applyFailuresEvent: (failuresData, now = Date.now()) => {
+    const failureNotifies: {
+      status: UnifiedTransferStatus;
+      fileName: string;
+      error?: string;
+    }[] = [];
+
     set((state) => {
       const idx = state.tasks.findIndex((t) => t.id === failuresData.transferId);
       if (idx < 0) return state;
@@ -1087,6 +1145,21 @@ export const useTransferQueueStore = create<TransferQueueState>((set, get) => ({
           ? "partial"
           : "failed"
         : existing.status;
+      const nextError = hasFailures
+        ? `${failuresData.failures.length} failed`
+        : existing.error;
+      if (
+        shouldFinalize &&
+        (existing.status === "transferring" ||
+          existing.status === "queued" ||
+          (hasFailures && existing.status === "completed"))
+      ) {
+        failureNotifies.push({
+          status: nextStatus,
+          fileName: existing.fileName,
+          error: nextError,
+        });
+      }
       const nextTasks = [...state.tasks];
       nextTasks[idx] = {
         ...existing,
@@ -1096,13 +1169,15 @@ export const useTransferQueueStore = create<TransferQueueState>((set, get) => ({
         status: nextStatus,
         speedBytesPerSec: shouldFinalize ? 0 : existing.speedBytesPerSec,
         etaSeconds: shouldFinalize ? undefined : existing.etaSeconds,
-        error: hasFailures
-          ? `${failuresData.failures.length} failed`
-          : existing.error,
+        error: nextError,
         updatedAt: now,
       };
       return { tasks: nextTasks };
     });
+
+    for (const item of failureNotifies) {
+      notifyTransferOutcome(item.status, item.fileName, item.error);
+    }
   },
 
   setPriority: (id, priority, now = Date.now()) => {
@@ -1280,6 +1355,11 @@ export const useTransferQueueStore = create<TransferQueueState>((set, get) => ({
   },
 
   reset: () => {
+    if (progressRafId !== null && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(progressRafId);
+    }
+    progressRafId = null;
+    progressBatch.clear();
     schedulerEpoch += 1;
     idSequence = 0;
     runSequence = 0;
@@ -1380,12 +1460,14 @@ export const useTransferQueueStore = create<TransferQueueState>((set, get) => ({
           if (activeRunTokens.get(candidate.id) !== runToken) return;
           activeRunTokens.delete(candidate.id);
           const ts = Date.now();
+          let transitionedName: string | null = null;
           set((curr) => ({
             tasks: curr.tasks.map((t) => {
               if (t.id !== candidate.id || t.status !== "transferring") {
                 return t;
               }
               rateSamples.delete(t.id);
+              transitionedName = t.fileName || candidate.fileName;
               return {
                 ...t,
                 status: "completed",
@@ -1397,6 +1479,10 @@ export const useTransferQueueStore = create<TransferQueueState>((set, get) => ({
               };
             }),
           }));
+          // 仅当任务未在 upsertFromProgressEvent 中提前收敛时补发通知，避免重复提示或对 failed 误报完成
+          if (transitionedName) {
+            notifyTransferOutcome("completed", transitionedName);
+          }
           get().tickScheduler();
         })
         .catch((err) => {
@@ -1405,12 +1491,14 @@ export const useTransferQueueStore = create<TransferQueueState>((set, get) => ({
           activeRunTokens.delete(candidate.id);
           const ts = Date.now();
           const msg = err instanceof Error ? err.message : String(err);
+          let transitionedName: string | null = null;
           set((curr) => ({
             tasks: curr.tasks.map((t) => {
               if (t.id !== candidate.id || t.status !== "transferring") {
                 return t;
               }
               rateSamples.delete(t.id);
+              transitionedName = t.fileName || candidate.fileName;
               return {
                 ...t,
                 status: "failed",
@@ -1422,6 +1510,9 @@ export const useTransferQueueStore = create<TransferQueueState>((set, get) => ({
               };
             }),
           }));
+          if (transitionedName) {
+            notifyTransferOutcome("failed", transitionedName, msg);
+          }
           get().tickScheduler();
         });
     }

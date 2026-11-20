@@ -43,8 +43,16 @@ import {
 } from '@/services/connection-targets'
 import { InlineProxyEditor, InlineTunnelEditor } from '@/components/server/inline-network-config'
 import { LogonScriptsTab } from './logon-scripts-tab'
+import { Pkcs11IdentityPicker } from './pkcs11-identity-picker'
 import type { LogonScriptsConfig } from '@/types'
 import { SelectKeyDialog } from '@/components/server/select-key-dialog'
+
+/** 自定义会话图标预设（P1-13），支持自由输入任意 emoji 覆盖 */
+const SESSION_ICON_PRESETS = [
+  '🖥️', '🐧', '🪟', '🍎', '🗄️', '☁️', '🌐', '🔒',
+  '⚙️', '🚀', '🐳', '📦', '🧪', '🏢', '🛰️', '🔧',
+]
+
 import type {
   Server as ServerType,
   ProxyConfig,
@@ -54,6 +62,7 @@ import type {
   SerialConfig,
   LocalShellProfile,
   FileTransferConfig,
+  FileTransferEncoding,
   SessionLogFormat,
   X11EnvironmentProbe,
 } from '@/types'
@@ -353,7 +362,7 @@ export function ServerFormDialog({
   const [host, setHost] = useState('')
   const [port, setPort] = useState(String(initialSpec.defaultPort))
   const [username, setUsername] = useState(initialSpec.defaultUsername)
-  const [authType, setAuthType] = useState<'password' | 'privateKey' | 'sshAgent' | 'certificate' | 'keyboardInteractive'>(
+  const [authType, setAuthType] = useState<'password' | 'privateKey' | 'sshAgent' | 'certificate' | 'keyboardInteractive' | 'pkcs11' | 'gssapi'>(
     initialTargetType === 'linux' ? initialSpec.defaultAuthType : 'password'
   )
   const [authProfileId, setAuthProfileId] = useState('')
@@ -362,6 +371,9 @@ export function ServerFormDialog({
   const [privateKeyPath, setPrivateKeyPath] = useState('')
   const [privateKeyPassphrase, setPrivateKeyPassphrase] = useState('')
   const [agentIdentity, setAgentIdentity] = useState('')
+  const [gssapiSpn, setGssapiSpn] = useState('')
+  const [gssapiDelegate, setGssapiDelegate] = useState(false)
+  const [gssapiPrincipal, setGssapiPrincipal] = useState('')
   const [certificatePath, setCertificatePath] = useState('')
   const [sshKeyId, setSshKeyId] = useState('')
   const [forwardAgent, setForwardAgent] = useState(false)
@@ -380,6 +392,8 @@ export function ServerFormDialog({
   const [notes, setNotes] = useState('')
   const [connectionTimeout, setConnectionTimeout] = useState('30')
   const [terminalType, setTerminalType] = useState('')
+  // 自定义会话图标（emoji 或 data URL）
+  const [sessionIcon, setSessionIcon] = useState('')
   const [rdpPort, setRdpPort] = useState('3389')
   const [vncPort, setVncPort] = useState('')
   const [vncPassword, setVncPassword] = useState('')
@@ -417,7 +431,7 @@ export function ServerFormDialog({
   const [ftPassword, setFtPassword] = useState('')
   const [showFtPassword, setShowFtPassword] = useState(false)
   const [ftTransferMode, setFtTransferMode] = useState<'passive' | 'active'>('passive')
-  const [ftEncoding, setFtEncoding] = useState<'utf-8' | 'gbk'>('utf-8')
+  const [ftEncoding, setFtEncoding] = useState<FileTransferEncoding>('utf-8')
   const [ftAllowInvalidCerts, setFtAllowInvalidCerts] = useState(false)
 
   // 本地终端 (Local Shell) 参数状态
@@ -588,7 +602,7 @@ export function ServerFormDialog({
           setAuthType(
             (isPasswordOnlyTarget
               ? 'password'
-              : existingServer.authType || 'password') as 'password' | 'privateKey' | 'sshAgent' | 'certificate' | 'keyboardInteractive'
+              : existingServer.authType || 'password') as 'password' | 'privateKey' | 'sshAgent' | 'certificate' | 'keyboardInteractive' | 'pkcs11' | 'gssapi'
           )
           setAuthProfileId(supportsAuthProfileOnLoad ? existingServer.authProfileId || '' : '')
           setPassword('') // 编辑时不回显密码
@@ -596,6 +610,22 @@ export function ServerFormDialog({
           setPrivateKeyPath(isPasswordOnlyTarget ? '' : existingServer.privateKeyPath || '')
           setPrivateKeyPassphrase('')
           setAgentIdentity(isPasswordOnlyTarget ? '' : existingServer.agentIdentity || '')
+          if (!isPasswordOnlyTarget && existingServer.authType === 'gssapi' && existingServer.agentIdentity) {
+            try {
+              const parsed = JSON.parse(existingServer.agentIdentity) as { spn?: string; delegate?: boolean; principal?: string }
+              setGssapiSpn(parsed.spn || '')
+              setGssapiDelegate(Boolean(parsed.delegate))
+              setGssapiPrincipal(parsed.principal || '')
+            } catch {
+              setGssapiSpn(existingServer.agentIdentity)
+              setGssapiDelegate(false)
+              setGssapiPrincipal('')
+            }
+          } else {
+            setGssapiSpn('')
+            setGssapiDelegate(false)
+            setGssapiPrincipal('')
+          }
           setCertificatePath(isPasswordOnlyTarget ? '' : existingServer.certificatePath || '')
           setSshKeyId(isPasswordOnlyTarget ? '' : existingServer.sshKeyId || '')
           setForwardAgent(existingServer.forwardAgent === true)
@@ -635,6 +665,7 @@ export function ServerFormDialog({
           setNotes(existingServer.notes || '')
           setConnectionTimeout(String(existingServer.connectionTimeout || 30))
           setTerminalType(existingServer.terminalType || '')
+          setSessionIcon(existingServer.icon || '')
           if (!isWindows) {
             setRdpPort(String(existingServer.rdpPort || 3389))
           }
@@ -657,17 +688,9 @@ export function ServerFormDialog({
           })
         } catch {
           setLogonScriptsConfig({ enabled: false, rules: [] })
-      setSessionLoggingEnabled(false)
-      setSessionLoggingFormat('plain')
-      setSessionLoggingDir('')
-      setSessionLoggingPattern('')
         }
       } else {
         setLogonScriptsConfig({ enabled: false, rules: [] })
-      setSessionLoggingEnabled(false)
-      setSessionLoggingFormat('plain')
-      setSessionLoggingDir('')
-      setSessionLoggingPattern('')
       }
 
       if (existingServer.sessionLoggingConfig) {
@@ -758,6 +781,9 @@ export function ServerFormDialog({
       setPrivateKeyPath('')
       setPrivateKeyPassphrase('')
       setAgentIdentity('')
+      setGssapiSpn('')
+      setGssapiDelegate(false)
+      setGssapiPrincipal('')
       setCertificatePath('')
       setSshKeyId('')
       setForwardAgent(false)
@@ -771,6 +797,7 @@ export function ServerFormDialog({
       setNotes('')
       setConnectionTimeout('30')
       setTerminalType('')
+      setSessionIcon('')
       setDisabledProtocols([])
       setRdpPort(isWin ? '3389' : '3389')
       setVncPort('')
@@ -778,7 +805,17 @@ export function ServerFormDialog({
       setBmcPort('443')
       setProxyConfig(null)
       setTunnelsConfig([])
-      setLogonScriptsConfig({ enabled: false, rules: [] })
+      const globalTpl = useAppStore.getState().globalLogonScriptsConfig
+      if (globalTpl?.enabled) {
+        setLogonScriptsConfig({
+          ...globalTpl,
+          rules: (globalTpl.rules || []).map((r) => ({ ...r, id: crypto.randomUUID() })),
+          parameters: (globalTpl.parameters || []).map((p) => ({ ...p })),
+          inheritGlobal: false,
+        })
+      } else {
+        setLogonScriptsConfig({ enabled: false, rules: [] })
+      }
       setSessionLoggingEnabled(false)
       setSessionLoggingFormat('plain')
       setSessionLoggingDir('')
@@ -1151,16 +1188,23 @@ export function ServerFormDialog({
             port: parseInt(port.trim(), 10) || 22,
             username: username.trim(),
             authType,
-            password: authType === 'password' ? password || undefined : undefined,
+            password: authType === 'password' || authType === 'gssapi' ? password || undefined : undefined,
             privateKeyPath:
-              authType === 'privateKey' || authType === 'certificate'
+              authType === 'privateKey' || authType === 'certificate' || authType === 'pkcs11'
                 ? privateKeyPath || existingServer?.privateKeyPath
                 : undefined,
             privateKeyPassphrase:
-              authType === 'privateKey' || authType === 'certificate'
+              authType === 'privateKey' || authType === 'certificate' || authType === 'pkcs11'
                 ? privateKeyPassphrase || undefined
                 : undefined,
-            agentIdentity: authType === 'sshAgent' ? agentIdentity || existingServer?.agentIdentity : undefined,
+            agentIdentity:
+              authType === 'sshAgent' || authType === 'pkcs11'
+                ? agentIdentity || existingServer?.agentIdentity
+                : authType === 'gssapi'
+                  ? (gssapiSpn.trim() || gssapiDelegate || gssapiPrincipal.trim()
+                      ? JSON.stringify({ spn: gssapiSpn.trim() || undefined, delegate: gssapiDelegate, principal: gssapiPrincipal.trim() || undefined })
+                      : undefined)
+                  : undefined,
             certificatePath:
               authType === 'certificate' ? certificatePath || existingServer?.certificatePath : undefined,
             connectionTimeout: parseInt(connectionTimeout) || 30,
@@ -1229,16 +1273,23 @@ export function ServerFormDialog({
         port: parseInt(port) || getProtocolSpec(protocol).defaultPort,
         username: username.trim(),
         authType,
-        password: authType === 'password' ? password || undefined : undefined,
+        password: authType === 'password' || authType === 'gssapi' ? password || undefined : undefined,
         privateKeyPath:
-          authType === 'privateKey' || authType === 'certificate'
+          authType === 'privateKey' || authType === 'certificate' || authType === 'pkcs11'
             ? privateKeyPath || existingServer?.privateKeyPath
             : undefined,
         privateKeyPassphrase:
-          authType === 'privateKey' || authType === 'certificate'
+          authType === 'privateKey' || authType === 'certificate' || authType === 'pkcs11'
             ? privateKeyPassphrase || undefined
             : undefined,
-        agentIdentity: authType === 'sshAgent' ? agentIdentity || existingServer?.agentIdentity : undefined,
+        agentIdentity:
+          authType === 'sshAgent' || authType === 'pkcs11'
+            ? agentIdentity || existingServer?.agentIdentity
+            : authType === 'gssapi'
+              ? (gssapiSpn.trim() || gssapiDelegate || gssapiPrincipal.trim()
+                  ? JSON.stringify({ spn: gssapiSpn.trim() || undefined, delegate: gssapiDelegate, principal: gssapiPrincipal.trim() || undefined })
+                  : undefined)
+              : undefined,
         certificatePath:
           authType === 'certificate' ? certificatePath || existingServer?.certificatePath : undefined,
         connectionTimeout: parseInt(connectionTimeout) || 30,
@@ -1340,6 +1391,7 @@ export function ServerFormDialog({
             notes: notes.trim() || undefined,
             connectionTimeout: parseInt(connectionTimeout) || 30,
             terminalType: terminalType.trim(),
+            icon: sessionIcon.trim(),
             targetType: 'local',
             protocol: 'local',
             protocols: ['local'],
@@ -1351,7 +1403,10 @@ export function ServerFormDialog({
             setError(result.error || tr('保存本地终端配置失败', 'Failed to save local shell'))
             return
           }
-          updateServer(serverId, updates)
+          updateServer(serverId, {
+            ...updates,
+            icon: sessionIcon.trim() || undefined,
+          })
           toast.success(tr('保存成功', 'Saved successfully'))
           if (onSaved) onSaved(serverId)
         } else {
@@ -1367,6 +1422,7 @@ export function ServerFormDialog({
             notes: notes.trim() || undefined,
             connectionTimeout: parseInt(connectionTimeout) || 30,
             terminalType: terminalType.trim() || undefined,
+            icon: sessionIcon.trim(),
             targetType: 'local',
             protocol: 'local',
             protocols: ['local'],
@@ -1491,6 +1547,7 @@ export function ServerFormDialog({
             protocol: 'serial',
             protocols: ['serial'],
             serialConfig: serialConfigStr,
+            icon: sessionIcon.trim(),
             groupId: groupId || HOST_GROUP_ID,
           }
           const result = await sshService.updateServer(serverId, updates)
@@ -1498,7 +1555,10 @@ export function ServerFormDialog({
             setError(result.error || tr('保存串口连接失败', 'Failed to save serial connection'))
             return
           }
-          updateServer(serverId, updates)
+          updateServer(serverId, {
+            ...updates,
+            icon: sessionIcon.trim() || undefined,
+          })
           toast.success(tr('保存成功', 'Saved successfully'))
           if (onSaved) onSaved(serverId)
         } else {
@@ -1517,6 +1577,7 @@ export function ServerFormDialog({
             protocol: 'serial',
             protocols: ['serial'],
             serialConfig: serialConfigStr,
+            icon: sessionIcon.trim(),
             groupId: groupId || HOST_GROUP_ID,
           }
           type ServerInput = Parameters<typeof sshService.addServer>[0]
@@ -1790,6 +1851,7 @@ export function ServerFormDialog({
           notes: notes.trim() || undefined,
           connectionTimeout: parseInt(connectionTimeout) || 30,
           terminalType: supportsTerminalTypeOnSave ? terminalType.trim() : '',
+          icon: sessionIcon.trim(),
           forwardAgent: finalProtocols.includes('ssh') ? forwardAgent : false,
           x11Forwarding: finalProtocols.includes('ssh') ? x11Forwarding : false,
           rdpPort: targetType === 'windows' ? rdpPortNum : 3389,
@@ -1838,6 +1900,20 @@ export function ServerFormDialog({
           updates.agentIdentity = agentIdentity || ''
           updates.sshKeyId = ''
         }
+        if (effectiveAuthType === 'pkcs11') {
+          updates.sshKeyId = ''
+          updates.privateKeyPath = privateKeyPath || ''
+          if (privateKeyPassphrase) {
+            updates.privateKeyPassphrase = privateKeyPassphrase
+          }
+          updates.agentIdentity = agentIdentity.trim()
+        }
+        if (effectiveAuthType === 'gssapi') {
+          updates.sshKeyId = ''
+          updates.agentIdentity = (gssapiSpn.trim() || gssapiDelegate || gssapiPrincipal.trim())
+            ? JSON.stringify({ spn: gssapiSpn.trim() || undefined, delegate: gssapiDelegate, principal: gssapiPrincipal.trim() || undefined })
+            : ''
+        }
         if (detectedOsType) {
           updates.osType = detectedOsType
         }
@@ -1863,15 +1939,24 @@ export function ServerFormDialog({
           username: resolvedUsername,
           authType: effectiveAuthType,
           authProfileId: supportsAuthProfileOnSave && authProfileId ? authProfileId : undefined,
-          password: (effectiveAuthType === 'password' || (targetType === 'windows' && Boolean(rdpPort.trim()))) ? (password || undefined) : undefined,
+          password: (effectiveAuthType === 'password' || effectiveAuthType === 'gssapi' || (targetType === 'windows' && Boolean(rdpPort.trim()))) ? (password || undefined) : undefined,
           vncPassword: vncPassword || undefined,
           privateKeyPath:
-            effectiveAuthType === 'privateKey' || effectiveAuthType === 'certificate' ? privateKeyPath : undefined,
+            effectiveAuthType === 'privateKey' || effectiveAuthType === 'certificate' || effectiveAuthType === 'pkcs11'
+              ? privateKeyPath
+              : undefined,
           privateKeyPassphrase:
-            effectiveAuthType === 'privateKey' || effectiveAuthType === 'certificate'
+            effectiveAuthType === 'privateKey' || effectiveAuthType === 'certificate' || effectiveAuthType === 'pkcs11'
               ? privateKeyPassphrase || undefined
               : undefined,
-          agentIdentity: effectiveAuthType === 'sshAgent' ? agentIdentity || undefined : undefined,
+          agentIdentity:
+            effectiveAuthType === 'sshAgent' || effectiveAuthType === 'pkcs11'
+              ? agentIdentity || undefined
+              : effectiveAuthType === 'gssapi'
+                ? ((gssapiSpn.trim() || gssapiDelegate || gssapiPrincipal.trim())
+                    ? JSON.stringify({ spn: gssapiSpn.trim() || undefined, delegate: gssapiDelegate, principal: gssapiPrincipal.trim() || undefined })
+                    : undefined)
+                : undefined,
           certificatePath: effectiveAuthType === 'certificate' ? certificatePath : undefined,
           sshKeyId: sshKeyId || undefined,
           forwardAgent: finalProtocols.includes('ssh') ? forwardAgent : false,
@@ -1880,6 +1965,7 @@ export function ServerFormDialog({
           notes: notes.trim() || undefined,
           connectionTimeout: parseInt(connectionTimeout) || 30,
           terminalType: supportsTerminalTypeOnSave ? (terminalType.trim() || undefined) : undefined,
+          icon: sessionIcon.trim(),
           favorite: false,
           status: 'unknown' as const,
           osType: detectedOsType || undefined,
@@ -2805,7 +2891,11 @@ export function ServerFormDialog({
                                         ? t('auth_type_ssh_agent')
                                         : bound?.authType === 'keyboardInteractive'
                                           ? t('auth_type_keyboard_interactive')
-                                          : bound?.authType || ''
+                                          : bound?.authType === 'pkcs11'
+                                            ? t('auth_type_pkcs11')
+                                            : bound?.authType === 'gssapi'
+                                              ? t('auth_type_gssapi')
+                                              : bound?.authType || ''
                               const isPureRdpWithKeyProfile =
                                 isWindowsTarget && !port.trim() && Boolean(rdpPort.trim()) && bound && bound.authType !== 'password'
                               return (
@@ -2855,13 +2945,15 @@ export function ServerFormDialog({
                           ) : (
                             <SelectPopover
                               value={authType}
-                              onChange={(v) => setAuthType(v as 'password' | 'privateKey' | 'sshAgent' | 'certificate' | 'keyboardInteractive')}
+                              onChange={(v) => setAuthType(v as 'password' | 'privateKey' | 'sshAgent' | 'certificate' | 'keyboardInteractive' | 'pkcs11' | 'gssapi')}
                               options={[
                                 { value: "password", label: "密码" },
                                 { value: "privateKey", label: "私钥" },
                                 { value: "certificate", label: "证书" },
                                 { value: "sshAgent", label: "SSH Agent" },
                                 { value: "keyboardInteractive", label: tr("键盘交互 (2FA/OTP)", "Keyboard-Interactive (2FA)") },
+                                { value: "pkcs11", label: tr("智能卡 / PKCS#11", "Smart Card / PKCS#11") },
+                                { value: "gssapi", label: "Kerberos / GSSAPI" },
                               ]}
                               className="h-7 flex-1"
                             />
@@ -2999,6 +3091,136 @@ export function ServerFormDialog({
                               浏览...
                             </Button>
                           </div>
+                        </div>
+                      </>
+                    )}
+
+                    {/* PKCS#11 智能卡 / 硬件令牌配置 */}
+                    {!authProfileId && authType === 'pkcs11' && (
+                      <>
+                        <div className="flex items-center gap-3">
+                          <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
+                            {tr('驱动库:', 'Library:')}
+                          </label>
+                          <div className="flex-1 flex gap-2 items-center">
+                            <Input
+                              value={privateKeyPath}
+                              onChange={(e) => setPrivateKeyPath(e.target.value)}
+                              placeholder={tr('opensc-pkcs11.dll / libykcs11.dylib / opensc-pkcs11.so', 'Path to PKCS#11 .dll / .so / .dylib')}
+                              className="h-7 text-xs font-mono flex-1 bg-background"
+                              spellCheck={false}
+                            />
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={async () => {
+                                const selected = await openDialog({ multiple: false })
+                                if (typeof selected === 'string' && selected) {
+                                  setPrivateKeyPath(selected)
+                                }
+                              }}
+                              className="h-7 px-3 text-xs shrink-0"
+                            >
+                              {tr('浏览...', 'Browse...')}
+                            </Button>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
+                            PIN:
+                          </label>
+                          <Input
+                            type="password"
+                            value={privateKeyPassphrase}
+                            onChange={(e) => setPrivateKeyPassphrase(e.target.value)}
+                            placeholder={tr('选填，留空则在连接时安全弹窗输入 PIN', 'Optional; leave blank to prompt on connect')}
+                            className="h-7 text-xs font-mono flex-1 bg-background"
+                            autoComplete="new-password"
+                          />
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
+                            {tr('密钥标签:', 'Key Label:')}
+                          </label>
+                          <Input
+                            value={agentIdentity}
+                            onChange={(e) => setAgentIdentity(e.target.value)}
+                            placeholder={tr('选填（CKA_LABEL 或 CKA_ID 十六进制），留空自动选用首个密钥', 'Optional CKA_LABEL or hex CKA_ID')}
+                            className="h-7 text-xs font-mono flex-1 bg-background"
+                            spellCheck={false}
+                          />
+                        </div>
+                      </>
+                    )}
+
+                    {!authProfileId && authType === 'pkcs11' && (
+                      <div className="pl-[68px]">
+                        <Pkcs11IdentityPicker
+                          libraryPath={privateKeyPath}
+                          pin={privateKeyPassphrase}
+                          selectedValue={agentIdentity}
+                          onSelect={setAgentIdentity}
+                          tr={tr}
+                        />
+                      </div>
+                    )}
+
+                    {/* Kerberos / GSSAPI 单点登录配置 */}
+                    {!authProfileId && authType === 'gssapi' && (
+                      <>
+                        <div className="flex items-center gap-3">
+                          <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
+                            SPN:
+                          </label>
+                          <Input
+                            value={gssapiSpn}
+                            onChange={(e) => setGssapiSpn(e.target.value)}
+                            placeholder={tr('选填，默认自动使用 host/<服务器地址>', 'Optional; defaults to host/<hostname>')}
+                            className="h-7 text-xs font-mono flex-1 bg-background"
+                            spellCheck={false}
+                          />
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
+                            {tr('域账号:', 'Principal:')}
+                          </label>
+                          <Input
+                            value={gssapiPrincipal}
+                            onChange={(e) => setGssapiPrincipal(e.target.value)}
+                            placeholder={tr('选填，非加域/跨集群时填 user@REALM（留空走系统 SSO）', 'Optional; user@REALM for non-domain login (blank = OS SSO)')}
+                            className="h-7 text-xs font-mono flex-1 bg-background"
+                            spellCheck={false}
+                          />
+                        </div>
+                        {gssapiPrincipal.trim() && (
+                          <div className="flex items-center gap-3">
+                            <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap">
+                              {tr('域密码:', 'Secret:')}
+                            </label>
+                            <Input
+                              type="password"
+                              value={password}
+                              onChange={(e) => setPassword(e.target.value)}
+                              placeholder={existingServer?.password ? tr('已保存（留空则保持不变）', 'Saved (leave blank to keep)') : tr('输入 Kerberos 账号密码', 'Enter Kerberos password')}
+                              className="h-7 text-xs flex-1 bg-background"
+                              autoComplete="new-password"
+                            />
+                          </div>
+                        )}
+                        <div className="flex items-center gap-3">
+                          <span className="w-14 shrink-0" />
+                          <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              checked={gssapiDelegate}
+                              onChange={(e) => setGssapiDelegate(e.target.checked)}
+                              className="rounded border-border"
+                            />
+                            <span>
+                              {tr('允许凭据委派 (Delegate Credentials，复用系统当前 Kerberos 票据)', 'Delegate Credentials (uses current OS Kerberos ticket)')}
+                            </span>
+                          </label>
                         </div>
                       </>
                     )}
@@ -3218,8 +3440,41 @@ export function ServerFormDialog({
                     )}
                   </fieldset>
 
+                  {/* 文件名字符编码（SFTP / Auto / FTP / FTPS 通用） */}
+                  {(ftProtocol === 'auto' || ftProtocol === 'sftp' || ftProtocol === 'ftp' || ftProtocol === 'ftps') && (
+                    <fieldset className="border border-border/70 rounded-md p-3.5 pt-1 space-y-2 bg-card/20 shadow-2xs">
+                      <legend className="px-1.5 text-xs font-medium text-foreground">
+                        {tr('文件名编码', 'Filename Encoding')}
+                      </legend>
+                      <div className="flex items-start gap-3">
+                        <label className="text-xs font-normal text-foreground w-14 text-right shrink-0 whitespace-nowrap pt-1">
+                          {tr('编码:', 'Encoding:')}
+                        </label>
+                        <div className="space-y-1 flex-1">
+                          <select
+                            aria-label={tr('文件名编码', 'Filename Encoding')}
+                            value={ftEncoding}
+                            onChange={(e) => setFtEncoding(e.target.value as FileTransferEncoding)}
+                            className="h-7 text-xs bg-background border border-input rounded px-2"
+                          >
+                            <option value="utf-8">{tr('UTF-8 (通用)', 'UTF-8 (Universal)')}</option>
+                            <option value="auto">{tr('自动检测 (UTF-8 / GBK)', 'Auto (UTF-8 / GBK)')}</option>
+                            <option value="gbk">{tr('GBK (中文 Windows / 旧版系统常见)', 'GBK (Chinese Windows / Legacy)')}</option>
+                            <option value="gb18030">{tr('GB18030 (完整中文字符集)', 'GB18030 (Extended Chinese)')}</option>
+                          </select>
+                          <p className="text-[11px] text-muted-foreground">
+                            {tr(
+                              '用于解析和发送远端文件名；若 SFTP / FTP 中文目录或文件名乱码，可切换为 GBK / GB18030 或自动检测。',
+                              'Charset used to decode and send remote filenames; switch to GBK / GB18030 or Auto if non-UTF-8 paths look garbled.',
+                            )}
+                          </p>
+                        </div>
+                      </div>
+                    </fieldset>
+                  )}
+
                   {/* FTP / FTPS 认证与传输选项 */}
-                  {ftProtocol !== 'sftp' && (
+                  {(ftProtocol === 'ftp' || ftProtocol === 'ftps') && (
                     <fieldset className="border border-border/70 rounded-md p-3.5 pt-1 space-y-3 bg-card/20 shadow-2xs">
                       <legend className="px-1.5 text-xs font-medium text-foreground">{tr('认证与传输选项', 'Auth & Transfer Settings')}</legend>
                       
@@ -3320,17 +3575,6 @@ export function ServerFormDialog({
                             </label>
                           </div>
 
-                          <div className="flex items-center gap-2">
-                            <span className="text-muted-foreground">{tr('编码:', 'Encoding:')}</span>
-                            <select
-                              value={ftEncoding}
-                              onChange={(e) => setFtEncoding(e.target.value as 'utf-8' | 'gbk')}
-                              className="h-7 text-xs bg-background border border-input rounded px-2"
-                            >
-                              <option value="utf-8">UTF-8 (通用)</option>
-                              <option value="gbk">GBK (Windows 中文常见)</option>
-                            </select>
-                          </div>
                         </div>
 
                         {ftProtocol === 'ftps' && (
@@ -3424,6 +3668,49 @@ export function ServerFormDialog({
                         />
                       </div>
                     )}
+
+                    {/* 自定义会话图标 */}
+                    <div className="flex items-start gap-3 pt-1">
+                      <label className="text-xs font-normal text-foreground shrink-0 pt-1">
+                        {tr('会话图标:', 'Session Icon:')}
+                      </label>
+                      <div className="flex flex-col gap-1.5 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <Input
+                            value={sessionIcon}
+                            onChange={(e) => setSessionIcon(e.target.value)}
+                            placeholder={tr('emoji，留空用默认', 'Emoji, empty for default')}
+                            maxLength={8}
+                            className="h-7 text-xs w-40 bg-background"
+                          />
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2 text-xs"
+                            onClick={() => setSessionIcon('')}
+                          >
+                            {tr('清除', 'Clear')}
+                          </Button>
+                        </div>
+                        <div className="flex flex-wrap gap-0.5 max-w-[260px]">
+                          {SESSION_ICON_PRESETS.map((emoji) => (
+                            <button
+                              key={emoji}
+                              type="button"
+                              onClick={() => setSessionIcon(emoji)}
+                              className={cn(
+                                'h-6 w-6 rounded text-sm leading-none hover:bg-accent transition-colors',
+                                sessionIcon === emoji && 'bg-accent ring-1 ring-primary',
+                              )}
+                              title={emoji}
+                            >
+                              {emoji}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
 
                     {/* SSH Agent Forwarding */}
                     {targetType !== 'local' && (protocol === 'ssh' || inferredProtocols.includes('ssh')) && (() => {

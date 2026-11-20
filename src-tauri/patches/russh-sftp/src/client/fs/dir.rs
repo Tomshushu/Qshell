@@ -8,6 +8,7 @@ use crate::protocol::FileType;
 pub struct DirEntry {
     parent: Arc<str>,
     file: String,
+    raw_file: Vec<u8>,
     metadata: Metadata,
 }
 
@@ -15,6 +16,11 @@ impl DirEntry {
     /// Returns the file name for the file that this entry points at.
     pub fn file_name(&self) -> String {
         self.file.to_owned()
+    }
+
+    /// Returns the exact raw wire bytes of the entry filename before lossy UTF-8 conversion.
+    pub fn raw_file_name(&self) -> &[u8] {
+        &self.raw_file
     }
 
     /// Returns the file type for the file that this entry points at.
@@ -49,7 +55,7 @@ impl DirEntry {
 /// Iterator over the entries in a remote directory.
 pub struct ReadDir {
     pub(crate) parent: Arc<str>,
-    pub(crate) entries: VecDeque<(String, Metadata)>,
+    pub(crate) entries: VecDeque<(String, Vec<u8>, Metadata)>,
 }
 
 impl Iterator for ReadDir {
@@ -62,7 +68,8 @@ impl Iterator for ReadDir {
             Some(entry) => Some(DirEntry {
                 parent: self.parent.clone(),
                 file: entry.0,
-                metadata: entry.1,
+                raw_file: entry.1,
+                metadata: entry.2,
             }),
         }
     }

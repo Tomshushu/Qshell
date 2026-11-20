@@ -222,6 +222,7 @@ function computeConfigFingerprint(
   groups: any[],
   keys: any[],
   authProfiles: any[] = [],
+  includeSecrets = true,
 ): string {
   const normServers = (servers || [])
     .map((s) => ({
@@ -251,10 +252,10 @@ function computeConfigFingerprint(
       name: p.name,
       username: p.username || '',
       authType: p.authType || 'password',
-      password: p.password || '',
+      password: includeSecrets ? p.password || '' : '',
       sshKeyId: p.sshKeyId || '',
       privateKeyPath: p.privateKeyPath || '',
-      privateKeyPassphrase: p.privateKeyPassphrase || '',
+      privateKeyPassphrase: includeSecrets ? p.privateKeyPassphrase || '' : '',
       certificatePath: p.certificatePath || '',
       agentIdentity: p.agentIdentity || '',
       forwardAgent: Boolean(p.forwardAgent),
@@ -325,8 +326,8 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       giteeToken: savedGiteeToken,
       githubToken: savedGitHubToken,
       masterPassword: savedMasterPassword,
-      syncPasswords: true,
-      syncTerminalBackgrounds: true,
+      syncPasswords: getSavedItem(SYNC_INCLUDE_CREDENTIALS_STORAGE_KEY) !== 'false',
+      syncTerminalBackgrounds: getSavedItem(SYNC_TERMINAL_BACKGROUNDS_STORAGE_KEY) !== 'false',
       autoSync: savedAutoSync,
       currentToken,
       isConfigured: Boolean(currentToken),
@@ -539,13 +540,21 @@ export const useSyncStore = create<SyncState>((set, get) => ({
       const localKeys = await sshService.listKeysForSync()
       const localAuthProfiles = (await sshService.listAuthProfilesForSync?.()) ?? []
 
+      const includeSecrets = get().syncPasswords
       const cloudFp = computeConfigFingerprint(
         cloudPayload.servers || [],
         cloudPayload.groups || [],
         cloudPayload.sshKeys || [],
         cloudPayload.authProfiles || [],
+        includeSecrets,
       )
-      const localFp = computeConfigFingerprint(localServers, localGroups, localKeys, localAuthProfiles)
+      const localFp = computeConfigFingerprint(
+        localServers,
+        localGroups,
+        localKeys,
+        localAuthProfiles,
+        includeSecrets,
+      )
 
       // 3. 若配置指纹完全一致，说明本地与云端已保持同步，无需产生任何云端提交与同步读写
       if (cloudFp === localFp) {
@@ -690,6 +699,8 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         theme: appState.theme,
         uiStyle: appState.uiStyle,
         customCursorEnabled: appState.customCursorEnabled,
+        closeToTray: appState.closeToTray,
+        systemNotificationsEnabled: appState.systemNotificationsEnabled,
         uiSoundEnabled: appState.uiSoundEnabled,
         autoRefresh: appState.autoRefresh,
         refreshInterval: appState.refreshInterval,
@@ -707,6 +718,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
         terminalAntiIdleMode: appState.terminalAntiIdleMode,
         terminalAntiIdleCustomString: appState.terminalAntiIdleCustomString,
         terminalCopyPaste: appState.terminalCopyPaste,
+        terminalOsc52Read: appState.terminalOsc52Read,
         terminalSelectionToolbar: appState.terminalSelectionToolbar,
         terminalBellSound: appState.terminalBellSound,
         terminalWordSeparator: appState.terminalWordSeparator,
@@ -1155,6 +1167,9 @@ export const useSyncStore = create<SyncState>((set, get) => ({
           theme: (prefs.theme as typeof prev.theme) ?? prev.theme,
           uiStyle: (prefs.uiStyle as typeof prev.uiStyle) ?? prev.uiStyle,
           customCursorEnabled: (prefs.customCursorEnabled as boolean) ?? prev.customCursorEnabled,
+          closeToTray: (prefs.closeToTray as boolean) ?? prev.closeToTray,
+          systemNotificationsEnabled:
+            (prefs.systemNotificationsEnabled as boolean) ?? prev.systemNotificationsEnabled,
           uiSoundEnabled: (prefs.uiSoundEnabled as boolean) ?? prev.uiSoundEnabled,
           autoRefresh: (prefs.autoRefresh as boolean) ?? prev.autoRefresh,
           refreshInterval: (prefs.refreshInterval as number) ?? prev.refreshInterval,
@@ -1172,6 +1187,7 @@ export const useSyncStore = create<SyncState>((set, get) => ({
           terminalAntiIdleMode: (prefs.terminalAntiIdleMode as typeof prev.terminalAntiIdleMode) ?? prev.terminalAntiIdleMode,
           terminalAntiIdleCustomString: (prefs.terminalAntiIdleCustomString as string) ?? prev.terminalAntiIdleCustomString,
           terminalCopyPaste: (prefs.terminalCopyPaste as boolean) ?? prev.terminalCopyPaste,
+          terminalOsc52Read: (prefs.terminalOsc52Read as boolean) ?? prev.terminalOsc52Read,
           terminalSelectionToolbar: (prefs.terminalSelectionToolbar as boolean) ?? prev.terminalSelectionToolbar,
           terminalBellSound: (prefs.terminalBellSound as boolean) ?? prev.terminalBellSound,
           terminalWordSeparator: (prefs.terminalWordSeparator as string) ?? prev.terminalWordSeparator,
@@ -1211,6 +1227,17 @@ export const useSyncStore = create<SyncState>((set, get) => ({
           appLockIdleMinutes: (prefs.appLockIdleMinutes as number) ?? prev.appLockIdleMinutes,
           terminalPasteWarnEnabled: (prefs.terminalPasteWarnEnabled as boolean) ?? prev.terminalPasteWarnEnabled,
         }))
+        // 触发带副作用的 setter，确保音效、队列并发与后端限速/过滤策略立即生效
+        try {
+          const appState = useAppStore.getState()
+          if (prefs.uiSoundEnabled !== undefined) appState.setUiSoundEnabled?.(appState.uiSoundEnabled)
+          if (prefs.sftpTransferConcurrency !== undefined) appState.setSftpTransferConcurrency?.(appState.sftpTransferConcurrency)
+          if (prefs.transferRateLimit !== undefined) appState.setTransferRateLimit?.(appState.transferRateLimit)
+          if (prefs.sftpExclusionEnabled !== undefined) appState.setSftpExclusionEnabled?.(appState.sftpExclusionEnabled)
+          if (prefs.sftpSymlinkPolicy !== undefined) appState.setSftpSymlinkPolicy?.(appState.sftpSymlinkPolicy)
+        } catch {
+          // 单元测试中 sshService 可能未完整 mock 传输限速/过滤接口，忽略非关键副作用异常
+        }
       }
 
       // 5.5 还原全量路径收藏（SFTP 与工作台）

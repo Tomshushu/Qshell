@@ -23,6 +23,7 @@ import {
   ExternalLink,
   Shield,
   SlidersHorizontal,
+  Film,
 } from "lucide-react";
 import { useAppStore } from "@/store";
 import { cn } from "@/lib/utils";
@@ -65,6 +66,7 @@ export interface TerminalContextMenuProps {
   onOpenLogFile: () => void;
   onOpenLogFolder: () => void;
   onChooseLogDirectory: () => void;
+  onReplayRecording?: () => void;
   onAIDiagnosis?: () => void;
   onAIDiagnoseRecent?: () => void;
   onAIExplainShell?: () => void;
@@ -189,6 +191,7 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
   onOpenLogFile,
   onOpenLogFolder,
   onChooseLogDirectory,
+  onReplayRecording,
   onAIDiagnosis,
   onAIDiagnoseRecent,
   onAIExplainShell,
@@ -251,21 +254,6 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
         </span>
       </button>
 
-      {/* 复制全部输出 */}
-      <button
-        type="button"
-        className={cn(
-          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
-          isLightTerminal
-            ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
-            : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
-        )}
-        onClick={onCopyAll}
-      >
-        <Copy className="h-3.5 w-3.5 text-sky-400 shrink-0" />
-        <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_copy_all")}</span>
-      </button>
-
       {/* 粘贴 */}
       <button
         type="button"
@@ -300,88 +288,20 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
         <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_paste_selected")}</span>
       </button>
 
-      {/* 格式化 JSON */}
-      {onFormatJson && (
-        <button
-          type="button"
-          data-testid="terminal-menu-format-json"
-          className={cn(
-            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
-            isLightTerminal
-              ? "text-amber-700 hover:bg-amber-500/10 hover:text-amber-900"
-              : "text-amber-300 hover:bg-amber-500/15 hover:text-amber-200",
-          )}
-          onClick={onFormatJson}
-        >
-          <Braces className="h-3.5 w-3.5 text-amber-400 shrink-0" />
-          <span className="truncate tracking-tight font-sans text-[11.5px] font-medium">{t("tm_format_json") || "格式化 JSON"}</span>
-        </button>
-      )}
-
-      {/* AI 诊断选中文本 */}
-      {onAIDiagnosis && ctxMenu.hasSelection && (
-        <>
-          <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
-          <button
-            type="button"
-            className={cn(
-              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
-              isLightTerminal
-                ? "text-purple-700 hover:bg-purple-50 hover:text-purple-900"
-                : "text-purple-300 hover:bg-purple-500/15 hover:text-purple-200",
-            )}
-            onClick={onAIDiagnosis}
-          >
-            <Sparkles className="h-3.5 w-3.5 text-purple-400 shrink-0" />
-            <span className="truncate tracking-tight font-sans text-[11.5px] font-medium">
-              {t("tm_ai_diagnosis_menu") || "AI 诊断选中文本"}
-            </span>
-          </button>
-        </>
-      )}
-
-      {/* AI 拆解选中文本指令 (Explain Shell) */}
-      {onAIExplainShell && ctxMenu.hasSelection && (
-        <button
-          type="button"
-          data-testid="terminal-menu-ai-explain-shell"
-          className={cn(
-            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
-            isLightTerminal
-              ? "text-sky-700 hover:bg-sky-50 hover:text-sky-900"
-              : "text-sky-300 hover:bg-sky-500/15 hover:text-sky-200",
-          )}
-          onClick={onAIExplainShell}
-        >
-          <Layers className="h-3.5 w-3.5 text-sky-400 shrink-0" />
-          <span className="truncate tracking-tight font-sans text-[11.5px] font-medium">
-            {t("tm_ai_explain_shell") || "拆解并解释指令 (Explain)"}
-          </span>
-        </button>
-      )}
-
-      {/* AI 诊断终端最新报错/输出 */}
-      {onAIDiagnoseRecent && !ctxMenu.hasSelection && (
-        <>
-          <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
-          <button
-            type="button"
-            data-testid="terminal-menu-ai-diagnose-recent"
-            className={cn(
-              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
-              isLightTerminal
-                ? "text-purple-700 hover:bg-purple-50 hover:text-purple-900"
-                : "text-purple-300 hover:bg-purple-500/15 hover:text-purple-200",
-            )}
-            onClick={onAIDiagnoseRecent}
-          >
-            <Sparkles className="h-3.5 w-3.5 text-purple-400 shrink-0" />
-            <span className="truncate tracking-tight font-sans text-[11.5px] font-medium">
-              {t("tm_ai_diagnosis_recent") || "AI 诊断终端报错/输出"}
-            </span>
-          </button>
-        </>
-      )}
+      {/* 复制全部输出 */}
+      <button
+        type="button"
+        className={cn(
+          "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+          isLightTerminal
+            ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+            : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+        )}
+        onClick={onCopyAll}
+      >
+        <Copy className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+        <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_copy_all")}</span>
+      </button>
 
       <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
 
@@ -406,11 +326,78 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
         </span>
       </button>
 
-      <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
+      {/* 清屏：悬停展开子菜单 */}
+      <TerminalSubmenu
+        panelMinWidthClass="min-w-[190px]"
+        estimatedHeight={116}
+        isSubmenuLeft={isSubmenuLeft}
+        isLightTerminal={isLightTerminal}
+        trigger={
+          <button
+            type="button"
+            className={cn(
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+              isLightTerminal
+                ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+            )}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Trash2 className="h-3.5 w-3.5 text-rose-400 shrink-0" />
+            <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_clear")}</span>
+            <ChevronRight className="h-3.5 w-3.5 ml-auto opacity-60" />
+          </button>
+        }
+      >
+          <button
+            type="button"
+            className={cn(
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+              isLightTerminal
+                ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+            )}
+            onClick={onClearScreen}
+          >
+            <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_clear_screen")}</span>
+            <span className={cn("ml-auto text-[10px] font-mono tracking-tight", isLightTerminal ? "text-slate-400" : "text-slate-400/70")}>
+              L
+            </span>
+          </button>
+          <button
+            type="button"
+            className={cn(
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+              isLightTerminal
+                ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+            )}
+            onClick={onClearScrollback}
+          >
+            <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_clear_scrollback")}</span>
+            <span className={cn("ml-auto text-[10px] font-mono tracking-tight", isLightTerminal ? "text-slate-400" : "text-slate-400/70")}>
+              O
+            </span>
+          </button>
+          <button
+            type="button"
+            className={cn(
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+              isLightTerminal
+                ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+            )}
+            onClick={onClearAll}
+          >
+            <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_clear_all")}</span>
+            <span className={cn("ml-auto text-[10px] font-mono tracking-tight", isLightTerminal ? "text-slate-400" : "text-slate-400/70")}>
+              N
+            </span>
+          </button>
+      </TerminalSubmenu>
 
       {/* 传输与文件：SSH 会话二级子菜单（非 SSH 自动隐藏） */}
       {hasTransferGroup && (
-        <>
           <TerminalSubmenu
             panelMinWidthClass="min-w-[232px]"
             estimatedHeight={190}
@@ -543,79 +530,90 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
                 </button>
               )}
           </TerminalSubmenu>
-          <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
+      )}
+
+      <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
+
+      {/* 格式化 JSON */}
+      {onFormatJson && (
+        <button
+          type="button"
+          data-testid="terminal-menu-format-json"
+          className={cn(
+            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+            isLightTerminal
+              ? "text-amber-700 hover:bg-amber-500/10 hover:text-amber-900"
+              : "text-amber-300 hover:bg-amber-500/15 hover:text-amber-200",
+          )}
+          onClick={onFormatJson}
+        >
+          <Braces className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+          <span className="truncate tracking-tight font-sans text-[11.5px] font-medium">{t("tm_format_json") || "格式化 JSON"}</span>
+        </button>
+      )}
+
+      {/* AI 诊断选中文本 */}
+      {onAIDiagnosis && ctxMenu.hasSelection && (
+        <>
+          <button
+            type="button"
+            className={cn(
+              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+              isLightTerminal
+                ? "text-purple-700 hover:bg-purple-50 hover:text-purple-900"
+                : "text-purple-300 hover:bg-purple-500/15 hover:text-purple-200",
+            )}
+            onClick={onAIDiagnosis}
+          >
+            <Sparkles className="h-3.5 w-3.5 text-purple-400 shrink-0" />
+            <span className="truncate tracking-tight font-sans text-[11.5px] font-medium">
+              {t("tm_ai_diagnosis_menu") || "AI 诊断选中文本"}
+            </span>
+          </button>
         </>
       )}
 
-      {/* 清屏：悬停展开子菜单 */}
-      <TerminalSubmenu
-        panelMinWidthClass="min-w-[190px]"
-        estimatedHeight={116}
-        isSubmenuLeft={isSubmenuLeft}
-        isLightTerminal={isLightTerminal}
-        trigger={
+      {/* AI 拆解选中文本指令 (Explain Shell) */}
+      {onAIExplainShell && ctxMenu.hasSelection && (
+        <button
+          type="button"
+          data-testid="terminal-menu-ai-explain-shell"
+          className={cn(
+            "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+            isLightTerminal
+              ? "text-sky-700 hover:bg-sky-50 hover:text-sky-900"
+              : "text-sky-300 hover:bg-sky-500/15 hover:text-sky-200",
+          )}
+          onClick={onAIExplainShell}
+        >
+          <Layers className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+          <span className="truncate tracking-tight font-sans text-[11.5px] font-medium">
+            {t("tm_ai_explain_shell") || "拆解并解释指令 (Explain)"}
+          </span>
+        </button>
+      )}
+
+      {/* AI 诊断终端最新报错/输出 */}
+      {onAIDiagnoseRecent && !ctxMenu.hasSelection && (
+        <>
           <button
             type="button"
+            data-testid="terminal-menu-ai-diagnose-recent"
             className={cn(
               "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
               isLightTerminal
-                ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
-                : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+                ? "text-purple-700 hover:bg-purple-50 hover:text-purple-900"
+                : "text-purple-300 hover:bg-purple-500/15 hover:text-purple-200",
             )}
-            onClick={(e) => e.stopPropagation()}
+            onClick={onAIDiagnoseRecent}
           >
-            <Trash2 className="h-3.5 w-3.5 text-rose-400 shrink-0" />
-            <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_clear")}</span>
-            <ChevronRight className="h-3.5 w-3.5 ml-auto opacity-60" />
-          </button>
-        }
-      >
-          <button
-            type="button"
-            className={cn(
-              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
-              isLightTerminal
-                ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
-                : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
-            )}
-            onClick={onClearScreen}
-          >
-            <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_clear_screen")}</span>
-            <span className={cn("ml-auto text-[10px] font-mono tracking-tight", isLightTerminal ? "text-slate-400" : "text-slate-400/70")}>
-              L
+            <Sparkles className="h-3.5 w-3.5 text-purple-400 shrink-0" />
+            <span className="truncate tracking-tight font-sans text-[11.5px] font-medium">
+              {t("tm_ai_diagnosis_recent") || "AI 诊断终端报错/输出"}
             </span>
           </button>
-          <button
-            type="button"
-            className={cn(
-              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
-              isLightTerminal
-                ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
-                : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
-            )}
-            onClick={onClearScrollback}
-          >
-            <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_clear_scrollback")}</span>
-            <span className={cn("ml-auto text-[10px] font-mono tracking-tight", isLightTerminal ? "text-slate-400" : "text-slate-400/70")}>
-              O
-            </span>
-          </button>
-          <button
-            type="button"
-            className={cn(
-              "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
-              isLightTerminal
-                ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
-                : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
-            )}
-            onClick={onClearAll}
-          >
-            <span className="truncate tracking-tight font-sans text-[11.5px]">{t("tm_clear_all")}</span>
-            <span className={cn("ml-auto text-[10px] font-mono tracking-tight", isLightTerminal ? "text-slate-400" : "text-slate-400/70")}>
-              N
-            </span>
-          </button>
-      </TerminalSubmenu>
+        </>
+      )}
 
       <div className={cn("h-px my-1 mx-2", isLightTerminal ? "bg-slate-200/80" : "bg-white/10")} />
 
@@ -908,6 +906,21 @@ export const TerminalContextMenu = memo(function TerminalContextMenu({
           >
             <span className="truncate tracking-tight font-sans text-[11.5px]">{t("recording_choose_dir")}</span>
           </button>
+          {onReplayRecording && (
+            <button
+              type="button"
+              className={cn(
+                "group flex items-center gap-2 px-2.5 py-1.5 rounded-lg mx-0.5 cursor-pointer transition-all active:scale-[0.98] text-xs font-mono w-full text-left",
+                isLightTerminal
+                  ? "text-slate-700 hover:bg-slate-900/[0.06] hover:text-slate-900"
+                  : "text-slate-300 hover:bg-white/[0.08] hover:text-slate-100",
+              )}
+              onClick={onReplayRecording}
+            >
+              <Film className="w-3.5 h-3.5 shrink-0 opacity-75" />
+              <span className="truncate tracking-tight font-sans text-[11.5px]">{t("replay_open_btn")}</span>
+            </button>
+          )}
       </TerminalSubmenu>
     </div>
   );

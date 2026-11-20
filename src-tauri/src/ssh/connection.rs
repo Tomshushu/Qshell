@@ -220,6 +220,19 @@ pub enum AuthMethod {
     },
     /// 键盘交互式认证（RFC 4256：2FA / OTP / PAM Challenge-Response）。
     KeyboardInteractive,
+    /// PKCS#11 智能卡 / 硬件令牌认证（YubiKey、OpenSC、UKey）。
+    Pkcs11 {
+        library_path: String,
+        pin: Option<String>,
+        key_label: Option<String>,
+    },
+    /// Kerberos / GSSAPI（RFC 4462 `gssapi-with-mic`）企业单点登录。
+    Gssapi {
+        target_spn: Option<String>,
+        delegate_credentials: bool,
+        principal: Option<String>,
+        password: Option<String>,
+    },
 }
 
 /// 建立 SSH 传输与认证时的附加连接选项。
@@ -743,7 +756,7 @@ pub async fn connect_via_chained_jump(
     .map_err(|e| SshError::ConnectionFailed(format!("第 1 级跳板机 SSH 握手失败: {}", e)))?;
 
     let auth_timeout = deadline.saturating_duration_since(std::time::Instant::now()).max(Duration::from_secs(5));
-    SshTransport::authenticate(&mut handle_0, server_id, generation, &hop0.username, &hop0.auth, auth_timeout).await?;
+    SshTransport::authenticate(&mut handle_0, server_id, &hop0.host, generation, &hop0.username, &hop0.auth, auth_timeout).await?;
     jump_handles.push(handle_0);
 
     // 2. 中间跳：在上一跳 channel 内 open_direct_tcpip 穿透并在其上握手
@@ -787,7 +800,7 @@ pub async fn connect_via_chained_jump(
         .map_err(|e| SshError::ConnectionFailed(format!("第 {} 级跳板机 SSH 握手失败: {}", i + 1, e)))?;
 
         let auth_timeout = deadline.saturating_duration_since(std::time::Instant::now()).max(Duration::from_secs(5));
-        SshTransport::authenticate(&mut handle_i, server_id, generation, &hop.username, &hop.auth, auth_timeout).await?;
+        SshTransport::authenticate(&mut handle_i, server_id, &hop.host, generation, &hop.username, &hop.auth, auth_timeout).await?;
         jump_handles.push(handle_i);
     }
 
@@ -1202,6 +1215,7 @@ impl SshTransport {
         Self::authenticate(
             &mut handle,
             &server_id,
+            &host,
             options.auth_generation,
             username,
             auth,
@@ -1388,6 +1402,7 @@ impl SshTransport {
     async fn authenticate(
         handle: &mut russh::client::Handle<ClientHandler>,
         server_id: &str,
+        host: &str,
         generation: u64,
         username: &str,
         auth: &AuthMethod,
@@ -1405,6 +1420,215 @@ impl SshTransport {
                     false,
                 )
                 .await?;
+            }
+            AuthMethod::Pkcs11 {
+                library_path,
+                pin,
+                key_label,
+            } => {
+                let effective_pin = if let Some(p) = pin.as_ref().filter(|s| !s.is_empty()) {
+                    Some(p.clone())
+                } else if let Some(app) = crate::ssh::manager::app_handle() {
+                    use crate::ssh::auth_interaction::{
+                        AuthInteractionRegistry, AuthInteractionRequest, AuthPrompt,
+                        AUTH_INTERACTION_TIMEOUT_SECS,
+                    };
+                    use tauri::Emitter;
+
+                    if generation > 0 {
+                        crate::ssh::manager::emit_state_changed(
+                            &crate::ssh::state::ConnectionStateData {
+                                server_id: server_id.to_string(),
+                                state: crate::ssh::state::ConnectionState::Authenticating,
+                                error: None,
+                                error_kind: None,
+                                generation,
+                            },
+                        );
+                    }
+                    let (guard, rx) = AuthInteractionRegistry::global().register(server_id);
+                    let req = AuthInteractionRequest {
+                        request_id: guard.request_id().to_string(),
+                        server_id: server_id.to_string(),
+                        generation,
+                        title: "PKCS#11 Smart Card".into(),
+                        instructions: format!(
+                            "Enter PIN for hardware token ({})",
+                            library_path.trim()
+                        ),
+                        prompts: vec![AuthPrompt {
+                            prompt: "PIN:".into(),
+                            echo: false,
+                        }],
+                        timeout_secs: AUTH_INTERACTION_TIMEOUT_SECS,
+                    };
+                    let _ = app.emit("ssh:auth-interaction-required", &req);
+                    let user_res = timeout(
+                        Duration::from_secs(AUTH_INTERACTION_TIMEOUT_SECS),
+                        rx,
+                    )
+                    .await;
+                    guard.disarm();
+                    match user_res {
+                        Ok(Ok(Some(answers))) => answers.into_iter().next().filter(|s| !s.is_empty()),
+                        Ok(Ok(None)) => {
+                            return Err(SshError::AuthFailed("用户已取消智能卡 PIN 输入".into()));
+                        }
+                        Ok(Err(_)) => {
+                            return Err(SshError::AuthFailed("智能卡 PIN 交互通道已关闭".into()));
+                        }
+                        Err(_) => {
+                            return Err(SshError::AuthFailed(format!(
+                                "智能卡 PIN 输入超时（{} 秒内未响应）",
+                                AUTH_INTERACTION_TIMEOUT_SECS
+                            )));
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                tracing::info!(
+                    "[PKCS11] {} 开始加载驱动库: {}, has_pin={}, key_label={:?}",
+                    server_id,
+                    library_path,
+                    effective_pin.is_some(),
+                    key_label
+                );
+                let mut signer = crate::ssh::pkcs11::load_pkcs11_signer(
+                    library_path.clone(),
+                    effective_pin,
+                    key_label.clone(),
+                )
+                .await
+                .map_err(SshError::AuthFailed)?;
+
+                let pubkey = signer.public_key().clone();
+                tracing::info!(
+                    "[PKCS11] {} 驱动加载成功: label={}, alg={:?}",
+                    server_id,
+                    signer.key_label(),
+                    pubkey.algorithm()
+                );
+                let negotiated = if matches!(pubkey.algorithm(), russh::keys::Algorithm::Rsa { .. }) {
+                    Self::negotiated_rsa_hash(handle).await
+                } else {
+                    None
+                };
+                let attempts: Vec<Option<russh::keys::HashAlg>> = if negotiated.is_some() {
+                    vec![negotiated, None]
+                } else {
+                    vec![None]
+                };
+
+                let mut authenticated = false;
+                let mut kbdint_partial: Option<bool> = None;
+                let mut last_error: Option<String> = None;
+                for hash_alg in attempts {
+                    let effective_hash = if matches!(pubkey.algorithm(), russh::keys::Algorithm::Rsa { .. }) {
+                        hash_alg
+                    } else {
+                        None
+                    };
+                    tracing::info!(
+                        "[PKCS11] {} 调用 authenticate_publickey_with: hash={:?}",
+                        server_id,
+                        effective_hash
+                    );
+                    let auth_result = timeout(
+                        step_timeout.max(Duration::from_secs(15)),
+                        handle.authenticate_publickey_with(
+                            username,
+                            pubkey.clone(),
+                            effective_hash,
+                            &mut signer,
+                        ),
+                    )
+                    .await
+                    .map_err(|_| SshError::AuthFailed("PKCS#11 智能卡签名认证超时".into()))?;
+                    tracing::info!(
+                        "[PKCS11] {} authenticate_publickey_with 返回: {:?}",
+                        server_id,
+                        auth_result.as_ref().map(|r| r.success())
+                    );
+                    match auth_result {
+                        Ok(result) if result.success() => {
+                            authenticated = true;
+                            break;
+                        }
+                        Ok(result) => {
+                            if let Some(partial) = Self::should_continue_with_kbdint(&result, false) {
+                                kbdint_partial = Some(partial);
+                                break;
+                            }
+                        }
+                        Err(e) => last_error = Some(e.to_string()),
+                    }
+                }
+                drop(signer);
+                if let Some(partial) = kbdint_partial {
+                    return Self::authenticate_keyboard_interactive_loop(
+                        handle,
+                        server_id,
+                        generation,
+                        username,
+                        step_timeout,
+                        None,
+                        partial,
+                    )
+                    .await;
+                }
+                if !authenticated {
+                    return Err(SshError::AuthFailed(last_error.unwrap_or_else(|| {
+                        "PKCS#11 智能卡公钥被服务端拒绝".into()
+                    })));
+                }
+            }
+            AuthMethod::Gssapi {
+                target_spn,
+                delegate_credentials,
+                principal,
+                password,
+            } => {
+                let mut gss = crate::ssh::gssapi::Krb5GssapiAuthenticator::new(
+                    host,
+                    target_spn.as_deref(),
+                    *delegate_credentials,
+                    principal.as_deref(),
+                    password.as_deref(),
+                )
+                .await
+                .map_err(SshError::AuthFailed)?;
+
+                let auth_result = timeout(
+                    step_timeout.max(Duration::from_secs(15)),
+                    handle.authenticate_gssapi_with_mic(
+                        username,
+                        vec![crate::ssh::gssapi::KRB5_MECH_OID.to_vec()],
+                        &mut gss,
+                    ),
+                )
+                .await
+                .map_err(|_| SshError::AuthFailed("Kerberos / GSSAPI 认证超时".into()))?
+                .map_err(|e| SshError::AuthFailed(format!("Kerberos / GSSAPI 认证失败: {}", e)))?;
+
+                if !auth_result.success() {
+                    if let Some(partial) = Self::should_continue_with_kbdint(&auth_result, false) {
+                        return Self::authenticate_keyboard_interactive_loop(
+                            handle,
+                            server_id,
+                            generation,
+                            username,
+                            step_timeout,
+                            None,
+                            partial,
+                        )
+                        .await;
+                    }
+                    return Err(SshError::AuthFailed(
+                        "Kerberos / GSSAPI 认证被服务端拒绝".into(),
+                    ));
+                }
             }
             AuthMethod::Password { password } => {
                 let result = timeout(
@@ -2771,8 +2995,30 @@ impl SshConnection {
         Ok(transport)
     }
 
+    /// 判断连接（含跳板链）是否包含需要人工交互的认证方式（2FA/OTP 或 PKCS#11 智能卡）。
+    /// 此类认证无法在后台静默新建第二条专用传输连接，SFTP 应直接复用主连接。
+    fn requires_interactive_sftp_reuse(params: &ConnectParams) -> bool {
+        let is_interactive = |auth: &AuthMethod| {
+            matches!(auth, AuthMethod::KeyboardInteractive | AuthMethod::Pkcs11 { .. })
+        };
+        if is_interactive(&params.auth) {
+            return true;
+        }
+        params
+            .jump_chain
+            .as_ref()
+            .is_some_and(|hops| hops.iter().any(|h| is_interactive(&h.auth)))
+    }
+
     /// 使用 SFTP 专用连接（优先）或主连接（回退）创建 SFTP 会话。
     async fn open_sftp_session_with_fallback(&self) -> SshResult<russh_sftp::client::SftpSession> {
+        if Self::requires_interactive_sftp_reuse(&self.connect_params) {
+            tracing::info!(
+                "[SFTP] {} 使用交互式/硬件认证，SFTP 会话直接复用主 SSH 连接（跳过独立二次建连）",
+                self.server_id()
+            );
+            return FileManager::new(&self.transport).create_sftp_session().await;
+        }
         match self.get_or_create_sftp_transport().await {
             Ok(sftp_transport) => {
                 match FileManager::with_sftp_transport(&self.transport, &sftp_transport)

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Qshell",
-  "version": "1.0.21",
+  "version": "1.0.22",
   "identifier": "com.qshell.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -136,6 +136,11 @@
     "longDescription": "Qshell - 通过 SSH 直连远程主机，提供终端、文件、Docker、服务、进程、端口、网络诊断等一站式管理能力。"
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["qshell"]
+      }
+    },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZCNzJENjY1REIyOEYwQwpSV1FNajdKZFppMjNCdHk0aWNML1Z4TmpEMStVRWw1NWxFTCtMaUVMM0tPMGtPYXBrUkZnVVhOVwo=",
       "endpoints": [

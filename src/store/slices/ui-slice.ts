@@ -26,6 +26,11 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (set) => (
   setUiStyle: (uiStyle) => set({ uiStyle }),
   customCursorEnabled: true,
   setCustomCursorEnabled: (customCursorEnabled) => set({ customCursorEnabled }),
+  closeToTray: false,
+  setCloseToTray: (closeToTray) => set({ closeToTray }),
+  systemNotificationsEnabled: true,
+  setSystemNotificationsEnabled: (systemNotificationsEnabled) =>
+    set({ systemNotificationsEnabled }),
 
   // Language
   language: "zh-CN",

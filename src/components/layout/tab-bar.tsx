@@ -1,4 +1,4 @@
-import { useRef, useEffect, useMemo } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { useAppStore } from '@/store'
 import { Button } from '@/components/ui/button'
 import {
@@ -81,6 +81,12 @@ export function TabBar() {
 
   // 设置弹框由 App 顶层统一渲染，这里只负责发起打开（含指定分页）
   const openSettings = useSettingsDialogStore((s) => s.openSettings)
+  const [userMenuOpen, setUserMenuOpen] = useState(false)
+
+  const handleOpenSettingsFromMenu = (tab: 'general' | 'account') => {
+    setUserMenuOpen(false)
+    openSettings(tab)
+  }
 
   const handleQuickBackup = async () => {
     if (!masterPassword) {
@@ -182,7 +188,7 @@ export function TabBar() {
       </Button>
 
       {/* 右侧：用户与全局设置下拉菜单 (统一收纳云同步、快捷备份、设置等) */}
-      <DropdownMenu>
+      <DropdownMenu open={userMenuOpen} onOpenChange={setUserMenuOpen}>
         <DropdownMenuTrigger asChild>
           <button
             type="button"
@@ -232,7 +238,7 @@ export function TabBar() {
         <DropdownMenuContent align="end" sideOffset={6} className="w-64 p-2 glass-strong border border-border/60 rounded-xl shadow-xl space-y-1">
           {/* 1. 用户信息卡片（可点击直达云同步设置） */}
           <div
-            onClick={() => openSettings('account')}
+            onClick={() => handleOpenSettingsFromMenu('account')}
             className="p-2.5 rounded-lg bg-muted/40 hover:bg-muted/70 transition-colors border border-border/50 cursor-pointer group select-none"
             title={t('sync_manage_menu')}
           >
@@ -303,7 +309,10 @@ export function TabBar() {
           <DropdownMenuGroup>
             {isConfigured && (
               <DropdownMenuItem
-                onClick={handleQuickBackup}
+                onClick={() => {
+                  setUserMenuOpen(false)
+                  void handleQuickBackup()
+                }}
                 disabled={isSyncing}
                 className="text-xs gap-2 py-2 cursor-pointer"
               >
@@ -316,7 +325,7 @@ export function TabBar() {
             )}
 
             <DropdownMenuItem
-              onClick={() => openSettings('account')}
+              onClick={() => handleOpenSettingsFromMenu('account')}
               className="text-xs gap-2 py-2 cursor-pointer"
             >
               <Cloud className="h-3.5 w-3.5 text-primary shrink-0" />
@@ -324,7 +333,7 @@ export function TabBar() {
             </DropdownMenuItem>
 
             <DropdownMenuItem
-              onClick={() => openSettings('general')}
+              onClick={() => handleOpenSettingsFromMenu('general')}
               className="text-xs gap-2 py-2 cursor-pointer"
             >
               <Settings className="h-3.5 w-3.5 text-foreground/80 shrink-0" />

@@ -165,7 +165,8 @@ pub async fn resolve_ftp_config_for_server(
         username,
         password,
         passive_mode: !cfg.transfer_mode.trim().eq_ignore_ascii_case("active"),
-        use_gbk: cfg.encoding.trim().eq_ignore_ascii_case("gbk"),
+        use_gbk: cfg.encoding.trim().eq_ignore_ascii_case("gbk")
+            || cfg.encoding.trim().eq_ignore_ascii_case("gb18030"),
         allow_invalid_certs: cfg.allow_invalid_certs,
         timeout_secs: (server.connection_timeout.max(5) as u64).min(120),
     }))

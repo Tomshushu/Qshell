@@ -56,6 +56,12 @@ export interface UiSlice {
   setUiStyle: (style: UiStyleId) => void;
   /** 是否启用主题专属个性化鼠标指针（喵~猫爪、赛博朋克准星等） */
   customCursorEnabled: boolean;
+  /** 关闭主窗口时最小化到系统托盘（默认关闭，避免无托盘环境窗口丢失） */
+  closeToTray: boolean;
+  setCloseToTray: (enabled: boolean) => void;
+  /** 后台时通过系统原生通知提示传输完成/异常断线（默认开启） */
+  systemNotificationsEnabled: boolean;
+  setSystemNotificationsEnabled: (enabled: boolean) => void;
   setCustomCursorEnabled: (enabled: boolean) => void;
 
   // Language (i18n)
@@ -254,6 +260,13 @@ export interface TerminalSlice {
   setTerminalAntiIdleCustomString: (str: string) => void;
   terminalCopyPaste: boolean;
   setTerminalCopyPaste: (enabled: boolean) => void;
+  /**
+   * 是否允许远端程序通过 OSC 52 查询读取本机剪贴板（默认关闭）。
+   * 与 terminalCopyPaste 解耦：写入剪贴板由 terminalCopyPaste 控制，
+   * 读取本机剪贴板属敏感操作，需显式开启，防止远端静默窃取。
+   */
+  terminalOsc52Read: boolean;
+  setTerminalOsc52Read: (enabled: boolean) => void;
   /** 超大文本粘贴前是否二次确认（默认 true，大文本 > 10000 字符时提示，可在弹窗中勾选不再提示） */
   terminalPasteWarnEnabled: boolean;
   setTerminalPasteWarnEnabled: (enabled: boolean) => void;
@@ -350,6 +363,10 @@ export interface SftpSlice {
   /** 统一文件浏览隐藏文件显示开关（覆盖 SFTP 双栏与工作台文件模块，默认 true） */
   sftpShowHidden: boolean;
   setSftpShowHidden: (show: boolean) => void;
+  sftpThumbnailsLocal: boolean;
+  setSftpThumbnailsLocal: (enabled: boolean) => void;
+  sftpThumbnailsRemote: boolean;
+  setSftpThumbnailsRemote: (enabled: boolean) => void;
   /** SFTP 本地面板默认是否显示隐藏文件（保留向后兼容字段，写入时自动全局同步） */
   sftpLocalShowHidden: boolean;
   setSftpLocalShowHidden: (show: boolean) => void;

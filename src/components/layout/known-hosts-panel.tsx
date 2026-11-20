@@ -23,6 +23,7 @@ import type { KnownHostRecord } from "@/services/api/types";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/utils";
 import { useModalStack } from "@/hooks/use-modal-stack";
+import { HintTooltip } from "@/components/ui/hint-tooltip";
 
 function getKeyTypeBadge(keyType: string) {
   const kt = keyType.toLowerCase();
@@ -157,11 +158,12 @@ export function KnownHostsPanel() {
         <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-2 shrink-0">
             <ShieldCheck className="h-4 w-4 text-primary" />
-            <h3 className="text-xs font-semibold text-foreground flex items-center gap-1.5" title={t("known_hosts_desc")}>
+            <h3 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
               {t("sidebar_known_hosts")}
               <span className="px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-primary/10 text-primary border border-primary/20">
                 {hosts.length}
               </span>
+              <HintTooltip content={t("known_hosts_desc")} side="bottom" />
             </h3>
           </div>
 

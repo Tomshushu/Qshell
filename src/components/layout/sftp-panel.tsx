@@ -32,6 +32,8 @@ import { CodeEditor } from '@/components/ui/code-editor'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { SshCredentialDialog } from '@/components/workspace/ssh-credential-dialog'
+import type { AuthInteractionRequest } from '@/services/api/types'
 import { useToast } from '@/components/ui/toast'
 import {
   DropdownMenu,
@@ -136,6 +138,7 @@ import { UniversalFileViewer } from '@/components/ui/universal-file-viewer'
 import { MarkdownViewer } from '@/components/ui/markdown-viewer'
 import { ResizablePreviewDialog } from '@/components/ui/resizable-preview-dialog'
 import { ArchiveFileIcon } from '@/components/ui/file-icons'
+import { FileThumbnailIcon } from '@/components/sftp/file-thumbnail-icon'
 import { OsIcon } from '@/pages/dashboard'
 import { SftpBreadcrumbBar } from '@/components/layout/sftp-breadcrumb-bar'
 import { QshellLoader } from '@/components/ui/qshell-loader'
@@ -797,6 +800,10 @@ export function SftpPanel() {
   const [isRemoteDisconnected, setIsRemoteDisconnected] = useState<boolean>(false)
   const [remoteDisconnectedError, setRemoteDisconnectedError] = useState<string | null>(null)
   const [isReconnecting, setIsReconnecting] = useState<boolean>(false)
+  const [authInteraction, setAuthInteraction] = useState<AuthInteractionRequest | null>(null)
+  const [authInteractionSubmitting, setAuthInteractionSubmitting] = useState<boolean>(false)
+  const authInteractionRef = useRef<AuthInteractionRequest | null>(null)
+  authInteractionRef.current = authInteraction
   const reconnectState = useReconnectState(selectedServerId)
   const [openingRemotePath, setOpeningRemotePath] = useState<string | null>(null)
   const [copiedLocalIp, setCopiedLocalIp] = useState<boolean>(false)
@@ -3132,11 +3139,31 @@ export function SftpPanel() {
   const knownGenerationsRef = useRef<Map<string, number>>(new Map())
   useEffect(() => {
     if (!backend) return
+    const unsubAuth = sshService.onAuthInteractionRequired((req) => {
+      if (!req.serverId.startsWith('sftp:')) return
+      setAuthInteractionSubmitting(false)
+      setAuthInteraction(req)
+    })
+    return () => {
+      unsubAuth?.()
+    }
+  }, [])
+  useEffect(() => {
+    if (!backend) return
     const unsubscribe = sshService.onStateChanged((data) => {
       // generation 过期检查：丢弃乱序到达的旧事件
       const known = knownGenerationsRef.current.get(data.serverId) ?? 0
       if (data.generation < known) return
       knownGenerationsRef.current.set(data.serverId, data.generation)
+      if (
+        authInteractionRef.current?.serverId === data.serverId &&
+        (data.state === ConnectionState.Ready ||
+          data.state === ConnectionState.Failed ||
+          data.state === ConnectionState.Disconnected)
+      ) {
+        setAuthInteraction(null)
+        setAuthInteractionSubmitting(false)
+      }
       const currentId = selectedServerIdRef.current
       const isActiveTab = currentId && data.serverId === currentId
 
@@ -7077,7 +7104,16 @@ export function SftpPanel() {
                 {openingLocalPath === file.path ? (
                   <Loader2 className="h-6 w-6 animate-spin text-primary shrink-0" />
                 ) : (
-                  renderFileIcon(file, iconSize)
+                  <FileThumbnailIcon
+                    name={file.name}
+                    path={file.path}
+                    isDirectory={file.isDirectory}
+                    size={file.size}
+                    modifiedTime={file.modified}
+                    source={leftServerId ? { serverId: leftServerId } : 'local'}
+                    sizeClass={iconSize}
+                    fallback={renderFileIcon(file, iconSize)}
+                  />
                 )}
               </div>
               {renameTarget && renameTarget.path === file.path ? (
@@ -7233,7 +7269,16 @@ export function SftpPanel() {
                 {openingRemotePath === file.path ? (
                   <Loader2 className="h-6 w-6 animate-spin text-primary shrink-0" />
                 ) : (
-                  renderFileIcon(file, iconSize)
+                  <FileThumbnailIcon
+                    name={file.name}
+                    path={file.path}
+                    isDirectory={file.isDirectory}
+                    size={file.size}
+                    modifiedTime={file.modifiedTime}
+                    source={selectedServerId ? { serverId: selectedServerId } : 'local'}
+                    sizeClass={iconSize}
+                    fallback={renderFileIcon(file, iconSize)}
+                  />
                 )}
               </div>
               {renameTarget && renameTarget.path === file.path ? (
@@ -11146,6 +11191,37 @@ export function SftpPanel() {
         <FilePropertiesTooltip
           info={hoveredCardInfo}
           t={t}
+        />
+      )}
+
+      {/* SFTP 独立连接的 2FA/OTP 与 PKCS#11 PIN 交互式认证弹窗 */}
+      {authInteraction && (
+        <SshCredentialDialog
+          mode="interaction"
+          open={true}
+          interactionRequest={authInteraction}
+          submitting={authInteractionSubmitting}
+          error={null}
+          onSubmitInteraction={(responses) => {
+            const reqId = authInteraction.requestId
+            setAuthInteractionSubmitting(true)
+            void sshService
+              .submitAuthInteraction(reqId, responses)
+              .then((submitted) => {
+                if (!submitted) {
+                  setAuthInteractionSubmitting(false)
+                }
+              })
+              .catch(() => {
+                setAuthInteractionSubmitting(false)
+              })
+          }}
+          onCancel={() => {
+            const reqId = authInteraction.requestId
+            setAuthInteraction(null)
+            setAuthInteractionSubmitting(false)
+            void sshService.submitAuthInteraction(reqId, null)
+          }}
         />
       )}
     </div>

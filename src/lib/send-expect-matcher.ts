@@ -16,7 +16,7 @@ export function stripAnsiCodes(input: string): string {
 }
 
 /**
- * 宏变量替换引擎 (对标 Xshell %u, %h, %p 等)
+ * 宏变量替换引擎 (%u, %h, %p 等)
  * - %u: 用户名 (username)
  * - %h: 主机 (host)
  * - %p: 端口 (port)
@@ -426,7 +426,7 @@ export function cleanupSendExpectState(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 现代可编程交互脚本引擎 (JavaScript/TypeScript Async Script Sandbox)
-// 彻底解决 Xshell 必须安装 Python / VBScript 的环境配置痛点
+// 内置 JS 异步交互脚本引擎，无需额外安装外部脚本运行时
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface ScriptScreenAPI {

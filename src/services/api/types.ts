@@ -24,6 +24,7 @@ import type {
   X11EnvironmentProbe,
   DockerContainer,
   FileEntry,
+  FileTransferEncoding,
   NetOverview,
   InterfaceInfo,
   RouteView,
@@ -97,7 +98,7 @@ export interface AuthProfile {
   id: string;
   name: string;
   username: string;
-  authType: "password" | "privateKey" | "sshAgent" | "certificate" | "keyboardInteractive";
+  authType: "password" | "privateKey" | "sshAgent" | "certificate" | "keyboardInteractive" | "pkcs11" | "gssapi";
   password?: string;
   sshKeyId?: string;
   privateKeyPath?: string;
@@ -281,7 +282,7 @@ export interface FtpTestConfigInput {
   serverPassword?: string;
   serverId?: string;
   transferMode?: "passive" | "active";
-  encoding?: "utf-8" | "gbk";
+  encoding?: FileTransferEncoding;
   allowInvalidCerts?: boolean;
 }
 
@@ -820,7 +821,7 @@ export interface TestConnectConfig {
   username: string;
   /** 编辑场景下传入以回填原凭据 */
   id?: string;
-  authType: "password" | "privateKey" | "sshAgent" | "certificate" | "keyboardInteractive";
+  authType: "password" | "privateKey" | "sshAgent" | "certificate" | "keyboardInteractive" | "pkcs11" | "gssapi";
   password?: string;
   privateKeyPath?: string;
   /** 私钥解密密码（passphrase），用于解密受密码保护的私钥文件 */
@@ -964,6 +965,16 @@ export interface SshAgentStatus {
   available: boolean;
   platform: "unix" | "windows" | "unknown";
   message?: string;
+}
+
+/** PKCS#11 智能卡 / 硬件令牌中的密钥身份信息 */
+export interface Pkcs11IdentityInfo {
+  slotId: number;
+  slotLabel: string;
+  keyLabel: string;
+  keyIdHex: string;
+  algorithm: string;
+  fingerprint: string;
 }
 
 /** Tail 流清理函数 */
@@ -1196,6 +1207,8 @@ export interface BackendAdapter {
       testAgent: () => Promise<SshAgentStatus>;
       /** 列出 SSH Agent 中已加载的所有身份（公钥 + 指纹） */
       listAgentIdentities: () => Promise<SshAgentIdentity[]>;
+      /** 枚举指定 PKCS#11 驱动库中的硬件密钥身份 */
+      listPkcs11Identities: (libraryPath: string, pin?: string) => Promise<Pkcs11IdentityInfo[]>;
     };
     /** 探测本地 X11 Display / X Server 与离线 addons 环境 */
     probeX11Environment?: () => Promise<X11EnvironmentProbe>;

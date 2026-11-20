@@ -1,6 +1,6 @@
 [package]
 name = "qshell"
-version = "1.0.21"
+version = "1.0.22"
 description = "Qshell - Tauri Edition"
 authors = ["Qshell Community"]
 edition = "2021"
@@ -14,13 +14,16 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset"] }
+tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-os = "2"
 tauri-plugin-process = "2"
 tauri-plugin-updater = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-deep-link = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
@@ -71,10 +74,14 @@ portable-pty = "0.9"
 # zip: X Server 插件包离线导入。仅启用 deflate（最常见压缩方式），避免使用外部
 # `tar -xf` 带来的 zip-slip 与 Windows/Unix 行为差异；路径由 enclosed_name 校验。
 zip = { version = "4.6", default-features = false, features = ["deflate-flate2"] }
+# P0-03 智能卡 PKCS#11 动态库封装（运行时加载 opensc-pkcs11 / libykcs11 等驱动，编译期零 C 依赖）
+cryptoki = "0.10"
+# P0-04 Unix 端运行时动态加载系统 GSSAPI/Kerberos（Windows 端直接走 windows-sys 原生 SSPI，零编译期 C 依赖）
+libloading = "0.8"
 
 # Windows API（用于获取全局鼠标位置和按键状态，支持跨窗口拖拽合并；磁盘空间查询）
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_Storage_FileSystem", "Win32_Security_Authentication_Identity", "Win32_Security_Credentials"] }
 
 [profile.release]
 lto = true

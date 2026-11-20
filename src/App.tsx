@@ -17,11 +17,12 @@ import { backend, isTauri } from '@/services/api'
 import type { SshKeyInput } from '@/services/api'
 import type { WorkspaceTab } from '@/types'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
+import { invoke } from '@tauri-apps/api/core'
 import { emit, listen } from '@tauri-apps/api/event'
 import { getSupabaseClient } from '@/lib/supabase'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { AlertCircle, Copy, ShieldCheck } from 'lucide-react'
-import { useEffect, useCallback, useState } from 'react'
+import { useEffect, useCallback, useRef, useState } from 'react'
 import { StabilityTestPanel } from '@/components/dev/stability-test-panel'
 import { CommandPalette } from '@/components/command-palette'
 import { QuickCommandPaletteModal } from '@/components/terminal/quick-command-palette-modal'
@@ -40,6 +41,8 @@ import { useToast } from '@/components/ui/toast'
 import { FloatingAIAssistant } from '@/components/ai/floating-ai-assistant'
 import { FloatingTextFormatter } from '@/components/terminal/floating-text-formatter'
 import { SettingsDialog } from '@/components/layout/settings-dialog'
+import { LaunchActionHandler } from '@/components/layout/launch-action-handler'
+import { SessionReplayDialog } from '@/components/terminal/session-replay-dialog'
 import { useSettingsDialogStore, type SettingsTab } from '@/store/settings-dialog-store'
 
 
@@ -57,6 +60,28 @@ function AppContent() {
   useKeyboardShortcuts()
   useOverflowTitle()
   useAppIdleLock()
+
+  // P2-30：把「关闭时最小化到托盘」策略同步给 Rust 侧（默认关闭）
+  const closeToTray = useAppStore((s) => s.closeToTray)
+  useEffect(() => {
+    if (!isTauri) return
+    void invoke('tray_set_close_to_tray', { enabled: closeToTray }).catch(() => {})
+  }, [closeToTray])
+
+  // P2-30：托盘菜单文案跟随界面语言（仅在语言变化时推送一次）
+  const language = useAppStore((s) => s.language)
+  const trayLangRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!isTauri) return
+    if (trayLangRef.current === language) return
+    trayLangRef.current = language
+    void invoke('tray_update_labels', {
+      show: t('tray_show'),
+      hide: t('tray_hide'),
+      quit: t('tray_quit'),
+      tooltip: 'Qshell',
+    }).catch(() => {})
+  }, [t, language])
 
   // 统一传输队列的运行时必须常驻：进度订阅与 1s 调度器原先只挂在
   // TransferPanel / SftpPanel 的 effect 里，关闭 SFTP 标签或文件面板后
@@ -717,6 +742,12 @@ function AppContent() {
 
       {/* 快捷命令中心弹框（Alt+C 或底栏快捷命令按钮打开） */}
       <QuickCommandPaletteModal />
+
+      {/* Deep Link / CLI / 右键菜单启动动作处理器（P1-07 / P2-22 / P2-29） */}
+      <LaunchActionHandler />
+
+      {/* 会话录制回放播放器（P2-14） */}
+      <SessionReplayDialog />
 
       {/* 退出应用二次确认弹窗（存在活跃传输时拦截） */}
       <ConfirmDialog

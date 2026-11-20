@@ -80,6 +80,7 @@ pub async fn acquire_transfer_channel_with_cancel(
 async fn cleanup_connection_caches(server_id: &str) {
     UID_CACHE.write().await.remove(server_id);
     GID_CACHE.write().await.remove(server_id);
+    crate::ssh::sftp_encoding::invalidate_server_sftp_caches(server_id);
     TRANSFER_CHANNEL_LIMITERS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -224,8 +225,9 @@ impl<'a> Drop for ConnectingCleanupGuard<'a> {
 /// transport 检测能覆盖：TCP 断开、SSH DISCONNECT 消息、keepalive 失败。
 const HEARTBEAT_INTERVAL_SECS: u64 = 15;
 /// 等待已有连接任务的最大超时（秒）
-/// 超时后取消旧任务并自己发起连接，防止旧任务 panic/死锁导致所有后续 connect 卡死
-const CONNECT_WAIT_TIMEOUT_SECS: u64 = 30;
+/// 必须大于交互式认证弹窗超时（AUTH_INTERACTION_TIMEOUT_SECS=90s），
+/// 否则用户在看手机输入 OTP/PIN 超过 30 秒时，并发的终端连接等待方会误判超时并抢占发起第二次连接，导致进终端后又弹出一次验证码窗。
+const CONNECT_WAIT_TIMEOUT_SECS: u64 = super::auth_interaction::AUTH_INTERACTION_TIMEOUT_SECS + 30;
 
 /// SSH 连接池管理器
 ///
@@ -513,6 +515,25 @@ impl SshManager {
             }
             "keyboardInteractive" | "keyboard_interactive" | "keyboard-interactive" => {
                 AuthMethod::KeyboardInteractive
+            }
+            "pkcs11" | "smartcard" | "smart_card" => {
+                let lib = private_key_path
+                    .filter(|s| !s.trim().is_empty())
+                    .ok_or_else(|| SshError::AuthFailed("Missing PKCS#11 driver library path".into()))?;
+                AuthMethod::Pkcs11 {
+                    library_path: lib,
+                    pin: private_key_passphrase.filter(|s| !s.is_empty()),
+                    key_label: agent_identity.filter(|s| !s.trim().is_empty()),
+                }
+            }
+            "gssapi" | "kerberos" | "krb5" => {
+                let cfg = crate::ssh::gssapi::parse_gssapi_config(agent_identity.as_deref());
+                AuthMethod::Gssapi {
+                    target_spn: cfg.spn,
+                    delegate_credentials: cfg.delegate,
+                    principal: cfg.principal,
+                    password: password.filter(|s| !s.is_empty()),
+                }
             }
             _ => {
                 let pass = password
@@ -1828,25 +1849,34 @@ pub(crate) async fn sleep_until_cancel(cancel: Option<&Arc<std::sync::atomic::At
 /// 3. rename tmp 到目标失败 → 恢复 .bak 到目标，删除 tmp，返回 Err
 pub(crate) async fn sftp_atomic_rename_overwrite(
     sftp: &russh_sftp::client::SftpSession,
+    server_id: &str,
     tmp_path: &str,
     target_path: &str,
 ) -> Result<(), String> {
+    let tmp_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id, tmp_path).await;
+    let target_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id, target_path).await;
+
     // 先尝试直接 rename（目标不存在或服务器支持 overwrite 时直接成功）
-    if sftp.rename(tmp_path, target_path).await.is_ok() {
+    if sftp.rename_bytes(&tmp_bytes, &target_bytes).await.is_ok() {
+        crate::ssh::sftp_encoding::invalidate_cached_path(server_id, tmp_path);
         return Ok(());
     }
 
     // 直接 rename 失败：目标已存在，需要先备份
     let bak_path = format!("{}.sw-bak-{}", target_path, uuid::Uuid::new_v4());
+    let bak_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id, &bak_path).await;
 
     // 步骤 1：把目标 rename 到 .bak
-    if sftp.rename(target_path, &bak_path).await.is_err() {
+    if sftp.rename_bytes(&target_bytes, &bak_bytes).await.is_err() {
         // 备份失败：回退到旧策略（删除目标再 rename），保留原行为
-        let _ = sftp.remove_file(target_path).await;
-        match sftp.rename(tmp_path, target_path).await {
-            Ok(_) => return Ok(()),
+        let _ = sftp.remove_file_bytes(&target_bytes).await;
+        match sftp.rename_bytes(&tmp_bytes, &target_bytes).await {
+            Ok(_) => {
+                crate::ssh::sftp_encoding::invalidate_cached_path(server_id, tmp_path);
+                return Ok(());
+            }
             Err(e) => {
-                let _ = sftp.remove_file(tmp_path).await;
+                let _ = sftp.remove_file_bytes(&tmp_bytes).await;
                 return Err(format!(
                     "SFTP rename failed (write completed but atomic move failed): {}",
                     e
@@ -1856,16 +1886,17 @@ pub(crate) async fn sftp_atomic_rename_overwrite(
     }
 
     // 步骤 2：rename tmp 到目标
-    match sftp.rename(tmp_path, target_path).await {
+    match sftp.rename_bytes(&tmp_bytes, &target_bytes).await {
         Ok(_) => {
             // 步骤 3：删除备份
-            let _ = sftp.remove_file(&bak_path).await;
+            let _ = sftp.remove_file_bytes(&bak_bytes).await;
+            crate::ssh::sftp_encoding::invalidate_cached_path(server_id, tmp_path);
             Ok(())
         }
         Err(e) => {
             // rename tmp 失败：尝试恢复备份到目标，避免数据丢失
-            let _ = sftp.rename(&bak_path, target_path).await;
-            let _ = sftp.remove_file(tmp_path).await;
+            let _ = sftp.rename_bytes(&bak_bytes, &target_bytes).await;
+            let _ = sftp.remove_file_bytes(&tmp_bytes).await;
             Err(format!(
                 "SFTP rename failed (write completed but atomic move failed, backup restored): {}",
                 e
@@ -1897,15 +1928,19 @@ pub async fn sftp_read_file_base64(server_id: &str, path: &str) -> Result<String
         .create_sftp_session()
         .await
         .map_err(|e| format!("SFTP session failed: {}", e))?;
+    let path_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id, path).await;
 
     let mut remote_file = sftp
-        .open(path)
+        .open_bytes(&path_bytes)
         .await
         .map_err(|e| format!("SFTP open failed: {}", e))?;
 
     // 限制读取大小，防止读取超大文件导致内存爆炸（与前端预览上限对齐，100MB）
     const MAX_READ_SIZE: u64 = 100 * 1024 * 1024;
-    let meta = sftp.metadata(path).await.map_err(|e| format!("SFTP stat failed: {}", e))?;
+    let meta = sftp
+        .metadata_bytes(&path_bytes)
+        .await
+        .map_err(|e| format!("SFTP stat failed: {}", e))?;
     if meta.len() > MAX_READ_SIZE {
         return Err(format!(
             "File too large to preview ({} bytes, max {} bytes)",
@@ -1942,12 +1977,13 @@ pub async fn sftp_write(server_id: String, path: String, content: Vec<u8>) -> Re
 
     // 临时文件用 uuid 避免并发写同路径时碰撞
     let tmp_path = format!("{}.sw-write-tmp-{}", path, uuid::Uuid::new_v4());
+    let tmp_path_bytes = crate::ssh::sftp_encoding::encode_sftp_path(&server_id, &tmp_path).await;
     // 清理可能残留的同名临时文件
-    let _ = sftp.remove_file(&tmp_path).await;
+    let _ = sftp.remove_file_bytes(&tmp_path_bytes).await;
 
     let mut remote_file = sftp
-        .open_with_flags(
-            &tmp_path,
+        .open_with_flags_bytes(
+            &tmp_path_bytes,
             OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
         )
         .await
@@ -1977,7 +2013,7 @@ pub async fn sftp_write(server_id: String, path: String, content: Vec<u8>) -> Re
 
     if write_result.is_err() {
         // 写入失败：清理临时文件，目标文件完全不受影响
-        let _ = sftp.remove_file(&tmp_path).await;
+        let _ = sftp.remove_file_bytes(&tmp_path_bytes).await;
         if let Err(ref e) = write_result {
             SshManager::handle_connection_loss(&server_id, &conn, e).await;
         }
@@ -1985,7 +2021,7 @@ pub async fn sftp_write(server_id: String, path: String, content: Vec<u8>) -> Re
     }
 
     // 原子 rename 覆盖目标（三步法：备份 → rename → 删除备份，避免数据丢失）
-    sftp_atomic_rename_overwrite(&sftp, &tmp_path, &path).await?;
+    sftp_atomic_rename_overwrite(&sftp, &server_id, &tmp_path, &path).await?;
 
     Ok(())
 }
@@ -2073,6 +2109,7 @@ pub async fn sftp_upload_file_stream(
 
     let res = sftp_upload_file_with_session(
         &sftp,
+        server_id,
         local_path,
         remote_path,
         on_progress,
@@ -2112,6 +2149,7 @@ pub async fn sftp_download_file_stream(
 
     let res = sftp_download_file_with_session(
         &sftp,
+        server_id,
         remote_path,
         local_path,
         on_progress,
@@ -2131,7 +2169,12 @@ pub async fn sftp_download_file_stream(
 
 /// 尽力保留文件修改时间（失败忽略，不影响传输结果）。
 /// 上传场景：用本地 mtime 设置远端文件；仅同步时间戳，不改变远端权限位。
-async fn apply_remote_mtime_from_local(sftp: &russh_sftp::client::SftpSession, remote_path: &str, local_path: &str) {
+async fn apply_remote_mtime_from_local(
+    sftp: &russh_sftp::client::SftpSession,
+    server_id: &str,
+    remote_path: &str,
+    local_path: &str,
+) {
     use russh_sftp::protocol::FileAttributes;
     let Ok(meta) = tokio::fs::metadata(local_path).await else { return };
     let Some(mtime) = meta
@@ -2152,7 +2195,8 @@ async fn apply_remote_mtime_from_local(sftp: &russh_sftp::client::SftpSession, r
         atime: None,
         mtime: Some(mtime),
     };
-    let _ = sftp.set_metadata(remote_path, attrs).await;
+    let remote_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id, remote_path).await;
+    let _ = sftp.set_metadata_bytes(&remote_bytes, attrs).await;
 }
 
 /// 下载场景：用远端 mtime 设置本地文件修改时间（失败忽略，放到阻塞线程池避免阻塞 Tokio worker）。
@@ -2171,6 +2215,7 @@ async fn apply_local_mtime_from_remote(remote_mtime: Option<u32>, local_path: &s
 /// `cancel`: 可选的取消标志，在 chunk 循环中检查；为 true 时立即停止并清理临时文件
 pub async fn sftp_upload_file_with_session(
     sftp: &russh_sftp::client::SftpSession,
+    server_id: &str,
     local_path: &str,
     remote_path: &str,
     on_progress: impl Fn(u64, u64),
@@ -2195,6 +2240,7 @@ pub async fn sftp_upload_file_with_session(
     // 统一将反斜杠转为正斜杠，如 C:\Users\... → C:/Users/...
     let sftp_tmp_path = tmp_remote_path.replace('\\', "/");
     let sftp_remote_path = remote_path.replace('\\', "/");
+    let sftp_tmp_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id, &sftp_tmp_path).await;
 
     let metadata = tokio::fs::metadata(local_path)
         .await
@@ -2220,7 +2266,7 @@ pub async fn sftp_upload_file_with_session(
                 ));
             }
             // 已传完（offset == total_size），直接 rename（三步法避免数据丢失）
-            sftp_atomic_rename_overwrite(sftp, &sftp_tmp_path, &sftp_remote_path).await?;
+            sftp_atomic_rename_overwrite(sftp, server_id, &sftp_tmp_path, &sftp_remote_path).await?;
             return Ok(());
         }
         local_file
@@ -2236,7 +2282,7 @@ pub async fn sftp_upload_file_with_session(
 
     let mut remote_file = timeout(
         Duration::from_secs(30),
-        sftp.open_with_flags(&sftp_tmp_path, open_flags),
+        sftp.open_with_flags_bytes(&sftp_tmp_bytes, open_flags),
     )
     .await
     .map_err(|_| "SFTP open timed out".to_string())?
@@ -2246,7 +2292,7 @@ pub async fn sftp_upload_file_with_session(
     // 避免 check 与 open 之间 tmp 文件被截断或扩展导致数据损坏
     // metadata 失败时必须中止（不能静默跳过），防止 tmp 文件不完整但 APPEND 继续写入
     if let Some(expected_offset) = resume_offset {
-        match sftp.metadata(&sftp_tmp_path).await {
+        match sftp.metadata_bytes(&sftp_tmp_bytes).await {
             Ok(meta) => {
                 let actual_size = meta.len();
                 if actual_size != expected_offset {
@@ -2290,7 +2336,7 @@ pub async fn sftp_upload_file_with_session(
             // tmp 尾部采样：独立只读句柄（remote_file 是 APPEND 写句柄，混用读写位置不可靠）
             let mut tmp_read = timeout(
                 Duration::from_secs(30),
-                sftp.open_with_flags(&sftp_tmp_path, OpenFlags::READ),
+                sftp.open_with_flags_bytes(&sftp_tmp_bytes, OpenFlags::READ),
             )
             .await
             .map_err(|_| "SFTP open timed out (tail sample)".to_string())?
@@ -2372,7 +2418,7 @@ pub async fn sftp_upload_file_with_session(
                                     let _ = remote_file.shutdown().await;
                                     // 查询 tmp 真实大小以对齐重试偏移；metadata 失败则无法
                                     // 确定已写入量，中止比盲目重写更安全
-                                    let actual_size = match timeout(Duration::from_secs(30), sftp.metadata(&sftp_tmp_path)).await {
+                                    let actual_size = match timeout(Duration::from_secs(30), sftp.metadata_bytes(&sftp_tmp_bytes)).await {
                                         Ok(Ok(meta)) => meta.len(),
                                         Ok(Err(e2)) => {
                                             return Err(format!("SFTP metadata failed after write error: {} (original: {})", e2, e));
@@ -2390,7 +2436,7 @@ pub async fn sftp_upload_file_with_session(
                                     let written = (actual_size - transferred) as usize;
                                     let reopen_result = timeout(
                                         Duration::from_secs(30),
-                                        sftp.open_with_flags(&sftp_tmp_path, OpenFlags::WRITE | OpenFlags::APPEND),
+                                        sftp.open_with_flags_bytes(&sftp_tmp_bytes, OpenFlags::WRITE | OpenFlags::APPEND),
                                     ).await;
                                     let mut reopened = match reopen_result {
                                         Ok(Ok(f)) => f,
@@ -2469,16 +2515,16 @@ pub async fn sftp_upload_file_with_session(
     if write_result.is_err() {
         let _ = remote_file.shutdown().await;
         if !keep_tmp_on_failure {
-            let _ = sftp.remove_file(&sftp_tmp_path).await;
+            let _ = sftp.remove_file_bytes(&sftp_tmp_bytes).await;
         }
         return write_result;
     }
 
     // 原子 rename 覆盖目标（三步法：备份 → rename → 删除备份，避免数据丢失）
-    sftp_atomic_rename_overwrite(sftp, &sftp_tmp_path, &sftp_remote_path).await?;
+    sftp_atomic_rename_overwrite(sftp, server_id, &sftp_tmp_path, &sftp_remote_path).await?;
 
     // 元数据保留：同步修改时间（远端不支持 SETSTAT 时静默忽略）
-    apply_remote_mtime_from_local(sftp, &sftp_remote_path, local_path).await;
+    apply_remote_mtime_from_local(sftp, server_id, &sftp_remote_path, local_path).await;
 
     Ok(())
 }
@@ -2487,6 +2533,7 @@ pub async fn sftp_upload_file_with_session(
 /// `cancel`: 可选的取消标志，在 chunk 循环中检查；为 true 时立即停止
 pub async fn sftp_download_file_with_session(
     sftp: &russh_sftp::client::SftpSession,
+    server_id: &str,
     remote_path: &str,
     local_path: &str,
     on_progress: impl Fn(u64, u64),
@@ -2515,13 +2562,14 @@ pub async fn sftp_download_file_with_session(
 
     // Windows 路径兼容：SFTP 协议要求正斜杠路径分隔符
     let sftp_remote_path = remote_path.replace('\\', "/");
+    let remote_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id, &sftp_remote_path).await;
 
-    let total_size = match sftp.metadata(&sftp_remote_path).await {
+    let total_size = match sftp.metadata_bytes(&remote_bytes).await {
         Ok(meta) => meta.size.unwrap_or(0),
         Err(_) => 0,
     };
 
-    let mut remote_file = timeout(Duration::from_secs(30), sftp.open(&sftp_remote_path))
+    let mut remote_file = timeout(Duration::from_secs(30), sftp.open_bytes(&remote_bytes))
         .await
         .map_err(|_| "SFTP open timed out".to_string())?
         .map_err(|e| format!("SFTP open failed: {}", e))?;
@@ -2826,7 +2874,7 @@ pub async fn sftp_download_file_with_session(
     }
 
     // 元数据保留：同步本地文件修改时间（读取远端 mtime 失败时跳过）
-    if let Ok(meta) = sftp.metadata(remote_path).await {
+    if let Ok(meta) = sftp.metadata_bytes(&remote_bytes).await {
         apply_local_mtime_from_remote(meta.mtime, local_path).await;
     }
 
@@ -2847,7 +2895,8 @@ pub async fn sftp_mkdir(server_id: &str, path: &str) -> Result<(), String> {
             .create_sftp_session()
             .await
             .map_err(|e| format!("SFTP session failed: {}", e))?;
-        sftp.create_dir(path)
+        let path_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id, path).await;
+        sftp.create_dir_bytes(&path_bytes)
             .await
             .map_err(|e| format!("SFTP mkdir failed: {}", e))
     }.await;
@@ -2886,7 +2935,11 @@ pub async fn sftp_read_dir(server_id: &str, path: &str) -> Result<Vec<SftpDirEnt
             .create_sftp_session()
             .await
             .map_err(|e| format!("SFTP session failed: {}", e))?;
-        let mut read_dir = match sftp.read_dir(path).await {
+        let encoding = crate::ssh::sftp_encoding::resolve_sftp_filename_encoding(server_id).await;
+        let path_bytes =
+            crate::ssh::sftp_encoding::lookup_encoded_path(server_id, path, encoding);
+        let dir_display = crate::ssh::sftp_encoding::normalize_display_path(path);
+        let mut read_dir = match sftp.read_dir_bytes(&path_bytes).await {
             Ok(dir) => dir,
             Err(e) => {
                 // 某些 sshd 在句柄达到上限后会拒绝新的 opendir。清掉缓存的
@@ -2899,7 +2952,7 @@ pub async fn sftp_read_dir(server_id: &str, path: &str) -> Result<Vec<SftpDirEnt
                         .await
                         .map_err(|se| format!("SFTP session recovery failed: {} (original: {})", se, message))?;
                     fresh
-                        .read_dir(path)
+                        .read_dir_bytes(&path_bytes)
                         .await
                         .map_err(|re| format!("SFTP read_dir failed after session recovery: {}", re))?
                 } else {
@@ -2909,18 +2962,31 @@ pub async fn sftp_read_dir(server_id: &str, path: &str) -> Result<Vec<SftpDirEnt
         };
         let mut entries: Vec<SftpDirEntry> = read_dir
             .by_ref()
-            .map(|e| SftpDirEntry {
-                name: e.file_name(),
-                path: e.path(),
-                is_dir: e.file_type().is_dir(),
-                is_symlink: e.file_type().is_symlink(),
-                size: e.metadata().len(),
-                mtime: e.metadata().mtime,
-                permissions: e.metadata().permissions,
-                user: e.metadata().user,
-                group: e.metadata().group,
-                uid: e.metadata().uid,
-                gid: e.metadata().gid,
+            .map(|e| {
+                let raw_name = e.raw_file_name();
+                let decoded_name =
+                    crate::ssh::sftp_encoding::decode_sftp_bytes(raw_name, encoding);
+                let entry_display =
+                    crate::ssh::sftp_encoding::join_display_path(&dir_display, &decoded_name);
+                let entry_raw =
+                    crate::ssh::sftp_encoding::join_raw_path(&path_bytes, raw_name);
+                crate::ssh::sftp_encoding::record_raw_path(server_id, &entry_display, entry_raw);
+                let is_dir = e.file_type().is_dir();
+                let is_symlink = e.file_type().is_symlink();
+                let meta = e.metadata();
+                SftpDirEntry {
+                    name: decoded_name,
+                    path: entry_display,
+                    is_dir,
+                    is_symlink,
+                    size: meta.len(),
+                    mtime: meta.mtime,
+                    permissions: meta.permissions,
+                    user: meta.user,
+                    group: meta.group,
+                    uid: meta.uid,
+                    gid: meta.gid,
+                }
             })
             .collect();
         // 检查并补全尚未解析的数字所有者/所属组（优先使用内存快照，绝不阻塞当前目录返回）
@@ -2976,14 +3042,17 @@ pub async fn sftp_remove_dir(server_id: &str, path: &str) -> Result<(), String> 
     let conn = SshManager::global()
         .get_connection(server_id)
         .map_err(|e| e.to_string())?;
-    let res = async {
+    let res: Result<(), String> = async {
         let sftp = conn
             .create_sftp_session()
             .await
             .map_err(|e| format!("SFTP session failed: {}", e))?;
-        sftp.remove_dir(path)
+        let path_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id, path).await;
+        sftp.remove_dir_bytes(&path_bytes)
             .await
-            .map_err(|e| format!("SFTP remove_dir failed: {}", e))
+            .map_err(|e| format!("SFTP remove_dir failed: {}", e))?;
+        crate::ssh::sftp_encoding::invalidate_cached_path(server_id, path);
+        Ok(())
     }.await;
     if let Err(ref e) = res {
         SshManager::handle_connection_loss(server_id, &conn, e).await;
@@ -2999,14 +3068,17 @@ pub async fn sftp_remove_file(server_id: &str, path: &str) -> Result<(), String>
     let conn = SshManager::global()
         .get_connection(server_id)
         .map_err(|e| e.to_string())?;
-    let res = async {
+    let res: Result<(), String> = async {
         let sftp = conn
             .create_sftp_session()
             .await
             .map_err(|e| format!("SFTP session failed: {}", e))?;
-        sftp.remove_file(path)
+        let path_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id, path).await;
+        sftp.remove_file_bytes(&path_bytes)
             .await
-            .map_err(|e| format!("SFTP remove_file failed: {}", e))
+            .map_err(|e| format!("SFTP remove_file failed: {}", e))?;
+        crate::ssh::sftp_encoding::invalidate_cached_path(server_id, path);
+        Ok(())
     }.await;
     if let Err(ref e) = res {
         SshManager::handle_connection_loss(server_id, &conn, e).await;
@@ -3028,14 +3100,20 @@ pub async fn sftp_rename(server_id: &str, old_path: &str, new_path: &str) -> Res
     let conn = SshManager::global()
         .get_connection(server_id)
         .map_err(|e| e.to_string())?;
-    let res = async {
+    let res: Result<(), String> = async {
         let sftp = conn
             .create_sftp_session()
             .await
             .map_err(|e| format!("SFTP session failed: {}", e))?;
-        sftp.rename(old_path, new_path)
+        let encoding = crate::ssh::sftp_encoding::resolve_sftp_filename_encoding(server_id).await;
+        let old_bytes = crate::ssh::sftp_encoding::lookup_encoded_path(server_id, old_path, encoding);
+        let new_bytes = crate::ssh::sftp_encoding::lookup_encoded_path(server_id, new_path, encoding);
+        sftp.rename_bytes(&old_bytes, &new_bytes)
             .await
-            .map_err(|e| format!("SFTP rename failed: {}", e))
+            .map_err(|e| format!("SFTP rename failed: {}", e))?;
+        crate::ssh::sftp_encoding::invalidate_cached_path(server_id, old_path);
+        crate::ssh::sftp_encoding::record_raw_path(server_id, new_path, new_bytes);
+        Ok(())
     }.await;
     if let Err(ref e) = res {
         SshManager::handle_connection_loss(server_id, &conn, e).await;
@@ -3056,7 +3134,8 @@ pub async fn sftp_stat(
             .create_sftp_session()
             .await
             .map_err(|e| format!("SFTP session failed: {}", e))?;
-        let mut attrs = sftp.metadata(path)
+        let path_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id, path).await;
+        let mut attrs = sftp.metadata_bytes(&path_bytes)
             .await
             .map_err(|e| format!("SFTP metadata failed: {}", e))?;
         let is_unresolved_user = attrs.user.as_deref().map_or(true, |u| u.is_empty() || u.chars().all(|c| c.is_ascii_digit()));
@@ -3097,7 +3176,9 @@ pub async fn sftp_symlink(
         .create_sftp_session()
         .await
         .map_err(|e| format!("SFTP session failed: {}", e))?;
-    sftp.symlink(target, link_path)
+    let target_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id, target).await;
+    let link_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id, link_path).await;
+    sftp.symlink_bytes(&target_bytes, &link_bytes)
         .await
         .map_err(|e| format!("SFTP symlink failed: {}", e))?;
     Ok(())
@@ -3112,10 +3193,16 @@ pub async fn sftp_readlink(server_id: &str, path: &str) -> Result<String, String
         .create_sftp_session()
         .await
         .map_err(|e| format!("SFTP session failed: {}", e))?;
-    let target = sftp
-        .read_link(path)
+    let encoding = crate::ssh::sftp_encoding::resolve_sftp_filename_encoding(server_id).await;
+    let path_bytes = crate::ssh::sftp_encoding::lookup_encoded_path(server_id, path, encoding);
+    let raw_target = sftp
+        .read_link_bytes(&path_bytes)
         .await
         .map_err(|e| format!("SFTP readlink failed: {}", e))?;
+    let target = crate::ssh::sftp_encoding::decode_sftp_bytes(&raw_target, encoding);
+    if target.starts_with('/') {
+        crate::ssh::sftp_encoding::record_raw_path(server_id, &target, raw_target);
+    }
     Ok(target)
 }
 
@@ -3128,9 +3215,15 @@ pub async fn sftp_canonicalize(server_id: &str, path: &str) -> Result<String, St
         .create_sftp_session()
         .await
         .map_err(|e| format!("SFTP session failed: {}", e))?;
-    sftp.canonicalize(path)
+    let encoding = crate::ssh::sftp_encoding::resolve_sftp_filename_encoding(server_id).await;
+    let path_bytes = crate::ssh::sftp_encoding::lookup_encoded_path(server_id, path, encoding);
+    let raw_canon = sftp
+        .canonicalize_bytes(&path_bytes)
         .await
-        .map_err(|e| format!("SFTP canonicalize failed: {}", e))
+        .map_err(|e| format!("SFTP canonicalize failed: {}", e))?;
+    let canon = crate::ssh::sftp_encoding::decode_sftp_bytes(&raw_canon, encoding);
+    crate::ssh::sftp_encoding::record_raw_path(server_id, &canon, raw_canon);
+    Ok(canon)
 }
 
 /// 单次在线文本读取最大字节数（10MB，防止读取超大文件导致内存暴涨）
@@ -3147,7 +3240,8 @@ pub async fn sftp_read_file_bytes(server_id: &str, path: &str) -> Result<Vec<u8>
         .create_sftp_session()
         .await
         .map_err(|e| format!("SFTP session failed: {}", e))?;
-    if let Ok(meta) = tokio::time::timeout(Duration::from_secs(30), sftp.metadata(path)).await {
+    let path_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id, path).await;
+    if let Ok(meta) = tokio::time::timeout(Duration::from_secs(30), sftp.metadata_bytes(&path_bytes)).await {
         if let Ok(m) = meta {
             if m.len() > FILE_READ_MAX_BYTES as u64 {
                 return Err(format!(
@@ -3158,7 +3252,7 @@ pub async fn sftp_read_file_bytes(server_id: &str, path: &str) -> Result<Vec<u8>
             }
         }
     }
-    let mut file = tokio::time::timeout(Duration::from_secs(30), sftp.open(path))
+    let mut file = tokio::time::timeout(Duration::from_secs(30), sftp.open_bytes(&path_bytes))
         .await
         .map_err(|_| "SFTP open timed out".to_string())?
         .map_err(|e| format!("SFTP open failed: {}", e))?;
@@ -3200,8 +3294,9 @@ pub async fn sftp_read_file_bytes_bounded(
         .create_sftp_session()
         .await
         .map_err(|e| format!("SFTP session failed: {}", e))?;
+    let path_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id, path).await;
     let meta = sftp
-        .metadata(path)
+        .metadata_bytes(&path_bytes)
         .await
         .map_err(|e| format!("SFTP stat failed: {}", e))?;
     if meta.is_dir() {
@@ -3209,7 +3304,7 @@ pub async fn sftp_read_file_bytes_bounded(
     }
     let to_read = (meta.len() as usize).min(max_bytes);
     let mut file = sftp
-        .open(path)
+        .open_bytes(&path_bytes)
         .await
         .map_err(|e| format!("SFTP open failed: {}", e))?;
     let mut buf = vec![0u8; to_read];
@@ -3245,8 +3340,9 @@ pub async fn sftp_read_range(
         .create_sftp_session()
         .await
         .map_err(|e| format!("SFTP session failed: {}", e))?;
+    let remote_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id, remote_path).await;
 
-    let meta = tokio::time::timeout(Duration::from_secs(30), sftp.metadata(remote_path))
+    let meta = tokio::time::timeout(Duration::from_secs(30), sftp.metadata_bytes(&remote_bytes))
         .await
         .map_err(|_| "SFTP stat timed out".to_string())?
         .map_err(|e| format!("SFTP stat failed: {}", e))?;
@@ -3266,7 +3362,7 @@ pub async fn sftp_read_range(
         });
     }
 
-    let mut file = tokio::time::timeout(Duration::from_secs(30), sftp.open(remote_path))
+    let mut file = tokio::time::timeout(Duration::from_secs(30), sftp.open_bytes(&remote_bytes))
         .await
         .map_err(|_| "SFTP open timed out".to_string())?
         .map_err(|e| format!("SFTP open failed: {}", e))?;

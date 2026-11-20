@@ -7,21 +7,19 @@ import {
   Eye,
   EyeOff,
   Zap,
-  HelpCircle,
   Sparkles,
   Code2,
   ListOrdered,
   Clock,
   ShieldAlert,
   Download,
-  Info,
   CheckCircle2,
   AlertTriangle,
   PlayCircle,
-  ChevronRight,
   Terminal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { HintTooltip } from "@/components/ui/hint-tooltip";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -234,22 +232,21 @@ export function LogonScriptsTab({
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3.5">
       {/* 顶部主开关 */}
-      <div className="flex items-center justify-between rounded-lg border border-border/70 p-3 bg-card/25 shadow-2xs">
-        <div className="space-y-0.5 pr-2">
-          <div className="flex items-center gap-1.5">
-            <Zap className="h-4 w-4 text-amber-500 fill-amber-500/20" />
-            <span className="text-xs font-semibold text-foreground">
-              {tr("启用登录与交互自动化脚本 (Send-Expect)", "Enable Logon & Interactive Automation Scripts")}
-            </span>
-          </div>
-          <p className="text-[11px] text-muted-foreground leading-normal">
-            {tr(
-              "会话建立后，自动扫描终端输出并响应预设内容。支持延时发送(\\p)、宏变量(%u, %h, %p)、超时保护以及纯 JS 交互脚本编程。",
-              "Watches terminal output and replies automatically. Supports pause (\\p), macros (%u, %h, %p), timeout policies, and JS async scripting."
+      <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-2.5 bg-card/25">
+        <div className="flex items-center gap-1.5 pr-2">
+          <Zap className="h-4 w-4 text-amber-500 fill-amber-500/20 shrink-0" />
+          <span className="text-xs font-semibold text-foreground">
+            {tr("启用登录自动化脚本", "Enable Logon Scripts")}
+          </span>
+          <HintTooltip
+            content={tr(
+              "会话建立后自动扫描终端输出并响应预设内容，支持延时发送(\\p)、宏变量(%u, %h, %p)、超时保护与 JS 异步交互脚本。",
+              "Watches terminal output after connect and replies automatically. Supports pause (\\p), macros (%u, %h, %p), timeout policies, and JS async scripting."
             )}
-          </p>
+            label={tr("登录脚本说明", "Logon script info")}
+          />
         </div>
         <Switch
           checked={config.enabled}
@@ -257,25 +254,12 @@ export function LogonScriptsTab({
         />
       </div>
 
-      {/* 全局设置提示横幅（仅在全局设置对话框中展示） */}
-      {isGlobalSettings && config.enabled && (
-        <div className="flex items-center gap-2 p-2.5 rounded-md bg-amber-500/10 border border-amber-500/20 text-xs text-amber-700 dark:text-amber-300">
-          <Info className="h-4 w-4 shrink-0" />
-          <span>
-            {tr(
-              "💡 此处配置系统全局默认脚本。任意服务器在编辑面板中勾选「继承全局默认脚本」，即可直接自动应用以下规则。",
-              "Configured rules will act as global defaults. Enable 'Inherit Global Defaults' in any server to apply them."
-            )}
-          </span>
-        </div>
-      )}
-
       {config.enabled && (
-        <div className="space-y-3">
-          {/* 顶栏控制：模式切换与全局继承 */}
-          <div className="flex items-center justify-between bg-muted/30 border border-border/60 rounded-md p-2 text-xs">
+        <div className="space-y-4">
+          {/* 顶栏控制：模式切换与导入默认模板 */}
+          <div className="flex items-center justify-between gap-2 text-xs">
             {/* 模式选择按钮组 */}
-            <div className="flex items-center gap-1 bg-background border border-border rounded-md p-0.5">
+            <div className="inline-flex items-center gap-1 bg-muted/40 border border-border/60 rounded-md p-0.5">
               <button
                 type="button"
                 onClick={() => handleSetMode("rules")}
@@ -300,49 +284,57 @@ export function LogonScriptsTab({
                 )}
               >
                 <Code2 className="h-3.5 w-3.5" />
-                <span>{tr("可编程 JS 脚本", "JS Script Engine")}</span>
+                <span>{tr("可编程 JS 脚本", "JS Script")}</span>
               </button>
             </div>
 
-            {/* 单机模式下的全局继承与导入选项 */}
-            {!isGlobalSettings && (
-              <div className="flex items-center gap-3">
-                <label className="flex items-center gap-1.5 cursor-pointer select-none text-[11px] text-muted-foreground hover:text-foreground">
-                  <input
-                    type="checkbox"
-                    checked={config.inheritGlobal ?? false}
-                    onChange={(e) => handleToggleInheritGlobal(e.target.checked)}
-                    className="rounded border-border text-primary focus:ring-0"
-                  />
-                  <span>{tr("继承全局默认脚本", "Inherit Global Defaults")}</span>
-                </label>
-
-                {(hasGlobalRules || hasGlobalParams) && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={handleImportFromGlobal}
-                    className="h-6 px-2 text-[11px] gap-1 cursor-pointer"
-                    title={tr("从全局默认脚本配置中复制规则与参数到当前服务器", "Copy rules and parameters from global defaults")}
-                  >
-                    <Download className="h-3 w-3" />
-                    <span>{tr("导入全局规则", "Import Global")}</span>
-                  </Button>
-                )}
-              </div>
+            {/* 单机模式下的一键导入默认模板 */}
+            {!isGlobalSettings && (hasGlobalRules || hasGlobalParams) && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleImportFromGlobal}
+                className="h-7 px-2.5 text-[11px] gap-1 cursor-pointer"
+                title={tr("从默认登录脚本模板中复制规则与参数到当前服务器", "Copy rules and parameters from the default logon script template")}
+              >
+                <Download className="h-3 w-3" />
+                <span>{tr("导入默认模板", "Import Template")}</span>
+              </Button>
             )}
           </div>
 
           {/* 模式 A：规则表格模式 (Rules Table Mode) */}
           {currentMode === "rules" && (
-            <fieldset className="border border-border/70 rounded-md p-3.5 pt-1 space-y-3 bg-card/10 shadow-2xs">
-              <legend className="px-1.5 text-xs font-medium text-foreground flex items-center justify-between w-full">
-                <span>{tr("Expect-Send 规则列表", "Expect-Send Rules")}</span>
+            <div className="space-y-2.5 pt-1 border-t border-border/50">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                  <span>{tr("Expect-Send 规则", "Expect-Send Rules")}</span>
+                  <HintTooltip
+                    label={tr("转义字符与宏变量说明", "Macros & Escape Sequences")}
+                    content={
+                      <div className="space-y-1.5">
+                        <div className="font-medium text-foreground">
+                          {tr("支持的转义字符与宏变量", "Macros & Escape Sequences")}
+                        </div>
+                        <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 font-mono text-[10px] text-muted-foreground">
+                          <div><span className="text-primary font-semibold">%u</span> {tr("用户名", "Username")}</div>
+                          <div><span className="text-primary font-semibold">%h</span> {tr("主机/IP", "Host")}</div>
+                          <div><span className="text-primary font-semibold">%p</span> {tr("端口", "Port")}</div>
+                          <div><span className="text-primary font-semibold">%n</span> {tr("服务器名", "Name")}</div>
+                          <div><span className="text-amber-500 font-semibold">\p</span> {tr("暂停 1000ms", "Pause 1s")}</div>
+                          <div><span className="text-amber-500 font-semibold">\p500</span> {tr("暂停 500ms", "Pause 500ms")}</div>
+                          <div><span className="text-foreground font-semibold">\r, \n</span> {tr("回车换行", "CR / LF")}</div>
+                          <div><span className="text-foreground font-semibold">/pat/i</span> {tr("正则匹配", "RegExp")}</div>
+                        </div>
+                      </div>
+                    }
+                  />
+                </div>
                 <div className="flex items-center gap-2">
                   {/* 全局超时策略选择器 */}
                   <div className="flex items-center gap-1 text-[11px] text-muted-foreground mr-1">
-                    <span>{tr("超时动作:", "Timeout:")}</span>
+                    <span>{tr("超时:", "Timeout:")}</span>
                     <select
                       value={config.timeoutPolicy || "ignore"}
                       onChange={(e) =>
@@ -496,11 +488,11 @@ export function LogonScriptsTab({
                     <span>{tr("添加规则", "Add Rule")}</span>
                   </Button>
                 </div>
-              </legend>
+              </div>
 
               {config.rules.length === 0 ? (
-                <div className="py-6 text-center text-xs text-muted-foreground border border-dashed rounded-md">
-                  <p>{tr("暂无自动化规则，点击上方「添加规则」或选择「常用模板」创建", "No rules configured yet. Click 'Add Rule' or pick a template above.")}</p>
+                <div className="py-5 text-center text-xs text-muted-foreground border border-dashed rounded-md">
+                  <p>{tr("暂无规则，点击右上角「添加规则」或「常用模板」", "No rules yet. Click 'Add Rule' or 'Templates' above.")}</p>
                 </div>
               ) : (
                 <div className="space-y-2.5">
@@ -697,34 +689,32 @@ export function LogonScriptsTab({
                   })}
                 </div>
               )}
-
-              {/* 宏变量与转义帮助贴纸 */}
-              <div className="bg-muted/40 rounded border border-border/50 p-2 text-[11px] text-muted-foreground space-y-1">
-                <div className="flex items-center gap-1 font-medium text-foreground">
-                  <Info className="h-3.5 w-3.5 text-primary" />
-                  <span>{tr("支持的高级转义字符与宏变量 (对标并超越 Xshell)", "Supported Macros & Escape Sequences")}</span>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 text-[10px] font-mono text-muted-foreground/90">
-                  <div><span className="text-primary font-semibold">%u</span>: {tr("当前用户名", "Username")}</div>
-                  <div><span className="text-primary font-semibold">%h</span>: {tr("当前主机/IP", "Host IP")}</div>
-                  <div><span className="text-primary font-semibold">%p</span>: {tr("当前端口", "Port")}</div>
-                  <div><span className="text-primary font-semibold">%n</span>: {tr("服务器名", "Server Name")}</div>
-                  <div><span className="text-amber-500 font-semibold">\p</span>: {tr("暂停 1000ms", "Pause 1s")}</div>
-                  <div><span className="text-amber-500 font-semibold">\p500</span>: {tr("暂停 500ms", "Pause 500ms")}</div>
-                  <div><span className="text-foreground font-semibold">\r, \n</span>: {tr("回车换行", "CR / LF")}</div>
-                  <div><span className="text-foreground font-semibold">/pattern/i</span>: {tr("正则表达式", "RegExp")}</div>
-                </div>
-              </div>
-            </fieldset>
+            </div>
           )}
 
           {/* 模式 B：现代可编程 JavaScript 脚本模式 (Programmable Script Mode) */}
           {currentMode === "script" && (
-            <fieldset className="border border-border/70 rounded-md p-3.5 pt-1 space-y-3 bg-card/10 shadow-2xs">
-              <legend className="px-1.5 text-xs font-medium text-foreground flex items-center justify-between w-full">
+            <div className="space-y-2.5 pt-1 border-t border-border/50">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-medium text-foreground">
                 <div className="flex items-center gap-1.5">
                   <Code2 className="h-3.5 w-3.5 text-primary" />
-                  <span>{tr("JavaScript 异步自动化脚本 (免安装 Python/VBScript)", "JavaScript Async Automation Script")}</span>
+                  <span>{tr("JavaScript 自动化脚本", "JavaScript Automation Script")}</span>
+                  <HintTooltip
+                    label={tr("内置 API 说明", "Built-in API Reference")}
+                    content={
+                      <div className="space-y-1 font-mono text-[10px]">
+                        <div className="font-sans font-medium text-foreground mb-1">
+                          {tr("内置可用 API", "Built-in API Reference")}
+                        </div>
+                        <div><span className="text-primary">screen.waitForString(str, ms)</span> — {tr("等待子串", "Wait for substring")}</div>
+                        <div><span className="text-primary">screen.waitForStrings([...], ms)</span> — {tr("多分支等待", "Wait for any")}</div>
+                        <div><span className="text-primary">screen.waitForRegex(/re/i, ms)</span> — {tr("正则匹配", "Wait for regex")}</div>
+                        <div><span className="text-primary">screen.send(text, enter?)</span> — {tr("发送指令", "Send text")}</div>
+                        <div><span className="text-primary">screen.sleep(ms)</span> — {tr("延时挂起", "Pause")}</div>
+                        <div><span className="text-primary">dialog.prompt(msg, def)</span> — {tr("弹窗输入", "Prompt user")}</div>
+                      </div>
+                    }
+                  />
                 </div>
                 <div className="flex items-center gap-2">
                   {/* 代码片段插入器 */}
@@ -804,7 +794,7 @@ export function LogonScriptsTab({
                     <span>{tr("重置示例", "Reset Template")}</span>
                   </Button>
                 </div>
-              </legend>
+              </div>
 
               {/* 语法检测状态栏 */}
               {syntaxStatus && (
@@ -840,31 +830,28 @@ export function LogonScriptsTab({
                     });
                     if (syntaxStatus) setSyntaxStatus(null);
                   }}
-                  rows={14}
+                  rows={10}
                   spellCheck={false}
                   placeholder={tr("在此编写标准的 async/await JavaScript 登录脚本...", "Write async JavaScript logon script here...")}
                   className="w-full rounded-md border border-border/80 bg-zinc-950 text-zinc-100 p-3 font-mono text-xs leading-relaxed focus:outline-none focus:ring-1 focus:ring-primary/50"
                 />
-
-                <div className="bg-muted/40 rounded border border-border/50 p-2.5 text-[11px] text-muted-foreground space-y-1.5">
-                  <span className="font-semibold text-foreground">{tr("内置可用 API 说明:", "Built-in API Reference:")}</span>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 font-mono text-[10px]">
-                    <div><span className="text-primary">await screen.waitForString(str, ms)</span> - {tr("等待指定子串出现", "Wait for substring")}</div>
-                    <div><span className="text-primary">await screen.waitForStrings([s1, s2], ms)</span> - {tr("多选等待，返回命中索引", "Wait for any")}</div>
-                    <div><span className="text-primary">await screen.waitForRegex(/re/i, ms)</span> - {tr("正则匹配", "Wait for regex")}</div>
-                    <div><span className="text-primary">await screen.send(text, enter?)</span> - {tr("向 Shell 发送指令", "Send text to shell")}</div>
-                    <div><span className="text-primary">await screen.sleep(ms)</span> - {tr("延时挂起", "Pause execution")}</div>
-                    <div><span className="text-primary">await dialog.prompt(msg, def)</span> - {tr("弹窗交互式索取动态口令", "Prompt user")}</div>
-                  </div>
-                </div>
               </div>
-            </fieldset>
+            </div>
           )}
 
           {/* 显式脚本参数清单 (%P{name} / session.params) */}
-          <fieldset className="space-y-2 rounded-lg border border-border/70 p-3 bg-card/10">
-            <legend className="text-[11px] font-medium px-1.5 text-muted-foreground flex items-center justify-between w-full">
-              <span>{tr("脚本参数 (%P{name} / session.params)", "Script Parameters (%P{name} / session.params)")}</span>
+          <div className="space-y-2 pt-2 border-t border-border/50">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                <span>{tr("脚本参数", "Script Parameters")}</span>
+                <HintTooltip
+                  label={tr("脚本参数说明", "Script Parameters Info")}
+                  content={tr(
+                    "可选：声明可复用参数，在规则发送串中使用 %P{name} 或在脚本中读取 session.params.name。",
+                    "Optional: declare reusable parameters referenced via %P{name} in rules or session.params.name in scripts."
+                  )}
+                />
+              </div>
               <Button
                 type="button"
                 variant="outline"
@@ -875,16 +862,9 @@ export function LogonScriptsTab({
                 <Plus className="h-3 w-3" />
                 <span>{tr("添加参数", "Add Param")}</span>
               </Button>
-            </legend>
+            </div>
 
-            {parameters.length === 0 ? (
-              <p className="text-[11px] text-muted-foreground py-1">
-                {tr(
-                  "可选：声明可复用参数，在规则发送串中使用 %P{name} 或在脚本中读取 session.params.name",
-                  "Optional: declare parameters referenced via %P{name} or session.params.name"
-                )}
-              </p>
-            ) : (
+            {parameters.length > 0 && (
               <div className="space-y-2">
                 {parameters.map((param, idx) => {
                   const paramKey = paramKeysRef.current[idx] || `param-${idx}`;
@@ -965,7 +945,7 @@ export function LogonScriptsTab({
                 })}
               </div>
             )}
-          </fieldset>
+          </div>
         </div>
       )}
     </div>

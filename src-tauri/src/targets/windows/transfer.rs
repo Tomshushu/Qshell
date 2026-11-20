@@ -104,11 +104,12 @@ pub async fn upload_file(
             message: e.to_string(),
         })?;
 
+    let tmp_remote_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id, &tmp_remote).await;
     // 4. 打开远程临时文件（覆盖模式）
     let mut remote_file = timeout(
         Duration::from_secs(SFTP_TIMEOUT),
-        sftp.open_with_flags(
-            &tmp_remote,
+        sftp.open_with_flags_bytes(
+            &tmp_remote_bytes,
             OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
         ),
     )
@@ -131,7 +132,7 @@ pub async fn upload_file(
         // 检查取消
         if let Some(flag) = cancel {
             if flag.load(Ordering::Relaxed) {
-                let _ = sftp.remove_file(&tmp_remote).await;
+                let _ = sftp.remove_file_bytes(&tmp_remote_bytes).await;
                 return Err(TransferError::Canceled);
             }
         }
@@ -152,7 +153,7 @@ pub async fn upload_file(
         for attempt in 0..WRITE_RETRIES {
             if let Some(flag) = cancel {
                 if flag.load(Ordering::Relaxed) {
-                    let _ = sftp.remove_file(&tmp_remote).await;
+                    let _ = sftp.remove_file_bytes(&tmp_remote_bytes).await;
                     return Err(TransferError::Canceled);
                 }
             }
@@ -179,8 +180,8 @@ pub async fn upload_file(
                         drop(remote_file);
                         remote_file = timeout(
                             Duration::from_secs(SFTP_TIMEOUT),
-                            sftp.open_with_flags(
-                                &tmp_remote,
+                            sftp.open_with_flags_bytes(
+                                &tmp_remote_bytes,
                                 OpenFlags::WRITE | OpenFlags::APPEND,
                             ),
                         )
@@ -234,7 +235,7 @@ pub async fn upload_file(
     // 8. rename 为正式文件（复用三步原子备份重命名，避免删除目标后重命名失败导致原文件永久丢失）
     timeout(
         Duration::from_secs(SFTP_TIMEOUT),
-        crate::ssh::manager::sftp_atomic_rename_overwrite(&sftp, &tmp_remote, &sftp_remote),
+        crate::ssh::manager::sftp_atomic_rename_overwrite(&sftp, server_id, &tmp_remote, &sftp_remote),
     )
     .await
     .map_err(|_| TransferError::Timeout {
@@ -291,8 +292,10 @@ pub async fn download_file(
             message: e.to_string(),
         })?;
 
+    let sftp_remote_bytes = crate::ssh::sftp_encoding::encode_sftp_path(server_id, &sftp_remote).await;
+
     // 获取远程文件大小（带 60s 超时）
-    let total_size = match timeout(Duration::from_secs(SFTP_TIMEOUT), sftp.metadata(&sftp_remote)).await {
+    let total_size = match timeout(Duration::from_secs(SFTP_TIMEOUT), sftp.metadata_bytes(&sftp_remote_bytes)).await {
         Ok(Ok(meta)) => meta.size.unwrap_or(0),
         Ok(Err(e)) => {
             return Err(TransferError::from_sftp_message(&e.to_string()));
@@ -308,7 +311,7 @@ pub async fn download_file(
     // 打开远程文件
     let mut remote_file = timeout(
         Duration::from_secs(SFTP_TIMEOUT),
-        sftp.open(&sftp_remote),
+        sftp.open_bytes(&sftp_remote_bytes),
     )
     .await
     .map_err(|_| TransferError::Timeout {

@@ -73,52 +73,109 @@ pub async fn servers_add(server: String) -> Result<OperationResult, String> {
 
 /// 更新服务器配置
 /// updates 为 JSON 字符串（ServerUpdate）
+fn json_field_norm_eq(key: &str, old_val: Option<&serde_json::Value>, new_val: &serde_json::Value) -> bool {
+    let norm = |v: &serde_json::Value| -> Option<serde_json::Value> {
+        match v {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(str_val) => {
+                let trimmed = str_val.trim();
+                if trimmed.is_empty() {
+                    return None;
+                }
+                if key == "proxyConfig" {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                        if parsed.get("type").and_then(|t| t.as_str()) == Some("none") {
+                            return None;
+                        }
+                        return Some(parsed);
+                    }
+                }
+                Some(serde_json::Value::String(str_val.clone()))
+            }
+            other => Some(other.clone()),
+        }
+    };
+    old_val.and_then(norm) == norm(new_val)
+}
+
+fn find_changed_connection_keys(old_raw: Option<&str>, updates_raw: &str) -> Vec<&'static str> {
+    let Some(new_obj) = serde_json::from_str::<serde_json::Value>(updates_raw)
+        .ok()
+        .and_then(|v| v.as_object().cloned())
+    else {
+        return Vec::new();
+    };
+    let old_obj = old_raw
+        .and_then(|str_val| serde_json::from_str::<serde_json::Value>(str_val).ok())
+        .and_then(|v| v.as_object().cloned());
+
+    const CONNECTION_KEYS: &[&str] = &[
+        "host",
+        "port",
+        "username",
+        "authType",
+        "password",
+        "privateKeyPath",
+        "privateKeyPassphrase",
+        "connectionTimeout",
+        "targetType",
+        "protocol",
+        "forwardAgent",
+        "x11Forwarding",
+        "authProfileId",
+        "sshKeyId",
+        "agentIdentity",
+        "certificatePath",
+        "proxyConfig",
+    ];
+
+    let Some(old_obj) = old_obj else {
+        return CONNECTION_KEYS
+            .iter()
+            .copied()
+            .filter(|k| new_obj.contains_key(*k))
+            .collect();
+    };
+
+    CONNECTION_KEYS
+        .iter()
+        .copied()
+        .filter(|key| match new_obj.get(*key) {
+            Some(new_val) => !json_field_norm_eq(key, old_obj.get(*key), new_val),
+            None => false,
+        })
+        .collect()
+}
+
 #[tauri::command]
 pub async fn servers_update(
     id: String,
     updates: String,
 ) -> Result<OperationResult, String> {
-    // 检测是否修改了连接相关字段。
-    // 若修改了，需在 DB 更新后断开旧连接，避免后续 detectOsInfo/execute
-    // 复用指向旧主机的连接（修复"修改服务器后图标/系统信息不更新"问题）。
-    let connection_fields_changed = serde_json::from_str::<serde_json::Value>(&updates)
-        .ok()
-        .and_then(|v| v.as_object().cloned())
-        .map(|obj| {
-            obj.contains_key("host")
-                || obj.contains_key("port")
-                || obj.contains_key("username")
-                || obj.contains_key("authType")
-                || obj.contains_key("password")
-                || obj.contains_key("privateKeyPath")
-                || obj.contains_key("privateKeyPassphrase")
-                || obj.contains_key("connectionTimeout")
-                || obj.contains_key("targetType")
-                || obj.contains_key("protocol")
-                || obj.contains_key("forwardAgent")
-                || obj.contains_key("x11Forwarding")
-                || obj.contains_key("authProfileId")
-                || obj.contains_key("sshKeyId")
-                || obj.contains_key("agentIdentity")
-                || obj.contains_key("certificatePath")
-                || obj.contains_key("proxyConfig")
-                || obj.contains_key("fileTransferConfig")
-        })
-        .unwrap_or(false);
-
     let id_for_disconnect = id.clone();
     let result = tokio::task::spawn_blocking(move || {
-        db::servers_update(id, updates)
+        // 读取旧配置并逐字段比对：只有连接/认证/代理字段真正发生变化时才断开旧连接，
+        // 避免仅编辑名称、分组、标签、登录脚本或未改连接信息保存时误断已连接的终端与 SFTP。
+        let old_raw = db::servers_get_raw(id.clone()).ok();
+        let changed_keys = find_changed_connection_keys(old_raw.as_deref(), &updates);
+        db::servers_update(id, updates).map(|()| changed_keys)
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?;
     match result {
-        Ok(()) => {
+        Ok(changed_keys) => {
             crate::files::remote_fs::clear_protocol_cache(&id_for_disconnect).await;
-            // 连接相关字段变更：断开旧连接，确保后续操作使用新配置重连（含仅开启 SFTP 子连接的场景）
-            let mgr = crate::ssh::manager::SshManager::global();
-            if connection_fields_changed && mgr.has_server_or_child_connection_sync(&id_for_disconnect) {
-                let _ = mgr.disconnect(&id_for_disconnect).await;
+            crate::ssh::sftp_encoding::invalidate_server_sftp_caches(&id_for_disconnect);
+            if !changed_keys.is_empty() {
+                tracing::info!(
+                    "[servers_update] id={} 检测到连接字段变更: {:?}",
+                    id_for_disconnect,
+                    changed_keys
+                );
+                let mgr = crate::ssh::manager::SshManager::global();
+                if mgr.has_server_or_child_connection_sync(&id_for_disconnect) {
+                    let _ = mgr.disconnect(&id_for_disconnect).await;
+                }
             }
             Ok(OperationResult::ok())
         }
@@ -438,6 +495,9 @@ struct ExportServer {
     /// 单服务器终端 TERM 类型覆写
     #[serde(default, skip_serializing_if = "Option::is_none")]
     terminal_type: Option<String>,
+    /// 自定义会话图标（预设 ID / emoji / data URL）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    icon: Option<String>,
     /// 私钥文件内容（明文）
     #[serde(skip_serializing_if = "Option::is_none")]
     private_key_content: Option<String>,
@@ -600,6 +660,7 @@ fn to_export_server(
         forward_agent: server.forward_agent,
         x11_forwarding: server.x11_forwarding,
         terminal_type: server.terminal_type.clone(),
+        icon: server.icon.clone(),
         private_key_content: None,
         certificate_content: None,
         proxy_config: server.proxy_config.clone(),
@@ -922,6 +983,7 @@ pub async fn servers_import(
                 "forwardAgent": server.forward_agent,
                 "x11Forwarding": server.x11_forwarding,
                 "terminalType": server.terminal_type,
+                "icon": server.icon,
                 "proxyConfig": server.proxy_config,
                 "tunnelsConfig": server.tunnels_config,
                 "keysConfig": keys_config,

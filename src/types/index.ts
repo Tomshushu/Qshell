@@ -11,7 +11,7 @@ export interface Server {
    * - sshAgent: SSH Agent 认证（Unix ssh-agent / Windows Pageant）
    * - certificate: OpenSSH 证书认证（私钥 + CA 签名的 *-cert.pub）
    */
-  authType: 'password' | 'privateKey' | 'sshAgent' | 'certificate' | 'keyboardInteractive'
+  authType: 'password' | 'privateKey' | 'sshAgent' | 'certificate' | 'keyboardInteractive' | 'pkcs11' | 'gssapi'
   password?: string
   privateKeyPath?: string
   privateKeyPassphrase?: string
@@ -60,6 +60,8 @@ export interface Server {
   tlsAllowInvalidCerts?: boolean
   /** 终端类型（TERM，如 xterm-256color / vt100），为空时继承全局设置 */
   terminalType?: string | null
+  /** 自定义会话图标：预设 ID / emoji / data:image URL；空表示按 OS 默认图标渲染 */
+  icon?: string | null
   /**
    * FinalShell 模式：代理随服务器内联配置。
    * 后端以加密 JSON 字符串存储；前端以 JSON 字符串在数据中传递。
@@ -209,6 +211,8 @@ export interface SessionLoggingConfig {
   fileNamePattern?: string
 }
 
+export type FileTransferEncoding = 'utf-8' | 'gbk' | 'gb18030' | 'auto'
+
 export interface FileTransferConfig {
   /** 文件传输协议：'auto' (SFTP 自动降级 SCP) | 'sftp' (默认复用 SSH) | 'scp' | 'ftp' | 'ftps' */
   protocol: 'auto' | 'sftp' | 'scp' | 'ftp' | 'ftps'
@@ -228,8 +232,8 @@ export interface FileTransferConfig {
   hasPassword?: boolean
   /** 数据连接模式：'passive' (PASV/EPSV，默认) | 'active' (PORT) */
   transferMode?: 'passive' | 'active'
-  /** 文件名字符编码：'utf-8' (默认) | 'gbk' */
-  encoding?: 'utf-8' | 'gbk'
+  /** 文件名字符编码：'utf-8' (默认) | 'gbk' | 'gb18030' | 'auto' */
+  encoding?: FileTransferEncoding
   /** FTPS 是否信任自签名证书（默认 false，需用户显式勾选） */
   allowInvalidCerts?: boolean
 }

@@ -6,6 +6,8 @@
 // 这些 pub 项在 Rust 侧未被直接调用但属于公开契约。全局静音 dead_code 警告，
 // 避免逐个标注 #[allow(dead_code)] 的维护负担。
 #![allow(dead_code)]
+// 服务器导出使用大字段集的 serde_json::json! 宏，默认 128 层递归上限不足（编译器建议值）。
+#![recursion_limit = "256"]
 
 mod crypto;
 mod db;
@@ -29,12 +31,37 @@ pub mod serial;
 pub mod network;
 mod oauth;
 pub mod mcp_client;
+mod tray;
+mod launch_actions;
 
 use tauri::Manager;
 
 // ============================================================================
 // Tauri 应用入口
 // ============================================================================
+
+fn focus_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+fn dispatch_warm_launch_actions(app: &tauri::AppHandle, actions: Vec<launch_actions::LaunchAction>) {
+    use tauri::Emitter;
+    focus_main_window(app);
+    if actions.is_empty() {
+        return;
+    }
+    if app.get_webview_window("main").is_none() {
+        launch_actions::enqueue_pending_actions(actions);
+        return;
+    }
+    for action in actions {
+        let _ = app.emit("app:launch-action", &action);
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -45,14 +72,35 @@ pub fn run() {
         .init();
 
     tauri::Builder::default()
+        // P1-07：single-instance 必须作为第一个插件注册，用于接管二次启动的 CLI / Deep Link 参数
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            let actions = launch_actions::parse_cli_args(&argv, Some(&cwd));
+            tracing::info!(
+                "[SingleInstance] wakeup argv={:?} cwd={} actions={}",
+                argv,
+                cwd,
+                actions.len()
+            );
+            dispatch_warm_launch_actions(app, actions);
+        }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
+        .plugin(tauri_plugin_notification::init())
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                // P2-30：开启「关闭时最小化到托盘」后拦截主窗口关闭，保留 SSH 会话；
+                // 仅托盘菜单「彻底退出」或系统关机才真正退出。
+                if window.label() == "main" && tray::close_to_tray_enabled() {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+            tauri::WindowEvent::Destroyed => {
                 let label = window.label().to_string();
                 tauri::async_runtime::spawn(async move {
                     crate::ssh::shell::close_sessions_for_window(&label).await;
@@ -61,8 +109,59 @@ pub fn run() {
                     crate::local_shell::close_sessions_for_window(&label);
                 });
             }
+            _ => {}
         })
         .setup(|app| {
+            // 初始化系统托盘（P2-30）：图标 + 显示/隐藏/彻底退出菜单
+            if let Err(err) = tray::init(app.handle()) {
+                tracing::warn!("[Tray] 系统托盘初始化失败，已降级忽略: {}", err);
+            }
+
+            // P1-07 / P2-22：收集冷启动 CLI 参数，待前端挂载后通过 app_take_pending_launch_actions 消费
+            let cold_args: Vec<String> = std::env::args().collect();
+            let cold_cwd = std::env::current_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned());
+            let cold_actions = launch_actions::parse_cli_args(&cold_args, cold_cwd.as_deref());
+            if !cold_actions.is_empty() {
+                tracing::info!(
+                    "[Launch] queued {} cold-start action(s) from CLI",
+                    cold_actions.len()
+                );
+                launch_actions::enqueue_pending_actions(cold_actions);
+            }
+
+            // P1-07：注册 Deep Link 运行时监听器（含 macOS / Linux / Windows 开发或便携场景）
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                #[cfg(any(target_os = "linux", all(debug_assertions, windows)))]
+                if let Err(err) = app.deep_link().register_all() {
+                    tracing::warn!("[DeepLink] register_all skipped: {}", err);
+                }
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    let dl_actions: Vec<_> = urls
+                        .iter()
+                        .filter_map(|u| launch_actions::parse_deep_link_url(u.as_str()))
+                        .collect();
+                    if !dl_actions.is_empty() {
+                        launch_actions::enqueue_pending_actions(dl_actions);
+                    }
+                }
+                let dl_handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    let actions: Vec<_> = event
+                        .urls()
+                        .iter()
+                        .filter_map(|u| launch_actions::parse_deep_link_url(u.as_str()))
+                        .collect();
+                    if !actions.is_empty() {
+                        dispatch_warm_launch_actions(&dl_handle, actions);
+                    } else {
+                        focus_main_window(&dl_handle);
+                    }
+                });
+            }
+
             // 保存全局 AppHandle，供 SshManager 发射 ssh:disconnected 事件
             ssh::manager::set_app_handle(app.handle().clone());
 
@@ -274,6 +373,7 @@ pub fn run() {
             commands::ssh::ssh_generate_key,
             commands::ssh::ssh_test_ssh_agent,
             commands::ssh::ssh_list_agent_identities,
+            commands::ssh::ssh_list_pkcs11_identities,
             commands::ssh::x11_probe_environment,
             commands::ssh::x11_import_addon,
 
@@ -360,6 +460,7 @@ pub fn run() {
             commands::files::files_read,
             commands::files::files_read_binary,
             commands::files::files_read_chunk,
+            commands::files::files_read_local_thumbnail,
             commands::files::files_write,
             commands::files::files_mkdir,
             commands::files::files_delete,
@@ -537,6 +638,13 @@ pub fn run() {
             commands::vnc::vnc_stop_session,
             commands::vnc::vnc_test_connection,
             commands::vnc::vnc_solve_auth_challenge,
+            // 系统托盘（P2-30）
+            commands::tray::tray_set_close_to_tray,
+            commands::tray::tray_update_labels,
+            // 桌面集成与启动动作（P1-07 / P2-22 / P2-29）
+            commands::desktop_integration::app_take_pending_launch_actions,
+            commands::desktop_integration::desktop_integration_status,
+            commands::desktop_integration::desktop_integration_set_context_menu,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

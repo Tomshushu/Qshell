@@ -66,26 +66,26 @@ pub use self::{
 
 pub const VERSION: u32 = 3;
 
-const SSH_FXP_INIT: u8 = 1;
-const SSH_FXP_VERSION: u8 = 2;
-const SSH_FXP_OPEN: u8 = 3;
-const SSH_FXP_CLOSE: u8 = 4;
-const SSH_FXP_READ: u8 = 5;
-const SSH_FXP_WRITE: u8 = 6;
-const SSH_FXP_LSTAT: u8 = 7;
-const SSH_FXP_FSTAT: u8 = 8;
-const SSH_FXP_SETSTAT: u8 = 9;
-const SSH_FXP_FSETSTAT: u8 = 10;
-const SSH_FXP_OPENDIR: u8 = 11;
-const SSH_FXP_READDIR: u8 = 12;
-const SSH_FXP_REMOVE: u8 = 13;
-const SSH_FXP_MKDIR: u8 = 14;
-const SSH_FXP_RMDIR: u8 = 15;
-const SSH_FXP_REALPATH: u8 = 16;
-const SSH_FXP_STAT: u8 = 17;
-const SSH_FXP_RENAME: u8 = 18;
-const SSH_FXP_READLINK: u8 = 19;
-const SSH_FXP_SYMLINK: u8 = 20;
+pub(crate) const SSH_FXP_INIT: u8 = 1;
+pub(crate) const SSH_FXP_VERSION: u8 = 2;
+pub(crate) const SSH_FXP_OPEN: u8 = 3;
+pub(crate) const SSH_FXP_CLOSE: u8 = 4;
+pub(crate) const SSH_FXP_READ: u8 = 5;
+pub(crate) const SSH_FXP_WRITE: u8 = 6;
+pub(crate) const SSH_FXP_LSTAT: u8 = 7;
+pub(crate) const SSH_FXP_FSTAT: u8 = 8;
+pub(crate) const SSH_FXP_SETSTAT: u8 = 9;
+pub(crate) const SSH_FXP_FSETSTAT: u8 = 10;
+pub(crate) const SSH_FXP_OPENDIR: u8 = 11;
+pub(crate) const SSH_FXP_READDIR: u8 = 12;
+pub(crate) const SSH_FXP_REMOVE: u8 = 13;
+pub(crate) const SSH_FXP_MKDIR: u8 = 14;
+pub(crate) const SSH_FXP_RMDIR: u8 = 15;
+pub(crate) const SSH_FXP_REALPATH: u8 = 16;
+pub(crate) const SSH_FXP_STAT: u8 = 17;
+pub(crate) const SSH_FXP_RENAME: u8 = 18;
+pub(crate) const SSH_FXP_READLINK: u8 = 19;
+pub(crate) const SSH_FXP_SYMLINK: u8 = 20;
 
 const SSH_FXP_STATUS: u8 = 101;
 const SSH_FXP_HANDLE: u8 = 102;
@@ -270,11 +270,16 @@ impl TryFrom<Packet> for Bytes {
             Packet::ExtendedReply(reply) => (SSH_FXP_EXTENDED_REPLY, ser::to_bytes(&reply)?),
         };
 
-        let length = payload.len() as u32 + 1;
-        let mut bytes = BytesMut::new();
-        bytes.put_u32(length);
-        bytes.put_u8(r#type);
-        bytes.put_slice(&payload);
-        Ok(bytes.freeze())
+        Ok(frame_raw_packet(r#type, payload))
     }
+}
+
+/// Frames a pre-serialized SFTP packet payload with its 4-byte length prefix and packet type byte.
+pub(crate) fn frame_raw_packet(packet_type: u8, payload: Bytes) -> Bytes {
+    let length = payload.len() as u32 + 1;
+    let mut bytes = BytesMut::new();
+    bytes.put_u32(length);
+    bytes.put_u8(packet_type);
+    bytes.put_slice(&payload);
+    bytes.freeze()
 }

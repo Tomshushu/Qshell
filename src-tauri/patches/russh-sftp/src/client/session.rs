@@ -166,12 +166,11 @@ impl SftpSession {
         }
     }
 
-    /// Returns an iterator over the entries within a directory.
-    pub async fn read_dir<P: Into<String>>(&self, path: P) -> SftpResult<ReadDir> {
-        let path: String = path.into();
-        let parent = Arc::from(path.as_str());
-
-        let handle = self.session.opendir(path).await?.handle;
+    async fn read_dir_by_handle(
+        &self,
+        parent: Arc<str>,
+        handle: String,
+    ) -> SftpResult<ReadDir> {
         let mut files = vec![];
 
         loop {
@@ -190,7 +189,7 @@ impl SftpSession {
                                     f.attrs.group = g;
                                 }
                             }
-                            (f.filename, f.attrs)
+                            (f.filename, f.raw_filename, f.attrs)
                         })
                         .chain(files)
                         .collect();
@@ -206,6 +205,123 @@ impl SftpSession {
             parent,
             entries: files.into(),
         })
+    }
+
+    /// Returns an iterator over the entries within a directory.
+    pub async fn read_dir<P: Into<String>>(&self, path: P) -> SftpResult<ReadDir> {
+        let path: String = path.into();
+        let parent = Arc::from(path.as_str());
+
+        let handle = self.session.opendir(path).await?.handle;
+        self.read_dir_by_handle(parent, handle).await
+    }
+
+    /// Raw byte-path variant of [`Self::open`] supporting non-UTF-8 wire paths.
+    pub async fn open_bytes(&self, filename: &[u8]) -> SftpResult<File> {
+        self.open_with_flags_bytes(filename, OpenFlags::READ).await
+    }
+
+    /// Raw byte-path variant of [`Self::create`] supporting non-UTF-8 wire paths.
+    pub async fn create_bytes(&self, filename: &[u8]) -> SftpResult<File> {
+        self.open_with_flags_bytes(
+            filename,
+            OpenFlags::CREATE | OpenFlags::TRUNCATE | OpenFlags::WRITE,
+        )
+        .await
+    }
+
+    /// Raw byte-path variant of [`Self::open_with_flags`] supporting non-UTF-8 wire paths.
+    pub async fn open_with_flags_bytes(
+        &self,
+        filename: &[u8],
+        flags: OpenFlags,
+    ) -> SftpResult<File> {
+        self.open_with_flags_and_attributes_bytes(filename, flags, FileAttributes::empty())
+            .await
+    }
+
+    /// Raw byte-path variant of [`Self::open_with_flags_and_attributes`] supporting non-UTF-8 wire paths.
+    pub async fn open_with_flags_and_attributes_bytes(
+        &self,
+        filename: &[u8],
+        flags: OpenFlags,
+        attributes: FileAttributes,
+    ) -> SftpResult<File> {
+        let handle = self
+            .session
+            .open_bytes(filename, flags, attributes)
+            .await?
+            .handle;
+        Ok(File::new(self.session.clone(), handle, self.features))
+    }
+
+    /// Raw byte-path variant of [`Self::canonicalize`], returning exact wire filename bytes.
+    pub async fn canonicalize_bytes(&self, path: &[u8]) -> SftpResult<Vec<u8>> {
+        let name = self.session.realpath_bytes(path).await?;
+        match name.files.into_iter().next() {
+            Some(file) => Ok(file.raw_filename),
+            None => Err(Error::UnexpectedBehavior("no file".to_owned())),
+        }
+    }
+
+    /// Raw byte-path variant of [`Self::create_dir`] supporting non-UTF-8 wire paths.
+    pub async fn create_dir_bytes(&self, path: &[u8]) -> SftpResult<()> {
+        self.session
+            .mkdir_bytes(path, FileAttributes::empty())
+            .await
+            .map(|_| ())
+    }
+
+    /// Raw byte-path variant of [`Self::read_dir`] supporting non-UTF-8 wire paths.
+    pub async fn read_dir_bytes(&self, path: &[u8]) -> SftpResult<ReadDir> {
+        let parent_lossy = String::from_utf8_lossy(path);
+        let parent = Arc::from(parent_lossy.as_ref());
+        let handle = self.session.opendir_bytes(path).await?.handle;
+        self.read_dir_by_handle(parent, handle).await
+    }
+
+    /// Raw byte-path variant of [`Self::read_link`], returning exact wire target bytes.
+    pub async fn read_link_bytes(&self, path: &[u8]) -> SftpResult<Vec<u8>> {
+        let name = self.session.readlink_bytes(path).await?;
+        match name.files.into_iter().next() {
+            Some(file) => Ok(file.raw_filename),
+            None => Err(Error::UnexpectedBehavior("no file".to_owned())),
+        }
+    }
+
+    /// Raw byte-path variant of [`Self::remove_dir`] supporting non-UTF-8 wire paths.
+    pub async fn remove_dir_bytes(&self, path: &[u8]) -> SftpResult<()> {
+        self.session.rmdir_bytes(path).await.map(|_| ())
+    }
+
+    /// Raw byte-path variant of [`Self::remove_file`] supporting non-UTF-8 wire paths.
+    pub async fn remove_file_bytes(&self, filename: &[u8]) -> SftpResult<()> {
+        self.session.remove_bytes(filename).await.map(|_| ())
+    }
+
+    /// Raw byte-path variant of [`Self::rename`] supporting non-UTF-8 wire paths.
+    pub async fn rename_bytes(&self, oldpath: &[u8], newpath: &[u8]) -> SftpResult<()> {
+        self.session.rename_bytes(oldpath, newpath).await.map(|_| ())
+    }
+
+    /// Raw byte-path variant of [`Self::symlink`] supporting non-UTF-8 wire paths.
+    pub async fn symlink_bytes(&self, path: &[u8], target: &[u8]) -> SftpResult<()> {
+        self.session.symlink_bytes(path, target).await.map(|_| ())
+    }
+
+    /// Raw byte-path variant of [`Self::metadata`] supporting non-UTF-8 wire paths.
+    pub async fn metadata_bytes(&self, path: &[u8]) -> SftpResult<Metadata> {
+        Ok(self.session.stat_bytes(path).await?.attrs)
+    }
+
+    /// Raw byte-path variant of [`Self::set_metadata`] supporting non-UTF-8 wire paths.
+    pub async fn set_metadata_bytes(&self, path: &[u8], metadata: Metadata) -> SftpResult<()> {
+        self.session.setstat_bytes(path, metadata).await.map(|_| ())
+    }
+
+    /// Raw byte-path variant of [`Self::symlink_metadata`] supporting non-UTF-8 wire paths.
+    pub async fn symlink_metadata_bytes(&self, path: &[u8]) -> SftpResult<Metadata> {
+        Ok(self.session.lstat_bytes(path).await?.attrs)
     }
 
     /// Reads a symbolic link, returning the file that the link points to.

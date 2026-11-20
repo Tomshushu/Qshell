@@ -55,7 +55,6 @@ import {
 } from "@/lib/serial-checksum";
 import { decodeBase64Bytes, formatSerialHex } from "@/lib/serial-utils";
 import {
-  clearAllOutputBusSessions,
   clearOutputBusSession,
   dispatchTerminalOutputObservers,
 } from "@/lib/terminal-output-bus";
@@ -85,7 +84,8 @@ import { useAppStore } from "@/store";
 import { shouldAutoRunTerminalCommand } from "@/services/ai/terminal-execution-policy";
 import { ConnectionState } from "@/services/ssh-connection-state";
 import { reconnectManager } from "@/services/reconnect-manager";
-import { useTranslation } from "@/i18n";
+import { useTranslation, translate } from "@/i18n";
+import { notifySystem } from "@/services/system-notification";
 import { QshellLoader } from "@/components/ui/qshell-loader";
 import {
   matchHints,
@@ -129,6 +129,7 @@ import {
   serializeSessionEvent,
   type SessionEventType,
 } from "@/lib/session-recording";
+import { buildDefaultSavePath, resolveRecordingDirectory } from "@/lib/app-paths";
 
 import { useToast } from "@/components/ui/toast";
 import { playSound, SoundType } from "@/lib/sound";
@@ -2861,6 +2862,10 @@ export function TerminalModule({
         else if (variant === "warning") toastRef.current.warning(msg);
         else if (variant === "success") toastRef.current.success(msg);
         else toastRef.current.info(msg);
+        void notifySystem(
+          server?.name || translate("notify_trigger_alert"),
+          msg,
+        );
       },
       ringBell: () => playSound(SoundType.Bell),
       addMarker: (label: string) => {
@@ -2877,7 +2882,13 @@ export function TerminalModule({
       },
       prompt: (message, defaultValue) =>
         requestAutomationPrompt(message, defaultValue ?? "", { title: server?.name }),
-      alert: (message) => requestAutomationAlert(message, server?.name),
+      alert: (message) => {
+        void notifySystem(
+          server?.name || translate("notify_trigger_alert"),
+          message,
+        );
+        return requestAutomationAlert(message, server?.name);
+      },
     });
   }, [
     tabId,
@@ -3634,18 +3645,10 @@ export function TerminalModule({
       const next = new Set(recordingTermIdsRef.current);
       if (next.has(termId)) return;
 
-      let directory = options?.directory || terminalRecordingDirectory;
-      if (!directory) {
-        if (options?.silent) return; // 静默启动不弹出目录选择
-        const selected = await openDialog({
-          directory: true,
-          multiple: false,
-          title: t("recording_select_directory"),
-        });
-        if (typeof selected !== "string" || !selected) return;
-        directory = selected;
-        setTerminalRecordingDirectory(selected);
-      }
+      const directory = await resolveRecordingDirectory(
+        options?.directory || terminalRecordingDirectory,
+      );
+      if (!directory) return;
 
       const now = new Date();
       const safeName = (server?.name || "terminal").replace(
@@ -3865,6 +3868,10 @@ export function TerminalModule({
                 else if (variant === "warning") toastRef.current.warning(msg);
                 else if (variant === "success") toastRef.current.success(msg);
                 else toastRef.current.info(msg);
+        void notifySystem(
+          server?.name || translate("notify_trigger_alert"),
+          msg,
+        );
               },
             },
           );
@@ -3955,11 +3962,11 @@ export function TerminalModule({
                 });
           toastRef.current.success(message);
         }
+        recordingTermIdsRef.current = next;
+        setRecordingTermIds(next);
       } else {
         await startRecording(termId);
       }
-      recordingTermIdsRef.current = next;
-      setRecordingTermIds(next);
     },
     [startRecording, appendSessionEvent, t],
   );
@@ -5191,19 +5198,22 @@ export function TerminalModule({
         updateShellTitle,
       );
       const osc52Disposable = term.parser.registerOscHandler(52, (value) => {
-        if (!terminalCopyPaste) return false;
         try {
           const idx = value.indexOf(";");
-          const selection = idx >= 0 ? value.slice(0, idx) : "c";
+          const rawSelection = idx >= 0 ? value.slice(0, idx) : "c";
+          const selection = /^[cps0-7]*$/.test(rawSelection) ? rawSelection : "c";
           const encoded = idx >= 0 ? value.slice(idx + 1) : value;
           if (!encoded) return false;
           // P2-07：读取查询（OSC 52;<sel>;?）—— 读剪贴板并回写 OSC 52 响应
           if (encoded === "?") {
+            // 读取本机剪贴板属敏感操作，由独立开关控制且默认关闭，
+            // 与 terminalCopyPaste（写入剪贴板）解耦，避免远端静默窃取。
+            if (!useAppStore.getState().terminalOsc52Read) return false;
             if (navigator.clipboard?.readText) {
               navigator.clipboard
                 .readText()
                 .then((text) => {
-                  if (!text || !useAppStore.getState().terminalCopyPaste) return;
+                  if (!text || !useAppStore.getState().terminalOsc52Read) return;
                   try {
                     const bytes = new TextEncoder().encode(text);
                     let binary = "";
@@ -5217,6 +5227,8 @@ export function TerminalModule({
             }
             return false;
           }
+          // 写入本机剪贴板只需「剪贴板集成」开关
+          if (!useAppStore.getState().terminalCopyPaste) return false;
           const bytes = Uint8Array.from(atob(encoded), (ch) =>
             ch.charCodeAt(0),
           );
@@ -7404,15 +7416,24 @@ export function TerminalModule({
     if (isOpening) return;
     const termId = activeTermId;
     setCtxMenu(null);
-    const filePath = termId
+    let filePath = termId
       ? (recordingFileStatesRef.current.get(termId)?.path ??
         recordingLastPathRef.current.get(termId))
       : undefined;
     if (!filePath) {
-      toastRef.current?.warning(t("recording_no_active_file"));
-      return;
+      const defaultDir = await resolveRecordingDirectory(terminalRecordingDirectory, false);
+      const selected = await openDialog({
+        directory: false,
+        multiple: false,
+        defaultPath: defaultDir || undefined,
+        filters: [
+          { name: "Log & Recording Files", extensions: ["log", "txt", "jsonl", "cast"] },
+          { name: "All Files", extensions: ["*"] },
+        ],
+      });
+      if (typeof selected !== "string" || !selected) return;
+      filePath = selected;
     }
-    if (isOpening) return;
     setIsOpening(true);
     try {
       await invoke("open_path", { path: filePath });
@@ -7423,23 +7444,19 @@ export function TerminalModule({
     } finally {
       setIsOpening(false);
     }
-  }, [activeTermId, isOpening]);
+  }, [activeTermId, isOpening, terminalRecordingDirectory]);
 
   // 日志菜单：在系统文件管理器中打开日志目录
   const handleOpenLogFolder = useCallback(async () => {
     if (isOpening) return;
     setCtxMenu(null);
-    let dir = terminalRecordingDirectory;
-    if (!dir) {
-      const selected = await openDialog({
-        directory: true,
-        multiple: false,
-        title: t("recording_select_directory"),
-      });
-      if (typeof selected !== "string" || !selected) return;
-      dir = selected;
-      setTerminalRecordingDirectory(selected);
-    }
+    const activeStateDir = activeTermId
+      ? recordingFileStatesRef.current.get(activeTermId)?.directory
+      : undefined;
+    const dir = await resolveRecordingDirectory(
+      activeStateDir || terminalRecordingDirectory,
+    );
+    if (!dir) return;
     setIsOpening(true);
     try {
       await invoke("open_path", { path: dir });
@@ -7491,7 +7508,7 @@ export function TerminalModule({
     const content = lines.join("\r\n");
     const safeName = (server?.name || "terminal").replace(/[<>:"/\\|?*\p{Cc}]/gu, "_");
     const dateStr = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const defaultPath = `${safeName}_audit_${dateStr}.log`;
+    const defaultPath = await buildDefaultSavePath(`${safeName}_audit_${dateStr}.log`, { preferredDir: terminalRecordingDirectory, fallbackSubdir: "recordings" });
 
     try {
       const filePath = await saveDialog({
@@ -7545,7 +7562,7 @@ export function TerminalModule({
     const content = lines.join("\r\n");
     const safeName = (server?.name || "terminal").replace(/[<>:"/\\|?*\p{Cc}]/gu, "_");
     const dateStr = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const defaultPath = `${safeName}_timestamped_${dateStr}.log`;
+    const defaultPath = await buildDefaultSavePath(`${safeName}_timestamped_${dateStr}.log`, { preferredDir: terminalRecordingDirectory, fallbackSubdir: "recordings" });
 
     try {
       const filePath = await saveDialog({
@@ -7989,13 +8006,14 @@ export function TerminalModule({
       resizeTimersRef.current.forEach((timer) => window.clearTimeout(timer));
       // eslint-disable-next-line react-hooks/exhaustive-deps
       resizeTimersRef.current.clear();
-      xtermInstances.current.forEach(({ term, cleanup, termCleanup }) => {
+      xtermInstances.current.forEach(({ term, cleanup, termCleanup }, termId) => {
         // 正常连接实例的 cleanup 会同时释放会话和终端级资源；认证阻塞或
         // 初始化失败时可能只有 termCleanup，没有 session cleanup，不能漏掉
         // contextmenu/mouse/wheel/搜索器等外部资源。
         if (cleanup) cleanup();
         else termCleanup?.();
         term.dispose();
+        clearOutputBusSession(termId);
       });
       // eslint-disable-next-line react-hooks/exhaustive-deps
       xtermInstances.current.clear();
@@ -8055,9 +8073,6 @@ export function TerminalModule({
         cleanupSendExpectState(st);
       });
       sendExpectStatesRef.current.clear();
-      // 输出总线的 trafficByTerm 按 termId 累积，绝大多数会话并没有 Send-Expect 状态；
-      // 模块整体卸载时无条件清空，避免全局总线随会话数缓慢泄漏。
-      clearAllOutputBusSessions();
       pausedShellsRef.current.clear();
       sigintActiveUntilRef.current.clear();
       sigintDroppedCharsRef.current.clear();
@@ -9674,7 +9689,7 @@ export function TerminalModule({
       }
       const path = await saveDialog({
         title: t("serial_export_raw"),
-        defaultPath: `serial-${Date.now()}.bin`,
+        defaultPath: await buildDefaultSavePath(`serial-${Date.now()}.bin`),
         filters: [{ name: "Binary", extensions: ["bin"] }],
       });
       if (!path) return;
@@ -9700,7 +9715,7 @@ export function TerminalModule({
       const text = await sshService.decodeSerialHex(hex, serialEncodingLabelRef.current);
       const path = await saveDialog({
         title: t("serial_export_text"),
-        defaultPath: `serial-${Date.now()}.txt`,
+        defaultPath: await buildDefaultSavePath(`serial-${Date.now()}.txt`),
         filters: [{ name: "Text", extensions: ["txt", "log"] }],
       });
       if (!path) return;
@@ -10689,6 +10704,10 @@ export function TerminalModule({
         recordingTermIds={recordingTermIds}
         recordingPausedIds={recordingPausedIds}
         isOpening={isOpening}
+        onReplayRecording={() => {
+          setCtxMenu(null);
+          window.dispatchEvent(new CustomEvent("open-session-replay"));
+        }}
         isSplitPane={isSplitPane}
         onLockTerminal={handleLockCurrentTerminal}
         onLockSession={handleTriggerAppLock}

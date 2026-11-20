@@ -4,6 +4,7 @@ import { Input } from '@/components/ui/input'
 import { Star, Copy, Check, Heart, Monitor } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { OsIcon } from '@/components/dashboard/os-icon'
+import { ServerIconBadge } from './server-icon-badge'
 import type { ServerCardSkinProps } from './types'
 import { useServerCardActions } from './use-server-card-actions'
 
@@ -140,12 +141,19 @@ export const AnimeCatServerCard = memo(function AnimeCatServerCard({
         <div className="flex items-center gap-3 relative z-10 px-1">
           {/* OS 图标（萌系圆润小铃铛项圈风） */}
           <div className="relative flex-shrink-0">
-            <OsIcon
-              osType={server.osType}
-              osInfo={server.osInfo}
-              targetType={server.targetType}
-              className="h-10 w-10 rounded-[14px] flex-shrink-0 shadow-sm ring-2 ring-pink-300/40 dark:ring-pink-500/30 transition-transform group-hover/card:scale-105"
-            />
+            {server.icon ? (
+              <ServerIconBadge
+                icon={server.icon}
+                className="h-10 w-10 rounded-[14px] flex-shrink-0 shadow-sm ring-2 ring-pink-300/40 dark:ring-pink-500/30 transition-transform group-hover/card:scale-105"
+              />
+            ) : (
+              <OsIcon
+                osType={server.osType}
+                osInfo={server.osInfo}
+                targetType={server.targetType}
+                className="h-10 w-10 rounded-[14px] flex-shrink-0 shadow-sm ring-2 ring-pink-300/40 dark:ring-pink-500/30 transition-transform group-hover/card:scale-105"
+              />
+            )}
             {/* 萌系小金铃铛 (Jingle Bell Collar Tag) */}
             <div
               className="absolute -bottom-1 -right-1 pointer-events-none drop-shadow-sm transition-transform duration-300 group-hover/card:rotate-12 group-hover/card:scale-110"

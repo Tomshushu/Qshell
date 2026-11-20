@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useAppStore } from "@/store";
+import { notifySystem } from "@/services/system-notification";
+import { translate } from "@/i18n";
 
 /**
  * 空闲无操作自动锁屏 Hook（Termius 风格）
@@ -54,6 +56,10 @@ export function useAppIdleLock() {
 
       if (idleMs >= timeoutMs) {
         lockApp();
+        void notifySystem(
+          translate("notify_app_locked"),
+          translate("notify_app_locked_body"),
+        );
       }
     }, 5000);
 
