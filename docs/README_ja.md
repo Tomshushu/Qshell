@@ -16,8 +16,8 @@
   <a href="./README_ko.md"><b>한국어</b></a>
 </p>
 
-[![GitHub Release](https://img.shields.io/badge/GitHub-v1.0.17-blue.svg?style=flat-square&logo=github)](https://github.com/Tomshushu/Qshell/releases)
-[![Gitee Release](https://img.shields.io/badge/Gitee-v1.0.17-red.svg?style=flat-square&logo=gitee)](https://gitee.com/Tom-shushu/qshell/releases)
+[![GitHub Release](https://img.shields.io/badge/GitHub-v1.0.22-blue.svg?style=flat-square&logo=github)](https://github.com/Tomshushu/Qshell/releases)
+[![Gitee Release](https://img.shields.io/badge/Gitee-v1.0.22-red.svg?style=flat-square&logo=gitee)](https://gitee.com/Tom-shushu/qshell/releases)
 [![Tauri](https://img.shields.io/badge/Tauri-v2.0-24C8D8.svg?style=flat-square&logo=tauri)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-19.0-61DAFB.svg?style=flat-square&logo=react)](https://react.dev/)
 [![Rust](https://img.shields.io/badge/Rust-1.80+-DEA584.svg?style=flat-square&logo=rust)](https://www.rust-lang.org/)
@@ -130,7 +130,7 @@ Qshell は、**軽量・俊敏・高セキュリティ・オールインワン**
   - **Windows**：システムネイティブ RDP クライアントのワンタッチ起動；
   - **BMC リモート管理**：Redfish over HTTPS によるハードウェア状態監視と電源オン・オフ・リブート。
 - **SSH トンネル（ポート転送）**：ローカル転送 (`-L`)、リモート転送 (`-R`)、動的 SOCKS5 (`-D`)。
-- **強固な認証**：パスワード、パスフレーズ付き秘密鍵、SSH エージェント、OpenSSH 証明書、多段 ProxyJump。
+- **エンタープライズ認証 & 拡張プロトコル**：パスワード、パスフレーズ付き秘密鍵、SSH エージェント、**OpenSSH CA 証明書**、**2FA / OTP (`keyboard-interactive`)**、**PKCS#11 ハードウェアトークン (YubiKey PIV / スマートカード)**、**Kerberos / GSSAPI (`gssapi-with-mic`) SSO**、多段 ProxyJump に加え、VNC / FTP(S) / ローカルシェルおよびターミナルセッション録画・再生（`.qsr` / `.cast`）に対応。
 - **サーバーごみ箱機能**：誤削除防止の論理削除とワンクリック復元。
 
 ### 7. 📊 エージェントレス監視と DevOps ツールボックス
@@ -184,11 +184,11 @@ graph TB
 
 | OS | アーキテクチャ | 形式 | 高速ミラー (Gitee) | グローバル (GitHub) |
 | :--- | :--- | :--- | :--- | :--- |
-| **Windows** | x86_64 / x64 | `.exe` (NSIS) | [⚡ exe インストーラ](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.17/Qshell_1.0.17_x64-setup.exe) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.17) |
-| **macOS** | Apple Silicon (M1/M2/M3/M4) | `.dmg` | [⚡ aarch64 dmg](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.17/Qshell_1.0.17_aarch64.dmg) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.17) |
-| **macOS** | Apple Silicon (ポータブル) | `.app.tar.gz` | [⚡ aarch64 tar.gz](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.17/Qshell_1.0.17_aarch64.app.tar.gz) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.17) |
-| **Linux** | x86_64 / amd64 | `.AppImage` (ポータブル) | [⚡ AppImage](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.17/Qshell_1.0.17_amd64.AppImage) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.17) |
-| **Linux** | x86_64 / Debian/Ubuntu | `.deb` (deb パッケージ) | [⚡ deb パッケージ](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.17/Qshell_1.0.17_amd64.deb) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.17) |
+| **Windows** | x86_64 / x64 | `.exe` (NSIS) | [⚡ exe インストーラ](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.22/Qshell_1.0.22_x64-setup.exe) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.22) |
+| **macOS** | Apple Silicon (M1/M2/M3/M4) | `.dmg` | [⚡ aarch64 dmg](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.22/Qshell_1.0.22_aarch64.dmg) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.22) |
+| **macOS** | Apple Silicon (ポータブル) | `.app.tar.gz` | [⚡ aarch64 tar.gz](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.22/Qshell_1.0.22_aarch64.app.tar.gz) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.22) |
+| **Linux** | x86_64 / amd64 | `.AppImage` (ポータブル) | [⚡ AppImage](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.22/Qshell_1.0.22_amd64.AppImage) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.22) |
+| **Linux** | x86_64 / Debian/Ubuntu | `.deb` (deb パッケージ) | [⚡ deb パッケージ](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.22/Qshell_1.0.22_amd64.deb) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.22) |
 
 > 🔄 **全自動 OTA アップデート**：既存のインストール環境からは、【設定】->【アップデートを確認】により、GitHub / Gitee の最適ルートから差分アップデートをワンクリックで実行できます。
 

@@ -16,8 +16,8 @@
   <a href="./docs/README_ko.md"><b>한국어</b></a>
 </p>
 
-[![GitHub Release](https://img.shields.io/badge/GitHub-v1.0.17-blue.svg?style=flat-square&logo=github)](https://github.com/Tomshushu/Qshell/releases)
-[![Gitee Release](https://img.shields.io/badge/Gitee-v1.0.17-red.svg?style=flat-square&logo=gitee)](https://gitee.com/Tom-shushu/qshell/releases)
+[![GitHub Release](https://img.shields.io/badge/GitHub-v1.0.22-blue.svg?style=flat-square&logo=github)](https://github.com/Tomshushu/Qshell/releases)
+[![Gitee Release](https://img.shields.io/badge/Gitee-v1.0.22-red.svg?style=flat-square&logo=gitee)](https://gitee.com/Tom-shushu/qshell/releases)
 [![Tauri](https://img.shields.io/badge/Tauri-v2.0-24C8D8.svg?style=flat-square&logo=tauri)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-19.0-61DAFB.svg?style=flat-square&logo=react)](https://react.dev/)
 [![Rust](https://img.shields.io/badge/Rust-1.80+-DEA584.svg?style=flat-square&logo=rust)](https://www.rust-lang.org/)
@@ -69,7 +69,7 @@ Qshell is engineered to deliver a **lightweight, agile, secure, and all-in-one**
 
 **Qshell** is a modern, high-performance desktop server operations workbench crafted for developers, system administrators, and DevOps engineers.
 
-Built on **Tauri 2 + Rust + React 19**, Qshell integrates multi-protocol terminals (SSH / Telnet / Serial / RDP / BMC Redfish), concurrent SFTP with instant document preview, agentless telemetry, Systemd management, Docker orchestration, SSH tunneling, and zero-knowledge end-to-end encrypted sync into a single cohesive experience.
+Built on **Tauri 2 + Rust + React 19**, Qshell integrates multi-protocol terminals and desktops (SSH / Local Shell / Telnet / Serial / VNC / RDP / FTP & FTPS / BMC Redfish), enterprise authentication (PKCS#11 Smart Card / YubiKey PIV, Kerberos / GSSAPI SSO, 2FA / OTP, OpenSSH CA Certificates), concurrent SFTP with instant document preview, session recording & playback, agentless telemetry, Systemd management, Docker orchestration, SSH tunneling, and zero-knowledge end-to-end encrypted sync into a single cohesive experience.
 
 ---
 
@@ -127,14 +127,15 @@ Built on **Tauri 2 + Rust + React 19**, Qshell integrates multi-protocol termina
   - **NIST SP 800-38D**: Authenticated encryption via `AES-256-GCM` with 16-byte integrity tags;
   - **Zero-Knowledge Architecture**: Master passwords and private keys are never transmitted in plaintext.
 
-### 6. 🖥️ Multi-Protocol Asset Management & Authentication
+### 6. 🖥️ Multi-Protocol Asset Management & Enterprise Authentication
 - **Broad Protocol Support**:
-  - **Linux / Unix / Arm**: SSH shell, SFTP, custom terminal themes, and localization;
-  - **Serial & Hardware (COM)**: Industrial-grade serial terminal (baud rates, parity, data bits, stop bits, flow control, HEX/ASCII, CRC checksums, DTR/RTS signals, auto-reconnect) and Telnet;
-  - **Windows Targets**: Native RDP client invocation;
+  - **Linux / Unix / Arm**: SSH shell, SFTP / SCP / FTP / FTPS file transfer, VNC remote desktop, Local Shell (ConPTY / Unix PTY), custom terminal themes, and localization;
+  - **Serial & Hardware (COM)**: Industrial-grade serial terminal (baud rates, parity, data bits, stop bits, flow control, HEX/ASCII, CRC checksums, DTR/RTS signals, YModem/XModem/ZMODEM, auto-reconnect) and Telnet;
+  - **Windows Targets**: Native RDP client invocation & VNC desktop access;
   - **BMC Out-of-Band Management**: Redfish over HTTPS with remote power control and hardware health telemetry.
-- **SSH Tunneling (Port Forwarding)**: Local (`-L`), Remote (`-R`), and Dynamic SOCKS5 (`-D`) proxy forwarding.
-- **Multi-Factor Authentication**: Passwords, passphrase-protected private keys, SSH agent forwarding, OpenSSH user certificates, and multi-hop ProxyJump.
+- **SSH Tunneling (Port Forwarding)**: Local (`-L`), Remote (`-R`), and Dynamic SOCKS5 (`-D`) proxy forwarding, plus X11 forwarding.
+- **Enterprise-Grade Authentication**: Passwords, passphrase-protected private keys, SSH Agent forwarding, **OpenSSH CA Certificates**, **2FA / OTP (`keyboard-interactive`)**, **PKCS#11 Hardware Keys (YubiKey PIV / Smart Card)**, **Kerberos / GSSAPI (`gssapi-with-mic`) SSO**, reusable Global Auth Profiles, and multi-hop ProxyJump.
+- **Session Recording & Desktop Integration**: Terminal session recording and variable-speed playback (`.qsr` / asciinema `.cast`), system tray quick connect, and desktop shortcuts.
 - **Server Recycle Bin**: Soft deletion with one-click recovery.
 
 ### 7. 📊 Agentless System Monitoring & Ops Toolbox
@@ -188,11 +189,11 @@ Qshell provides official binaries and portable packages across major operating s
 
 | Operating System | Architecture | Package Format | Fast Mirror (Gitee) | Global Release (GitHub) |
 | :--- | :--- | :--- | :--- | :--- |
-| **Windows** | x86_64 / x64 | `.exe` (NSIS Installer) | [⚡ Download exe](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.17/Qshell_1.0.17_x64-setup.exe) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.17) |
-| **macOS** | Apple Silicon (M1/M2/M3/M4) | `.dmg` | [⚡ Download aarch64 dmg](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.17/Qshell_1.0.17_aarch64.dmg) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.17) |
-| **macOS** | Apple Silicon (Portable) | `.app.tar.gz` | [⚡ Download aarch64 tar.gz](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.17/Qshell_1.0.17_aarch64.app.tar.gz) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.17) |
-| **Linux** | x86_64 / amd64 | `.AppImage` (Portable) | [⚡ Download AppImage](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.17/Qshell_1.0.17_amd64.AppImage) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.17) |
-| **Linux** | x86_64 / Debian/Ubuntu | `.deb` (Debian Package) | [⚡ Download deb](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.17/Qshell_1.0.17_amd64.deb) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.17) |
+| **Windows** | x86_64 / x64 | `.exe` (NSIS Installer) | [⚡ Download exe](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.22/Qshell_1.0.22_x64-setup.exe) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.22) |
+| **macOS** | Apple Silicon (M1/M2/M3/M4) | `.dmg` | [⚡ Download aarch64 dmg](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.22/Qshell_1.0.22_aarch64.dmg) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.22) |
+| **macOS** | Apple Silicon (Portable) | `.app.tar.gz` | [⚡ Download aarch64 tar.gz](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.22/Qshell_1.0.22_aarch64.app.tar.gz) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.22) |
+| **Linux** | x86_64 / amd64 | `.AppImage` (Portable) | [⚡ Download AppImage](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.22/Qshell_1.0.22_amd64.AppImage) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.22) |
+| **Linux** | x86_64 / Debian/Ubuntu | `.deb` (Debian Package) | [⚡ Download deb](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.22/Qshell_1.0.22_amd64.deb) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.22) |
 
 > 🔄 **Seamless OTA Updates**: Existing Qshell installations automatically check for updates via dual GitHub/Gitee channels with Minisign verification. Go to **Settings -> Check for Updates** to update with one click.
 

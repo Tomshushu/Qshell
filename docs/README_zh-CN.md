@@ -16,8 +16,8 @@
   <a href="./README_ko.md"><b>한국어</b></a>
 </p>
 
-[![GitHub Release](https://img.shields.io/badge/GitHub-v1.0.17-blue.svg?style=flat-square&logo=github)](https://github.com/Tomshushu/Qshell/releases)
-[![Gitee Release](https://img.shields.io/badge/Gitee-v1.0.17-red.svg?style=flat-square&logo=gitee)](https://gitee.com/Tom-shushu/qshell/releases)
+[![GitHub Release](https://img.shields.io/badge/GitHub-v1.0.22-blue.svg?style=flat-square&logo=github)](https://github.com/Tomshushu/Qshell/releases)
+[![Gitee Release](https://img.shields.io/badge/Gitee-v1.0.22-red.svg?style=flat-square&logo=gitee)](https://gitee.com/Tom-shushu/qshell/releases)
 [![Tauri](https://img.shields.io/badge/Tauri-v2.0-24C8D8.svg?style=flat-square&logo=tauri)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-19.0-61DAFB.svg?style=flat-square&logo=react)](https://react.dev/)
 [![Rust](https://img.shields.io/badge/Rust-1.80+-DEA584.svg?style=flat-square&logo=rust)](https://www.rust-lang.org/)
@@ -69,7 +69,7 @@ Qshell 致力于打造一款**轻巧、敏捷、安全且全能**的新一代服
 
 **Qshell** 是一款面向开发者、系统管理员与 DevOps 工程师精心打造的**现代化极速桌面服务器运维与多协议工作台**。
 
-项目采用极简轻量的高性能桌面架构，基于 **Tauri 2 + Rust + React 19** 构建，以原生硬件性能驱动终端交互。Qshell 将主机资产树、多协议终端（SSH / Telnet / Serial / RDP / BMC Redfish）、带并发断点续传的 SFTP 文件管理、零侵入系统指标监控、Systemd 服务管理、Docker 容器编排、SSH 隧道转发、全格式文档实时预览与**端到端零知识加密（E2EE）全量配置漫游**深度融合于同一个优雅直观的工作台中。
+项目采用极简轻量的高性能桌面架构，基于 **Tauri 2 + Rust + React 19** 构建，以原生硬件性能驱动终端交互。Qshell 将主机资产树、全协议终端与远程桌面（SSH / 本地 Shell / Telnet / Serial / VNC / RDP / FTP & FTPS / BMC Redfish）、企业级认证矩阵（PKCS#11 硬件智能卡与 YubiKey PIV / Kerberos GSSAPI 单点登录 / 2FA 双因素认证 / OpenSSH CA 证书）、带并发断点续传的 SFTP 文件管理、终端会话录制回放、零侵入系统指标监控、Systemd 服务管理、Docker 容器编排、SSH 隧道转发、全格式文档实时预览与**端到端零知识加密（E2EE）全量配置漫游**深度融合于同一个优雅直观的工作台中。
 
 ---
 
@@ -127,15 +127,16 @@ Qshell 致力于打造一款**轻巧、敏捷、安全且全能**的新一代服
   - **NIST SP 800-38D**：`AES-256-GCM` 全包认证加密与 16 字节完整性标签防篡改；
   - **零知识原则**：主密码与明文凭据永不上云，第三方托管（GitHub / Gitee 私有仓库）仅持有高强度密文信封；本地全量端到端加密同步资产与配置，支持 Token 与主密码一键安全复制。
 
-### 6. 🖥️ 全协议资产管理与灵活认证
+### 6. 🖥️ 全协议资产管理与企业级认证
 - **全协议栈覆盖**：
-  - **Linux / Unix / 信创系统**：SSH 终端、SFTP 双向管理，深度适配统信 UOS、麒麟 Kylin 等国产操作系统；
-  - **网络硬件与串口 (Serial / COM)**：完备的工业级串口调试终端（波特率、数据位、停止位、流控、HEX/ASCII 双模、CRC 校验、DTR/RTS 信号监测、VID/PID 稳定重连）与 Telnet 会话；
-  - **Windows 目标**：便捷调用系统原生 RDP 客户端；
+  - **Linux / Unix / 信创系统**：SSH 终端、SFTP / SCP / FTP / FTPS 文件传输、VNC 图形远程桌面、本地 Shell（Windows ConPTY / Unix PTY），深度适配统信 UOS、麒麟 Kylin 等国产操作系统；
+  - **网络硬件与串口 (Serial / COM)**：完备的工业级串口调试终端（波特率、数据位、停止位、流控、HEX/ASCII 双模、CRC 校验、DTR/RTS 信号监测、YModem/XModem/ZMODEM 固件传输、VID/PID 稳定重连）与 Telnet 会话；
+  - **Windows 目标**：便捷调用系统原生 RDP 客户端及 VNC 远程桌面；
   - **服务器带外管理 (BMC)**：Redfish over HTTPS 协议，硬件状态与电源远程开关/重启。
 - **SSH 隧道与端口转发 (Tunneling)**：
-  - 内联支持本地转发（Local `-L`）、远程转发（Remote `-R`）与动态 SOCKS5 代理转发（Dynamic `-D`），随服务器连接自动建立。
-- **多层次安全认证**：支持密码、加密私钥（Passphrase）、SSH Agent 身份枚举、OpenSSH 用户证书认证以及多级链式跳板代理（Multi-Hop ProxyJump）。
+  - 内联支持本地转发（Local `-L`）、远程转发（Remote `-R`）、动态 SOCKS5 代理转发（Dynamic `-D`）及 X11 图形转发，随服务器连接自动建立。
+- **企业级多层次安全认证**：支持密码、加密私钥（Passphrase）、SSH Agent 身份枚举、**OpenSSH CA 证书认证**、**2FA / OTP 双因素交互认证 (`keyboard-interactive`)**、**PKCS#11 硬件智能卡 / YubiKey PIV**、**Kerberos / GSSAPI (`gssapi-with-mic`) 企业单点登录**、全局可复用身份凭证模板以及多级链式跳板代理（Multi-Hop ProxyJump）。
+- **会话录制回放与系统集成**：支持终端会话录制与多倍速时间轴回放（`.qsr` / asciinema `.cast`），内置系统托盘快速连接与桌面快捷方式/右键菜单集成。
 - **资产安全防误触**：内置服务器回收站（Recycle Bin），支持软删除与一键找回。
 
 ### 7. 📊 免 Agent 深度系统感知与运维工具箱
@@ -189,11 +190,11 @@ Qshell 为各大主流操作系统提供了开箱即用的安装包与绿色便�
 
 | 操作系统 | 架构 | 安装包格式 | 国内极速直链 (Gitee) | 全球发布源 (GitHub) |
 | :--- | :--- | :--- | :--- | :--- |
-| **Windows** | x86_64 / x64 | `.exe` (NSIS 安装包) | [⚡ 下载 exe 安装包](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.17/Qshell_1.0.17_x64-setup.exe) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.17) |
-| **macOS** | Apple Silicon (M1/M2/M3/M4) | `.dmg` | [⚡ 下载 aarch64 dmg](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.17/Qshell_1.0.17_aarch64.dmg) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.17) |
-| **macOS** | Apple Silicon (便携包) | `.app.tar.gz` | [⚡ 下载 aarch64 压缩包](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.17/Qshell_1.0.17_aarch64.app.tar.gz) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.17) |
-| **Linux** | x86_64 / amd64 | `.AppImage` (免安装便携版) | [⚡ 下载 AppImage](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.17/Qshell_1.0.17_amd64.AppImage) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.17) |
-| **Linux** | x86_64 / Debian/Ubuntu | `.deb` (系统安装包) | [⚡ 下载 deb 包](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.17/Qshell_1.0.17_amd64.deb) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.17) |
+| **Windows** | x86_64 / x64 | `.exe` (NSIS 安装包) | [⚡ 下载 exe 安装包](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.22/Qshell_1.0.22_x64-setup.exe) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.22) |
+| **macOS** | Apple Silicon (M1/M2/M3/M4) | `.dmg` | [⚡ 下载 aarch64 dmg](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.22/Qshell_1.0.22_aarch64.dmg) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.22) |
+| **macOS** | Apple Silicon (便携包) | `.app.tar.gz` | [⚡ 下载 aarch64 压缩包](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.22/Qshell_1.0.22_aarch64.app.tar.gz) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.22) |
+| **Linux** | x86_64 / amd64 | `.AppImage` (免安装便携版) | [⚡ 下载 AppImage](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.22/Qshell_1.0.22_amd64.AppImage) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.22) |
+| **Linux** | x86_64 / Debian/Ubuntu | `.deb` (系统安装包) | [⚡ 下载 deb 包](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.22/Qshell_1.0.22_amd64.deb) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.22) |
 
 > 💡 **国内用户建议优先前往 [Gitee Releases 发行页](https://gitee.com/Tom-shushu/qshell/releases)** 享受无障碍高速下载。
 > 
