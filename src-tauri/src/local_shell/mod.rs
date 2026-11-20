@@ -8,7 +8,9 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+#[cfg(target_os = "windows")]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

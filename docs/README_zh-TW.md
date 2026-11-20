@@ -16,8 +16,8 @@
   <a href="./README_ko.md"><b>한국어</b></a>
 </p>
 
-[![GitHub Release](https://img.shields.io/badge/GitHub-v1.0.17-blue.svg?style=flat-square&logo=github)](https://github.com/Tomshushu/Qshell/releases)
-[![Gitee Release](https://img.shields.io/badge/Gitee-v1.0.17-red.svg?style=flat-square&logo=gitee)](https://gitee.com/Tom-shushu/qshell/releases)
+[![GitHub Release](https://img.shields.io/badge/GitHub-v1.0.22-blue.svg?style=flat-square&logo=github)](https://github.com/Tomshushu/Qshell/releases)
+[![Gitee Release](https://img.shields.io/badge/Gitee-v1.0.22-red.svg?style=flat-square&logo=gitee)](https://gitee.com/Tom-shushu/qshell/releases)
 [![Tauri](https://img.shields.io/badge/Tauri-v2.0-24C8D8.svg?style=flat-square&logo=tauri)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-19.0-61DAFB.svg?style=flat-square&logo=react)](https://react.dev/)
 [![Rust](https://img.shields.io/badge/Rust-1.80+-DEA584.svg?style=flat-square&logo=rust)](https://www.rust-lang.org/)
@@ -132,7 +132,7 @@ Qshell 致力於打造一款**輕巧、敏捷、安全且全能**的新一代伺
   - **伺服器頻外管理 (BMC)**：Redfish over HTTPS 協定，硬體狀態與電源遠端開關/重開機。
 - **SSH 通道與連接埠轉發 (Tunneling)**：
   - 內聯支援本機轉發（Local `-L`）、遠端轉發（Remote `-R`）與動態 SOCKS5 代理轉發（Dynamic `-D`），隨伺服器連線自動建立。
-- **多層次安全認證**：支援密碼、加密私密金鑰（Passphrase）、SSH Agent 身分列舉、OpenSSH 使用者憑證認證以及多級鏈式跳板代理（Multi-Hop ProxyJump）。
+- **企業級多層次安全認證**：支援密碼、加密私密金鑰（Passphrase）、SSH Agent 身分列舉、**OpenSSH CA 憑證認證**、**2FA / OTP 雙因素互動認證 (`keyboard-interactive`)**、**PKCS#11 硬體智慧卡 / YubiKey PIV**、**Kerberos / GSSAPI (`gssapi-with-mic`) 企業單一登入**、全域身分憑證範本，以及 VNC / FTP(S) / 本地 Shell 與終端機工作階段錄製回放（`.qsr` / `.cast`）。
 - **資產安全防誤觸**：內建伺服器資源回收筒（Recycle Bin），支援軟刪除與一鍵找回。
 
 ### 7. 📊 免 Agent 深度系統感知與維運工具箱
@@ -186,11 +186,11 @@ Qshell 為各大主流作業系統提供了開箱即用的安裝包與綠色便�
 
 | 作業系統 | 架構 | 安裝包格式 | 國內高速載點 (Gitee) | 全球發布源 (GitHub) |
 | :--- | :--- | :--- | :--- | :--- |
-| **Windows** | x86_64 / x64 | `.exe` (NSIS 安裝包) | [⚡ 下載 exe 安裝包](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.17/Qshell_1.0.17_x64-setup.exe) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.17) |
-| **macOS** | Apple Silicon (M1/M2/M3/M4) | `.dmg` | [⚡ 下載 aarch64 dmg](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.17/Qshell_1.0.17_aarch64.dmg) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.17) |
-| **macOS** | Apple Silicon (便攜包) | `.app.tar.gz` | [⚡ 下載 aarch64 壓縮包](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.17/Qshell_1.0.17_aarch64.app.tar.gz) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.17) |
-| **Linux** | x86_64 / amd64 | `.AppImage` (免安裝便攜版) | [⚡ 下載 AppImage](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.17/Qshell_1.0.17_amd64.AppImage) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.17) |
-| **Linux** | x86_64 / Debian/Ubuntu | `.deb` (系統安裝包) | [⚡ 下載 deb 包](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.17/Qshell_1.0.17_amd64.deb) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.17) |
+| **Windows** | x86_64 / x64 | `.exe` (NSIS 安裝包) | [⚡ 下載 exe 安裝包](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.22/Qshell_1.0.22_x64-setup.exe) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.22) |
+| **macOS** | Apple Silicon (M1/M2/M3/M4) | `.dmg` | [⚡ 下載 aarch64 dmg](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.22/Qshell_1.0.22_aarch64.dmg) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.22) |
+| **macOS** | Apple Silicon (便攜包) | `.app.tar.gz` | [⚡ 下載 aarch64 壓縮包](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.22/Qshell_1.0.22_aarch64.app.tar.gz) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.22) |
+| **Linux** | x86_64 / amd64 | `.AppImage` (免安裝便攜版) | [⚡ 下載 AppImage](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.22/Qshell_1.0.22_amd64.AppImage) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.22) |
+| **Linux** | x86_64 / Debian/Ubuntu | `.deb` (系統安裝包) | [⚡ 下載 deb 包](https://gitee.com/Tom-shushu/qshell/releases/download/v1.0.22/Qshell_1.0.22_amd64.deb) | [🌐 GitHub Releases](https://github.com/Tomshushu/Qshell/releases/tag/v1.0.22) |
 
 > 🔄 **全自動無感 OTA 線上升級**：已安裝 Qshell 的使用者無須手動重新下載，客戶端內建 GitHub 與 Gitee 雙通道智慧測速與 Minisign 驗簽更新引擎。在【設定】->【檢查更新】中即可一鍵完成安全差量升級。
 
